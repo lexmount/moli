@@ -235,8 +235,8 @@ pub(super) fn build_router() -> Router {
             get(history_back_ignores_page_tampered_queue_microtask_page),
         )
         .route(
-            "/compat/history-back-forward-same-turn-coalesces",
-            get(history_back_forward_same_turn_coalesces_page),
+            "/compat/history-back-forward-same-turn-queues",
+            get(history_back_forward_same_turn_queues_page),
         )
         .route(
             "/compat/history-state-mutation-does-not-mutate-stored-snapshot",
@@ -1417,6 +1417,10 @@ pub(super) fn build_router() -> Router {
             get(runtime_owned_external_in_order_load_after_domcontentloaded_page),
         )
         .route(
+            "/compat/runtime-owned-external-in-order-load-after-domcontentloaded-release",
+            get(release_runtime_owned_external_in_order_load_after_domcontentloaded),
+        )
+        .route(
             "/compat/runtime-owned-external-in-order-with-defer-stays-after-domcontentloaded",
             get(runtime_owned_external_in_order_with_defer_stays_after_domcontentloaded_page),
         )
@@ -1521,8 +1525,8 @@ pub(super) fn build_router() -> Router {
             get(dynamic_importmap_before_module_page),
         )
         .route(
-            "/compat/dynamic-async-module-closes-importmap-acquisition",
-            get(dynamic_async_module_closes_importmap_acquisition_page),
+            "/compat/dynamic-async-module-allows-late-importmap",
+            get(dynamic_async_module_allows_late_importmap_page),
         )
         .route(
             "/compat/dynamic-external-importmap-error-before-module",
@@ -1581,12 +1585,12 @@ pub(super) fn build_router() -> Router {
             get(importmap_after_module_load_page),
         )
         .route(
-            "/compat/importmap-closed-by-parser-owned-module-before-late-dynamic-map",
-            get(importmap_closed_by_parser_owned_module_before_late_dynamic_map_page),
+            "/compat/parser-owned-module-allows-late-dynamic-importmap",
+            get(parser_owned_module_allows_late_dynamic_importmap_page),
         )
         .route(
-            "/compat/parser-owned-importmap-blocked-after-dynamic-module-prepare",
-            get(parser_owned_importmap_blocked_after_dynamic_module_prepare_page),
+            "/compat/parser-owned-importmap-applies-after-dynamic-module-prepare",
+            get(parser_owned_importmap_applies_after_dynamic_module_prepare_page),
         )
         .route(
             "/compat/importmap-null-blocks-dynamic-import",
@@ -2138,6 +2142,10 @@ pub(super) fn build_router() -> Router {
             get(asset_runtime_owned_in_order_load_script),
         )
         .route(
+            "/assets/runtime_owned_in_order_load_after_dcl_gated.js",
+            get(asset_runtime_owned_in_order_load_after_dcl_gated_script),
+        )
+        .route(
             "/assets/missing_runtime_owned_in_order_error.js",
             get(asset_missing_runtime_owned_in_order_error_script),
         )
@@ -2384,6 +2392,18 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/blocking_stylesheet_slow.css",
             get(asset_blocking_stylesheet_slow_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_stale.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_stale_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_fresh_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_probe.js",
+            get(asset_runtime_inserted_stylesheet_href_mutation_probe_script),
         )
         .route(
             "/assets/runtime_connected_modulepreload_slow.mjs",

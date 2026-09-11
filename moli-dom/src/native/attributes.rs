@@ -73,6 +73,36 @@ impl NativeDom {
         changed
     }
 
+    pub fn set_attribute_utf16_units(
+        &mut self,
+        node_id: NativeNodeId,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        let Some(normalized_name) = self.normalized_attribute_name(node_id, name) else {
+            return false;
+        };
+        let base_document =
+            self.base_element_attribute_owner_document(node_id, None, &normalized_name);
+        let changed = self
+            .node_mut(node_id)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(|element| {
+                element.set_attribute_utf16_units(
+                    normalized_name,
+                    String::new(),
+                    None,
+                    value.to_owned(),
+                    units,
+                )
+            });
+        if changed && let Some(document) = base_document {
+            self.process_base_element(document, false);
+        }
+        changed
+    }
+
     pub fn set_attribute_ns(
         &mut self,
         node_id: NativeNodeId,

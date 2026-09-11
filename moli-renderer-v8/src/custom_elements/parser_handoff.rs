@@ -18,7 +18,6 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
     document_handle: DomHandle,
-    document_has_body: bool,
     local_name: &str,
     namespace: &str,
     prefix: Option<&str>,
@@ -29,7 +28,6 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
     let definition_match = lookup_parser_custom_element_definition_for_token(
         host_ptr,
         document_handle,
-        document_has_body,
         local_name,
         namespace,
         token_attributes,

@@ -7,8 +7,9 @@ enum ChildDocumentInteractiveScriptDisposition {
 }
 use crate::{
     context_bootstrap::{
-        construct_original_event, dispatch_beforeunload_for_runtime_owner,
-        dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
+        dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner,
+        dispatch_unload_for_runtime_owner, record_performance_dom_content_loaded_event_end,
+        record_performance_dom_content_loaded_event_start,
     },
     detached_event_target::dispatch_detached_simple_event,
     document_runtime::DomHandle,
@@ -18,13 +19,10 @@ use crate::{
         FrameDocumentDescendantLoadParent, FrameDocumentInteractiveLifecycleAction,
         FrameDocumentLifecycleAction, FrameDocumentLifecycleTaskEffect,
         FrameDocumentLoadDeliveryTask, FrameDocumentNavigationLoadBinding, FrameDocumentTaskOwner,
-        FrameRealmId,
+        FrameDocumentUnloadLifecycleAction, FrameRealmId,
     },
     native_bridge::document::DETACHED_STATE_SLOT,
-    util::{
-        call_object_method, context_host_ptr_from_global_bridge, get_private_object, v8_string,
-        v8str,
-    },
+    util::{context_host_ptr_from_global_bridge, get_private_object, v8_string, v8str},
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -61,8 +59,21 @@ impl JsContextHost {
         action: FrameDocumentLifecycleAction,
         realm_id: FrameRealmId,
     ) -> bool {
+        if !matches!(action, FrameDocumentLifecycleAction::Interactive(_)) {
+            return self
+                .page_task_capabilities
+                .get()
+                .expect("a child Document must retain its Page task capabilities")
+                .dom_manipulation()
+                .send_child_document_lifecycle(
+                    crate::page_task_queue::RendererPageChildDocumentLifecycleTarget::new(
+                        action, realm_id,
+                    ),
+                )
+                .is_ok();
+        }
         self.page_child_frame_task_sender()
-            .send_document_lifecycle(
+            .send_interactive_lifecycle(
                 crate::page_task_queue::RendererPageChildDocumentLifecycleTarget::new(
                     action, realm_id,
                 ),
@@ -192,6 +203,35 @@ impl JsContextHost {
             return false;
         };
         self.route_child_document_lifecycle_action(action.into(), realm_request.realm_id())
+    }
+
+    /// Parser stop changes readiness synchronously. Only an unmaterialized
+    /// child realm needs an owner continuation before it can dispatch events.
+    pub(crate) fn finish_child_document_parser_stop(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        action: FrameDocumentInteractiveLifecycleAction,
+    ) -> FrameDocumentLifecycleTaskEffect {
+        if !self.child_document_lifecycle_action_is_current(action.into()) {
+            return FrameDocumentLifecycleTaskEffect::NotApplied;
+        }
+        let dispatch_scope = super::super::OwnerDispatchScope::Child(action.child_handle());
+        let execution_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
+            action.owner().local_window_id,
+        );
+        let Some((_, context)) =
+            self.window_execution_context(scope, execution_owner, dispatch_scope)
+        else {
+            return if self.queue_child_document_interactive_lifecycle_action(action) {
+                FrameDocumentLifecycleTaskEffect::ConsumedWithoutEvent
+            } else {
+                FrameDocumentLifecycleTaskEffect::NotApplied
+            };
+        };
+        let context = v8::Global::new(scope, context);
+        let context = v8::Local::new(scope, &context);
+        let child_scope = &mut v8::ContextScope::new(scope, context);
+        self.run_child_document_lifecycle_action(child_scope, action.into())
     }
 
     pub(crate) fn queue_child_document_domcontentloaded_if_ready(
@@ -712,6 +752,7 @@ impl JsContextHost {
         {
             return FrameDocumentLifecycleTaskEffect::NotApplied;
         }
+        record_performance_dom_content_loaded_event_start(scope);
         let event_dispatched = self
             .child_browsing_context_document_wrapper(scope, child_handle)
             .is_some_and(|document| {
@@ -725,6 +766,7 @@ impl JsContextHost {
                     false,
                 )
             });
+        record_performance_dom_content_loaded_event_end(scope);
         if self
             .frame_owner_store
             .child_document_task_owner_is_current(child_handle, action.owner())
@@ -810,18 +852,14 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn mark_current_child_document_unload_dispatched_after_navigation_traversal(
+    pub(crate) fn dispatch_child_document_unload_after_traversal_check(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> bool {
-        let Some(action) = self
-            .frame_owner_store
-            .begin_current_child_document_unload(handle)
-        else {
-            return false;
-        };
-        self.frame_owner_store
-            .finish_current_child_document_unload(action)
+        // Traversal has already fired the root beforeunload before navigate.
+        // Descendants still need their checks before any document unloads.
+        self.dispatch_child_document_tree_unload_lifecycle(scope, handle, false)
     }
 
     pub(in crate::native_bridge::context_host) fn dispatch_child_browsing_context_unload_lifecycle_if_needed(
@@ -829,56 +867,163 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> bool {
-        let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
-        else {
-            return false;
-        };
-        let Some(_document) = self.child_browsing_context_document_wrapper(scope, handle) else {
-            return false;
-        };
-        let Some(action) = self
-            .frame_owner_store
-            .begin_current_child_document_unload(handle)
-        else {
-            return false;
-        };
-        tracing::debug!(
-            ?handle,
-            owner = ?action.owner(),
-            "dispatching document-owned child unload lifecycle"
-        );
-        let execution_context_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
-            action.owner().local_window_id,
-        );
-        dispatch_beforeunload_for_runtime_owner(scope, window);
-        dispatch_pagehide_for_runtime_owner(scope, window);
-        dispatch_unload_for_runtime_owner(scope, window);
-        let finished = self
-            .frame_owner_store
-            .finish_current_child_document_unload(action);
-        tracing::debug!(
-            ?handle,
-            owner = ?action.owner(),
-            finished,
-            "finished document-owned child unload lifecycle"
-        );
-        unsafe { &mut *self.runtime }
-            .cancel_window_execution_context_timers(execution_context_owner);
-        true
+        self.dispatch_child_document_tree_unload_lifecycle(scope, handle, true)
     }
 
-    /// Dispatches the unload sequence used when `Document::open()` removes a
-    /// descendant frame.
-    ///
-    /// This is intentionally distinct from navigation teardown: Chromium's
-    /// document-open steps do not prompt the child with `beforeunload`, and
-    /// dispatch pagehide/visibilitychange before unload while the parent
-    /// document's listeners are still installed.
-    fn dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
+    fn dispatch_child_document_tree_unload_lifecycle(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        include_root_beforeunload: bool,
+    ) -> bool {
+        let root_handle = handle;
+        let documents = self.child_document_unload_tree_snapshot(handle);
+        let mut unload_guards = Vec::new();
+        let mut actions = Vec::new();
+        // Every descendant gets its cancellation check before actual unload
+        // begins. Keep ancestor counters active across descendant callbacks.
+        for (handle, document, parent_document) in documents {
+            while unload_guards
+                .last()
+                .is_some_and(|(document, _)| Some(*document) != parent_document)
+            {
+                unload_guards.pop();
+            }
+            if self.child_browsing_context_document_handle(handle) != Some(document) {
+                continue;
+            }
+            let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
+            else {
+                continue;
+            };
+            if self
+                .child_browsing_context_document_wrapper(scope, handle)
+                .is_none()
+            {
+                continue;
+            }
+            let Some(action) = self
+                .frame_owner_store
+                .begin_current_child_document_unload(handle)
+            else {
+                continue;
+            };
+            unload_guards.push((document, self.enter_document_unload(document)));
+            actions.push((document, parent_document, action));
+            if include_root_beforeunload || handle != root_handle {
+                dispatch_beforeunload_for_runtime_owner(scope, window);
+            }
+        }
+        unload_guards.clear();
+        let dispatched = !actions.is_empty();
+        for (document, parent_document, action) in actions {
+            while unload_guards
+                .last()
+                .is_some_and(|(document, _)| Some(*document) != parent_document)
+            {
+                unload_guards.pop();
+            }
+            if self
+                .frame_owner_store
+                .child_document_task_owner_is_current(action.child_handle(), action.owner())
+            {
+                unload_guards.push((document, self.enter_document_unload(document)));
+                self.dispatch_child_document_unload_action(scope, action);
+            }
+        }
+        dispatched
+    }
+
+    fn child_document_unload_tree_snapshot(
+        &self,
+        handle: DomHandle,
+    ) -> Vec<(DomHandle, DomHandle, Option<DomHandle>)> {
+        let Some(document) = self.child_browsing_context_document_handle(handle) else {
+            return Vec::new();
+        };
+        let mut handles = vec![handle];
+        self.collect_child_browsing_context_handles_in_document_order_from_document(
+            document,
+            &mut handles,
+        );
+        // Snapshot the documents before any unload handler can remove or
+        // replace a descendant. A new document must not inherit this unload.
+        handles
+            .into_iter()
+            .filter_map(|handle| {
+                self.child_browsing_context_document_handle(handle)
+                    .map(|document| {
+                        (
+                            handle,
+                            document,
+                            self.dom_host().owner_document_handle(handle),
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    pub(in crate::native_bridge::context_host) fn dispatch_child_javascript_url_unload_lifecycle(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) {
+        let documents = self.child_document_unload_tree_snapshot(handle);
+        // Keep an ancestor's counter active while its descendants unload,
+        // and release a completed sibling before entering the next subtree.
+        let mut unload_guards = Vec::new();
+        for (handle, document, parent_document) in documents {
+            while unload_guards
+                .last()
+                .is_some_and(|(document, _)| Some(*document) != parent_document)
+            {
+                unload_guards.pop();
+            }
+            if self.child_browsing_context_document_handle(handle) == Some(document) {
+                unload_guards.push((document, self.enter_document_unload(document)));
+                self.dispatch_child_document_unload_without_beforeunload(scope, handle);
+            }
+        }
+    }
+
+    /// JavaScript URL replacement and removal by `Document::open()` unload
+    /// documents without checking whether unloading is canceled. They still
+    /// dispatch the actual unload lifecycle and cancel the old window's timers.
+    fn dispatch_child_document_unload_without_beforeunload(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) {
+        if self
+            .existing_child_browsing_context_window_wrapper(scope, handle)
+            .is_none()
+            || self
+                .child_browsing_context_document_wrapper(scope, handle)
+                .is_none()
+        {
+            return;
+        }
+        let Some(action) = self
+            .frame_owner_store
+            .begin_current_child_document_unload(handle)
+        else {
+            return;
+        };
+        self.dispatch_child_document_unload_action(scope, action);
+    }
+
+    fn dispatch_child_document_unload_action(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        action: FrameDocumentUnloadLifecycleAction,
+    ) {
+        let handle = action.child_handle();
+        if !self
+            .frame_owner_store
+            .child_document_task_owner_is_current(handle, action.owner())
+        {
+            return;
+        }
         let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             return;
@@ -886,21 +1031,38 @@ impl JsContextHost {
         let Some(document) = self.child_browsing_context_document_wrapper(scope, handle) else {
             return;
         };
-        let Some(action) = self
-            .frame_owner_store
-            .begin_current_child_document_unload(handle)
-        else {
-            return;
-        };
         let execution_context_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
             action.owner().local_window_id,
         );
 
+        let _document_unload = self
+            .child_browsing_context_document_handle(handle)
+            .map(|document| self.enter_document_unload(document));
         dispatch_pagehide_for_runtime_owner(scope, window);
-        if let Some(event) = construct_original_event(scope, "visibilitychange") {
-            let _ = call_object_method(scope, document, "dispatchEvent", &[event.into()]);
+        if let Some(document_handle) = self.child_browsing_context_document_handle(handle)
+            && self
+                .frame_owner_store
+                .child_document_task_owner_is_current(handle, action.owner())
+            && self
+                .dom_host_mut()
+                .set_document_visibility_hidden_for_handle(document_handle, true)
+        {
+            self.dispatch_child_document_event_for_owner(
+                scope,
+                handle,
+                action.owner(),
+                document,
+                "visibilitychange",
+                true,
+                false,
+            );
         }
-        dispatch_unload_for_runtime_owner(scope, window);
+        if self
+            .frame_owner_store
+            .child_document_task_owner_is_current(handle, action.owner())
+        {
+            dispatch_unload_for_runtime_owner(scope, window);
+        }
         let _ = self
             .frame_owner_store
             .finish_current_child_document_unload(action);
@@ -918,9 +1080,7 @@ impl JsContextHost {
             if self.dom_host().owner_document_handle(handle) != Some(document_handle) {
                 continue;
             }
-            self.dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
-                scope, handle,
-            );
+            self.dispatch_child_document_unload_without_beforeunload(scope, handle);
         }
     }
 }

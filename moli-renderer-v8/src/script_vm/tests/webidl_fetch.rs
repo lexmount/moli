@@ -2875,9 +2875,9 @@ fn readable_stream_default_reader_release_lock_rejects_closed_and_reads() {
     );
 }
 
-#[test]
-fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+#[tokio::test(flavor = "current_thread")]
+async fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://example.com/");
 
     let initial = vm
         .eval(
@@ -2912,6 +2912,12 @@ fn readable_stream_default_reader_release_lock_suppresses_internal_closed_reject
             .expect("ReadableStreamDefaultReader.releaseLock suppress promises should drain");
     }
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let unhandled = vm
         .eval("JSON.stringify(globalThis.__readerReleaseUnhandled)")
         .expect("ReadableStreamDefaultReader.releaseLock suppress events should evaluate");
@@ -8531,6 +8537,118 @@ fn url_and_search_params_declared_slots_ignore_prototype_spoofing() {
 }
 
 #[test]
+fn url_parsing_apis_reject_invalid_bases_for_absolute_inputs() {
+    let mut vm = new_storage_test_vm("https://url-invalid-base.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const invalidBases = [
+    '', '/relative', 'relative', 'http://', 'https://example.test:bogus/',
+    'http://[::1', 'file://example:1/', null, false,
+  ];
+  for (const input of ['about:blank', 'https://example.test/', 'data:text/plain,x', 'child']) {
+    for (const base of invalidBases) {
+      let error;
+      try { new URL(input, base); } catch (caught) { error = caught; }
+      assert(error instanceof TypeError, `constructor rejects invalid base ${base} for ${input}`);
+      assert(URL.parse(input, base) === null, `parse rejects invalid base ${base} for ${input}`);
+      assert(URL.canParse(input, base) === false, `canParse rejects invalid base ${base} for ${input}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("all URL parsing APIs must validate a supplied base");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn url_parsing_apis_resolve_same_scheme_inputs_against_the_base() {
+    let mut vm = new_storage_test_vm("https://url-same-scheme-base.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const cases = [
+    ['https:child', 'https://u:p@example.test:8443/dir/base?old#old', 'https://u:p@example.test:8443/dir/child'],
+    ['HTTPS:../next', 'https://example.test/dir/base', 'https://example.test/next'],
+    ['https:?next', 'https://example.test/dir/base?old#old', 'https://example.test/dir/base?next'],
+    ['https:#next', 'https://example.test/dir/base?old#old', 'https://example.test/dir/base?old#next'],
+    ['ftp:child', 'ftp://example.test/dir/base', 'ftp://example.test/dir/child'],
+    ['file:child', 'file:///dir/base', 'file:///dir/child'],
+    ['https:child', 'http://example.test/dir/base', 'https://child/'],
+    ['https:child', undefined, 'https://child/'],
+    ['about:blank', 'https://example.test/', 'about:blank'],
+    ['data:text/plain,x', 'about:blank', 'data:text/plain,x'],
+    ['#new', 'about:blank?old#old', 'about:blank?old#new'],
+    ['https://other.test/x', 'https://example.test/dir/base', 'https://other.test/x'],
+  ];
+  for (const [input, base, expected] of cases) {
+    assert(new URL(input, base).href === expected, `constructor resolves ${input} against ${base}`);
+    const parsed = URL.parse(input, base);
+    assert(parsed instanceof URL && parsed.href === expected, `parse resolves ${input} against ${base}`);
+    assert(URL.canParse(input, base), `canParse accepts ${input} against ${base}`);
+    assert(parsed.searchParams.toString() === new URL(expected).searchParams.toString(), 'resolved query initializes URLSearchParams');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("URL parsing must use the base even when the input includes a scheme");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn url_parsing_apis_convert_arguments_before_parsing() {
+    let mut vm = new_storage_test_vm("https://url-base-conversion-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  for (const parse of [(...args) => new URL(...args), URL.parse, URL.canParse]) {
+    const order = [];
+    const value = (name, text) => ({
+      [Symbol.toPrimitive](hint) {
+        assert(hint === 'string', 'URL arguments use string conversion');
+        order.push(name);
+        return text;
+      },
+    });
+    parse(value('input', 'https://example.test/'), value('base', 'https://base.test/'));
+    assert(order.join(',') === 'input,base', 'input then base are each converted once');
+    order.length = 0;
+    const marker = new RangeError('conversion marker');
+    let error;
+    try {
+      parse(value('input', 'http://['), {
+        toString() { order.push('base'); throw marker; },
+      });
+    } catch (caught) { error = caught; }
+    assert(error === marker && order.join(',') === 'input,base', 'base conversion errors precede URL parsing');
+    order.length = 0;
+    error = undefined;
+    try {
+      parse({ toString() { throw marker; } }, value('base', 'https://base.test/'));
+    } catch (caught) { error = caught; }
+    assert(error === marker && order.length === 0, 'failed input conversion does not touch the base');
+    const withoutBase = parse('https://example.test/');
+    const undefinedBase = parse('https://example.test/', undefined);
+    assert(String(withoutBase) === String(undefinedBase), 'undefined base is equivalent to omission');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("URL argument conversion order must be preserved");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn url_static_parse_and_can_parse_stringify_undefined_input() {
     let mut vm = new_storage_test_vm("https://url-static-stringification.test/");
 
@@ -8959,6 +9077,205 @@ fn response_clone_tees_user_readable_stream_body() {
 }
 
 #[test]
+fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
+    use crate::network_host::MaterializedResponseBody;
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://opaque-stream.test/");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Fetch),
+        );
+        vm.eval(
+            r#"
+            globalThis.__chunks = [];
+            globalThis.__finished = false;
+            globalThis.__onChunk = chunk => __chunks.push(...chunk);
+            fetch('https://cross-origin.test/body', {mode: 'no-cors'}).then(response => {
+                globalThis.__opaque = response;
+                globalThis.__clone = response.clone();
+            });
+        "#,
+        )
+        .unwrap();
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1);
+        let pending = &pending[0];
+        let id = crate::network_host::new_network_body_source_id();
+        vm.start_streaming_async_subresource_fetch(
+            crate::types::AsyncSubresourceStreamingStarted {
+                internal_id: pending.internal_id,
+                request_url: pending.url.clone(),
+                request_method: "GET".to_owned(),
+                request_headers: Vec::new(),
+                request_body: None,
+                body_source_id: id,
+                network_request_headers: None,
+                head: moli_fetch::ResponseHead {
+                    status_text: None,
+                    final_url: pending.url.clone(),
+                    status: 200,
+                    headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([__opaque.type, __opaque.body, __clone.body])")
+                .unwrap(),
+            r#"["opaque",null,null]"#
+        );
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let response = v8::Local::<v8::Object>::try_from(
+                global.get(scope, v8str(scope, "__clone").into()).unwrap(),
+            )
+            .unwrap();
+            let callback = v8::Local::<v8::Function>::try_from(
+                global.get(scope, v8str(scope, "__onChunk").into()).unwrap(),
+            )
+            .unwrap();
+            let (body, _) =
+                crate::network_host::materialize_response_object_body_with_chunk_callback(
+                    scope,
+                    response,
+                    "opaque clone consumer",
+                    callback,
+                );
+            let MaterializedResponseBody::Pending(promise) = body else {
+                panic!("incomplete opaque body must remain pending");
+            };
+            assert_eq!(
+                global.set(scope, v8str(scope, "__bodyDone").into(), promise.into()),
+                Some(true)
+            );
+            Ok(())
+        })
+        .unwrap();
+        vm.eval("__bodyDone.then(() => __finished = true)").unwrap();
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[..bytes.len() - 1].to_vec());
+        if expected.is_empty() {
+            assert_eq!(
+                vm.eval("JSON.stringify(__chunks)").unwrap(),
+                "[]",
+                "blocked prefix reached internal consumer"
+            );
+        } else {
+            assert_eq!(
+                vm.eval("String(__finished)").unwrap(),
+                "false",
+                "allowed body ended before its last byte"
+            );
+        }
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[bytes.len() - 1..].to_vec());
+        vm.finish_streaming_async_subresource_fetch(pending.internal_id, id, Ok(()))
+            .unwrap();
+        assert_eq!(vm.eval("String(__finished)").unwrap(), "true");
+        assert_eq!(
+            vm.eval("JSON.stringify(__chunks)").unwrap(),
+            serde_json::to_string(expected).unwrap(),
+            "{mime}"
+        );
+    }
+}
+
+#[test]
+fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
+    use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
+
+    let vm = new_storage_test_vm("https://null-response.test/");
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let host = vm._context_host.clone();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(move |isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let document_url = Url::parse("https://null-response.test/").unwrap();
+            for (method, status) in [
+                ("HEAD", 200), ("HEAD", 302), ("CONNECT", 200),
+                ("GET", 101), ("GET", 103), ("GET", 204), ("GET", 205), ("GET", 304),
+            ] {
+                for opaque in [false, true] {
+                    for source in ["response", "bytes", "subresource", "stream", "preload"] {
+                        let request = FetchResponseRequest {
+                            method,
+                            mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
+                        };
+                        let head = moli_fetch::ResponseHead {
+                            status_text: None,
+                            final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
+                            status,
+                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            redirected: false,
+                            redirect_chain: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        };
+                        let id = crate::network_host::new_network_body_source_id();
+                        let response = match source {
+                            "response" => crate::network_host::build_fetch_response_object_for_request_mode(
+                                scope, &document_url, request,
+                                moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+                            ),
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                                scope, &document_url, request, head,
+                                moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
+                                opaque.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                            ),
+                            "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
+                                scope, &document_url, request, head,
+                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()),
+                            ),
+                            "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        assert!(response.get(scope, v8str(scope, "body").into()).unwrap().is_null(),
+                            "{method}/{status}/{opaque}/{source}");
+                        assert!(!host.borrow().pending_network_body_sources.contains_key(&id));
+                        crate::network_host::enqueue_pending_network_body_chunk(scope, id, b"late bytes".to_vec());
+                        crate::network_host::error_pending_network_body_stream(scope, id, "late error".to_owned());
+                        crate::network_host::close_pending_network_body_stream(scope, id);
+                        match crate::network_host::materialize_response_object_body(scope, response, "null body") {
+                            MaterializedResponseBody::Ready(bytes) => assert!(bytes.is_empty()),
+                            _ => panic!("null internal body must materialize immediately: {method}/{status}/{opaque}/{source}"),
+                        }
+                        assert!(host.borrow().pending_network_body_sources.is_empty());
+                        assert!(host.borrow().pending_network_body_clones.is_empty());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("null response body checks should complete");
+}
+
+#[test]
 fn response_clone_tees_pending_network_body_after_parent_consumption() {
     let mut vm = new_storage_test_vm("https://response-clone-pending-stream.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
@@ -8978,8 +9295,12 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
                         headers: vec![("content-type".to_owned(), "application/json".to_owned())],
@@ -9079,8 +9400,12 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -9196,9 +9521,13 @@ fn materialize_response_object_preserves_redirected_slot() {
             let response = crate::network_host::build_fetch_response_object_for_request_mode(
                 scope,
                 &document_url,
-                moli_fetch::RequestMode::Cors,
+                crate::network_host::FetchResponseRequest {
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::Cors,
+                },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: final_url.clone(),
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -9245,8 +9574,9 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                 let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: final_url.clone(),
                         status: 302,
                         headers: vec![("location".to_owned(), "target.html".to_owned())],

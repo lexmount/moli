@@ -52,6 +52,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     ChildNavigationCommit,
     ChildModulepreloadEventAction,
     DomManipulation(PageDomManipulationTestFamily),
+    AnyDomManipulation,
     DedicatedWorkerClientEvent,
     DynamicImportOwnerAction,
     FileReading,
@@ -76,6 +77,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     StylesheetCompletion,
     TextTrackNetworking,
     UserInteraction,
+    BitmapTask,
     WebCryptoTask,
     WebSocket,
     WindowMessage,
@@ -88,6 +90,9 @@ impl PageSelectedTaskTestSelector {
             Self::ChildDocumentLifecycle => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                    | RendererPageReadyDescriptor::DomManipulation {
+                        owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner), ..
+                    }
                     if matches!(
                         owner.target(),
                         crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
@@ -103,7 +108,9 @@ impl PageSelectedTaskTestSelector {
             ),
             Self::ChildHostLoad => matches!(
                 descriptor,
-                RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                RendererPageReadyDescriptor::DomManipulation {
+                    owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildHostLoad(owner), ..
+                }
                     if matches!(
                         owner.target(),
                         crate::page_task_queue::RendererPageChildFrameTaskTarget::HostLoad(_)
@@ -151,6 +158,10 @@ impl PageSelectedTaskTestSelector {
             Self::ChildModulepreloadEventAction => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::ChildModulepreloadEventAction { .. }
+            ),
+            Self::AnyDomManipulation => matches!(
+                descriptor,
+                RendererPageReadyDescriptor::DomManipulation { .. }
             ),
             Self::DomManipulation(family) => matches!(
                 descriptor,
@@ -281,6 +292,9 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::MiscPlatformApi { .. }
                 )
             }
+            Self::BitmapTask => {
+                matches!(descriptor, RendererPageReadyDescriptor::BitmapTask { .. })
+            }
             Self::WebCryptoTask => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::WebCryptoTask { .. }
@@ -304,7 +318,13 @@ impl PageSelectedTaskTestSelector {
 
     fn matches_task(self, task: &RendererPageSchedulerTask) -> bool {
         match (self, task) {
-            (Self::ChildDocumentLifecycle, RendererPageSchedulerTask::ChildFrameTask(task)) => {
+            (Self::ChildDocumentLifecycle, RendererPageSchedulerTask::ChildFrameTask(task))
+            | (
+                Self::ChildDocumentLifecycle,
+                RendererPageSchedulerTask::DomManipulation(
+                    RendererPageDomManipulationTask::ChildDocumentLifecycle(task),
+                ),
+            ) => {
                 matches!(
                     task.owner().target(),
                     crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
@@ -318,7 +338,12 @@ impl PageSelectedTaskTestSelector {
                     )
                 )
             }
-            (Self::ChildHostLoad, RendererPageSchedulerTask::ChildFrameTask(task)) => matches!(
+            (
+                Self::ChildHostLoad,
+                RendererPageSchedulerTask::DomManipulation(
+                    RendererPageDomManipulationTask::ChildHostLoad(task),
+                ),
+            ) => matches!(
                 task.owner().target(),
                 crate::page_task_queue::RendererPageChildFrameTaskTarget::HostLoad(_)
             ),
@@ -365,6 +390,7 @@ impl PageSelectedTaskTestSelector {
                 Self::ChildModulepreloadEventAction,
                 RendererPageSchedulerTask::ChildModulepreloadEventAction(_),
             ) => true,
+            (Self::AnyDomManipulation, RendererPageSchedulerTask::DomManipulation(_)) => true,
             (Self::DomManipulation(family), RendererPageSchedulerTask::DomManipulation(task)) => {
                 family.matches_owner(task.owner())
             }
@@ -406,6 +432,7 @@ impl PageSelectedTaskTestSelector {
                 RendererPageSchedulerTask::SharedWorkerClientEvent(_),
             )
             | (Self::UserInteraction, RendererPageSchedulerTask::UserInteraction(_))
+            | (Self::BitmapTask, RendererPageSchedulerTask::BitmapTask(_))
             | (Self::WebCryptoTask, RendererPageSchedulerTask::WebCryptoTask(_))
             | (Self::WindowMessage, RendererPageSchedulerTask::WindowMessage(_)) => true,
             (Self::WebSocket, RendererPageSchedulerTask::WebSocket(_)) => true,

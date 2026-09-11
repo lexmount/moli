@@ -111,30 +111,6 @@ macro_rules! body_attr_reflection {
 }
 
 body_attr_reflection!(
-    body_text_getter_function,
-    body_text_setter_function,
-    "text",
-    "text"
-);
-body_attr_reflection!(
-    body_link_getter_function,
-    body_link_setter_function,
-    "link",
-    "link"
-);
-body_attr_reflection!(
-    body_v_link_getter_function,
-    body_v_link_setter_function,
-    "vlink",
-    "vLink"
-);
-body_attr_reflection!(
-    body_a_link_getter_function,
-    body_a_link_setter_function,
-    "alink",
-    "aLink"
-);
-body_attr_reflection!(
     body_background_getter_function,
     body_background_setter_function,
     "background",

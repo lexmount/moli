@@ -272,7 +272,7 @@ fn validate_pre_insert_parent_and_ancestor(
     child: DomHandle,
 ) -> bool {
     if !node_can_contain_children(runtime, parent)
-        || node_move_before_shadow_including_contains(runtime, child, parent)
+        || node_is_host_including_inclusive_ancestor(runtime, child, parent)
     {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return false;
@@ -415,7 +415,7 @@ fn node_move_before_after_argument_validation(
     let runtime = unsafe { &*runtime_ptr };
     if !node_move_before_is_valid_parent(runtime, parent)
         || !node_move_before_is_valid_child(runtime, child)
-        || node_move_before_shadow_including_contains(runtime, child, parent)
+        || node_is_host_including_inclusive_ancestor(runtime, child, parent)
         || node_move_before_shadow_including_root(runtime, parent)
             != node_move_before_shadow_including_root(runtime, child)
     {
@@ -486,29 +486,14 @@ fn node_move_before_is_valid_child(runtime: &JsContextHost, handle: DomHandle) -
     })
 }
 
-pub(super) fn node_move_before_shadow_including_contains(
+pub(super) fn node_is_host_including_inclusive_ancestor(
     runtime: &JsContextHost,
     ancestor: DomHandle,
     node: DomHandle,
 ) -> bool {
-    let mut current = Some(node);
-    while let Some(handle) = current {
-        if handle == ancestor {
-            return true;
-        }
-        current = runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::parent_node)
-            .or_else(|| {
-                runtime
-                    .dom_host()
-                    .is_shadow_root(handle)
-                    .then(|| runtime.dom_host().shadow_root_host(handle))
-                    .flatten()
-            });
-    }
-    false
+    runtime
+        .dom_host()
+        .is_host_including_inclusive_ancestor(ancestor, node)
 }
 
 fn node_move_before_shadow_including_root(

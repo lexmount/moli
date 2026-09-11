@@ -35,6 +35,10 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
+from email import policy
+from email.parser import BytesParser
+from email.utils import formatdate
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -66,12 +70,35 @@ from .case_set import (
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+XHR_DOCUMENT_FIXTURES = {
+    "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
+    # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
+    "/xhr/resources/win-1252-html.py": ("text/html;charset=windows-1252", b"\xc3\xbf"),
+    "/xhr/resources/invalid-utf8-html.py": ("text/html;charset=utf-8", b"\xff"),
+    "/xhr/resources/shift-jis-html.py": ("text/html;charset=shift-jis", b"\x83e\x83X\x83g"),
+    "/xhr/resources/img-utf8-html.py": ("text/html;charset=utf-8", b"<img>foo"),
+    "/xhr/resources/empty-div-utf8-html.py": ("text/html;charset=utf-8", b"<!DOCTYPE html><div></div>"),
+}
+XHR_RESOURCE_PATHS = {
+    "/xhr/resources/requri.py",
+    "/xhr/resources/redirect.py",
+    "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/content.py",
+    "/xhr/resources/echo-content-type.py",
+    "/xhr/resources/status.py",
+    "/xhr/resources/last-modified.py",
+    *XHR_DOCUMENT_FIXTURES,
+}
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
     "/fetch/api/resources/stash-take.py",
     "/fetch/api/resources/infinite-slow-response.py",
 }
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
+FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
+FORM_SUBMISSION_PATH = (
+    "/html/semantics/forms/form-submission-0/resources/form-submission.py"
+)
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
     rb"/resources/testharnessreport\.js(?P=quote)",
@@ -463,7 +490,7 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   function dispatchKey(target, type, key, modifiers) {
-    target.dispatchEvent(new KeyboardEvent(type, {
+    return target.dispatchEvent(new KeyboardEvent(type, {
       key: key,
       altKey: !!modifiers.Alt,
       ctrlKey: !!modifiers.Control,
@@ -472,6 +499,29 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
       cancelable: true,
       composed: true,
     }));
+  }
+
+  function insertSendKeyText(target, key, modifiers) {
+    if (!target || key.length !== 1 || modifiers.Alt || modifiers.Control) {
+      return;
+    }
+    var codePoint = key.codePointAt(0);
+    if (codePoint >= 0xE000 && codePoint <= 0xF8FF) {
+      return;
+    }
+    var localName = String(target.localName || '').toLowerCase();
+    var type = localName === 'input' ? String(target.type || '').toLowerCase() : '';
+    var isTextControl =
+      localName === 'textarea' ||
+      (localName === 'input' &&
+       ['text', 'search', 'tel', 'url', 'email', 'password'].includes(type));
+    if (!isTextControl && !target.isContentEditable) {
+      return;
+    }
+    var doc = target.ownerDocument || document;
+    try {
+      doc.execCommand('insertText', false, key);
+    } catch (e) {}
   }
 
   async function action_sequence(actions, context) {
@@ -532,12 +582,19 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   async function sendKeys(element, keys) {
+    var wasFocused = document.activeElement === element;
     if (
       element &&
       typeof element.focus === 'function' &&
       String(element.localName || '').toLowerCase() !== 'body'
     ) {
       element.focus();
+    }
+    if (!wasFocused && element && typeof element.setSelectionRange === 'function') {
+      try {
+        var end = String(element.value || '').length;
+        element.setSelectionRange(end, end);
+      } catch (e) {}
     }
     var modifiers = { Alt: false, Control: false, Shift: false };
     for (var keyValue of String(keys || '')) {
@@ -548,7 +605,10 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
         dispatchKey(target, 'keydown', key, modifiers);
         continue;
       }
-      dispatchKey(target, 'keydown', key, modifiers);
+      var keyAllowed = dispatchKey(target, 'keydown', key, modifiers);
+      if (keyAllowed) {
+        insertSendKeyText(document.activeElement || target, key, modifiers);
+      }
       dispatchKey(document.activeElement || target, 'keyup', key, modifiers);
     }
     for (var modifier in modifiers) {
@@ -764,6 +824,10 @@ _TRICKLE_PIPE_RE = re.compile(r"(?:^|[|,])trickle\(d([0-9]+(?:\.[0-9]+)?)\)(?:$|
 _HEADER_PIPE_RE = re.compile(r"^header\(([^,()]+),([^()]*)\)$")
 _STATUS_PIPE_RE = re.compile(r"^status\(([0-9]{3})\)$")
 _GET_TEMPLATE_RE = re.compile(rb"\{\{GET\[([^\]\r\n]+)\]\}\}")
+_HEADER_OR_DEFAULT_TEMPLATE_RE = re.compile(
+    rb"\{\{header_or_default\(\s*([^,()]+?)\s*,\s*([^()]*)\)\}\}",
+    re.IGNORECASE,
+)
 _UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -1020,6 +1084,17 @@ def _response_content_type_and_extra_headers(
     return merged_content_type, merged_extra_headers
 
 
+def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
+    """Model the identical Fetch/XHR status.py handlers without decoding payloads."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    return (
+        int(params.get("code", ["200"])[0]),
+        params.get("text", ["OMG"])[0],
+        params.get("type", [""])[0],
+        params.get("content", [""])[0].encode("latin-1"),
+    )
+
+
 def _wasm_webapi_status_code(query: str) -> int | None:
     """Return the status for WPT's wasm/webapi/status.py fixture.
 
@@ -1053,6 +1128,127 @@ def _wpt_delay_seconds(query: str) -> float | None:
     if not math.isfinite(delay_ms) or delay_ms < 0:
         return None
     return delay_ms / 1_000.0
+
+
+def _workers_url_encoding_response(query: str) -> bytes:
+    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
+    value = next(
+        (
+            value
+            for name, value in parse_qsl(query, keep_blank_values=True)
+            if name == "x"
+        ),
+        None,
+    )
+    return b"PASS" if value == "å" else b"FAIL"
+
+
+def _form_echo_response(body: bytes) -> bytes:
+    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
+
+
+def _form_submission_response(
+    query: str, content_type: str | None, body: bytes
+) -> bytes:
+    """Validate entity bodies like the upstream form-submission.py fixture."""
+    params = dict(parse_qsl(query))
+    if params.get("query") == "1":
+        if content_type == "application/x-www-form-urlencoded":
+            valid = body == b"foo=bara"
+        elif content_type == "text/plain":
+            valid = body == b"qux=baz\r\n"
+        else:
+            # The upstream fallback compares the first parsed foo field, not
+            # the raw body. MIME parsing must respect boundaries and headers;
+            # a matching value elsewhere in the payload is not sufficient.
+            form_content_type = content_type or "application/x-www-form-urlencoded"
+            message = BytesParser(policy=policy.HTTP).parsebytes(
+                f"Content-Type: {form_content_type}\r\n\r\n".encode("latin-1") + body
+            )
+            # WPT's FieldStorage dispatches on the case-sensitive media token.
+            media_type = form_content_type.partition(";")[0].strip()
+            valid = False
+            if media_type == "application/x-www-form-urlencoded":
+                fields = parse_qsl(body.decode("latin-1"), keep_blank_values=True)
+                valid = (
+                    next((value for name, value in fields if name == "foo"), None)
+                    == "bar"
+                )
+            elif (
+                media_type == "multipart/form-data"
+                and message.is_multipart()
+            ):
+                for part in message.iter_parts():
+                    if part.get_param("name", header="content-disposition") == "foo":
+                        # FieldStorage does not decode Content-Transfer-Encoding
+                        # for form fields, and uploaded files are not byte values.
+                        valid = (
+                            not part.get_filename() and part.get_payload() == "bar"
+                        )
+                        break
+    elif "expected_body" in params:
+        valid = body == params["expected_body"].encode("utf-8")
+    else:
+        valid = False
+    return b"OK" if valid else b"FAIL"
+
+
+def _xhr_redirect_fixture_response(
+    path: str, query: str
+) -> tuple[int, str | None, list[tuple[str, str]], bytes, float | None]:
+    """Model xhr/resources/redirect.py, including its second Location decode."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    code = int(params.get("code", ["302"])[0])
+    location = params.get("location", [path + "?followed"])[0]
+    location = location.encode("latin-1").decode("utf-8")
+    if location:
+        location = parse_qs("location=" + location)["location"][0]
+        if location.startswith("redirect.py"):
+            location += "&code=" + str(code)
+    delay = None
+    if "delay" in params:
+        delay = float(params["delay"][0]) / 1_000
+        if not math.isfinite(delay) or delay < 0:
+            raise ValueError("invalid redirect delay")
+    if "followed" in params:
+        # Preserve the upstream handler's header spelling.
+        return 200, None, [("Content:Type", "text/plain")], b"MAGIC HAPPENED", delay
+    if any(character in location for character in "\r\n"):
+        raise ValueError("invalid Location header")
+    location.encode("latin-1")
+    return code, "WEBSRT MARKETING", [("Location", location)], b"TEST", delay
+
+
+def _xhr_inspect_headers_fixture_response(
+    query: str, raw_headers: list[tuple[str, str]]
+) -> tuple[list[tuple[str, str]], bytes]:
+    """Model xhr/resources/inspect-headers.py's raw header filtering."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    filter_value = params.get("filter_value", [""])[0].encode("latin-1")
+    filter_name = params.get("filter_name", [""])[0].encode("latin-1").lower()
+    parts = []
+    for raw_name, raw_value in raw_headers:
+        name, value = raw_name.encode("latin-1"), raw_value.encode("latin-1")
+        if filter_value:
+            if value == filter_value:
+                parts.append(name + b",")
+        elif name.lower() == filter_name:
+            parts.append(name + b": " + value + b"\n")
+    headers = []
+    if "cors" in params:
+        headers.extend([
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Credentials", "true"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
+            ("Access-Control-Allow-Headers", "x-test, x-foo"),
+            (
+                "Access-Control-Expose-Headers",
+                "x-request-method, x-request-content-type, x-request-query, "
+                "x-request-content-length",
+            ),
+        ])
+    headers.append(("content-type", "text/plain"))
+    return headers, b"".join(parts)
 
 
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
@@ -1091,6 +1287,79 @@ def _workers_modules_export_on_load_script_response() -> tuple[bytes, list[tuple
             ("Access-Control-Allow-Headers", "Service-Worker"),
         ],
     )
+
+
+def _inspect_headers_response_headers(
+    query: str,
+    request_headers: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Model fetch/api/resources/inspect-headers.py's response headers."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    checked_headers_value = next(
+        (value for name, value in params if name == "headers"),
+        None,
+    )
+    checked_headers = (
+        checked_headers_value.split("|") if checked_headers_value is not None else []
+    )
+    request_headers_by_name: dict[str, str] = {}
+    for name, value in request_headers:
+        request_headers_by_name.setdefault(name.lower(), value)
+
+    response_headers = []
+    for name in checked_headers:
+        value = request_headers_by_name.get(name.lower())
+        if value is not None:
+            response_headers.append((f"x-request-{name}", value))
+
+    if any(name == "cors" for name, _ in params):
+        response_headers.extend(
+            [
+                (
+                    "Access-Control-Allow-Origin",
+                    request_headers_by_name.get("origin", "*"),
+                ),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    ", ".join(f"x-request-{name}" for name in checked_headers),
+                ),
+            ]
+        )
+        allow_headers = next(
+            (value for name, value in params if name == "allow_headers"),
+            None,
+        )
+        response_headers.append(
+            (
+                "Access-Control-Allow-Headers",
+                allow_headers
+                if allow_headers is not None
+                else ", ".join(name for name, _ in request_headers),
+            )
+        )
+
+    return response_headers
+
+
+def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
+    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    outcome = next(
+        (value for name, value in params if name == "outcome"),
+        "f",
+    )
+    content_type = next(
+        (value for name, value in params if name == "type"),
+        None,
+    )
+    type_label = content_type if content_type is not None else "Content-Type missing"
+    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
+    body = ("// nothing to see here\n" + result_call).encode()
+    return content_type, body
 
 
 def _url_host_literal(hostname: str) -> str:
@@ -1148,6 +1417,7 @@ def _static_response_headers(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
 ) -> list[tuple[str, str]]:
     headers = _apply_header_operations(
         _sidecar_response_headers(file_path),
@@ -1168,6 +1438,7 @@ def _static_response_headers(
                 request_path=request_path,
                 request_hostname=request_hostname,
                 primary_hostname=primary_hostname,
+                request_headers=request_headers,
                 template_ids=template_ids,
             ).decode("latin-1"),
         )
@@ -1213,6 +1484,7 @@ def _substitute_wpt_template_variables(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
     template_ids: dict[bytes, bytes] | None = None,
 ) -> bytes:
     if alternate_port is None:
@@ -1383,6 +1655,17 @@ def _substitute_wpt_template_variables(
     }
     for marker, value in replacements.items():
         body = body.replace(marker, value)
+    normalized_request_headers = {
+        name.lower(): value for name, value in (request_headers or {}).items()
+    }
+
+    def replace_header_or_default(match: re.Match[bytes]) -> bytes:
+        name = match.group(1).decode("ascii", errors="ignore").strip().lower()
+        default = match.group(2).decode("utf-8", errors="replace").strip()
+        value = normalized_request_headers.get(name, default)
+        return html_escape(value, quote=True).encode("utf-8")
+
+    body = _HEADER_OR_DEFAULT_TEMPLATE_RE.sub(replace_header_or_default, body)
     if template_ids is None:
         template_ids = {}
 
@@ -1489,6 +1772,30 @@ class _Ipv6ThreadingHTTPServer(_FixtureThreadingHTTPServer):
     address_family = socket.AF_INET6
 
 
+class FetchStash:
+    """Write-once, read-once stash scoped to /fetch/api/resources/.
+
+    Every origin of one fixture server shares this namespace. UUID
+    normalization matches wptserve, including equivalent key spellings.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values: dict[uuid.UUID, str] = {}
+
+    def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            if not overwrite and parsed_key in self._values:
+                raise ValueError("Tried to overwrite existing shared stash value")
+            self._values[parsed_key] = value
+
+    def take(self, key: str) -> str | None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            return self._values.pop(parsed_key, None)
+
+
 class CspReportStore:
     """Thread-safe subset of WPT reporting stash used by CSP report checks."""
 
@@ -1539,41 +1846,6 @@ class CspReportStore:
             self._cv.notify_all()
 
 
-def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
-    """Model fetch/api/resources/status.py without decoding its byte payload."""
-    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
-    return (
-        int(params.get("code", ["200"])[0]),
-        params.get("text", ["OMG"])[0],
-        params.get("type", [""])[0],
-        params.get("content", [""])[0].encode("latin-1"),
-    )
-
-
-class FetchStash:
-    """Write-once, read-once stash scoped to /fetch/api/resources/.
-
-    Every origin of one fixture server shares this namespace. UUID
-    normalization matches wptserve, including equivalent key spellings.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._values: dict[uuid.UUID, str] = {}
-
-    def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
-        parsed_key = uuid.UUID(key)
-        with self._lock:
-            if not overwrite and parsed_key in self._values:
-                raise ValueError("Tried to overwrite existing shared stash value")
-            self._values[parsed_key] = value
-
-    def take(self, key: str) -> str | None:
-        parsed_key = uuid.UUID(key)
-        with self._lock:
-            return self._values.pop(parsed_key, None)
-
-
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -1582,6 +1854,18 @@ def _make_handler(
     stopping: threading.Event,
 ) -> type[BaseHTTPRequestHandler]:
     class WptHandler(BaseHTTPRequestHandler):
+        def __getattr__(self, name: str) -> Callable[[], None]:
+            if (
+                name.startswith("do_")
+                and unquote(urlsplit(getattr(self, "path", "")).path)
+                in XHR_RESOURCE_PATHS
+            ):
+                return self._serve_xhr_method
+            raise AttributeError(name)
+
+        def _serve_xhr_method(self) -> None:
+            self._serve_xhr_resource(emit_body=self.command != "HEAD")
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -1592,6 +1876,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_xhr_resource(emit_body=True):
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | {
@@ -1617,12 +1903,34 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_xhr_resource(emit_body=True):
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
             }:
                 self._serve_fetch_resource_method()
+                return
+            if path == FORM_SUBMISSION_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_submission_response(
+                            parsed.query, self.headers.get("Content-Type"), raw
+                        ),
+                        emit_body=True,
+                    )
+                return
+            if path == FORM_ECHO_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_echo_response(raw),
+                        emit_body=True,
+                    )
                 return
             if path == "/xhr/resources/delay.py":
                 if self._consume_request_body():
@@ -1663,6 +1971,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_xhr_resource(emit_body=True):
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(
@@ -1683,6 +1993,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_xhr_resource(emit_body=True):
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
@@ -1809,6 +2121,8 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_xhr_resource(emit_body=emit_body):
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == "/fetch/api/resources/status.py":
@@ -1836,8 +2150,51 @@ def _make_handler(
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
                 return
+            if path == FORM_ECHO_PATH:
+                self._send_bytes("text/plain", b"", emit_body=emit_body)
+                return
+            if path == FORM_SUBMISSION_PATH:
+                self._send_bytes(
+                    "text/plain",
+                    _form_submission_response(
+                        parsed.query, self.headers.get("Content-Type"), b""
+                    ),
+                    emit_body=emit_body,
+                )
+                return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
+                return
+            if path == "/workers/semantics/encodings/003-1.py":
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    _workers_url_encoding_response(parsed.query),
+                    emit_body=emit_body,
+                )
+                return
+            if path == "/fetch/api/resources/status.py":
+                self._serve_fetch_status(parsed.query, emit_body=emit_body)
+                return
+            if path == "/fetch/api/resources/trickle.py":
+                self._serve_fetch_trickle(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS:
+                self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
+                return
+            if path == "/fetch/api/resources/inspect-headers.py":
+                self._send_bytes(
+                    "text/plain",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=_inspect_headers_response_headers(
+                        parsed.query,
+                        list(self.headers.items()),
+                    ),
+                    status_code=pipe_status_code or 200,
+                )
+                return
+            if path == "/fetch/nosniff/resources/js.py":
+                self._serve_nosniff_javascript(parsed.query, emit_body=emit_body)
                 return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/module/"
@@ -1858,6 +2215,29 @@ def _make_handler(
                 )
                 return
 
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/module/"
+                "dynamic-import/beta/redirect.py"
+            ):
+                params = parse_qs(parsed.query, keep_blank_values=True)
+                try:
+                    status_code = int(params.get("status", ["302"])[0])
+                except ValueError:
+                    status_code = 302
+                location = params.get("location", [""])[0]
+                if not 100 <= status_code <= 599 or any(
+                    character in location for character in "\r\n"
+                ):
+                    self.send_error(400)
+                    return
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=[("Location", location)],
+                    status_code=status_code,
+                )
+                return
             if path in {
                 "/fetch/api/resources/redirect.py",
                 "/common/redirect.py",
@@ -1985,6 +2365,7 @@ def _make_handler(
                     request_path=path,
                     request_hostname=_host_header_hostname(self.headers.get("Host")),
                     primary_hostname=primary_hostname,
+                    request_headers=self.headers,
                 )
             static_header_context = {
                 "port": int(
@@ -2029,6 +2410,7 @@ def _make_handler(
                         _host_header_hostname(self.headers.get("Host")),
                     )
                 ),
+                "request_headers": self.headers,
             }
 
             def static_headers() -> list[tuple[str, str]]:
@@ -2186,6 +2568,34 @@ def _make_handler(
                 return self._reject_request_body(413)
             return self._discard_request_body_bytes(length)
 
+        def _read_content_length_request_body(self) -> bytes | None:
+            if self.headers.get("Transfer-Encoding") is not None:
+                self._reject_request_body(400)
+                return None
+            length_str = self.headers.get("Content-Length")
+            if length_str is None:
+                return b""
+            try:
+                length = int(length_str)
+            except ValueError:
+                self._reject_request_body(400)
+                return None
+            if length < 0:
+                self._reject_request_body(400)
+                return None
+            if length > MAX_REQUEST_BODY_BYTES:
+                self._reject_request_body(413)
+                return None
+            try:
+                raw = self.rfile.read(length)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                self.close_connection = True
+                return None
+            if len(raw) != length:
+                self.close_connection = True
+                return None
+            return raw
+
         def _consume_chunked_request_body(self) -> bool:
             total = 0
             try:
@@ -2252,6 +2662,101 @@ def _make_handler(
             self.close_connection = True
             self.send_error(status_code)
             return False
+
+        def _serve_xhr_resource(self, *, emit_body: bool) -> bool:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path not in XHR_RESOURCE_PATHS:
+                return False
+            upload_consumed = False
+            try:
+                if path == "/xhr/resources/requri.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True)
+                    uri = self.path
+                    if "full" in params and not uri.startswith("http://"):
+                        authority = self.headers.get("Host")
+                        if authority is None:
+                            authority = _url_host_literal(
+                                str(self.server.server_address[0])
+                            )
+                        if urlsplit("//" + authority).port is None:
+                            authority += ":" + str(self.server.server_address[1])
+                        uri = f"http://{authority}{uri}"
+                    status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                elif path == "/xhr/resources/inspect-headers.py":
+                    status, reason = 200, None
+                    headers, body = _xhr_inspect_headers_fixture_response(
+                        parsed.query, list(self.headers.raw_items())
+                    )
+                elif path == "/xhr/resources/content.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "content" in params:
+                        body = params["content"][0].encode("latin-1")
+                    else:
+                        body = self._read_content_length_request_body()
+                        if body is None:
+                            return True
+                        upload_consumed = True
+                    content_type = "text/plain"
+                    if "response_charset_label" in params:
+                        content_type += ";charset=" + params["response_charset_label"][0]
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                    ]
+                elif path == "/xhr/resources/echo-content-type.py":
+                    status, reason = 200, None
+                    headers = [("Content-Type", "text/plain")]
+                    body = self.headers.get("Content-Type", "").encode("latin-1")
+                elif path == "/xhr/resources/status.py":
+                    status, reason, content_type, body = _fetch_status_response(parsed.query)
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                    ]
+                elif path == "/xhr/resources/last-modified.py":
+                    source = wpt_root / "xhr/resources/well-formed.xml"
+                    modified = formatdate(source.stat().st_mtime, usegmt=True)
+                    body = source.read_text(encoding="utf-8").encode("utf-8")
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", "application/xml"),
+                        ("Last-Modified", modified),
+                    ]
+                elif path in XHR_DOCUMENT_FIXTURES:
+                    content_type, body = XHR_DOCUMENT_FIXTURES[path]
+                    status, reason = 200, None
+                    headers = [("Content-Type", content_type)]
+                else:
+                    status, reason, headers, body, delay = _xhr_redirect_fixture_response(
+                        parsed.path, parsed.query
+                    )
+                    if delay is not None:
+                        time.sleep(delay)
+            except (ValueError, KeyError, OverflowError, OSError):
+                self.send_error(500)
+                return True
+            # Close connections with unread uploads so early responses and
+            # redirects do not wait for the request body to finish.
+            if path == "/xhr/resources/echo-content-type.py" or not upload_consumed and (
+                self.headers.get("Transfer-Encoding") is not None
+                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
+            ):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                None,
+                body,
+                emit_body=emit_body,
+                extra_headers=headers,
+                status_code=status,
+                status_text=reason,
+            )
+            return True
 
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
@@ -2416,9 +2921,23 @@ def _make_handler(
                 extra_headers=[("X-Request-Method", self.command)],
             )
 
+        def _serve_nosniff_javascript(self, query: str, *, emit_body: bool) -> None:
+            content_type, body = _nosniff_javascript_response(query)
+            self.send_response(200)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            if content_type is not None:
+                self.send_header("Content-Type", content_type)
+            self.end_headers()
+            if emit_body:
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
         def _send_bytes(
             self,
-            content_type: str,
+            content_type: str | None,
             body: bytes,
             *,
             emit_body: bool,
@@ -2426,12 +2945,15 @@ def _make_handler(
             status_code: int = 200,
             status_text: str | None = None,
         ) -> None:
-            content_type, extra_headers = _response_content_type_and_extra_headers(
-                content_type,
-                extra_headers,
-            )
+            if content_type is None:
+                header_block = list(extra_headers or [])
+            else:
+                content_type, extra_headers = _response_content_type_and_extra_headers(
+                    content_type,
+                    extra_headers,
+                )
+                header_block = _static_response_header_block(content_type, extra_headers)
             self.send_response(status_code, status_text)
-            header_block = _static_response_header_block(content_type, extra_headers)
             for name, value in header_block:
                 self.send_header(name, value)
             if not _headers_include(header_block, "Content-Length"):

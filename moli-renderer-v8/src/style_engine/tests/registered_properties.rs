@@ -377,6 +377,37 @@ fn registered_color_functions_resolve_currentcolor() {
 }
 
 #[test]
+fn registered_relative_colors_resolve_currentcolor() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let target = host.create_element("div");
+    assert!(host.set_attribute(target, "id", "target"));
+    assert!(host.append_child(document, target));
+
+    let mut engine = MoliStyleEngine::new();
+    register_custom_property(
+        &mut engine,
+        document,
+        "--registered-color",
+        "<color>",
+        "transparent",
+    );
+    let sources = vec![StyloStylesheetSource::new(
+        "#target {
+            color: blue;
+            --registered-color: color(from currentcolor srgb b g r);
+        }"
+        .into(),
+        test_url(),
+    )];
+
+    assert_eq!(
+        computed_value(&engine, &host, target, "--registered-color", &sources),
+        "color(srgb 1 0 0)"
+    );
+}
+
+#[test]
 fn registered_color_values_resolve_tree_counting_math() {
     let mut host = test_host();
     let document = host.document_handle();

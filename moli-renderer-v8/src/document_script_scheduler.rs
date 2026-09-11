@@ -578,6 +578,7 @@ mod tests {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }
     }
 
@@ -586,6 +587,7 @@ mod tests {
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }
     }
 
@@ -951,7 +953,10 @@ mod tests {
             .await
             .into_async_tasks();
         assert_eq!(async_scripts.len(), 1);
-        assert_eq!(async_scripts[0].position(), 2);
+        assert_eq!(
+            async_scripts[0].as_script().expect("async script").position,
+            2
+        );
     }
 
     #[tokio::test]
@@ -1094,6 +1099,7 @@ mod tests {
         );
         let response = crate::types::NavigationResponse::from_head_and_text_body(
             moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: module_script.url.clone(),
                 status: 200,
                 headers: vec![("content-type".to_owned(), "text/javascript".to_owned())],
@@ -1954,6 +1960,59 @@ mod tests {
     // -----------------------------------------------------------------------
     // Finalize: remaining async handed back correctly
     // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn finalize_plan_preserves_observed_async_completion_order() {
+        for source_failure in [false, true] {
+            let first = prepared_script(
+                1,
+                ScriptMode::Async,
+                ScriptKind::Classic,
+                ScriptSourceKind::External,
+            );
+            let second = prepared_script(
+                2,
+                ScriptMode::Async,
+                ScriptKind::Classic,
+                ScriptSourceKind::External,
+            );
+            let mut scheduler = scheduler_with_async_state(
+                vec![
+                    parse_time_async_entry(first.clone()),
+                    parse_time_async_entry(second.clone()),
+                ],
+                Vec::new(),
+            );
+            assert!(scheduler.runner.async_parse_time_queue.apply_completion(
+                async_load_completion_ok(second.node_id, "second-ready-first")
+            ));
+            let completion = if source_failure {
+                async_load_completion_err(first.node_id, "first-failed-later")
+            } else {
+                async_load_completion_ok(first.node_id, "first-ready-later")
+            };
+            assert!(
+                scheduler
+                    .runner
+                    .async_parse_time_queue
+                    .apply_completion(completion)
+            );
+
+            let tasks = scheduler
+                .finalize_owned_script_work()
+                .await
+                .into_async_tasks();
+            assert_eq!(
+                tasks
+                    .iter()
+                    .map(|task| task.as_script().expect("async script").node_id)
+                    .collect::<Vec<_>>(),
+                [second.node_id, first.node_id],
+                "parser handoff must preserve observed completion order, source_failure={source_failure}"
+            );
+            assert_eq!(tasks[1].is_async_script_failure(), source_failure);
+        }
+    }
 
     #[tokio::test]
     async fn finalize_plan_hands_back_ready_completions_before_post_dcl_fallback() {

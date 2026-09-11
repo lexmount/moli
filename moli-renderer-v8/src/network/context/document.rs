@@ -134,6 +134,11 @@ impl DocumentResourceLoader {
             request_client = request_client.with_browser_site_context(browser_site_context);
         }
         let loads = ResourceLoadRegistry::new(task_runner);
+        // The Fetch client origin is independent of a script's referrer/base
+        // URL, including cross-origin dependencies and inherited/sandboxed Documents.
+        let request_client = request_client.with_script_request_origin(
+            moli_url::WebOrigin::from_ascii_serialization(context.origin()),
+        );
         Self {
             request_client,
             authority: Arc::new(DocumentResourceLoaderAuthority {
@@ -207,6 +212,11 @@ impl DocumentResourceLoader {
         if let Some(browser_site_context) = self.request_client.shared_browser_site_context() {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
+        request_client = request_client.with_script_request_origin(
+            moli_url::WebOrigin::from_ascii_serialization(
+                self.authority.lifecycle.lock().context.origin(),
+            ),
+        );
         Self {
             request_client,
             authority: Arc::clone(&self.authority),

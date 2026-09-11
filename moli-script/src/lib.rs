@@ -5,12 +5,14 @@
 //! classification logic.
 
 mod classify;
+mod nonce;
 mod scheduling;
 
 pub use classify::{
     classify_script_element, classify_script_kind, classify_script_mode,
     classify_script_preparation, html_script_element_supports_type,
 };
+pub use nonce::script_element_nonce_is_nonceable;
 pub use scheduling::{
     ScriptElementClassification, ScriptElementClassificationInput, ScriptPreparationClassification,
     ScriptPreparationClassificationInput, ScriptPreparationDisposition, ScriptSchedulingInput,

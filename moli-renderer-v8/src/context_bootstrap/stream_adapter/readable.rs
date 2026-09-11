@@ -1,5 +1,18 @@
 use super::*;
 
+/// Installs an internal read request without materializing a JavaScript read
+/// result. The caller runs `maybe_pull_stream` after its synchronous read loop.
+pub(crate) fn prepare_readable_stream_read_with_steps<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    chunk_steps: v8::Local<'s, v8::Function>,
+    close_steps: v8::Local<'s, v8::Function>,
+    error_steps: v8::Local<'s, v8::Function>,
+) -> bool {
+    let request = new_internal_read_request(scope, chunk_steps, close_steps, error_steps);
+    perform_read_from_stream(scope, stream, request)
+}
+
 pub(in crate::context_bootstrap) fn read_from_stream_as_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
@@ -136,7 +149,7 @@ fn error_read_request_for_queue_error<'s>(
     error_read_request(scope, request, error);
 }
 
-pub(in crate::context_bootstrap) fn maybe_pull_stream<'s>(
+pub(crate) fn maybe_pull_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) {
@@ -374,6 +387,26 @@ fn apply_readable_stream_pull_state<'s>(
     );
 }
 
+/// Fetch ignores the cancellation promise and keeps its own abort reason.
+/// This must run the source algorithm before returning to the fetch caller.
+pub(crate) fn cancel_readable_stream_for_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    if !readable_stream_snapshot(scope, stream)
+        .state()
+        .is_readable()
+    {
+        return;
+    }
+    if let Some(result) = cancel_readable_stream(scope, stream, reason)
+        && let Ok(promise) = v8::Local::<v8::Promise>::try_from(result)
+    {
+        promise.mark_as_handled();
+    }
+}
+
 pub(crate) fn cancel_readable_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
@@ -427,8 +460,11 @@ pub(crate) fn cancel_readable_stream<'s>(
             Ok(result) => result.unwrap_or_else(|| v8::undefined(scope).into()),
             Err(error) => return rejected_promise_value(scope, error),
         };
-        if let Some(promise) = promise_then_undefined(scope, result) {
-            return Some(promise);
+        if let Ok(promise) = v8::Local::<v8::Promise>::try_from(result) {
+            let on_fulfilled =
+                v8::Function::builder(super::utils::promise_return_undefined_callback)
+                    .build(scope)?;
+            return promise.then(scope, on_fulfilled).map(Into::into);
         }
     }
     resolved_promise_value(scope, v8::undefined(scope).into())

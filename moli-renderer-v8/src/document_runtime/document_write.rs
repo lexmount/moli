@@ -36,6 +36,7 @@ enum DocumentWriteParserPumpInput<'a> {
 enum HtmlFragmentParserContextMode {
     Standard,
     RangeCreateContextualFragment,
+    SiblingInsertion,
 }
 
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
@@ -299,6 +300,13 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
             .mark_script_already_started_for_parser_in_live_dom_host(node_id);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: DomHandle) {
+        let _ = self
+            .runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: DomHandle) {
         let _ = self
             .runtime
@@ -311,6 +319,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
             .runtime
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {
+        let _ = self
+            .runtime
+            .sync_selectedcontents_after_parser_option_finished(self.scope, self.host_ptr, node_id);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -334,15 +348,11 @@ impl ParserElementCreationConsumer for DocumentWriteParserMutationOwner<'_, '_, 
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<DomHandle> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         let runtime = &mut *self.runtime;
         custom_elements::create_and_construct_parser_custom_element_direct_for_document(
             self.scope,
             self.host_ptr,
             request.document_handle,
-            document_has_body,
             request.local_name,
             request.namespace,
             request.prefix,
@@ -553,8 +563,11 @@ impl DocumentRuntime {
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        if context_mode == HtmlFragmentParserContextMode::RangeCreateContextualFragment
-            && context_namespace == "http://www.w3.org/1999/xhtml"
+        if matches!(
+            context_mode,
+            HtmlFragmentParserContextMode::RangeCreateContextualFragment
+                | HtmlFragmentParserContextMode::SiblingInsertion
+        ) && context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("html")
         {
             context_local_name = "body".to_owned();
@@ -946,7 +959,13 @@ impl DocumentRuntime {
         html: &str,
         insert: impl FnOnce(&mut Self, &mut v8::PinScope<'_, '_>, *mut JsContextHost, DomHandle) -> bool,
     ) -> bool {
-        let Some(fragment) = self.build_fragment_from_html(
+        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
+        let context_mode = if context_handle == target {
+            HtmlFragmentParserContextMode::Standard
+        } else {
+            HtmlFragmentParserContextMode::SiblingInsertion
+        };
+        let Some(fragment) = self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -954,11 +973,13 @@ impl DocumentRuntime {
             html,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
+            context_mode,
+            scripting_enabled,
+            false,
         ) else {
             return false;
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        let _ = target;
         let changed = insert(self, scope, host_ptr, fragment);
         if changed
             && !self.upgrade_inserted_html_fragment_custom_elements(
@@ -2143,10 +2164,7 @@ impl DocumentRuntime {
                 }
             }
             PreparedImportMapSource::ExternalUnsupported => {
-                let _ = self.enqueue_script_event_lifecycle_work(
-                    ScriptEventKind::Error,
-                    &host_script_handle,
-                );
+                unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node);
             }
         }
     }
@@ -2299,9 +2317,13 @@ impl DocumentRuntime {
                     node_id,
                     failure.element_state_transition(),
                 );
-                self.send_parser_owned_pre_domcontentloaded_page_owned_work(vec![
-                    parser_script_preparation_failure_page_owned_work(failure),
-                ]);
+                if failure.is_external_source_failure() {
+                    unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node_id);
+                } else {
+                    self.send_parser_owned_pre_domcontentloaded_page_owned_work(vec![
+                        parser_script_preparation_failure_page_owned_work(failure),
+                    ]);
+                }
                 false
             }
         }
@@ -2389,7 +2411,40 @@ impl DocumentRuntime {
                 completed_stylesheet_clients,
             );
 
+            let result = if let ParserPumpStep::Yield(ParserYield::ScriptPreparation(request)) =
+                result
+            {
+                let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
+                if request.needs_microtask_checkpoint()
+                    && let Err(error) =
+                        crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
+                {
+                    tracing::warn!(%error, "document.write parser preparation checkpoint failed");
+                }
+                if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
+                    return true;
+                }
+                let handoff = insertion_controller.with_parser_stream_mut(|stream| {
+                    self.with_dom_host_parse_step(|runtime| {
+                        let mut mutation_owner = DocumentWriteParserMutationOwner {
+                            runtime,
+                            scope,
+                            host_ptr,
+                            target: DocumentWriteParserMutationTarget::LiveDocument,
+                        };
+                        stream
+                            .prepare_script_with_runtime_dom_consumer(*request, &mut mutation_owner)
+                    })
+                });
+                ParserPumpStep::Yield(ParserYield::Script(Box::new(handoff)))
+            } else {
+                result
+            };
+
             match result {
+                ParserPumpStep::Yield(ParserYield::ScriptPreparation(_)) => {
+                    unreachable!("document.write parser preparation was resolved before dispatch")
+                }
                 ParserPumpStep::InputDrained => {
                     return true;
                 }

@@ -87,7 +87,7 @@ promise_test(async function () {
   assert_equals(fonts.ready, fonts.ready);
   assert_equals(face.family, "FixtureFace");
   assert_equals(face.source, "url(fixture.woff2)");
-  assert_equals(face.status, "loaded");
+  assert_equals(face.status, "unloaded");
   assert_equals(await face.load(), face);
   assert_equals(await face.loaded, face);
 

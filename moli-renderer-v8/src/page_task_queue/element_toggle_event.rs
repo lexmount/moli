@@ -17,11 +17,13 @@ use super::{
 
 /// The element-local coalescing slot used by a queued `toggle` event.
 ///
-/// `<details>` and popover tasks share the HTML DOM-manipulation task source,
-/// but each element keeps one pending task per specification algorithm.
+/// `<details>`, `<dialog>`, and popover tasks share the HTML DOM-manipulation
+/// task source, but each element keeps one pending task per specification
+/// algorithm.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RendererPageElementToggleEventKind {
     Details,
+    Dialog,
     Popover,
 }
 

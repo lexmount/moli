@@ -1,5 +1,6 @@
 use super::AbortStore;
 use super::event::{invoke_abort_event_callbacks, local_object_in_scope};
+use crate::context_bootstrap::abort_signal_events;
 use crate::util::{context_host_ptr_from_global_bridge, v8str};
 use crate::webidl;
 
@@ -109,18 +110,12 @@ pub(crate) fn abort_signal_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    let Ok(event) = v8::Local::<v8::Object>::try_from(parsed.event) else {
-        rv.set_bool(false);
-        return;
-    };
     let Some(signal_id) = AbortStore::signal_id_from_object(scope, signal) else {
         rv.set_bool(false);
         return;
     };
-    let Some(event_type) = event
-        .get(scope, v8str(scope, "type").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|s| s.to_rust_string_lossy(scope))
+    let Some((event, event_type)) =
+        abort_signal_events::prepare_script_dispatch(scope, parsed.event)
     else {
         rv.set_bool(false);
         return;
@@ -132,8 +127,6 @@ pub(crate) fn abort_signal_dispatch_event_callback<'s>(
     // callback signature that `FunctionTemplate::builder(...)` expects.
     let signal = local_object_in_scope(scope, signal);
     let event = local_object_in_scope(scope, event);
-    AbortStore::define_hidden_value(scope, event, "target", signal.into());
-    AbortStore::define_hidden_value(scope, event, "currentTarget", signal.into());
     let Some(dispatch_snapshot) = unsafe { &mut *host_ptr }
         .native_bridge_mut()
         .abort

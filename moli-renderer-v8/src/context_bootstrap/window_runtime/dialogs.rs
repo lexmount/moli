@@ -1,17 +1,18 @@
 use super::super::{
-    location_navigation::{LocationNavigationKind, navigate_location_object},
+    location_navigation::{LocationNavigationKind, navigate_location_object_with_source_element},
     navigation_cancellation::inform_about_canceled_navigation_for_window,
 };
 use crate::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
-        InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
+        InputNavigationPolicy, OwnerDispatchScope, PendingWindowMessageEndpoint,
+        child_window_handle_from_marker_data,
         element::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
         },
-        entered_child_window_handle,
+        entered_child_window_handle, lightweight_popup_id_from_window,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -68,11 +69,61 @@ pub(crate) fn window_noop_callback(
 ) {
 }
 
+pub(crate) fn window_focus_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !crate::context_bootstrap::is_window_receiver(scope, receiver) {
+        webidl::throw_type_error(scope, "Window.focus called on incompatible receiver.");
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver)
+    {
+        crate::native_bridge::element::focus_element(scope, host_ptr, handle);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn window_blur_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.blur called on incompatible receiver.");
+        return;
+    }
+    rv.set_undefined();
+}
+
 pub(crate) fn window_stop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
+        return;
+    }
+    let owner = super::super::navigation_window::runtime_window_owner(scope, args.this());
+    if super::super::navigation_window::navigation_unload_event_active(scope, owner) {
+        return;
+    }
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, owner)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(handle)
+    {
+        // Unlike an ordinary navigation, session history traversal is not
+        // canceled by Window.stop().
+        return;
+    }
     inform_about_canceled_navigation_for_window(scope, args.this());
 }
 
@@ -191,13 +242,28 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
-    if let Some(target_window) =
+    if let Some((target_handle, target_window)) =
         existing_named_child_window_for_window_open(scope, host_ptr, &parsed.target_name)
         && !suppress_opener
-        && navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None)
     {
-        rv.set(target_window.into());
-        return;
+        let opener_child_handle = window_open_receiver_child_handle(scope, entered_window);
+        let opener_endpoint = opener_child_handle
+            .map(PendingWindowMessageEndpoint::ChildWindow)
+            .or_else(|| {
+                lightweight_popup_id_from_window(scope, entered_window)
+                    .map(PendingWindowMessageEndpoint::LightweightPopup)
+            })
+            .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+        unsafe { &mut *host_ptr }.set_child_browsing_context_opener(
+            scope,
+            target_handle,
+            opener_endpoint,
+            entered_window,
+        );
+        if navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None) {
+            rv.set(target_window.into());
+            return;
+        }
     }
     let host = unsafe { &mut *host_ptr };
     let window_open_event = RendererPendingWindowOpenEvent {
@@ -305,13 +371,31 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(url) = host.child_browsing_context_base_url(handle)
-    {
-        return url;
-    }
-    if let Some(url) = host.active_lightweight_popup_base_url(scope) {
-        return url;
+    // The HTML entry settings object follows the context that entered the
+    // script or microtask, not the borrowed Window method's native realm.
+    let ambient_scope = host.entered_owner_dispatch_scope(scope);
+    let entry_scope = match ambient_scope {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
+        crate::native_bridge::OwnerDispatchScope::Top
+        | crate::native_bridge::OwnerDispatchScope::Child(_) => {
+            let entry_context = scope.get_entered_or_microtask_context();
+            host.window_execution_context_identity_for_access_check(entry_context)
+                .map(|identity| identity.dispatch_scope())
+                .unwrap_or(ambient_scope)
+        }
+    };
+    match entry_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            if let Some(url) = host.child_browsing_context_base_url(handle) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            if let Some(url) = host.lightweight_popup_request_base_url(scope, popup_id) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::Top => {}
     }
     host.dom_host()
         .document_base_url()
@@ -396,11 +480,14 @@ fn navigate_window_open_self<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    navigate_location_object(
+    // Window.open keeps its own history behavior while the target loads;
+    // it does not run the Location API's before-load replacement algorithm.
+    navigate_location_object_with_source_element(
         scope,
         location,
         LocationNavigationKind::Assign,
         Some(url.to_owned()),
+        None,
     );
     rv.set(receiver.into());
 }
@@ -409,13 +496,14 @@ fn existing_named_child_window_for_window_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut crate::native_bridge::JsContextHost,
     target_name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
+) -> Option<(DomHandle, v8::Local<'s, v8::Object>)> {
     if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {
         return None;
     }
     let host = unsafe { &mut *host_ptr };
     let handle = host.child_browsing_context_handle_by_name(target_name)?;
     host.child_browsing_context_window_wrapper(scope, handle)
+        .map(|window| (handle, window))
 }
 
 fn open_dialog(

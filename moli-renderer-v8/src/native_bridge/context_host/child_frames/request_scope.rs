@@ -151,6 +151,14 @@ impl JsContextHost {
         Some((entry.frame_id().to_owned(), document_url))
     }
 
+    pub(crate) fn child_browsing_context_request_origin(
+        &self,
+        handle: DomHandle,
+    ) -> Option<String> {
+        let document_url = self.child_browsing_context_current_url(handle)?;
+        self.child_browsing_context_document_origin_for_url(handle, &document_url)
+    }
+
     pub(crate) fn active_child_subresource_request_scope(
         &self,
     ) -> Option<(DomHandle, String, Url)> {
@@ -703,11 +711,17 @@ impl JsContextHost {
         let allow = is_iframe
             .then(|| self.dom_host().get_attribute(handle, "allow"))
             .flatten();
+        let allow_fullscreen = is_iframe
+            && self
+                .dom_host()
+                .get_attribute(handle, "allowfullscreen")
+                .is_some();
         parent_policy.delegated_to_child(
             &parent_url,
             &child_url,
             bootstrap.security_origin_inherited(),
             allow.as_deref(),
+            allow_fullscreen,
         )
     }
 
@@ -759,6 +773,10 @@ impl JsContextHost {
         }
         self.child_browsing_context_host_for_document_handle(document_handle)
             .map(|handle| self.child_browsing_context_scripting_enabled(handle))
+            .or_else(|| {
+                self.dom_host()
+                    .document_scripting_enabled_for_handle(document_handle)
+            })
             // DOMParser and document.implementation documents have no browsing
             // context, so scripting is disabled for their fragment parsers too.
             .unwrap_or(false)
@@ -802,9 +820,20 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> crate::document_runtime::DocumentSandboxPolicy {
-        document_sandbox_policy_from_attribute(
+        let owner_policy = document_sandbox_policy_from_attribute(
             self.dom_host().get_attribute(handle, "sandbox").as_deref(),
-        )
+        );
+        // A nested browsing context inherits the active sandboxing flags of
+        // its container Document. Preserve those restrictions when a network
+        // navigation replaces the initial empty Document.
+        self.child_browsing_context_parent_handle(handle)
+            .and_then(|parent| {
+                self.child_browsing_contexts
+                    .get(&parent)
+                    .map(|entry| entry.document_sandbox_policy())
+            })
+            .unwrap_or(self.document_policy_container().sandbox)
+            .with_response_content_security_policy(owner_policy)
     }
 
     pub(crate) fn child_browsing_context_document_credentialless(&self, handle: DomHandle) -> bool {

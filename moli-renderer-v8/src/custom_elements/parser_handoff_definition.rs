@@ -16,16 +16,12 @@ pub(super) struct ParserCustomElementDefinitionMatch {
 pub(super) fn lookup_parser_custom_element_definition_for_token(
     host_ptr: *mut JsContextHost,
     document_handle: DomHandle,
-    document_has_body: bool,
     local_name: &str,
     namespace: &str,
     token_attributes: &[Attribute],
     intended_parent: Option<DomHandle>,
 ) -> Option<ParserCustomElementDefinitionMatch> {
     if namespace != XHTML_NS {
-        return None;
-    }
-    if !document_has_body {
         return None;
     }
     let host = unsafe { &*host_ptr };

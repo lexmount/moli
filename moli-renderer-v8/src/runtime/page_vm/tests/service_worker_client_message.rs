@@ -25,7 +25,7 @@ fn service_worker_client_message(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn service_worker_client_message_body_leaves_reactions_for_selected_completion() {
+async fn service_worker_client_message_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -80,8 +80,8 @@ navigator.serviceWorker.onmessage = event => {
             page_vm
                 .vm_mut()
                 .eval("__serviceWorkerClientMessageEvents.join('|')")?,
-            "message:payload",
-            "the ServiceWorker message body must leave its Promise reaction pending"
+            "message:payload|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         assert_eq!(
             page_vm
@@ -101,7 +101,7 @@ navigator.serviceWorker.onmessage = event => {
                 .vm_mut()
                 .eval("__serviceWorkerClientMessageEvents.join('|')")?,
             "message:payload|microtask|runtime-script",
-            "selected completion must own the checkpoint and runtime follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -160,8 +160,8 @@ navigator.serviceWorker.onmessageerror = event => {
             page_vm
                 .vm_mut()
                 .eval("__serviceWorkerClientMessageErrorEvents.join('|')")?,
-            "messageerror",
-            "the messageerror body must leave its reaction pending"
+            "messageerror|microtask",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm

@@ -1,5 +1,7 @@
 use super::*;
+use crate::network_host::{CapturedBlobUrl, blob_url_entry, local_url_response_with_blob_entry};
 use crossbeam_channel::{after, bounded, never, select};
+use moli_url::WebOrigin;
 use moli_webapi_declare::WebApiObject;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     document_url: Url,
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     request_headers: Vec<(String, String)>,
     send_body: Option<Vec<u8>>,
@@ -408,15 +411,36 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     }
 
-    if let Some(response) = local_url_response(&prepared.resolved_url) {
-        apply_xhr_response(scope, xhr, response);
+    let local_response = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    );
+    if !async_request && let Some(result) = local_response {
+        match result {
+            Ok(response) => apply_xhr_response(scope, xhr, response),
+            Err(message) => {
+                record_worker_subresource_failure(
+                    &state.borrow(),
+                    prepared.document_url,
+                    prepared.resolved_url,
+                    prepared.method,
+                    prepared.request_headers,
+                    request_body_text(&prepared.send_body),
+                    SubresourceResourceType::Xhr,
+                    message,
+                );
+                throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
+            }
+        }
         return true;
     }
 
     let loader = state.borrow().loader.clone();
 
     let cancel_handle = FetchCancelHandle::new();
-    let intercept_request_stage = fetch_subresource_interception_enabled
+    let intercept_request_stage = local_response.is_none()
+        && fetch_subresource_interception_enabled
         && fetch_subresource_interception_resource_type.is_none_or(|expected| {
             expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Xhr)
         });
@@ -474,6 +498,17 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     };
     set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, xhr_id as f64);
     schedule_worker_xhr_timeout(scope, &state, xhr, xhr_id);
+
+    if let Some(result) = local_response {
+        // Local responses and network errors still complete asynchronously, so
+        // abort(), open() and timeout processing use the ordinary pending XHR.
+        let _ = state.borrow().xhr_completion_tx.send(WorkerXhrCompletion {
+            xhr_id,
+            network_request_headers: None,
+            result: result.map(|response| WorkerXhrResponse::Materialized(Box::new(response))),
+        });
+        return true;
+    }
 
     if intercept_request_stage {
         let info = PendingSubresourceFetchInfo {
@@ -643,7 +678,7 @@ fn send_synchronous_worker_xhr(
     };
 
     match result {
-        Ok(response) => {
+        Ok(mut response) => {
             let response_head = response.head();
             let redirect_status = if response_head.redirect_chain.is_empty() {
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
@@ -696,8 +731,15 @@ fn send_synchronous_worker_xhr(
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
                 return;
             }
-            if let Err(message) = validate_cors_response(
-                &prepared.document_url,
+            let request_origin = cors_request_origin_after_redirects(
+                &WebOrigin::from_url(&prepared.document_url),
+                response_head
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            );
+            if let Err(message) = validate_cors_response_for_origin(
+                &request_origin,
                 &response_head.final_url,
                 &response_head.headers,
                 prepared.credentials_mode,
@@ -725,6 +767,12 @@ fn send_synchronous_worker_xhr(
                 SubresourceResourceType::Xhr,
                 response_head,
                 SubresourceResponseBody::from_fetch_response(&response),
+            );
+            response.headers = filter_cors_exposed_response_headers_for_origin(
+                &request_origin,
+                &response.final_url,
+                &response.headers,
+                prepared.credentials_mode,
             );
             apply_xhr_response(scope, xhr, response);
         }
@@ -1069,8 +1117,15 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            match validate_cors_response(
-                &pending.document_url,
+            let request_origin = cors_request_origin_after_redirects(
+                &WebOrigin::from_url(&pending.document_url),
+                response_head
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            );
+            match validate_cors_response_for_origin(
+                &request_origin,
                 &response_head.final_url,
                 &response_head.headers,
                 pending.credentials_mode,
@@ -1104,8 +1159,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                                     },
                                 ));
                             }
-                            response_head.headers = filter_cors_exposed_response_headers(
-                                &pending.document_url,
+                            response_head.headers = filter_cors_exposed_response_headers_for_origin(
+                                &request_origin,
                                 &response_head.final_url,
                                 &response_head.headers,
                                 pending.credentials_mode,
@@ -1134,7 +1189,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
 pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    xhr: v8::Local<'_, v8::Object>,
+    xhr: v8::Local<'s, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
 ) -> Result<PreparedWorkerXhrSendRequest, WorkerXhrSendPrepareError> {
@@ -1147,12 +1202,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     })?;
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
         .map_err(WorkerXhrSendPrepareError::Request)?;
-    let request_headers = xhr_author_request_headers(
-        scope,
-        xhr,
-        prepared_body.default_content_type,
-        prepared_body.suppress_default_content_type,
-    );
+    let request_headers = xhr_author_request_headers(scope, xhr, &prepared_body);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             RequestCredentialsMode::Include
@@ -1163,6 +1213,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     Ok(PreparedWorkerXhrSendRequest {
         document_url,
         resolved_url,
+        blob_url_entry: blob_url_entry(scope, xhr),
         method,
         request_headers,
         send_body: prepared_body.body,

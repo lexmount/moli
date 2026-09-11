@@ -2,10 +2,7 @@ use super::{JsContextHost, OwnerDispatchScope};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::types::DedicatedWorkerId;
 use crate::{
-    module_runtime::{
-        ModuleAttributesKey, ModuleMapKey, ModuleSource, PendingDynamicModuleImport,
-        WasmModuleRecord,
-    },
+    module_runtime::{ModuleAttributesKey, PendingDynamicModuleImport, WasmModuleRecord},
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
@@ -84,14 +81,6 @@ impl JsContextHost {
     ) -> std::result::Result<url::Url, String> {
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &mut *self.runtime }.resolve_module_specifier(specifier, base_url)
-    }
-
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_module_source_for(module)
     }
 
     pub(crate) fn native_module_wasm_record_for(
@@ -562,10 +551,12 @@ impl JsContextHost {
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        request_origin: moli_url::WebOrigin,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
+        blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
     ) {
         self.assign_pending_subresource_fetch_identity(&mut info);
@@ -597,9 +588,11 @@ impl JsContextHost {
                         keepalive,
                         connect_policy,
                         csp_report_context,
+                        request_origin,
                     ),
                 ),
                 deferred_request_started: false,
+                blob_url_entry,
             },
         );
         self.note_subresource_activity();
@@ -636,6 +629,7 @@ impl JsContextHost {
                     fetch_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -668,6 +662,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -704,6 +699,7 @@ impl JsContextHost {
                     report_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -740,6 +736,7 @@ impl JsContextHost {
                     fetch_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -775,6 +772,7 @@ impl JsContextHost {
                     xhr_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -811,6 +809,7 @@ impl JsContextHost {
                     report_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -823,6 +822,7 @@ impl JsContextHost {
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        request_origin: moli_url::WebOrigin,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
@@ -863,9 +863,11 @@ impl JsContextHost {
                         keepalive,
                         connect_policy,
                         csp_report_context,
+                        request_origin,
                     ),
                 ),
                 deferred_request_started: defer_request_started,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -911,6 +913,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::EventSource(event_source),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -966,6 +969,7 @@ impl JsContextHost {
                     sequence,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1036,6 +1040,7 @@ impl JsContextHost {
                     request_initiator_type,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1150,6 +1155,7 @@ impl JsContextHost {
                     sequence,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1205,6 +1211,7 @@ impl JsContextHost {
                     css_image,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1241,6 +1248,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::Beacon,
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1278,6 +1286,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::CspReport { client_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1313,6 +1322,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::Beacon,
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1350,6 +1360,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::CspReport { client_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1363,6 +1374,7 @@ impl JsContextHost {
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
+        blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
         self.assign_pending_subresource_fetch_identity(&mut info);
@@ -1386,6 +1398,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::Xhr(xhr),
                 deferred_request_started: false,
+                blob_url_entry,
             },
         );
         self.note_subresource_activity();
@@ -1420,6 +1433,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::WebSocket(connection),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1457,6 +1471,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::Xhr(xhr),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1745,7 +1760,11 @@ impl JsContextHost {
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
             let xhr = v8::Local::new(scope, xhr);
             state.body_writer.append(bytes);
-            let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes);
+            let headers = &state.head.headers;
+            let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes, || {
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::network_host::xhr_response_text_decoder(scope, xhr, headers)
+            });
             crate::types::XhrStreamingChunkDelivery {
                 context,
                 xhr,
@@ -1774,6 +1793,11 @@ impl JsContextHost {
             .streaming_subresource_fetches
             .values()
             .find(|state| state.body_source_id == body_source_id)?;
+        if state.needs_orb_body_validation() {
+            // Keep the original bytes in the capture body writer until ORB
+            // has approved them for the opaque response's internal stream.
+            return None;
+        }
         if let Some(target) = state.pending.execution_context.window_request_target()
             && !self
                 .window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
@@ -2809,6 +2833,7 @@ impl JsContextHost {
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: info.url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),
@@ -2853,6 +2878,7 @@ impl JsContextHost {
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: info.response_final_url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),

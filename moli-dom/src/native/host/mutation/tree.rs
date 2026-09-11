@@ -77,6 +77,7 @@ impl DomHost {
         let owner_document = self.owner_document_handle(parent);
         let records_enabled = self.mutation_records_enabled();
         let removed_tree_was_connected = self.is_connected(child);
+        let parser_form_owner_resets = self.parser_form_owner_resets_for_removed_subtrees(&[child]);
         let removal_context = self.subtree_removal_context(child);
         let removed_shadow_slot_assignment_snapshots = self
             .slot_assignment_snapshots_for_removed_shadow_tree_slots(&removal_context.shadow_slots);
@@ -102,6 +103,7 @@ impl DomHost {
         if let Some(candidate_changes) = candidate_changes {
             self.invalidate_shadow_slot_name_index_for_tree_parent(parent);
             self.prune_disconnected_hovered_elements();
+            self.reset_parser_form_owners_after_subtree_removal(child, &parser_form_owner_resets);
             let mut effects = DomMutationEffects::changed();
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             self.clear_popover_open_states(&removal_context.open_popovers, &mut effects);
@@ -316,6 +318,9 @@ impl DomHost {
         } else {
             inserted_fragment_children.clone()
         };
+        let had_implicit_removal = removal_record.is_some();
+        let parser_form_owner_resets =
+            self.parser_form_owner_resets_for_removed_subtrees(&inserted_roots);
         let checked_radio_form_owners_before_insert =
             self.checked_radio_form_owner_snapshots_in_subtrees(&inserted_roots);
         let inserted_option_owner_snapshots =
@@ -333,11 +338,19 @@ impl DomHost {
                 self.invalidate_shadow_slot_name_index(shadow_root);
             }
             self.invalidate_shadow_slot_name_index_for_tree_parent(parent);
-            self.normalize_checked_radio_groups_after_form_owner_changes(
-                &checked_radio_form_owners_before_insert,
+            self.reset_parser_form_owners_after_subtree_insertion(
+                &inserted_roots,
+                had_implicit_removal,
+                &parser_form_owner_resets,
             );
             self.normalize_selected_options_after_owner_select_changes(
                 &inserted_option_owner_snapshots,
+            );
+            self.normalize_checked_radio_groups_after_form_owner_changes(
+                &checked_radio_form_owners_before_insert,
+            );
+            self.normalize_checked_radio_groups_after_form_owner_changes(
+                &checked_radio_form_owners_before_insert,
             );
             let new_owner_document = self.owner_document_handle(parent);
             let removed_connected_shadow_tree = single_child_was_connected_before_insert
@@ -507,7 +520,11 @@ impl DomHost {
                     .node(option)
                     .and_then(Node::as_element)
                     .is_some_and(Element::selected);
-                (option, self.owner_select_for_option(option), selected)
+                (
+                    option,
+                    self.option_nearest_ancestor_select(option),
+                    selected,
+                )
             })
             .collect()
     }
@@ -517,7 +534,7 @@ impl DomHost {
         snapshots: &[(DomHandle, Option<DomHandle>, bool)],
     ) {
         for &(option, previous_select, was_selected) in snapshots {
-            let Some(select) = self.owner_select_for_option(option) else {
+            let Some(select) = self.option_nearest_ancestor_select(option) else {
                 continue;
             };
             if previous_select == Some(select)

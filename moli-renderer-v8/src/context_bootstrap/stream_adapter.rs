@@ -79,13 +79,15 @@ pub(in crate::context_bootstrap) use queue_v8::{
     readable_stream_queue_exists, readable_stream_queue_is_empty, readable_stream_queue_total_size,
     reset_readable_stream_queue, take_byte_stream_bytes,
 };
-pub(crate) use readable::cancel_readable_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::mark_readable_stream_started;
-pub(in crate::context_bootstrap) use readable::maybe_pull_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::perform_read_from_stream;
 pub(super) use readable::{
     PreparedReadableStreamRead, prepare_read_from_stream_as_promise, read_from_stream_as_promise,
     readable_stream_closed_promise,
+};
+pub(crate) use readable::{
+    cancel_readable_stream, cancel_readable_stream_for_fetch, maybe_pull_stream,
+    prepare_readable_stream_read_with_steps,
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
@@ -99,21 +101,23 @@ pub(in crate::context_bootstrap) use readable_byte::{
     reset_byte_stream_pending_pull_intos, respond_byte_stream_with_new_view,
 };
 pub(in crate::context_bootstrap) use readable_state::EnqueueChunkError;
-pub(crate) use readable_state::readable_stream_disturbed;
 pub(in crate::context_bootstrap) use readable_state::{
     apply_readable_stream_access_transition, disturb_readable_stream,
     finish_readable_stream_close_if_requested_and_queue_empty, lock_readable_stream,
     readable_stream_access_snapshot, readable_stream_is_byte_stream, unlock_readable_stream,
 };
+pub(crate) use readable_state::{
+    begin_readable_stream_body_consumption, readable_stream_disturbed, readable_stream_locked,
+};
 pub(crate) use readable_state::{close_stream, enqueue_chunk, error_stream};
 pub(super) use readable_state::{
-    readable_stream_closed, readable_stream_error, readable_stream_locked,
-    reject_pending_read_requests, remove_pending_closed_promise, writable_stream_locked,
+    readable_stream_closed, readable_stream_error, reject_pending_read_requests,
+    remove_pending_closed_promise, writable_stream_locked,
 };
 pub(in crate::context_bootstrap::stream_adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{
-    done_result, promise_then_undefined, reject_pending_read, rejected_promise_value,
-    resolved_promise_value, set_resolved_promise, suppress_pending_read_unhandled_rejection,
+    done_result, reject_pending_read, rejected_promise_value, resolved_promise_value,
+    set_resolved_promise, suppress_pending_read_unhandled_rejection,
     suppress_promise_unhandled_rejection, value_buffer_source_bytes,
 };
 pub(in crate::context_bootstrap) use writable::register_writable_stream_pipe_owner;
@@ -145,7 +149,9 @@ pub(in crate::context_bootstrap::stream_adapter) use readable_state::{
     readable_stream_controller_algorithm_object, readable_stream_controller_algorithm_value,
     readable_stream_pull_state_has, readable_stream_snapshot, set_readable_stream_pull_state_bit,
 };
-pub(in crate::context_bootstrap) use tee::{TeeStartError, tee_readable_stream};
+pub(in crate::context_bootstrap) use tee::{
+    TeeStartError, tee_readable_stream, tee_readable_stream_with_cloned_branch,
+};
 pub(crate) use utils::require_internal_stream_value;
 pub(in crate::context_bootstrap) use utils::{
     StreamOwnerPublication, build_required_stream_callback, call_function_result,

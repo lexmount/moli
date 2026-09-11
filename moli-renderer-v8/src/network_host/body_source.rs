@@ -1,3 +1,6 @@
+mod stream_consumer;
+
+use self::stream_consumer::consume_readable_body_stream;
 use super::*;
 use crate::context_bootstrap::{
     close_stream, enqueue_byte_chunk, error_stream, readable_stream_has_pipe_owner,
@@ -237,8 +240,8 @@ impl Drop for NetworkBodySourceState {
 enum PendingBodyMaterializationKind {
     Text,
     Json,
-    ArrayBuffer,
-    Bytes,
+    ArrayBuffer(v8::Global<v8::Context>),
+    Bytes(v8::Global<v8::Context>),
     Blob { mime_type: String },
     FormData { content_type: String },
 }
@@ -286,28 +289,41 @@ pub(in crate::network_host) enum NetworkBodyConsumptionKind {
     FormData { content_type: String },
 }
 
-impl From<NetworkBodyConsumptionKind> for PendingBodyMaterializationKind {
-    fn from(kind: NetworkBodyConsumptionKind) -> Self {
+impl PendingBodyMaterializationKind {
+    fn new<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        kind: NetworkBodyConsumptionKind,
+    ) -> Self {
         match kind {
             NetworkBodyConsumptionKind::Text => Self::Text,
             NetworkBodyConsumptionKind::Json => Self::Json,
-            NetworkBodyConsumptionKind::ArrayBuffer => Self::ArrayBuffer,
-            NetworkBodyConsumptionKind::Bytes => Self::Bytes,
+            NetworkBodyConsumptionKind::ArrayBuffer | NetworkBodyConsumptionKind::Bytes => {
+                // Fetch explicitly allocates binary results in the Body
+                // receiver's relevant realm, even for a borrowed method or a
+                // stream created in another realm. Retain it until completion.
+                let realm = object
+                    .get_creation_context(scope)
+                    .expect("body owner must have a creation context");
+                let realm = v8::Global::new(scope, realm);
+                if matches!(kind, NetworkBodyConsumptionKind::ArrayBuffer) {
+                    Self::ArrayBuffer(realm)
+                } else {
+                    Self::Bytes(realm)
+                }
+            }
             NetworkBodyConsumptionKind::Blob { mime_type } => Self::Blob { mime_type },
             NetworkBodyConsumptionKind::FormData { content_type } => {
                 Self::FormData { content_type }
             }
         }
     }
-}
-
-impl PendingBodyMaterializationKind {
     fn clone_for_ready(&self) -> Self {
         match self {
             Self::Text => Self::Text,
             Self::Json => Self::Json,
-            Self::ArrayBuffer => Self::ArrayBuffer,
-            Self::Bytes => Self::Bytes,
+            Self::ArrayBuffer(realm) => Self::ArrayBuffer(realm.clone()),
+            Self::Bytes(realm) => Self::Bytes(realm.clone()),
             Self::Blob { mime_type } => Self::Blob {
                 mime_type: mime_type.clone(),
             },
@@ -631,6 +647,30 @@ fn enqueue_pending_network_body_chunk_in_maps(
     for clone_id in clone_ids {
         if let Some(clone) = sources.get_mut(&clone_id) {
             append_pending_body_state_bytes(scope, clone, &bytes);
+        }
+    }
+}
+
+pub(crate) fn release_pending_opaque_response_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    body_source_id: NetworkBodySourceId,
+    response_headers: &[(String, String)],
+    body: &SubresourceResponseBody,
+) -> Result<(), String> {
+    match validated_opaque_response_body(response_headers, body) {
+        Ok(bytes) => {
+            enqueue_pending_network_body_chunk(scope, body_source_id, bytes.into_owned());
+            Ok(())
+        }
+        Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(message)) => {
+            // An ORB-blocked Fetch still exposes an opaque response, with an
+            // empty internal body. Its network record reports the block.
+            close_pending_network_body_stream(scope, body_source_id);
+            Err(message)
+        }
+        Err(FetchResponseSecurityViolation::Rejected(message)) => {
+            error_pending_network_body_stream(scope, body_source_id, message.clone());
+            Err(message)
         }
     }
 }
@@ -1035,33 +1075,6 @@ pub(in crate::network_host) fn try_take_network_body_bytes_from_object<'s>(
     try_network_body_bytes_from_storage(scope, object, true)
 }
 
-pub(in crate::network_host) fn try_network_body_value_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Result<Option<v8::Local<'s, v8::Value>>, String> {
-    let source = network_body_source_from_object(scope, object).unwrap_or(object);
-    if network_body_source_kind(scope, source)
-        .as_deref()
-        .is_some_and(|kind| {
-            matches!(
-                kind,
-                BODY_SOURCE_KIND_REGISTRY_BYTES | BODY_SOURCE_KIND_SUBRESOURCE_BODY
-            )
-        })
-    {
-        return try_network_body_bytes_from_storage(scope, source, false).map(|bytes| {
-            bytes
-                .and_then(|bytes| blob::array_buffer_from_bytes(scope, bytes))
-                .map(Into::into)
-        });
-    }
-    Ok(
-        network_body_source_slot_value(scope, source, NETWORK_BODY_BYTES_SLOT)
-            .or_else(|| source.get(scope, v8str(scope, NETWORK_BODY_SLOT).into()))
-            .filter(|value| !value.is_null_or_undefined()),
-    )
-}
-
 pub(in crate::network_host) fn clone_pending_network_body_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
@@ -1227,16 +1240,6 @@ pub(in crate::network_host) fn consume_network_body_value_from_object_with_chunk
     consume_network_body_value_from_object_inner(scope, object, kind, Some(chunk_callback))
 }
 
-pub(in crate::network_host) fn network_body_value_is_pending_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    network_body_source_from_object(scope, object)
-        .and_then(|source| network_body_source_kind(scope, source))
-        .as_deref()
-        == Some(BODY_SOURCE_KIND_PENDING_STREAM)
-}
-
 pub(in crate::network_host) fn consume_filtered_response_internal_body_value_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1260,6 +1263,7 @@ pub(in crate::network_host) fn consume_filtered_response_internal_body_value_fro
     {
         return Some(consume_readable_body_stream(
             scope,
+            object,
             stream,
             kind,
             Some(chunk_callback),
@@ -1298,11 +1302,23 @@ fn consume_network_body_value_from_source_inner<'s>(
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
     let source = explicit_source.unwrap_or(object);
-    if network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM) {
+    let pending_stream =
+        network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM);
+    // Native storage consumers bypass a JS reader. Public body streams still
+    // acquire the same permanent lock and disturbed state as fully reading.
+    let uses_reader = explicit_source.is_none() || pending_stream && chunk_callback.is_some();
+    if !uses_reader
+        && let Some(stream) = body_stream_object(scope, object)
+        && !crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream)
+    {
+        let error = v8::Exception::type_error(scope, v8str(scope, "Body stream is locked"));
+        return (NetworkBodyConsumption::Rejected(error), None);
+    }
+    if pending_stream {
         if let Some(chunk_callback) = chunk_callback
             && let Some(stream) = readable_body_stream_from_object(scope, object)
         {
-            return consume_readable_body_stream(scope, stream, kind, Some(chunk_callback));
+            return consume_readable_body_stream(scope, object, stream, kind, Some(chunk_callback));
         }
         let Some(id) = registry_body_source_id(scope, source) else {
             return (NetworkBodyConsumption::Failed, None);
@@ -1311,7 +1327,7 @@ fn consume_network_body_value_from_source_inner<'s>(
             return (NetworkBodyConsumption::Failed, None);
         };
         let promise = resolver.get_promise(scope);
-        let materialization_kind = PendingBodyMaterializationKind::from(kind);
+        let materialization_kind = PendingBodyMaterializationKind::new(scope, object, kind);
         let mut ready = None;
         let mut rejected = None;
         if let Some(host) = context_host_mut(scope) {
@@ -1361,7 +1377,7 @@ fn consume_network_body_value_from_source_inner<'s>(
     if explicit_source.is_none()
         && let Some(stream) = readable_body_stream_from_object(scope, object)
     {
-        return consume_readable_body_stream(scope, stream, kind, chunk_callback);
+        return consume_readable_body_stream(scope, object, stream, kind, chunk_callback);
     }
 
     let bytes = match try_network_body_bytes_from_storage(scope, source, true) {
@@ -1372,7 +1388,8 @@ fn consume_network_body_value_from_source_inner<'s>(
         Ok(None) => return (NetworkBodyConsumption::Failed, None),
         Err(_) => return (NetworkBodyConsumption::Failed, None),
     };
-    match body_materialization_value(scope, &bytes, PendingBodyMaterializationKind::from(kind)) {
+    let kind = PendingBodyMaterializationKind::new(scope, object, kind);
+    match body_materialization_value(scope, &bytes, kind) {
         Ok(value) => (NetworkBodyConsumption::Ready(value), None),
         Err(error) => (NetworkBodyConsumption::Rejected(error), None),
     }
@@ -1408,76 +1425,6 @@ fn readable_body_stream_from_value<'s>(
         return Some(stream);
     }
     None
-}
-
-fn consume_readable_body_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stream: v8::Local<'s, v8::Object>,
-    kind: NetworkBodyConsumptionKind,
-    chunk_callback: Option<v8::Local<'s, v8::Function>>,
-) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
-    let global = scope.get_current_context().global(scope);
-    let Some(consumer) = global
-        .get(scope, v8str(scope, BODY_STREAM_CONSUMER_SLOT).into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let (kind_name, mime_type) = body_stream_consumer_args(&kind);
-    let Some(kind_value) = v8_string(scope, kind_name) else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let Some(mime_value) = v8_string(scope, mime_type.unwrap_or_default()) else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let this = v8::undefined(scope).into();
-    let (value, cancel_handle) = if let Some(chunk_callback) = chunk_callback {
-        let cancel_handle = v8::Global::new(scope, stream);
-        (
-            consumer.call(
-                scope,
-                this,
-                &[
-                    stream.into(),
-                    kind_value.into(),
-                    mime_value.into(),
-                    chunk_callback.into(),
-                ],
-            ),
-            Some(cancel_handle),
-        )
-    } else {
-        (
-            consumer.call(
-                scope,
-                this,
-                &[stream.into(), kind_value.into(), mime_value.into()],
-            ),
-            None,
-        )
-    };
-    let Some(value) = value else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let consumption = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
-        NetworkBodyConsumption::Pending(promise)
-    } else {
-        NetworkBodyConsumption::Ready(value)
-    };
-    (consumption, cancel_handle)
-}
-
-fn body_stream_consumer_args(kind: &NetworkBodyConsumptionKind) -> (&'static str, Option<&str>) {
-    match kind {
-        NetworkBodyConsumptionKind::Text => ("text", None),
-        NetworkBodyConsumptionKind::Json => ("json", None),
-        NetworkBodyConsumptionKind::ArrayBuffer => ("arrayBuffer", None),
-        NetworkBodyConsumptionKind::Bytes => ("bytes", None),
-        NetworkBodyConsumptionKind::Blob { mime_type } => ("blob", Some(mime_type.as_str())),
-        NetworkBodyConsumptionKind::FormData { content_type } => {
-            ("formData", Some(content_type.as_str()))
-        }
-    }
 }
 
 fn object_has_null_body_slot<'s>(
@@ -1846,28 +1793,32 @@ fn body_materialization_value<'s>(
     kind: PendingBodyMaterializationKind,
 ) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
     match kind {
-        PendingBodyMaterializationKind::Text => v8_string(scope, &String::from_utf8_lossy(bytes))
-            .map(Into::into)
-            .ok_or_else(|| v8::undefined(scope).into()),
+        PendingBodyMaterializationKind::Text => {
+            // Fetch's UTF-8 decode removes one initial UTF-8 BOM without
+            // selecting a different encoding from the bytes or MIME type.
+            let text = encoding_rs::UTF_8.decode_with_bom_removal(bytes).0;
+            v8_string(scope, &text)
+                .map(Into::into)
+                .ok_or_else(|| v8::undefined(scope).into())
+        }
         PendingBodyMaterializationKind::Json => {
-            let text = String::from_utf8_lossy(bytes).into_owned();
-            v8_json_parse(scope, &text).ok_or_else(|| {
-                v8_string(scope, "SyntaxError: JSON parse error")
-                    .map(|message| v8::Exception::syntax_error(scope, message))
-                    .unwrap_or_else(|| v8::undefined(scope).into())
+            let text = encoding_rs::UTF_8.decode_with_bom_removal(bytes).0;
+            let Some(text) = v8_string(scope, &text) else {
+                return Err(v8::undefined(scope).into());
+            };
+            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+            let scope = try_catch.init();
+            v8::json::parse(&scope, text).ok_or_else(|| {
+                scope
+                    .exception()
+                    .unwrap_or_else(|| v8::undefined(&scope).into())
             })
         }
-        PendingBodyMaterializationKind::ArrayBuffer => {
-            blob::array_buffer_from_bytes(scope, bytes.to_vec())
-                .map(Into::into)
-                .ok_or_else(|| v8::undefined(scope).into())
+        PendingBodyMaterializationKind::ArrayBuffer(realm) => {
+            binary_body_materialization_value(scope, bytes, realm, false)
         }
-        PendingBodyMaterializationKind::Bytes => {
-            let byte_len = bytes.len();
-            blob::array_buffer_from_bytes(scope, bytes.to_vec())
-                .and_then(|buffer| v8::Uint8Array::new(scope, buffer, 0, byte_len))
-                .map(Into::into)
-                .ok_or_else(|| v8::undefined(scope).into())
+        PendingBodyMaterializationKind::Bytes(realm) => {
+            binary_body_materialization_value(scope, bytes, realm, true)
         }
         PendingBodyMaterializationKind::Blob { mime_type } => {
             blob::build_blob_object(scope, bytes.to_vec(), mime_type)
@@ -1901,6 +1852,30 @@ fn body_materialization_value<'s>(
             }
         }
     }
+}
+
+fn binary_body_materialization_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+    realm: v8::Global<v8::Context>,
+    as_uint8_array: bool,
+) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
+    let realm = v8::Local::new(scope, realm);
+    let value = {
+        let scope = &mut v8::ContextScope::new(scope, realm);
+        blob::array_buffer_from_bytes(scope, bytes.to_vec())
+            .and_then(|buffer| {
+                if as_uint8_array {
+                    v8::Uint8Array::new(scope, buffer, 0, bytes.len()).map(Into::into)
+                } else {
+                    Some(v8::Local::<v8::Value>::from(buffer))
+                }
+            })
+            .map(|value| v8::Global::new(scope, value))
+    };
+    value
+        .map(|value| v8::Local::new(scope, value))
+        .ok_or_else(|| v8::undefined(scope).into())
 }
 
 fn registry_body_source_id<'s>(
@@ -1975,10 +1950,27 @@ fn pending_body_source_pull_callback<'s>(
 ) {
     let source = args.this();
     mark_registry_body_source_used(scope, source);
+    // Internal read requests can ask for another chunk while network delivery
+    // still borrows its pending-source state. Access that state after enqueue
+    // has returned, while retaining the stream's synchronous read request.
+    let callback = v8::Function::builder(pending_body_source_pull_microtask)
+        .data(source.into())
+        .build(scope)
+        .expect("pending body pull callback must allocate");
+    scope.enqueue_microtask(callback);
+    rv.set_undefined();
+}
+
+fn pending_body_source_pull_microtask<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let source = v8::Local::<v8::Object>::try_from(args.data())
+        .expect("pending body pull must retain its source");
     if let Some(id) = registry_body_source_id(scope, source) {
         pull_pending_network_body_source(scope, id);
     }
-    rv.set_undefined();
 }
 
 fn pull_pending_network_body_source(scope: &mut v8::PinScope<'_, '_>, id: NetworkBodySourceId) {

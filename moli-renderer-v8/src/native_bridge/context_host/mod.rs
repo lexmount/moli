@@ -40,8 +40,8 @@ use crate::{
             InFlightWorkerSubresourceFetchState, MessagePortId, NetworkBodySourceId,
             PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
-            RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
-            StreamingSubresourceFetchState, SubresourceResourceType,
+            RunningSubresourceFetchState, ScriptNetworkOutputItem, StreamingSubresourceFetchState,
+            SubresourceResourceType,
         },
         util::{
             string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
@@ -92,6 +92,7 @@ mod element_toggle_events;
 mod event_callbacks;
 mod file_chooser;
 mod file_entry_file_callbacks;
+mod fixture_support;
 mod focus;
 mod frame_document_ready_routes;
 mod hash_changes;
@@ -100,6 +101,8 @@ mod host_loads;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
+mod promise_rejection_tasks;
+mod script_preparation_errors;
 pub(crate) use image_resources::{
     CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
     ScannedImagePreloadAdmission,
@@ -144,6 +147,7 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod bitmap_tasks;
 mod shared_workers;
 mod signal_bridge;
 mod storage_events;
@@ -687,13 +691,14 @@ pub(crate) enum PendingImageLoadEventOwner {
     Child(FrameDocumentImageLoadEventBinding),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PendingImageLoadEvent {
     id: ImageLoadEventId,
     owner_document_handle: DomHandle,
     target: WindowDocumentTaskTarget,
     owner: PendingImageLoadEventOwner,
     request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+    request_key: Option<ImageRequestKey>,
     network_state: PendingImageLoadNetworkState,
     terminal_followup_queued: bool,
 }
@@ -727,32 +732,37 @@ impl PendingImageLoadEvent {
             target,
             owner,
             request_initiator_type,
+            request_key: None,
             network_state: PendingImageLoadNetworkState::Unbound,
             terminal_followup_queued: false,
         }
     }
 
-    pub(crate) fn id(self) -> ImageLoadEventId {
+    pub(crate) fn id(&self) -> ImageLoadEventId {
         self.id
     }
 
-    pub(crate) fn owner_document_handle(self) -> DomHandle {
+    pub(crate) fn owner_document_handle(&self) -> DomHandle {
         self.owner_document_handle
     }
 
-    pub(crate) fn target(self) -> WindowDocumentTaskTarget {
+    pub(crate) fn target(&self) -> WindowDocumentTaskTarget {
         self.target
     }
 
-    pub(crate) fn owner(self) -> PendingImageLoadEventOwner {
+    pub(crate) fn owner(&self) -> PendingImageLoadEventOwner {
         self.owner
     }
 
-    pub(crate) fn request_initiator_type(self) -> crate::types::SubresourceRequestInitiatorType {
+    pub(crate) fn request_initiator_type(&self) -> crate::types::SubresourceRequestInitiatorType {
         self.request_initiator_type
     }
 
-    pub(crate) fn network_request_id(self) -> Option<u64> {
+    pub(crate) fn request_key(&self) -> Option<&ImageRequestKey> {
+        self.request_key.as_ref()
+    }
+
+    pub(crate) fn network_request_id(&self) -> Option<u64> {
         match self.network_state {
             PendingImageLoadNetworkState::Pending(internal_id) => Some(internal_id),
             PendingImageLoadNetworkState::Unbound
@@ -762,7 +772,7 @@ impl PendingImageLoadEvent {
         }
     }
 
-    pub(crate) fn terminal_source(self) -> Option<PendingImageLoadTerminalSource> {
+    pub(crate) fn terminal_source(&self) -> Option<PendingImageLoadTerminalSource> {
         match self.network_state {
             PendingImageLoadNetworkState::Ready(source)
             | PendingImageLoadNetworkState::Failed(source) => Some(source),
@@ -773,7 +783,7 @@ impl PendingImageLoadEvent {
     }
 
     pub(crate) fn terminal_followup(
-        self,
+        &self,
     ) -> Option<crate::page_task_queue::RendererPageImageLoadEventKind> {
         if !self.terminal_followup_queued {
             return None;
@@ -841,6 +851,10 @@ pub(crate) struct JsContextHost {
     text_codecs: TextCodecStore,
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
+    // A failed `data` attribute load keeps an object in fallback until that
+    // resource selection is invalidated; ordinary context discovery must not
+    // recreate its nested browsing context in the meantime.
+    object_fallback_bootstraps: HashMap<DomHandle, ChildBrowsingContextBootstrap>,
     frame_owner_store: FrameOwnerStore,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
@@ -908,9 +922,15 @@ pub(crate) struct JsContextHost {
     directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
+    promise_rejection_tasks: promise_rejection_tasks::PromiseRejectionTaskState,
+    pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,
+    // Source selection can change before its pending request becomes available or broken. Keep
+    // the request exposed by currentSrc separate from the element's mutable source attributes.
+    current_image_requests: HashMap<DomHandle, ImageRequestKey>,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
     next_media_load_sequence_id: u64,
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
@@ -925,7 +945,10 @@ pub(crate) struct JsContextHost {
     next_image_decode_id: u64,
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
+    next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId,
     next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
+    pending_bitmap_tasks:
+        HashMap<crate::page_task_queue::RendererPageBitmapTaskId, bitmap_tasks::PendingBitmapTask>,
     pending_webcrypto_tasks: HashMap<
         crate::page_task_queue::RendererPageWebCryptoTaskId,
         webcrypto_tasks::PendingWebCryptoTask,
@@ -972,6 +995,7 @@ pub(crate) struct JsContextHost {
         HashMap<DomHandle, IndexMap<String, Vec<ChildWindowEventListenerEntry>>>,
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
+    active_window_error_report_owners: HashSet<WindowExecutionContextOwner>,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
     top_level_navigation_handoff_tx:
         crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
@@ -988,9 +1012,9 @@ pub(crate) struct JsContextHost {
         HashMap<DomHandle, moli_storage_key::OpaqueOriginNonce>,
     broadcast_channel_wrappers: HashMap<BroadcastChannelId, BroadcastChannelWrapperEntry>,
     form_past_named_items: HashMap<(DomHandle, String), DomHandle>,
-    button_element_targets: HashMap<(DomHandle, String), DomHandle>,
     constructing_form_data_forms: Vec<DomHandle>,
     active_form_submission_forms: Vec<DomHandle>,
+    active_dialog_request_closes: HashSet<DomHandle>,
     pending_form_submission_child_targets: HashMap<DomHandle, Vec<DomHandle>>,
     active_image_submitter_coordinate: Option<(DomHandle, u32, u32)>,
     current_inline_script_stack: Vec<DomHandle>,
@@ -1173,10 +1197,60 @@ impl ChildBrowsingContextBootstrap {
             }
         }
     }
+
+    pub(in crate::native_bridge::context_host) fn content_security_policy_inherited(&self) -> bool {
+        match self {
+            Self::AboutBlank | Self::Srcdoc { .. } => true,
+            Self::Url(url) => child_browsing_context_url_inherits_content_security_policy(url),
+            Self::Request(request) => {
+                child_browsing_context_url_inherits_content_security_policy(&request.url)
+            }
+        }
+    }
 }
 
 fn child_browsing_context_url_inherits_security_origin(url: &url::Url) -> bool {
     (url.scheme() == "about" && url.path() == "blank") || url.scheme() == "javascript"
+}
+
+fn child_browsing_context_url_inherits_content_security_policy(url: &url::Url) -> bool {
+    child_browsing_context_url_inherits_security_origin(url)
+        || matches!(url.scheme(), "blob" | "data" | "filesystem")
+}
+
+#[cfg(test)]
+mod child_content_security_policy_inheritance_tests {
+    use super::*;
+
+    #[test]
+    fn local_scheme_csp_inheritance_is_independent_from_origin_inheritance() {
+        let cases = [
+            ("about:blank", true, true),
+            ("javascript:void 0", true, true),
+            ("blob:https://example.test/id", false, true),
+            ("data:text/html,child", false, true),
+            (
+                "filesystem:https://example.test/temporary/child",
+                false,
+                true,
+            ),
+            ("https://example.test/child", false, false),
+        ];
+
+        for (input, inherits_origin, inherits_csp) in cases {
+            let url = Url::parse(input).expect("test URL should parse");
+            assert_eq!(
+                child_browsing_context_url_inherits_security_origin(&url),
+                inherits_origin,
+                "origin inheritance for {input}",
+            );
+            assert_eq!(
+                child_browsing_context_url_inherits_content_security_policy(&url),
+                inherits_csp,
+                "CSP inheritance for {input}",
+            );
+        }
+    }
 }
 
 pub use crate::protocol_types::PendingRuntimeBindingCall;
@@ -1198,6 +1272,15 @@ impl fmt::Debug for JsContextHost {
 
 #[cfg(test)]
 impl JsContextHost {
+    pub(crate) fn child_browsing_context_attribute_bootstrap_for_test(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+    ) -> Option<ChildBrowsingContextBootstrap> {
+        self.child_browsing_contexts
+            .get(&handle)
+            .map(|entry| entry.attribute_bootstrap().clone())
+    }
+
     pub(crate) fn child_browsing_context_pending_live_navigation_for_test(
         &self,
         handle: crate::document_runtime::DomHandle,
@@ -1245,6 +1328,8 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.promise_rejection_tasks =
+            promise_rejection_tasks::PromiseRejectionTaskState::default();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
         self.v8_finalizers.clear_for_context_teardown();

@@ -36,6 +36,15 @@ impl MimeType {
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
+
+    /// Mutably borrows the first parameter with the given ASCII-case-insensitive name.
+    pub fn parameter_mut(&mut self, name: &str) -> Option<&mut String> {
+        self.inner
+            .parameters
+            .iter_mut()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+    }
 }
 
 impl fmt::Display for MimeType {

@@ -10,9 +10,28 @@ pub(in crate::network_host) fn observe_subresource_request_cookie_report(
     method: &str,
     credentials_mode: moli_fetch::RequestCredentialsMode,
 ) -> Option<moli_cookie_jar::StoredCookieQueryReport> {
+    observe_subresource_request_cookie_report_for_origin(
+        loader,
+        document_url,
+        &moli_url::WebOrigin::from_url(document_url),
+        request_url,
+        method,
+        credentials_mode,
+    )
+}
+
+pub(in crate::network_host) fn observe_subresource_request_cookie_report_for_origin(
+    loader: &crate::network::ResourceRequestClient,
+    document_url: &url::Url,
+    request_origin: &moli_url::WebOrigin,
+    request_url: &url::Url,
+    method: &str,
+    credentials_mode: moli_fetch::RequestCredentialsMode,
+) -> Option<moli_cookie_jar::StoredCookieQueryReport> {
     let request = Request::new(method, request_url.as_str(), None, Vec::new())
         .ok()?
         .with_initiator_url(document_url)
+        .with_request_origin(request_origin.clone())
         .with_credentials_mode(credentials_mode);
     if !request.allows_credentials_for_url(request_url) {
         return None;
@@ -147,6 +166,28 @@ pub(in crate::network_host) fn subresource_request_scope_for_owner(
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => host
             .lightweight_popup_request_base_url(scope, popup_id)
             .map(|document_url| (None, document_url)),
+    }
+}
+
+pub(in crate::network_host) fn subresource_request_origin_for_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    owner: crate::native_bridge::OwnerDispatchScope,
+) -> Option<moli_url::WebOrigin> {
+    match owner {
+        crate::native_bridge::OwnerDispatchScope::Top => {
+            Some(moli_url::WebOrigin::from_url(host.document_url()))
+        }
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => host
+            .child_browsing_context_request_origin(handle)
+            .map(|origin| moli_url::WebOrigin::from_ascii_serialization(&origin)),
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .lightweight_popup_origin(popup_id)
+            .map(|origin| moli_url::WebOrigin::from_ascii_serialization(&origin))
+            .or_else(|| {
+                host.lightweight_popup_request_base_url(scope, popup_id)
+                    .map(|document_url| moli_url::WebOrigin::from_url(&document_url))
+            }),
     }
 }
 

@@ -11,6 +11,7 @@ mod session;
 mod stream;
 mod stylesheet_blocking;
 mod xml;
+mod xml_preprocess;
 mod xml_stream;
 mod xml_tree_viewer;
 
@@ -27,7 +28,8 @@ pub use html::{
     ParserCustomElementConstructionHandoff, ParserFinishDiscoverySignals, ParserInputContext,
     ParserInputQueue, ParserInputSession, ParserPumpOutcome, ParserPumpStep,
     ParserScriptElementStateTransition, ParserScriptHandoff, ParserScriptNoExecutionOutcome,
-    ParserScriptPreparationFailure, ParserStreamDocumentSnapshot, ParserYield,
+    ParserScriptPreparationFailure, ParserScriptPreparationRequest, ParserStreamDocumentSnapshot,
+    ParserYield,
 };
 pub use live_target::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
@@ -79,6 +81,7 @@ struct HtmlTreeSinkState {
     captured_blocking_stylesheet_nodes: HashSet<NativeNodeId>,
     captured_blocking_stylesheet_signatures: HashSet<DocumentBlockingStylesheetSignature>,
     finishing_tree_builder: bool,
+    non_nonceable_parser_scripts: HashSet<NativeNodeId>,
     current_position: ParserSourcePosition,
     script_start_positions: HashMap<NativeNodeId, ParserSourcePosition>,
 }
@@ -99,6 +102,7 @@ impl Default for HtmlTreeSinkState {
             captured_blocking_stylesheet_nodes: HashSet::new(),
             captured_blocking_stylesheet_signatures: HashSet::new(),
             finishing_tree_builder: false,
+            non_nonceable_parser_scripts: HashSet::new(),
             current_position: ParserSourcePosition::default(),
             script_start_positions: HashMap::new(),
         }

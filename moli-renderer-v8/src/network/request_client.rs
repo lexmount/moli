@@ -33,6 +33,7 @@ pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    script_request_origin: Option<Arc<moli_url::WebOrigin>>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -104,6 +105,22 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            script_request_origin: None,
+        }
+    }
+
+    pub(crate) fn with_script_request_origin(mut self, origin: moli_url::WebOrigin) -> Self {
+        self.script_request_origin = Some(Arc::new(origin));
+        self
+    }
+
+    fn script_request_with_client_origin(&self, request: Request) -> Request {
+        if request.explicit_request_origin().is_none()
+            && let Some(origin) = &self.script_request_origin
+        {
+            request.with_request_origin(origin.as_ref().clone())
+        } else {
+            request
         }
     }
 
@@ -141,6 +158,7 @@ impl ResourceRequestClient {
             self.page_network_policy.frozen_request_view(),
         );
         client.browser_site_context = self.browser_site_context.clone();
+        client.script_request_origin = self.script_request_origin.clone();
         client
     }
 
@@ -281,8 +299,8 @@ impl ResourceRequestClient {
         &self,
         request: Request,
     ) -> Result<Response> {
-        let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request.url) {
+        let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
+        if let Some(result) = local_text_response(&request) {
             return result;
         }
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
@@ -299,7 +317,10 @@ impl ResourceRequestClient {
                 );
             }
             let result = self
-                .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+                .fetch_script_text_stream_with_cancel_after_policy(
+                    request,
+                    FetchCancelHandle::new(),
+                )
                 .await;
             if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
                 let status = result.as_ref().ok().map(|response| response.status);
@@ -400,7 +421,7 @@ impl ResourceRequestClient {
         }
         let cache_request = request.clone();
         let result = self
-            .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+            .fetch_script_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
             .await
             .map_err(|error| format!("{error:#}"));
         if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
@@ -445,8 +466,8 @@ impl ResourceRequestClient {
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
-        let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request.url) {
+        let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
+        if let Some(result) = local_text_response(&request) {
             let task_runner = resource_load.task_runner();
             task_runner.spawn(async move {
                 resource_load.finish();
@@ -470,9 +491,10 @@ impl ResourceRequestClient {
             let cancel_handle = FetchCancelHandle::new();
             resource_load.attach_cancel_handle(cancel_handle.clone());
             let callback_resource_load = resource_load.clone();
-            let started_fetch = self.fetch_text_callback_with_cancel_after_policy(
+            let started_fetch = self.fetch_script_text_callback_with_cancel_after_policy(
                 request,
                 cancel_handle,
+                resource_load.task_runner(),
                 move |result| {
                     callback_resource_load.finish();
                     if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
@@ -601,9 +623,10 @@ impl ResourceRequestClient {
         let callback_key = key.clone();
         let cancel_handle = FetchCancelHandle::new();
         load.attach_transport_cancel(cancel_handle.clone());
-        if let Err(error) = self.fetch_text_callback_with_cancel_after_policy(
+        if let Err(error) = self.fetch_script_text_callback_with_cancel_after_policy(
             request,
             cancel_handle,
+            resource_load.task_runner(),
             move |result| {
                 let result = result.map_err(|error| format!("{error:#}"));
                 request_client
@@ -627,6 +650,48 @@ impl ResourceRequestClient {
             load.finish(result);
         }
         Ok(())
+    }
+
+    async fn fetch_script_text_stream_with_cancel_after_policy(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<Response> {
+        if request.request_mode == moli_fetch::RequestMode::Cors
+            && request.request_origin().is_some()
+        {
+            return crate::network_host::fetch_cors_script_text(self, request, cancel_handle)
+                .await
+                .map_err(anyhow::Error::msg);
+        }
+        self.fetch_text_stream_with_cancel_after_policy(request, cancel_handle)
+            .await
+    }
+
+    fn fetch_script_text_callback_with_cancel_after_policy<F>(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+        task_runner: super::RendererResourceTaskRunner,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(Result<Response>) + Send + 'static,
+    {
+        if request.request_mode == moli_fetch::RequestMode::Cors
+            && request.request_origin().is_some()
+        {
+            let client = self.clone();
+            task_runner.spawn(async move {
+                callback(
+                    client
+                        .fetch_script_text_stream_with_cancel_after_policy(request, cancel_handle)
+                        .await,
+                );
+            });
+            return Ok(());
+        }
+        self.fetch_text_callback_with_cancel_after_policy(request, cancel_handle, callback)
     }
 
     async fn fetch_text_stream_with_cancel_after_policy(
@@ -662,7 +727,7 @@ impl ResourceRequestClient {
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
-        if let Some(result) = local_text_response(&request.url) {
+        if let Some(result) = local_text_response(&request) {
             callback(result);
             return Ok(());
         }
@@ -676,7 +741,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
-        if let Some(response) = local_text_response(&request.url) {
+        if let Some(response) = local_text_response(&request) {
             return streaming_raw_response_from_local_response(response?);
         }
 
@@ -712,7 +777,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        if let Some(response) = local_text_response(&request.url) {
+        if let Some(response) = local_text_response(&request) {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_local_response(response?)?,
             ));
@@ -1109,8 +1174,8 @@ fn streaming_raw_response_from_cached_subresource(
     streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
 }
 
-fn local_text_response(url: &url::Url) -> Option<Result<Response>> {
-    crate::network_host::local_url_response_result(url)
+fn local_text_response(request: &Request) -> Option<Result<Response>> {
+    crate::network_host::local_url_response_result(&request.url, &request.method)
         .map(|result| result.map_err(anyhow::Error::msg))
 }
 

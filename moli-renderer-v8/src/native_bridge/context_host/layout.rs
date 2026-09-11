@@ -142,6 +142,27 @@ impl JsContextHost {
             .frame_viewport(frame)
     }
 
+    pub(crate) fn invalidate_published_frame_viewports(
+        &self,
+        frames: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let frames = frames.into_iter().collect::<Vec<_>>();
+        if frames.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.document_layout_state.borrow_mut();
+            let changed =
+                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            state.clear_latest_layout();
+            changed
+        };
+        if changed {
+            self.style_viewport_generation
+                .set(self.style_viewport_generation.get().saturating_add(1));
+        }
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn style_viewport_generation(&self) -> u64 {
         self.style_viewport_generation.get()
@@ -326,6 +347,21 @@ impl JsContextHost {
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         let viewport = self.layout_viewport_for_document(document);
         self.answer_layout(document, reason, viewport, queries, false)
+    }
+
+    pub(crate) fn answer_fresh_layout_for_document(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        queries: &LayoutQueryBatch<DomHandle>,
+    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        let viewport = self.layout_viewport_for_document(document);
+        self.with_fresh_layout_pass_for_document(
+            document,
+            LayoutPassRequest::new(viewport, reason),
+            |pass| Ok(pass.answer_queries(queries)),
+        )?
+        .ok_or(LayoutError::NoLayoutRoot)
     }
 
     pub(crate) fn can_answer_layout_from_snapshot(&self, document: DomHandle) -> bool {
@@ -532,6 +568,12 @@ impl JsContextHost {
         self.document_layout_state
             .borrow()
             .web_font_resources_are_current(generation)
+    }
+
+    pub(crate) fn document_web_font_sidecar_is_pristine(&self) -> bool {
+        self.document_layout_state
+            .borrow()
+            .web_font_sidecar_is_pristine()
     }
 
     pub(crate) fn publish_document_web_font_resource_generation(

@@ -12,6 +12,25 @@ pub fn referrer_header_value(
     if !matches!(request_url.scheme(), "http" | "https") {
         return None;
     }
+
+    referrer_value(
+        referrer_url,
+        request_url,
+        referrer_policy,
+        document_referrer_policy,
+    )
+}
+
+/// Applies Referrer Policy without requiring an HTTP(S) destination.
+///
+/// Local navigations still use the selected value for `Document.referrer`,
+/// even though they do not emit a `Referer` request header.
+pub fn referrer_value(
+    referrer_url: &Url,
+    request_url: &Url,
+    referrer_policy: Option<&str>,
+    document_referrer_policy: Option<&str>,
+) -> Option<String> {
     if !matches!(referrer_url.scheme(), "http" | "https") {
         return None;
     }
@@ -206,5 +225,17 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn non_http_navigation_target_still_has_a_policy_selected_referrer() {
+        let source = url("https://example.com/docs/page.html?x=1#section");
+        let target = url("about:blank");
+
+        assert_eq!(
+            referrer_value(&source, &target, None, None),
+            Some("https://example.com/".to_owned())
+        );
+        assert_eq!(referrer_header_value(&source, &target, None, None), None);
     }
 }

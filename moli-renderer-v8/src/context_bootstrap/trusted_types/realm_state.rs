@@ -8,49 +8,18 @@ const TRUSTED_TYPES_LAZY_STATE_INSTALLED_SLOT: &str = "__moliTrustedTypesLazySta
 const TRUSTED_TYPES_FACTORY_SLOT: &str = "__moliTrustedTypesFactory";
 const TRUSTED_TYPES_MATERIALIZING_SLOT: &str = "__moliTrustedTypesMaterializing";
 
-#[derive(Clone, Copy)]
-enum TrustedTypesGlobalProperty {
-    Html,
-    Script,
-    ScriptUrl,
-    Factory,
-}
+#[derive(WebApiObject)]
+#[webapi(fragment)]
+struct TrustedTypesGlobalAccessorDeclaration {
+    window_receiver: bool,
 
-impl TrustedTypesGlobalProperty {
-    const ALL: [(Self, &'static str); 4] = [
-        (Self::Html, "TrustedHTML"),
-        (Self::Script, "TrustedScript"),
-        (Self::ScriptUrl, "TrustedScriptURL"),
-        (Self::Factory, "trustedTypes"),
-    ];
-
-    const fn callback_data(self) -> u32 {
-        match self {
-            Self::Html => 0,
-            Self::Script => 1,
-            Self::ScriptUrl => 2,
-            Self::Factory => 3,
-        }
-    }
-
-    fn from_callback_data(value: u32) -> Option<Self> {
-        match value {
-            0 => Some(Self::Html),
-            1 => Some(Self::Script),
-            2 => Some(Self::ScriptUrl),
-            3 => Some(Self::Factory),
-            _ => None,
-        }
-    }
-
-    const fn trusted_type_kind(self) -> Option<TrustedTypeKind> {
-        match self {
-            Self::Html => Some(TrustedTypeKind::Html),
-            Self::Script => Some(TrustedTypeKind::Script),
-            Self::ScriptUrl => Some(TrustedTypeKind::ScriptUrl),
-            Self::Factory => None,
-        }
-    }
+    #[webapi(
+        accessor_property = "trustedTypes",
+        getter = trusted_types_global_getter,
+        data = self.window_receiver,
+        enumerable
+    )]
+    trusted_types: (),
 }
 
 pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
@@ -61,20 +30,81 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
         return Ok(());
     }
     install_trusted_script_code_like_constructor(scope, global)?;
-    for (property, name) in TrustedTypesGlobalProperty::ALL {
-        let data = v8::Integer::new_from_unsigned(scope, property.callback_data());
+    let policy_constructor = TrustedTypePolicyInterfaceDeclaration::build(scope)
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicy interface"))?;
+    global
+        .define_own_property(
+            scope,
+            v8str(scope, "TrustedTypePolicy").into(),
+            policy_constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicy interface"))?;
+    let policy_factory_constructor = TrustedTypePolicyFactoryInterfaceDeclaration::build(scope)
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicyFactory interface"))?;
+    global
+        .define_own_property(
+            scope,
+            v8str(scope, "TrustedTypePolicyFactory").into(),
+            policy_factory_constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicyFactory interface"))?;
+    // These eager interfaces are outside the exposed-interface template table.
+    // Register their intrinsic prototypes before author code can replace globals;
+    // WebApiObject binding must never use an author-supplied constructor.
+    for (name, constructor) in [
+        ("TrustedTypePolicy", policy_constructor),
+        ("TrustedTypePolicyFactory", policy_factory_constructor),
+    ] {
+        let prototype = constructor
+            .get(scope, v8str(scope, "prototype").into())
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .ok_or_else(|| anyhow!("{name}.prototype missing during bootstrap"))?;
+        if !crate::util::register_intrinsic_interface(
+            scope,
+            global,
+            name,
+            constructor.into(),
+            prototype,
+        ) {
+            return Err(anyhow!("failed to register intrinsic {name} interface"));
+        }
+    }
+    install_function_constructor_brand_guards(scope, global)?;
+    for (index, kind) in TRUSTED_TYPE_KINDS.into_iter().enumerate() {
+        let name = kind.constructor_name();
+        let data = crate::util::callback_data_index_value(scope, index);
         global
             .set_lazy_data_property_with_configuration(
                 scope,
                 v8str(scope, name).into(),
                 v8::LazyDataPropertyConfiguration::new(trusted_types_global_lazy_getter)
-                    .data(data.into())
+                    .data(data)
                     .property_attribute(v8::PropertyAttribute::DONT_ENUM),
             )
             .unwrap_or(false)
             .then_some(())
             .ok_or_else(|| anyhow!("failed to install lazy `{name}` global"))?;
     }
+    // Window owns its mixin attribute; workers inherit it from WorkerGlobalScope.
+    let is_worker = get_private_value(scope, global, crate::worker::WORKER_STATE_SLOT).is_some();
+    let target = if is_worker {
+        crate::util::global_constructor_prototype(scope, "WorkerGlobalScope").ok_or_else(|| {
+            anyhow!("WorkerGlobalScope.prototype missing during Trusted Types bootstrap")
+        })?
+    } else {
+        global
+    };
+    TrustedTypesGlobalAccessorDeclaration::new(!is_worker)
+        .initialize(scope, target)
+        .map_err(|error| anyhow!("failed to install trustedTypes accessor: {error}"))?;
     set_private_value(
         scope,
         global,
@@ -90,10 +120,10 @@ fn trusted_types_global_lazy_getter<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(property) = args
+    let Some(kind) = args
         .data()
         .uint32_value(scope)
-        .and_then(TrustedTypesGlobalProperty::from_callback_data)
+        .and_then(|index| TrustedTypeKind::from_callback_index(index as usize))
     else {
         throw_error(
             scope,
@@ -109,14 +139,64 @@ fn trusted_types_global_lazy_getter<'s>(
         return;
     };
     let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-    match ensure_trusted_types_state(target_scope)
-        .and_then(|()| cached_public_value(target_scope, property))
-    {
-        Ok(value) => rv.set(value),
-        Err(error) => throw_error(
+    if let Err(error) = ensure_trusted_types_state(target_scope) {
+        throw_error(
             target_scope,
             &format!("Failed to materialize Trusted Types: {error}"),
-        ),
+        );
+        return;
+    }
+    let global = relevant_context.global(target_scope);
+    if let Some(value) = get_private_value(target_scope, global, kind.constructor_slot()) {
+        rv.set(value);
+    } else {
+        throw_error(
+            target_scope,
+            "Materialized Trusted Types constructor is missing.",
+        );
+    }
+}
+
+fn trusted_types_global_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    // Reject in the getter's realm before entering a valid receiver's realm.
+    // Borrowing a getter changes neither its TypeError realm nor its brand check.
+    let valid_receiver = if args.data().is_true() {
+        super::super::window_receiver::is_window_receiver(scope, receiver)
+    } else {
+        let global = scope.get_current_context().global(scope);
+        receiver.strict_equals(global.into())
+    };
+    if !valid_receiver {
+        throw_type_error(
+            scope,
+            "trustedTypes getter called on incompatible receiver.",
+        );
+        return;
+    }
+    let relevant_context = receiver
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    if let Err(error) = ensure_trusted_types_state(target_scope) {
+        throw_error(
+            target_scope,
+            &format!("Failed to materialize Trusted Types: {error}"),
+        );
+        return;
+    }
+    let global = relevant_context.global(target_scope);
+    if let Some(factory) = cached_object(target_scope, global, TRUSTED_TYPES_FACTORY_SLOT) {
+        rv.set(factory.into());
+    } else {
+        throw_error(
+            target_scope,
+            "Materialized Trusted Types factory is missing.",
+        );
     }
 }
 
@@ -148,15 +228,11 @@ fn build_and_cache_trusted_types_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let factory = TrustedTypesFactoryDeclaration::default()
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory: {error}"))?;
     let constructors = TRUSTED_TYPE_KINDS
         .into_iter()
         .map(|kind| build_trusted_type_constructor(scope, kind))
         .collect::<Result<Vec<_>>>()?;
 
-    set_private_value(scope, global, TRUSTED_TYPES_FACTORY_SLOT, factory.into());
     for binding in constructors {
         set_private_value(
             scope,
@@ -171,20 +247,19 @@ fn build_and_cache_trusted_types_state<'s>(
             binding.prototype.into(),
         );
     }
+    let empty_html = build_trusted_type_object(scope, TrustedTypeKind::Html, String::new())
+        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyHTML"))?;
+    let empty_script = build_trusted_type_object(scope, TrustedTypeKind::Script, String::new())
+        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyScript"))?;
+    let factory = TrustedTypesFactoryObjectDeclaration {
+        empty_html,
+        empty_script,
+        created_policy_names: v8::Array::new(scope, 0),
+    }
+    .bind(scope)
+    .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory object: {error}"))?;
+    set_private_value(scope, global, TRUSTED_TYPES_FACTORY_SLOT, factory.into());
     Ok(())
-}
-
-fn cached_public_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    property: TrustedTypesGlobalProperty,
-) -> Result<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let slot = property.trusted_type_kind().map_or(
-        TRUSTED_TYPES_FACTORY_SLOT,
-        TrustedTypeKind::constructor_slot,
-    );
-    get_private_value(scope, global, slot)
-        .ok_or_else(|| anyhow!("materialized Trusted Types value is missing"))
 }
 
 fn cached_object<'s>(

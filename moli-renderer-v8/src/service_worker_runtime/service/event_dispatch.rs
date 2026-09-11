@@ -19,6 +19,7 @@ struct ServiceWorkerNavigationPreloadDispatch {
     event_id: ServiceWorkerEventId,
     owner: ServiceWorkerRunOwner,
     request_url: url::Url,
+    request_method: String,
     request_mode: moli_fetch::RequestMode,
     request_client: ResourceRequestClient,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
@@ -56,7 +57,7 @@ fn navigation_preload_request_for_job(
         } else {
             request.with_top_level_navigation_cookie_context()
         };
-        request
+        let mut request = request
             .with_initiator_url(&job.network_context.document_url)
             .with_request_mode(job.request_mode)
             .with_credentials_mode(job.credentials_mode)
@@ -70,7 +71,11 @@ fn navigation_preload_request_for_job(
             } else {
                 moli_fetch::BrowserNavigationRequestKind::Navigate
             })
-            .with_page_network_policy()
+            .with_page_network_policy();
+        if let Some(request_origin) = job.metadata.request_origin.clone() {
+            request = request.with_request_origin(request_origin);
+        }
+        request
     })
     .map_err(|error| error.to_string())
 }
@@ -79,6 +84,7 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),
         redirected: head.redirected,
@@ -139,6 +145,7 @@ async fn stream_navigation_preload_response(
         event_id: dispatch.event_id,
         owner: dispatch.owner.clone(),
         request_url: dispatch.request_url,
+        request_method: dispatch.request_method,
         request_mode: dispatch.request_mode,
         body_source_id,
         response_head,
@@ -1399,6 +1406,7 @@ impl ServiceWorkerRuntimeService {
         }
 
         let request_url = job.request_url.clone();
+        let request_method = job.request_method.clone();
         let request_mode = job.request_mode;
         let request_client = job.request_client.clone();
         let resource_task_runner = job.resource_task_runner.clone();
@@ -1418,6 +1426,7 @@ impl ServiceWorkerRuntimeService {
             event_id: event.event_id,
             owner: event.owner.clone(),
             request_url,
+            request_method,
             request_mode,
             request_client,
             resource_task_runner,

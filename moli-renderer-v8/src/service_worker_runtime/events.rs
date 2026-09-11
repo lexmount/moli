@@ -488,6 +488,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) request_origin: Option<moli_url::WebOrigin>,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -498,6 +499,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            request_origin: None,
         }
     }
 }
@@ -520,6 +522,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        request_origin: request.explicit_request_origin().cloned(),
     }
 }
 
@@ -661,6 +664,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadResponseStarted {
     pub(crate) event_id: ServiceWorkerEventId,
     pub(crate) owner: ServiceWorkerRunOwner,
     pub(crate) request_url: Url,
+    pub(crate) request_method: String,
     pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) response_head: MaterializedServiceWorkerFetchResponseHead,
@@ -694,6 +698,7 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
+    pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, String)>,
 }
 
@@ -708,6 +713,7 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 pub(crate) struct ServiceWorkerDirectFetchResponse {
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) from_network_fallback: bool,
 }
 
 #[derive(Clone, Debug)]

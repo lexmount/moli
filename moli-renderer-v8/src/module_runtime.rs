@@ -12,6 +12,7 @@ mod record;
 mod record_resolver;
 mod resolver;
 mod single_module_fetch;
+mod synthetic_text;
 #[cfg(test)]
 mod tests;
 mod tree_adapter;
@@ -51,6 +52,7 @@ pub(crate) use self::resolver::{
     ResolverScopeGuard, resolve_static_module_callback, resolve_static_source_callback,
 };
 pub(crate) use self::single_module_fetch::NativeModuleSingleFetchRequest;
+pub(crate) use self::synthetic_text::SyntheticTextModuleSource;
 pub(crate) use self::tree_owner::{
     NativeModuleTreeDocumentOwnerAdapter, NativeModuleTreeFrameDocumentOwner,
 };
@@ -149,11 +151,10 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
     start_line: u64,
     start_column: u64,
     import_map: PreparedImportMap,
-) {
+) -> anyhow::Result<()> {
     vm.document_runtime
         .note_parser_script_start_position(node_id, start_line, start_column);
-    let host_script_handle = vm
-        .document_runtime
+    vm.document_runtime
         .bind_parser_owned_script_handle_for_node(import_map.node_id);
     let _ = vm
         .document_runtime
@@ -167,7 +168,7 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
             let Some(source) =
                 vm.inline_script_element_source_for_execution(node_id, &source, request)
             else {
-                return;
+                return Ok(());
             };
             if let Err(error) =
                 register_parser_owned_import_map_source(vm, &source, &import_map.base_url)
@@ -179,12 +180,10 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
             }
         }
         PreparedImportMapSource::ExternalUnsupported => {
-            let _ = vm.document_runtime.enqueue_script_event_lifecycle_work(
-                crate::host::ScriptEventKind::Error,
-                &host_script_handle,
-            );
+            vm.queue_script_preparation_error(node_id)?;
         }
     }
+    Ok(())
 }
 
 pub(crate) fn resolve_module_specifier(
@@ -486,13 +485,6 @@ impl ModuleOwnerState {
         self.document_modulator.entry(entry_id).source().cloned()
     }
 
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        self.document_modulator.module_source_for(module)
-    }
-
     pub(crate) fn native_module_wasm_record_for(
         &self,
         module: v8::Local<'_, v8::Module>,
@@ -590,12 +582,6 @@ impl ModuleOwnerState {
         self.document_modulator
             .compiled_record(entry_id)
             .map(|record| record.compiled_module().clone())
-    }
-
-    pub(crate) fn native_module_url_for(&self, module: v8::Local<'_, v8::Module>) -> Option<Url> {
-        self.document_modulator
-            .module_key_for(module)
-            .map(|key| key.url().clone())
     }
 
     pub(crate) fn mark_native_module_instantiated(&mut self, entry_id: ModuleEntryId) {

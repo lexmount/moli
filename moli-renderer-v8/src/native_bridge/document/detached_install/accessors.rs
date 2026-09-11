@@ -1,7 +1,5 @@
 mod attributes;
 mod content;
-mod document_collection_scan;
-mod document_collections;
 mod document_tree_scan;
 mod form_association;
 mod iframe;
@@ -17,7 +15,6 @@ mod shadow;
 mod url_helpers;
 
 pub(in crate::native_bridge) use self::content::set_detached_text_replacement_value;
-pub(in crate::native_bridge::document) use self::document_collections::*;
 pub(in crate::native_bridge) use self::form_association::{
     detached_form_owner_object, detached_label_control_object,
 };

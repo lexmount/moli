@@ -83,6 +83,125 @@ async fn same_origin_window_fetch_and_xhr_post_send_origin_on_wire() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
+    let server = StaticHttpServer::spawn(1).await;
+    let base_url = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        base_url
+            .join("page.html")
+            .expect("page fixture URL")
+            .as_str(),
+        &loader,
+    );
+    let first_base = base_url.join("first/").expect("first base URL");
+    let second_base = base_url.join("second/").expect("second base URL");
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__xhrOpenUrlProbe = "pending";
+  const base = document.createElement("base");
+  base.href = {};
+  document.head.append(base);
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "resource", true, "alice", "secret");
+  base.href = {};
+  xhr.onload = () => {{ globalThis.__xhrOpenUrlProbe = "done"; }};
+  xhr.onerror = () => {{ globalThis.__xhrOpenUrlProbe = "error"; }};
+  xhr.send();
+  return "started";
+}})()
+"#,
+        serde_json::to_string(first_base.as_str()).expect("serialize first base URL"),
+        serde_json::to_string(second_base.as_str()).expect("serialize second base URL"),
+    ))
+    .expect("XHR open URL probe should evaluate");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__xhrOpenUrlProbe)",
+        "done",
+        "XHR open URL probe",
+    )
+    .await;
+
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/first/resource");
+    assert_eq!(
+        requests[0].header_value("authorization"),
+        Some("Basic YWxpY2U6c2VjcmV0")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_initiator() {
+    let server = StaticHttpServer::spawn(1).await;
+    let base_url = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        base_url
+            .join("page.html")
+            .expect("page fixture URL")
+            .as_str(),
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__xhrResourceTimingProbe = "pending";
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "xhr-resource");
+  xhr.onload = () => { globalThis.__xhrResourceTimingProbe = "done"; };
+  xhr.onerror = () => { globalThis.__xhrResourceTimingProbe = "error"; };
+  xhr.send();
+  return "started";
+})()
+"#,
+    )
+    .expect("XHR resource timing probe should evaluate");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__xhrResourceTimingProbe)",
+        "done",
+        "XHR resource timing probe",
+    )
+    .await;
+
+    let entry = vm
+        .eval(
+            r#"
+(() => {
+  const url = new URL("xhr-resource", location.href).href;
+  const entries = performance.getEntriesByName(url, "resource");
+  return JSON.stringify(entries.map(entry => ({
+    name: entry.name,
+    initiatorType: entry.initiatorType,
+    isResourceTiming: entry instanceof PerformanceResourceTiming
+  })));
+})()
+"#,
+        )
+        .expect("XHR resource timing entry should be readable");
+    assert_eq!(
+        entry,
+        format!(
+            r#"[{{"name":"{}","initiatorType":"xmlhttprequest","isResourceTiming":true}}]"#,
+            base_url.join("xhr-resource").expect("XHR resource URL")
+        )
+    );
+
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/xhr-resource");
+}
+
 fn pending_fetch_continuation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
@@ -102,6 +221,7 @@ fn pending_fetch_continuation<'s>(
                 dispatch_scope,
             )
             .expect("test Fetch should capture its CSP report context"),
+            moli_url::WebOrigin::from_url(host.document_url()),
         ),
     )
 }
@@ -710,6 +830,75 @@ fn xml_http_request_methods_apply_webidl_argument_conversion() {
     );
 }
 #[test]
+fn xml_http_request_set_request_header_preserves_validation_order() {
+    let mut vm = new_storage_test_vm("https://xhr-header-validation.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return callback() === undefined ? "undefined" : "unexpected return value";
+    } catch (error) {
+      return error instanceof DOMException
+        ? "DOM:" + error.name + ":" + error.code : error.name;
+    }
+  };
+  const unopened = new XMLHttpRequest();
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/headers");
+  const conversions = [];
+  const entered = new XMLHttpRequest();
+  return JSON.stringify({
+    unopenedBadSyntax: probe(() => unopened.setRequestHeader("bad:name", "bad\nvalue")),
+    unopenedNonByteString: probe(() => unopened.setRequestHeader("X-Test", "\u0100")),
+    forbiddenUnopened: probe(() => unopened.setRequestHeader("Host", "example.test")),
+    invalidNames: ["", "x y", "x:y", "\u00ff", "\u007f"].map(
+      name => probe(() => xhr.setRequestHeader(name, "ok"))),
+    invalidValues: ["x\0x", "x\rx", "x\nx"].map(
+      value => probe(() => xhr.setRequestHeader("X-Test", value))),
+    forbiddenBadValue: probe(() => xhr.setRequestHeader("Host", "x\nx")),
+    forbiddenValidValue: probe(() => xhr.setRequestHeader("Host", "example.test")),
+    emptyValue: probe(() => xhr.setRequestHeader("X-Test", "")),
+    normalizedLineEnds: probe(() => xhr.setRequestHeader("X-Test", "\r\n \tvalue\r\n ")),
+    otherBytes: probe(() => xhr.setRequestHeader("X-Test", "\u000b\u000c\u0085\u00a0")),
+    reentrantConversion: probe(() => entered.setRequestHeader({
+      toString() { conversions.push("name"); return "X-Test"; }
+    }, {
+      toString() {
+        conversions.push("value");
+        entered.open("GET", "/headers");
+        return " value ";
+      }
+    })),
+    conversions
+  });
+})()
+"#,
+        )
+        .expect("XHR request header validation probe should run");
+    let observed: serde_json::Value =
+        serde_json::from_str(&result).expect("parse XHR header validation result");
+    assert_eq!(
+        observed,
+        serde_json::json!({
+            "unopenedBadSyntax": "DOM:InvalidStateError:11",
+            "unopenedNonByteString": "TypeError",
+            "forbiddenUnopened": "DOM:InvalidStateError:11",
+            "invalidNames": vec!["DOM:SyntaxError:12"; 5],
+            "invalidValues": vec!["DOM:SyntaxError:12"; 3],
+            "forbiddenBadValue": "DOM:SyntaxError:12",
+            "forbiddenValidValue": "undefined",
+            "emptyValue": "undefined",
+            "normalizedLineEnds": "undefined",
+            "otherBytes": "undefined",
+            "reentrantConversion": "undefined",
+            "conversions": ["name", "value"],
+        })
+    );
+}
+
+#[test]
 fn xml_http_request_override_mime_type_affects_response_mime() {
     let mut vm = new_storage_test_vm("https://xhr-override-mime.test/");
 
@@ -744,6 +933,7 @@ fn xml_http_request_override_mime_type_affects_response_mime() {
                 scope,
                 xhr,
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://xhr-override-mime.test/mime")
                         .expect("response URL should parse"),
                     status: 200,
@@ -823,6 +1013,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                 scope,
                 xml_xhr,
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://xhr-response-xml.test/xml-doc")
                         .expect("XML response URL should parse"),
                     status: 200,
@@ -849,6 +1040,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                 scope,
                 plain_xhr,
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://xhr-response-xml.test/plain")
                         .expect("plain response URL should parse"),
                     status: 200,
@@ -885,6 +1077,644 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
         .expect("xhr responseXML probe should run");
 
     assert_eq!(result, "4|true|html|true|false|true");
+}
+
+#[test]
+fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
+    for child_realm in [false, true] {
+        for (mime, response_type) in [
+            ("application/xml", ""),
+            ("application/xml", "document"),
+            ("text/html", "document"),
+        ] {
+            let mut vm = new_parsed_test_vm(
+                "https://requester.example/page/index.html",
+                "<!doctype html><html><body></body></html>",
+            );
+            vm.set_timezone_override_and_sync_surface(Some("UTC"))
+                .unwrap();
+            vm.eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    globalThis.__originRealm = {child_realm} ? frame.contentWindow : self;
+                    globalThis.__documentXhr = new __originRealm.XMLHttpRequest();
+                    __documentXhr.open('GET', '/initial');
+                    __documentXhr.responseType = '{response_type}';
+                }})()"#
+            ))
+            .expect("create XHR in its owning realm");
+            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+            vm.renderer_document_isolate.with_entered_renderer_document_isolate(move |isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let xhr = context.global(scope).get(scope, v8str(scope, "__documentXhr").into())
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()).unwrap();
+                crate::network_host::apply_xhr_response_body_source(
+                    scope,
+                    xhr,
+                    moli_fetch::ResponseHead {
+                        status_text: None,
+                        final_url: Url::parse("https://response.example/resource/doc#fragment").unwrap(),
+                        status: 200,
+                        headers: vec![
+                            ("Content-Type".to_owned(), mime.to_owned()),
+                            ("lAsT-mOdIfIeD".to_owned(), "Thu, 01 Jan 1970 01:23:45 GMT".to_owned()),
+                        ],
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    moli_fetch::ResponseBody::materialized_bytes(br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><base href="../assets/" /></head><body><a id="link" href="child">link</a></body></html>"#.to_vec()),
+                );
+                Ok(())
+            }).expect("deliver response from a different origin in the parent realm");
+            let result = vm
+                .eval(
+                    r#"(() => {
+                const doc = __documentXhr.responseXML;
+                const check = (value, message) => { if (!value) throw new Error(message); };
+                const url = 'https://response.example/resource/doc#fragment';
+                check(doc instanceof __originRealm.Document, 'XHR creation realm');
+                check(doc.URL === url && doc.documentURI === url, 'response URL metadata');
+                check(__documentXhr.responseURL === url.split('#')[0], 'responseURL serialization');
+                check(doc.domain === 'requester.example', 'origin belongs to requester');
+                check(doc.defaultView === null && doc.hidden, 'windowless response document');
+                check(doc.lastModified === '01/01/1970 01:23:45', 'response source modification time');
+                const getter = Object.getOwnPropertyDescriptor(Document.prototype, 'lastModified').get;
+                check(getter.call(doc) === doc.lastModified, 'cross-realm metadata getter');
+                check(doc.baseURI === 'https://response.example/assets/', 'relative parsed base');
+                const link = doc.getElementById('link');
+                check(link.href === 'https://response.example/assets/child', 'relative link');
+                doc.querySelector('base').remove();
+                check(doc.baseURI === url && link.baseURI === url, 'base removal');
+                const base = doc.createElementNS('http://www.w3.org/1999/xhtml', 'base');
+                base.href = '../changed/';
+                doc.documentElement.appendChild(base);
+                check(doc.baseURI === 'https://response.example/changed/', 'base insertion');
+                document.head.appendChild(base);
+                check(doc.baseURI === url, 'base adoption');
+                __documentXhr.open('GET', '/next');
+                check(__documentXhr.responseXML === null && doc.URL === url, 'XHR reuse');
+                check(doc.lastModified === '01/01/1970 01:23:45', 'source time survives XHR reuse');
+                return 'ok';
+            })()"#,
+                )
+                .expect("response document metadata should remain coherent");
+            assert_eq!(
+                result, "ok",
+                "child_realm={child_realm}, mime={mime}, response_type={response_type}"
+            );
+        }
+    }
+}
+
+#[test]
+fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_xml() {
+    for streaming in [false, true] {
+        for response_type in ["", "document"] {
+            for (mime, source, xml_root) in [
+                (None, "<x/>", Some("x")),
+                (Some("bogus"), "<x/>", Some("x")),
+                (Some("video/custom+xml"), "<x/>", Some("x")),
+                (Some("text/plain;+xml"), "<x/>", None),
+                (Some("application/xml"), "", None),
+                (Some("application/xml"), "<!--no root-->", None),
+                (Some("application/xml"), "<x><y></x></y>", None),
+                (Some("application/xml"), "<p:x/>", None),
+                (
+                    Some("application/xml"),
+                    "<parsererror xmlns='http://www.w3.org/1999/xhtml'>author text</parsererror>",
+                    Some("parsererror"),
+                ),
+                (
+                    Some("text/html"),
+                    "<p>html",
+                    (response_type == "document").then_some("html"),
+                ),
+            ] {
+                let mut vm = new_storage_test_vm("https://xhr-document-eligibility.test/");
+                vm.set_fetch_subresource_interception(
+                    true,
+                    Some(crate::types::SubresourceResourceType::Xhr),
+                );
+                vm.eval(&format!(
+                    r#"globalThis.__documentXhr = new XMLHttpRequest();
+                    __documentXhr.open('GET', '/response');
+                    __documentXhr.responseType = '{response_type}';
+                    __documentXhr.send();"#
+                ))
+                .expect("intercept XHR before response delivery");
+                let pending = vm.take_pending_subresource_fetch_infos();
+                assert_eq!(pending.len(), 1);
+                let request = &pending[0];
+                let head = moli_fetch::ResponseHead {
+                    status_text: None,
+                    final_url: request.url.clone(),
+                    status: 200,
+                    headers: mime
+                        .map(|mime| vec![("Content-Type".to_owned(), mime.to_owned())])
+                        .unwrap_or_default(),
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                };
+                if streaming {
+                    let body_source_id = crate::network_host::new_network_body_source_id();
+                    vm.start_streaming_async_subresource_fetch(
+                        crate::types::AsyncSubresourceStreamingStarted {
+                            internal_id: request.internal_id,
+                            request_url: request.url.clone(),
+                            request_method: "GET".to_owned(),
+                            request_headers: Vec::new(),
+                            request_body: None,
+                            body_source_id,
+                            head,
+                            network_request_headers: None,
+                        },
+                    )
+                    .expect("deliver response headers");
+                    for chunk in source.as_bytes().chunks(5) {
+                        vm.append_streaming_async_subresource_fetch_chunk(
+                            body_source_id,
+                            chunk.to_vec(),
+                        );
+                        assert_eq!(
+                            vm.eval("__documentXhr.responseXML === null").unwrap(),
+                            "true"
+                        );
+                    }
+                    vm.finish_streaming_async_subresource_fetch(
+                        request.internal_id,
+                        body_source_id,
+                        Ok(()),
+                    )
+                    .expect("finish document response");
+                } else {
+                    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                    vm.renderer_document_isolate
+                        .with_entered_renderer_document_isolate(move |isolate| {
+                            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                            let scope = &mut scope.init();
+                            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                            let scope = &mut v8::ContextScope::new(scope, context);
+                            let xhr = context
+                                .global(scope)
+                                .get(scope, v8str(scope, "__documentXhr").into())
+                                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                                .unwrap();
+                            crate::network_host::apply_xhr_response_body_source(
+                                scope,
+                                xhr,
+                                head,
+                                moli_fetch::ResponseBody::materialized_bytes(
+                                    source.as_bytes().to_vec(),
+                                ),
+                            );
+                            Ok(())
+                        })
+                        .expect("deliver buffered document response");
+                }
+                let result = vm.eval(r#"(() => {
+                    const xhr = __documentXhr;
+                    const doc = xhr.responseXML;
+                    const root = doc && doc.documentElement.localName;
+                    const stable = doc === xhr.responseXML;
+                    const response = xhr.responseType === 'document'
+                        ? xhr.response === doc : xhr.responseText === xhr.response;
+                    const readyState = xhr.readyState;
+                    xhr.open('GET', '/next');
+                    return JSON.stringify([readyState, root, stable, response,
+                        xhr.responseXML === null, doc === null || doc.documentElement.localName === root]);
+                })()"#).expect("read document response and reopen XHR");
+                assert_eq!(
+                    result,
+                    serde_json::json!([4, xml_root, true, true, true, true]).to_string(),
+                    "streaming={streaming}, response_type={response_type}, mime={mime:?}, source={source:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
+    for (mime, response_type) in [
+        ("application/xml", ""),
+        ("application/xml", "document"),
+        ("text/html", "document"),
+    ] {
+        let mut vm = new_storage_test_vm("https://xhr-document-modified.test/");
+        vm.document_runtime
+            .set_document_source_last_modified(Some(5_025_000.0));
+        vm.set_timezone_override_and_sync_surface(Some("UTC"))
+            .unwrap();
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Xhr),
+        );
+        vm.eval(
+            r#"
+            globalThis.__modifiedXhr = new XMLHttpRequest();
+            globalThis.__responseDocuments = [];
+            __modifiedXhr.onload = () => __responseDocuments.push(__modifiedXhr.responseXML);
+        "#,
+        )
+        .unwrap();
+        for (header, expected) in [
+            (
+                Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                Some("11/06/1994 08:49:37"),
+            ),
+            (
+                Some("Thu, 01 Jan 1970 00:00:00 GMT"),
+                Some("01/01/1970 00:00:00"),
+            ),
+            (Some("not a date"), None),
+            (None, None),
+        ] {
+            vm.eval(&format!(
+                r#"
+                __modifiedXhr.open('GET', '/response');
+                __modifiedXhr.responseType = '{response_type}';
+                __modifiedXhr.send();
+            "#
+            ))
+            .unwrap();
+            let pending = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(pending.len(), 1);
+            let request = &pending[0];
+            let mut headers = vec![("Content-Type".to_owned(), mime.to_owned())];
+            if let Some(header) = header {
+                headers.push(("lAsT-mOdIfIeD".to_owned(), header.to_owned()));
+            }
+            let body_source_id = crate::network_host::new_network_body_source_id();
+            vm.start_streaming_async_subresource_fetch(
+                crate::types::AsyncSubresourceStreamingStarted {
+                    internal_id: request.internal_id,
+                    request_url: request.url.clone(),
+                    request_method: "GET".to_owned(),
+                    request_headers: Vec::new(),
+                    request_body: None,
+                    body_source_id,
+                    head: moli_fetch::ResponseHead {
+                        final_url: request.url.clone(),
+                        status: 200,
+                        status_text: None,
+                        headers,
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    network_request_headers: None,
+                },
+            )
+            .unwrap();
+            for chunk in [
+                b"<html><body>".as_slice(),
+                b"response</body></html>".as_slice(),
+            ] {
+                vm.append_streaming_async_subresource_fetch_chunk(body_source_id, chunk.to_vec());
+                assert_eq!(
+                    vm.eval("__modifiedXhr.responseXML === null").unwrap(),
+                    "true"
+                );
+            }
+            vm.finish_streaming_async_subresource_fetch(
+                request.internal_id,
+                body_source_id,
+                Ok(()),
+            )
+            .unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(
+                    vm.eval("__modifiedXhr.responseXML.lastModified").unwrap(),
+                    expected
+                );
+            } else {
+                assert_eq!(vm.eval(r#"(() => {
+                    const doc = __modifiedXhr.responseXML;
+                    const match = /^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d):(\d\d)$/.exec(doc.lastModified);
+                    const time = Date.UTC(+match[3], +match[1] - 1, +match[2], +match[4], +match[5], +match[6]);
+                    return Math.abs(Date.now() - time) < 5000;
+                })()"#).unwrap(), "true", "mime={mime}, response_type={response_type}, header={header:?}");
+            }
+        }
+        assert_eq!(
+            vm.eval(
+                r#"(() => {
+            const [first, second, third, fourth] = __responseDocuments;
+            __modifiedXhr.abort();
+            first.documentElement.remove();
+            return JSON.stringify([
+                first.lastModified, second.lastModified,
+                document.lastModified, first !== second && third !== fourth
+            ]);
+        })()"#
+            )
+            .unwrap(),
+            r#"["11/06/1994 08:49:37","01/01/1970 00:00:00","01/01/1970 01:23:45",true]"#
+        );
+        vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
+            .unwrap();
+        assert_eq!(
+            vm.eval("__responseDocuments[0].lastModified").unwrap(),
+            "11/06/1994 16:49:37"
+        );
+    }
+}
+
+#[test]
+fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_streamed_bytes() {
+    for streaming in [false, true] {
+        for (chunks, partial, expected) in [
+            (
+                vec![vec![0x83], vec![0x65, 0x83], vec![0x58, 0x83, 0x67]],
+                vec!["", "テ", "テスト"],
+                "テスト",
+            ),
+            (
+                vec![vec![0xff], vec![0xfe, b'A'], vec![0, 0xe9], vec![0]],
+                vec!["", "", "A", "Aé"],
+                "Aé",
+            ),
+        ] {
+            let mut vm = new_storage_test_vm("https://xhr-response-decoding.test/");
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Xhr),
+            );
+            vm.eval(
+                r#"
+                globalThis.__decodingXhr = new XMLHttpRequest();
+                globalThis.__decodingHeadersText = null;
+                __decodingXhr.open('GET', '/response');
+                __decodingXhr.onreadystatechange = () => {
+                    if (__decodingXhr.readyState === 2) {
+                        __decodingHeadersText = __decodingXhr.responseText;
+                        __decodingXhr.overrideMimeType('text/plain;charset=Shift_JIS');
+                    }
+                };
+                __decodingXhr.send();
+            "#,
+            )
+            .unwrap();
+            let requests = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(requests.len(), 1);
+            let request = &requests[0];
+            let bytes = chunks.concat();
+            let head = moli_fetch::ResponseHead {
+                final_url: request.url.clone(),
+                status: 200,
+                status_text: None,
+                headers: vec![
+                    (
+                        "Content-Type".to_owned(),
+                        "text/plain;charset=UTF-8".to_owned(),
+                    ),
+                    ("Content-Length".to_owned(), bytes.len().to_string()),
+                ],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            };
+            if streaming {
+                let body_source_id = crate::network_host::new_network_body_source_id();
+                vm.start_streaming_async_subresource_fetch(
+                    crate::types::AsyncSubresourceStreamingStarted {
+                        internal_id: request.internal_id,
+                        request_url: request.url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Vec::new(),
+                        request_body: None,
+                        body_source_id,
+                        head,
+                        network_request_headers: None,
+                    },
+                )
+                .unwrap();
+                for (chunk, text) in chunks.into_iter().zip(partial) {
+                    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, chunk);
+                    assert_eq!(vm.eval("__decodingXhr.responseText").unwrap(), text);
+                }
+                vm.finish_streaming_async_subresource_fetch(
+                    request.internal_id,
+                    body_source_id,
+                    Ok(()),
+                )
+                .unwrap();
+            } else {
+                let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+                vm.renderer_document_isolate
+                    .with_entered_renderer_document_isolate(move |isolate| {
+                        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                        let scope = &mut scope.init();
+                        let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                        let scope = &mut v8::ContextScope::new(scope, context);
+                        let xhr = context
+                            .global(scope)
+                            .get(scope, v8str(scope, "__decodingXhr").into())
+                            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                            .unwrap();
+                        crate::network_host::apply_xhr_response_body_source(
+                            scope,
+                            xhr,
+                            head,
+                            moli_fetch::ResponseBody::materialized_bytes(bytes),
+                        );
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            assert_eq!(vm.eval("__decodingHeadersText").unwrap(), "");
+            assert_eq!(vm.eval("__decodingXhr.responseText").unwrap(), expected);
+            assert_eq!(vm.eval("__decodingXhr.response === __decodingXhr.responseText && __decodingXhr.readyState === 4").unwrap(), "true");
+        }
+    }
+}
+
+#[test]
+fn xhr_queued_response_retains_legacy_bytes_and_decodes_json_as_utf8() {
+    let mut vm = new_storage_test_vm("https://xhr-queued-decoding.test/");
+    vm.eval(r#"
+        globalThis.__queuedDecoding = [];
+        for (const [url, type, override] of [
+            ['data:text/plain;charset=windows-1252,%FF', '', null],
+            ['data:text/plain;charset=utf-8,%83%65%83%58%83%67', '', 'text/plain;charset=Shift_JIS'],
+            ['data:application/json;charset=windows-1252,%EF%BB%BF%7B%22x%22%3A1%7D', 'json', null],
+            ['data:text/html,%3Cmeta%20charset=windows-1252%3E%3Cx%3E%FF%3C%2Fx%3E', 'document', null],
+        ]) {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', url);
+            xhr.responseType = type;
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 2 && override) xhr.overrideMimeType(override);
+            };
+            xhr.onload = () => __queuedDecoding.push(type === 'json' ? xhr.response.x :
+                type === 'document' ? [xhr.response.querySelector('x').textContent, xhr.response.characterSet] : xhr.responseText);
+            xhr.send();
+        }
+    "#).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__queuedDecoding)").unwrap(),
+        r#"["ÿ","テスト",1,["ÿ","windows-1252"]]"#
+    );
+}
+
+#[test]
+fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_errors() {
+    let mut vm = new_storage_test_vm("https://xhr-queued-document.test/");
+    vm.eval(r#"globalThis.__queuedDocumentResults = [];
+        for (const responseType of ['', 'document']) {
+            for (const override of [null, 'bogus', '']) {
+                for (const source of ['', '<x><y></x>', '<parsererror/>']) {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', 'data:application/xml,' + encodeURIComponent(source));
+                    xhr.responseType = responseType;
+                    if (override !== null) xhr.overrideMimeType(override);
+                    xhr.onload = () => {
+                        const doc = xhr.responseXML;
+                        __queuedDocumentResults.push([
+                            responseType, override, source, xhr.status,
+                            doc && doc.documentElement.localName,
+                            responseType === 'document' ? xhr.response === doc : xhr.response === source,
+                        ]);
+                    };
+                    xhr.send();
+                }
+            }
+        }"#).expect("enqueue asynchronous data URL responses");
+    let result = vm
+        .eval("JSON.stringify(__queuedDocumentResults)")
+        .expect("drain queued responses");
+    let mut expected = Vec::new();
+    for response_type in ["", "document"] {
+        for override_mime in [None, Some("bogus"), Some("")] {
+            for source in ["", "<x><y></x>", "<parsererror/>"] {
+                let xml_root = (override_mime.is_none() && source == "<parsererror/>")
+                    .then_some("parsererror");
+                expected.push(serde_json::json!([
+                    response_type,
+                    override_mime,
+                    source,
+                    200,
+                    xml_root,
+                    true
+                ]));
+            }
+        }
+    }
+    assert_eq!(result, serde_json::to_string(&expected).unwrap());
+}
+
+#[test]
+fn xml_http_request_serializes_document_bodies_and_limits_charset_rewriting_to_text() {
+    let vm = new_storage_test_vm("https://xhr-document-body.test/");
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(move |isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let source = v8::String::new(
+                scope,
+                r#"(() => {
+                    const xml = document.implementation.createDocument('urn:test', 'root');
+                    xml.documentElement.textContent = 'caf\u00e9\ud800';
+                    const html = document.implementation.createHTMLDocument();
+                    html.body.innerHTML = '<p>caf\u00e9 &amp;<br></p><template><b>x</b></template>';
+                    const empty = document.implementation.createDocument(null, null);
+                    const bogus = document.implementation.createDocument(null, null);
+                    const element = bogus.createElement('test:test');
+                    element.setAttribute('x', '\ud800');
+                    bogus.appendChild(element);
+                    const xhtml = new DOMParser().parseFromString('<html xmlns="http://www.w3.org/1999/xhtml"><br/></html>', 'application/xhtml+xml');
+                    for (const doc of [xml, html, empty, bogus, xhtml]) {
+                        Object.defineProperties(doc, {
+                            toString: {value() { throw new Error('Document toString'); }},
+                            contentType: {get() { throw new Error('Document contentType'); }},
+                            nodeType: {get() { throw new Error('Document nodeType'); }},
+                        });
+                    }
+                    const ordinaryElement = document.createElement('div');
+                    ordinaryElement.toString = () => 'element text';
+                    const spoof = {nodeType: 9, toString() { return 'ordinary text'; }};
+                    const form = new FormData();
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/');
+                    xhr.setRequestHeader('Content-Type', 'Text/Plain; Charset=ASCII;keep="alpha;beta"');
+                    return [xhr, [
+                        [xml, '<root xmlns="urn:test">caf\u00e9\ufffd</root>', 'application/xml;charset=UTF-8', true],
+                        [html, '<!DOCTYPE html><html><head></head><body><p>caf\u00e9 &amp;<br></p><template><b>x</b></template></body></html>', 'text/html;charset=UTF-8', true],
+                        [empty, '', 'application/xml;charset=UTF-8', true],
+                        [bogus, '<test:test x="\ufffd"/>', 'application/xml;charset=UTF-8', true],
+                        [xhtml, '<html xmlns="http://www.w3.org/1999/xhtml"><br /></html>', 'application/xml;charset=UTF-8', true],
+                        [ordinaryElement, 'element text', 'text/plain;charset=UTF-8', true],
+                        [spoof, 'ordinary text', 'text/plain;charset=UTF-8', true],
+                        ['caf\u00e9\ud800', 'caf\u00e9\ufffd', 'text/plain;charset=UTF-8', true],
+                        ['', '', 'text/plain;charset=UTF-8', true],
+                        [new URLSearchParams({q: 'caf\u00e9'}), 'q=caf%C3%A9', 'application/x-www-form-urlencoded;charset=UTF-8', true],
+                        [new Blob(['bytes'], {type: 'text/plain;charset=ascii'}), 'bytes', 'text/plain;charset=ascii', false],
+                        [new Uint8Array([65, 66]), 'AB', null, false],
+                        [null, null, null, false],
+                        [form, undefined, undefined, false],
+                    ]];
+                })()"#,
+            )
+            .expect("body fixture source");
+            let script = v8::Script::compile(scope, source, None).expect("compile body fixtures");
+            let fixtures = script.run(scope).expect("create body fixtures");
+            let fixtures = v8::Local::<v8::Array>::try_from(fixtures).expect("body fixture array");
+            let xhr_value = fixtures.get_index(scope, 0).expect("xhr fixture");
+            let xhr = v8::Local::<v8::Object>::try_from(xhr_value).expect("xhr object");
+            let cases_value = fixtures.get_index(scope, 1).expect("body cases");
+            let cases = v8::Local::<v8::Array>::try_from(cases_value).expect("body cases array");
+            for index in 0..cases.length() {
+                let case = cases.get_index(scope, index).expect("body case");
+                let case = v8::Local::<v8::Array>::try_from(case).expect("body case array");
+                let body = case.get_index(scope, 0).expect("body value");
+                let prepared = crate::network_host::prepare_xhr_send_body(scope, body)
+                    .expect("prepare body without observing Document properties");
+                let expected_bytes = case.get_index(scope, 1).expect("expected bytes");
+                let expected_type = case.get_index(scope, 2).expect("expected type");
+                let rewrite = case.get_index(scope, 3).expect("charset policy").is_true();
+                if expected_bytes.is_null() {
+                    assert!(prepared.body.is_none());
+                } else if !expected_bytes.is_undefined() {
+                    let expected = expected_bytes.to_string(scope).unwrap().to_rust_string_lossy(scope);
+                    assert_eq!(prepared.body.as_deref(), Some(expected.as_bytes()), "case {index}");
+                }
+                if expected_type.is_null() {
+                    assert!(prepared.default_content_type.is_none());
+                } else if !expected_type.is_undefined() {
+                    let expected = expected_type.to_string(scope).unwrap().to_rust_string_lossy(scope);
+                    assert_eq!(prepared.default_content_type.as_deref(), Some(expected.as_str()), "case {index}");
+                }
+                let headers = crate::network_host::xhr_author_request_headers(scope, xhr, &prepared);
+                assert_eq!(headers, [("Content-Type".to_owned(), if rewrite {
+                    "text/plain;charset=UTF-8;keep=\"alpha;beta\"".to_owned()
+                } else {
+                    "Text/Plain; Charset=ASCII;keep=\"alpha;beta\"".to_owned()
+                })], "case {index}");
+            }
+            Ok(())
+        })
+        .expect("document body preparation probe should run");
 }
 
 #[test]
@@ -1828,6 +2658,7 @@ __streamingXhr.send();
     let request_url = pending.url.clone();
     let body_source_id = crate::network_host::new_network_body_source_id();
     let response_head = moli_fetch::ResponseHead {
+        status_text: Some("Streamed message".to_owned()),
         final_url: request_url.clone(),
         status: 200,
         headers: vec![
@@ -1862,12 +2693,13 @@ __streamingXhr.send();
   events: __streamingXhrEvents,
   readyState: __streamingXhr.readyState,
   status: __streamingXhr.status,
+  statusText: __streamingXhr.statusText,
   responseText: __streamingXhr.responseText,
   contentType: __streamingXhr.getResponseHeader("content-type")
 })"#,
         )
         .expect("XHR response head should be Web-visible"),
-        r#"{"events":["readystatechange:1:0:","readystatechange:2:200:"],"readyState":2,"status":200,"responseText":"","contentType":"text/plain; charset=utf-8"}"#
+        r#"{"events":["readystatechange:1:0:","readystatechange:2:200:"],"readyState":2,"status":200,"statusText":"Streamed message","responseText":"","contentType":"text/plain; charset=utf-8"}"#
     );
 
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"hi \xe2".to_vec());
@@ -1900,6 +2732,15 @@ __streamingXhr.send();
             .expect("completed streaming XHR should be Web-visible"),
         r#"[4,200,"hi €!",["readystatechange:3:200:hi €!","progress:7:7:true","readystatechange:4:200:hi €!","load","loadend"]]"#,
         "DONE must flush the latest deferred progress before readystatechange 4"
+    );
+    assert_eq!(
+        vm.eval("__streamingXhr.statusText").unwrap(),
+        "Streamed message"
+    );
+    assert_eq!(
+        vm.eval("__streamingXhr.open('GET', '/next'); __streamingXhr.statusText")
+            .unwrap(),
+        ""
     );
 }
 
@@ -1977,6 +2818,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 None,
                             ),
                             deferred_request_started: false,
+                            blob_url_entry: None,
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
@@ -1984,6 +2826,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: final_url.clone(),
                             status: 200,
                             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -2122,6 +2965,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
                             None,
                         ),
                         deferred_request_started: false,
+                        blob_url_entry: None,
                     },
                 );
                 Ok(())
@@ -2258,6 +3102,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                                 None,
                             ),
                             deferred_request_started: false,
+                            blob_url_entry: None,
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
@@ -2265,6 +3110,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: final_url.clone(),
                             status: 206,
                             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -2359,8 +3205,12 @@ fn install_streaming_fetch_response_fixture(
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: request_url.clone(),
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -2410,6 +3260,7 @@ fn install_streaming_fetch_response_fixture(
                             Some(cancel_handle),
                         ),
                         deferred_request_started: false,
+                        blob_url_entry: None,
                     },
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
@@ -2417,6 +3268,7 @@ fn install_streaming_fetch_response_fixture(
                     request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: request_url,
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -2513,6 +3365,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                                 Some(cancel_handle_for_state),
                             ),
                             deferred_request_started: false,
+                            blob_url_entry: None,
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
@@ -2520,6 +3373,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: request_url,
                             status: 200,
                             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -3138,6 +3992,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                             None,
                         ),
                         deferred_request_started: false,
+                        blob_url_entry: None,
                     },
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
@@ -3145,6 +4000,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                     request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: request_url,
                         status: 200,
                         headers: Vec::new(),
@@ -3203,59 +4059,5 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
     assert_eq!(
         events,
         vec![crate::types::PendingSubresourceContinueEvent::Completed { internal_id }]
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
-    let server = StaticHttpServer::spawn(1).await;
-    let base_url = server.base_url();
-    let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_page_task_executor_test_vm_with_loader(
-        base_url
-            .join("page.html")
-            .expect("page fixture URL")
-            .as_str(),
-        &loader,
-    );
-    let first_base = base_url.join("first/").expect("first base URL");
-    let second_base = base_url.join("second/").expect("second base URL");
-
-    vm.eval(&format!(
-        r#"
-(() => {{
-  globalThis.__xhrOpenUrlProbe = "pending";
-  const base = document.createElement("base");
-  base.href = {};
-  document.head.append(base);
-  const xhr = new XMLHttpRequest();
-  xhr.open("GET", "resource", true, "alice", "secret");
-  base.href = {};
-  xhr.onload = () => {{ globalThis.__xhrOpenUrlProbe = "done"; }};
-  xhr.onerror = () => {{ globalThis.__xhrOpenUrlProbe = "error"; }};
-  xhr.send();
-  return "started";
-}})()
-"#,
-        serde_json::to_string(first_base.as_str()).expect("serialize first base URL"),
-        serde_json::to_string(second_base.as_str()).expect("serialize second base URL"),
-    ))
-    .expect("XHR open URL probe should evaluate");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__xhrOpenUrlProbe)",
-        "done",
-        "XHR open URL probe",
-    )
-    .await;
-
-    let requests = server.finish().await;
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].target, "/first/resource");
-    assert_eq!(
-        requests[0].header_value("authorization"),
-        Some("Basic YWxpY2U6c2VjcmV0")
     );
 }

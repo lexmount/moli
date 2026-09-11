@@ -1,7 +1,9 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value,
+    window_host_ptr, window_receiver,
 };
 use super::*;
+use crate::{native_bridge::lightweight_popup_id_from_window, util::v8str, webidl};
 
 fn window_inner_surface_dimension<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -99,13 +101,102 @@ fn set_receiver_window_alias<'s>(
     );
 }
 
+fn set_receiver_related_window_alias<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    slot: &'static str,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, args) else {
+        return;
+    };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
+        rv.set_null();
+        return;
+    }
+    rv.set(
+        window_hidden_value(scope, receiver, slot)
+            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+    );
+}
+
 pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
         rv.set_null();
+        return;
+    }
+    if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver)
+        && let Some(host_ptr) = window_host_ptr(scope, receiver)
+        && let Some(opener) = unsafe { &*host_ptr }.lightweight_popup_opener_window(scope, popup_id)
+    {
+        rv.set(opener.into());
+        return;
+    }
+    if let Some(handle) = window_child_context_handle(scope, receiver)
+        && let Some(host_ptr) = window_host_ptr(scope, receiver)
+        && let Some(opener) = unsafe { &*host_ptr }.child_browsing_context_opener(scope, handle)
+    {
+        rv.set(opener.into());
+        return;
+    }
+    rv.set_null();
+}
+
+pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
+        let closed = window_host_ptr(scope, receiver)
+            .is_none_or(|host_ptr| !unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
+        rv.set_bool(closed);
+        return;
+    }
+    rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
+}
+
+pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = args.get(0);
+    if value.is_null() {
+        if let Some(host_ptr) = window_host_ptr(scope, receiver) {
+            let host = unsafe { &mut *host_ptr };
+            if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
+                host.clear_lightweight_popup_opener(popup_id);
+            } else if let Some(handle) = window_child_context_handle(scope, receiver) {
+                host.clear_child_browsing_context_opener(handle);
+            }
+        }
+        return;
+    }
+    match receiver.define_own_property(
+        scope,
+        v8str(scope, "opener").into(),
+        value,
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => {
+            webidl::throw_type_error(scope, "Failed to replace Window.opener property.");
+        }
+        None => {}
     }
 }
 
@@ -252,7 +343,7 @@ pub(in crate::context_bootstrap) fn window_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
 }
 
 pub(in crate::context_bootstrap) fn window_parent_getter<'s>(
@@ -260,7 +351,7 @@ pub(in crate::context_bootstrap) fn window_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
 }
 
 pub(in crate::context_bootstrap) fn window_frames_getter<'s>(

@@ -1,7 +1,34 @@
 use super::super::headers::HeadersGuard;
 use super::*;
-use crate::web_api_interfaces;
 use crate::webidl;
+
+pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, &'static str> {
+    if method.is_empty()
+        || !method.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        return Err("Request method is not a valid HTTP token");
+    }
+    normalize_request_method(method)
+}
 
 pub(in crate::network_host) fn normalize_request_method(
     method: &str,
@@ -37,6 +64,7 @@ pub(super) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
 
 pub(crate) struct RequestInputSnapshot {
     pub(crate) url: String,
+    pub(crate) blob_url_entry: Option<CapturedBlobUrl>,
     pub(crate) method: String,
     pub(crate) mode: String,
     pub(crate) cache: String,
@@ -79,6 +107,9 @@ pub(crate) fn mark_request_input_body_used_for_fetch<'s>(
     let has_body = request_slot_value(scope, object, REQUEST_BODY_SLOT)
         .is_some_and(|body| !body.is_null_or_undefined());
     if has_body {
+        if let Some(stream) = body_stream_object(scope, object) {
+            crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream);
+        }
         set_request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT, true);
     }
 }
@@ -107,7 +138,7 @@ fn request_input_snapshot_inner<'s>(
     };
     let method = defined_object_string_property(scope, object, "method")
         .map(|value| {
-            normalize_request_method(&value)
+            normalize_fetch_request_method(&value)
                 .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
         })
         .transpose()?
@@ -145,6 +176,7 @@ fn request_input_snapshot_inner<'s>(
     let signal = request_signal_snapshot_from_property(scope, object)?;
     Ok(Some(RequestInputSnapshot {
         url,
+        blob_url_entry: None,
         method,
         mode,
         cache,
@@ -171,7 +203,7 @@ fn request_input_snapshot_from_private_slots<'s>(
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
         .map(|value| {
-            normalize_request_method(&value)
+            normalize_fetch_request_method(&value)
                 .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
         })
         .transpose()?
@@ -221,6 +253,7 @@ fn request_input_snapshot_from_private_slots<'s>(
         .flatten();
     Ok(RequestInputSnapshot {
         url,
+        blob_url_entry: blob_url_entry(scope, object),
         method,
         mode,
         cache,
@@ -249,30 +282,7 @@ fn request_body_unusable<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(body) = request_slot_value(scope, object, REQUEST_BODY_SLOT) else {
-        return false;
-    };
-    if body.is_null_or_undefined() {
-        return false;
-    }
-    request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT)
-        || request_body_stream_locked(scope, body)
-}
-
-fn request_body_stream_locked<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    body: v8::Local<'s, v8::Value>,
-) -> bool {
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
-        return false;
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return false;
-    }
-    stream
-        .get(scope, v8str(scope, "locked").into())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(false)
+    body_is_unusable(scope, object)
 }
 
 fn request_signal_snapshot_from_property<'s>(
@@ -316,11 +326,11 @@ fn object_bool_property(
         .map(|value| value.boolean_value(scope))
 }
 
-pub(super) fn resolve_request_constructor_url(
-    scope: &mut v8::PinScope<'_, '_>,
-    input: &str,
-) -> String {
-    try_resolve_request_constructor_url(scope, input).unwrap_or_else(|_| input.to_owned())
+pub(crate) fn validate_request_url_credentials(url: &url::Url) -> Result<(), &'static str> {
+    if !url.username().is_empty() || url.password().is_some_and(|value| !value.is_empty()) {
+        return Err("Request URL must not include credentials");
+    }
+    Ok(())
 }
 
 pub(crate) fn try_resolve_request_constructor_url(
@@ -380,19 +390,22 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
     }
 }
 
-pub(super) fn normalize_request_referrer(scope: &mut v8::PinScope<'_, '_>, input: &str) -> String {
+pub(super) fn normalize_request_referrer(
+    scope: &mut v8::PinScope<'_, '_>,
+    input: &str,
+) -> Result<String, String> {
     if input.is_empty() || input == "about:client" {
-        return input.to_owned();
+        return Ok(input.to_owned());
     }
 
-    let resolved = resolve_request_constructor_url(scope, input);
+    let resolved = try_resolve_request_constructor_url(scope, input)?;
     let Some(context_url) = current_request_context_url(scope) else {
-        return resolved;
+        return Ok(resolved);
     };
     if moli_url::parsed_same_origin(&resolved, &context_url) {
-        resolved
+        Ok(resolved)
     } else {
-        "about:client".to_owned()
+        Ok("about:client".to_owned())
     }
 }
 

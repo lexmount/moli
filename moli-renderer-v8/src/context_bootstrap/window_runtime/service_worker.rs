@@ -18,6 +18,10 @@ const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistr
 const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
 const SERVICE_WORKER_REGISTRATION_WORKER_SLOT: &str = "__moliServiceWorkerRegistrationWorker";
 const SERVICE_WORKER_REGISTRATION_WORKERS_SLOT: &str = "__moliServiceWorkerRegistrationWorkers";
+const SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT: &str =
+    "__moliServiceWorkerRegistrationInstalling";
+const SERVICE_WORKER_REGISTRATION_WAITING_SLOT: &str = "__moliServiceWorkerRegistrationWaiting";
+const SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT: &str = "__moliServiceWorkerRegistrationActive";
 const SERVICE_WORKER_SYNC_MANAGER_SCOPE_SLOT: &str = "__moliServiceWorkerSyncManagerScope";
 const SERVICE_WORKER_PERIODIC_SYNC_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerPeriodicSyncManagerScope";
@@ -331,6 +335,44 @@ struct BackgroundSyncOptions {
     min_interval: u64,
 }
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RegistrationOptions")]
+struct ServiceWorkerRegistrationOptions {
+    #[webidl(name = "scope", converter = "usv_string")]
+    requested_scope: Option<String>,
+
+    #[webidl(
+        name = "type",
+        converter = "enum",
+        default = WorkerScriptKind::Classic
+    )]
+    script_kind: WorkerScriptKind,
+
+    #[webidl(
+        name = "updateViaCache",
+        converter = "enum",
+        default = ServiceWorkerUpdateViaCache::Imports
+    )]
+    update_via_cache: ServiceWorkerUpdateViaCache,
+}
+
+impl Default for ServiceWorkerRegistrationOptions {
+    fn default() -> Self {
+        Self {
+            requested_scope: None,
+            script_kind: WorkerScriptKind::Classic,
+            update_via_cache: ServiceWorkerUpdateViaCache::Imports,
+        }
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "ServiceWorkerContainer.getRegistration")]
+struct ServiceWorkerGetRegistrationArgs {
+    #[webidl(name = "clientURL", converter = "usv_string", default = "")]
+    client_url: String,
+}
+
 #[derive(Clone, Copy)]
 enum ServiceWorkerRegistrationPhase<'a> {
     Snapshot(&'a crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot),
@@ -397,6 +439,9 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     ) else {
         return;
     };
+    let Some(options) = service_worker_registration_options(scope, &args) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -404,7 +449,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     let Some(script_url) =
         resolve_service_worker_script_url(request_context.document_url(), &script)
     else {
-        reject_service_worker_promise(
+        reject_service_worker_promise_with_type_error(
             scope,
             resolver,
             "failed to resolve service worker script URL",
@@ -412,24 +457,30 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
-    let script_kind = match service_worker_script_kind(scope, &args) {
-        Ok(script_kind) => script_kind,
-        Err(message) => {
-            reject_service_worker_promise(scope, resolver, message);
+    let scope_url = match service_worker_scope_url(
+        request_context.document_url(),
+        &script_url,
+        options.requested_scope.as_deref(),
+    ) {
+        Some(scope_url) => scope_url,
+        None => {
+            reject_service_worker_promise_with_type_error(
+                scope,
+                resolver,
+                "failed to resolve service worker scope URL",
+            );
             rv.set(promise.into());
             return;
         }
     };
-    let update_via_cache = match service_worker_update_via_cache(scope, &args) {
-        Ok(update_via_cache) => update_via_cache,
-        Err(message) => {
-            reject_service_worker_promise(scope, resolver, message);
-            rv.set(promise.into());
-            return;
-        }
-    };
-    let scope_url =
-        service_worker_scope_url(scope, request_context.document_url(), &script_url, &args);
+    if let Err(message) = crate::service_worker_runtime::verify_service_worker_registration_urls(
+        &scope_url,
+        &script_url,
+    ) {
+        reject_service_worker_promise_with_type_error(scope, resolver, &message);
+        rv.set(promise.into());
+        return;
+    }
     let host = unsafe { &mut *host_ptr };
     let Some(request_client) = host
         .document_resource_loader_for_window_owner(request_context.owner().window_document_owner())
@@ -443,13 +494,18 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
-    let (request_id, document_owner, completion_tx) =
-        host.register_pending_service_worker_register(scope, resolver, request_context.owner());
+    let (request_id, document_owner, completion_tx) = host
+        .register_pending_service_worker_register(
+            scope,
+            scope_url.clone(),
+            resolver,
+            request_context.owner(),
+        );
     host.start_service_worker_runtime(
         script_url,
         scope_url,
-        script_kind,
-        update_via_cache,
+        options.script_kind,
+        options.update_via_cache,
         &request_context,
         request_client,
         request_id,
@@ -463,6 +519,7 @@ pub(crate) fn settle_service_worker_register_completion<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     owner: OwnerDispatchScope,
+    scope_url: &url::Url,
     result: std::result::Result<
         crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
         ServiceWorkerRegistrationError,
@@ -497,8 +554,43 @@ pub(crate) fn settle_service_worker_register_completion<'s>(
             let _ = resolver.resolve(scope, registration.into());
         }
         Err(error) => {
+            refresh_service_worker_container_registration_for_scope(scope, owner, scope_url);
             reject_service_worker_registration_promise(scope, resolver, error);
         }
+    }
+}
+
+fn refresh_service_worker_container_registration_for_scope(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: OwnerDispatchScope,
+    scope_url: &url::Url,
+) {
+    let Some(container) = service_worker_container_for_owner(scope, owner) else {
+        return;
+    };
+    let Some(registration) = service_worker_container_cached_registration_for_scope(
+        scope,
+        container,
+        scope_url.as_str(),
+    ) else {
+        return;
+    };
+    let snapshot = context_host_ptr_from_global_bridge(scope)
+        .and_then(|host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            let request_context = host.service_worker_window_request_context(owner)?;
+            host.service_worker_registration_for_client(&request_context, scope_url)
+        })
+        .filter(|snapshot| snapshot.scope_url() == scope_url);
+    if let Some(snapshot) = snapshot {
+        update_service_worker_registration_object(
+            scope,
+            registration,
+            service_worker_registration_snapshot_script_url(&snapshot),
+            ServiceWorkerRegistrationPhase::Snapshot(&snapshot),
+        );
+    } else {
+        service_worker_registration_clear_workers(scope, registration);
     }
 }
 
@@ -568,16 +660,15 @@ pub(crate) fn dispatch_service_worker_lifecycle_notification(
     );
     for (owner, registration) in registrations {
         let previous_owner_context = owner.enter(scope);
+        update_service_worker_registration_object(
+            scope,
+            registration,
+            service_worker_registration_snapshot_script_url(&notification.registration),
+            ServiceWorkerRegistrationPhase::Snapshot(&notification.registration),
+        );
         for event in &notification.events {
             match event {
                 crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound => {
-                    if let Some(installing) = notification.registration.installing() {
-                        let _ = service_worker_registration_worker_for_snapshot_version(
-                            scope,
-                            registration,
-                            installing,
-                        );
-                    }
                     callback_effect = callback_effect.merge(dispatch_service_worker_simple_event(
                         scope,
                         registration,
@@ -1068,24 +1159,51 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<ServiceWorkerGetRegistrationArgs>(scope, &args) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
-    let value: v8::Local<'_, v8::Value> = if let Some(host_ptr) =
-        context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let owner = service_worker_container_owner_scope(scope, args.this());
-        let state = host
-            .service_worker_window_request_context(owner)
-            .and_then(|request_context| {
-                service_worker_client_url(scope, request_context.document_url(), &args).and_then(
-                    |client_url| {
-                        host.service_worker_registration_for_client(&request_context, &client_url)
-                    },
-                )
-            });
-        if let Some(state) = state {
+    let promise = resolver.get_promise(scope);
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let owner = service_worker_container_owner_scope(scope, args.this());
+    let Some(request_context) = host.service_worker_window_request_context(owner) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let client_url =
+        match service_worker_client_url(request_context.document_url(), &parsed.client_url) {
+            Ok(client_url) => client_url,
+            Err(ServiceWorkerClientUrlError::Invalid) => {
+                reject_service_worker_promise_with_type_error(
+                    scope,
+                    resolver,
+                    "Failed to parse the client URL.",
+                );
+                rv.set(promise.into());
+                return;
+            }
+            Err(ServiceWorkerClientUrlError::CrossOrigin) => {
+                reject_service_worker_promise_with_dom_exception(
+                    scope,
+                    resolver,
+                    "The client URL must have the same origin as the document.",
+                    "SecurityError",
+                );
+                rv.set(promise.into());
+                return;
+            }
+        };
+    let value: v8::Local<'_, v8::Value> = host
+        .service_worker_registration_for_client(&request_context, &client_url)
+        .map(|state| {
             build_service_worker_registration_object_for_container(
                 scope,
                 args.this(),
@@ -1094,14 +1212,10 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
                 ServiceWorkerRegistrationPhase::Snapshot(&state),
             )
             .into()
-        } else {
-            v8::undefined(scope).into()
-        }
-    } else {
-        v8::undefined(scope).into()
-    };
+        })
+        .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.resolve(scope, value);
-    rv.set(resolver.get_promise(scope).into());
+    rv.set(promise.into());
 }
 
 pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_callback<'s>(
@@ -2085,100 +2199,62 @@ fn resolve_service_worker_script_url(document_url: &url::Url, script: &str) -> O
     Some(script_url)
 }
 
+fn service_worker_registration_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<ServiceWorkerRegistrationOptions> {
+    let context = webidl::Context::argument("ServiceWorkerContainer.register", 2);
+    match webidl::dictionary_arg(args, 1, context) {
+        Ok(Some(options)) => {
+            match webidl::parse_dictionary_object::<ServiceWorkerRegistrationOptions>(
+                scope, options,
+            ) {
+                Ok(options) => Some(options),
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    None
+                }
+            }
+        }
+        Ok(None) => Some(ServiceWorkerRegistrationOptions::default()),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
 fn service_worker_scope_url(
-    scope: &mut v8::PinScope<'_, '_>,
     document_url: &url::Url,
     script_url: &url::Url,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> url::Url {
-    if args.length() > 1
-        && let Ok(options) = v8::Local::<v8::Object>::try_from(args.get(1))
-        && let Some(scope_value) = options.get(scope, v8str(scope, "scope").into())
-        && !scope_value.is_null_or_undefined()
-        && let Some(scope_string) = scope_value.to_string(scope)
-        && let Ok(mut scope_url) = document_url.join(&scope_string.to_rust_string_lossy(scope))
-    {
-        scope_url.set_fragment(None);
-        return scope_url;
-    }
-    default_service_worker_scope_url(script_url)
+    requested_scope: Option<&str>,
+) -> Option<url::Url> {
+    let Some(requested_scope) = requested_scope else {
+        return Some(default_service_worker_scope_url(script_url));
+    };
+    let mut scope_url = document_url.join(requested_scope).ok()?;
+    scope_url.set_fragment(None);
+    Some(scope_url)
 }
 
-fn service_worker_script_kind(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Result<WorkerScriptKind, &'static str> {
-    if args.length() <= 1 {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let value = args.get(1);
-    if value.is_null_or_undefined() {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(WorkerScriptKind::Classic);
-    };
-    let Some(type_value) = options.get(scope, v8str(scope, "type").into()) else {
-        return Ok(WorkerScriptKind::Classic);
-    };
-    if type_value.is_null_or_undefined() {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let Some(type_string) = type_value.to_string(scope) else {
-        return Err("failed to parse service worker type");
-    };
-    match type_string.to_rust_string_lossy(scope).as_str() {
-        "classic" => Ok(WorkerScriptKind::Classic),
-        "module" => Ok(WorkerScriptKind::Module),
-        _ => Err("invalid service worker type"),
-    }
-}
-
-fn service_worker_update_via_cache(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Result<ServiceWorkerUpdateViaCache, &'static str> {
-    if args.length() <= 1 {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let value = args.get(1);
-    if value.is_null_or_undefined() {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    };
-    let Some(update_via_cache_value) = options.get(scope, v8str(scope, "updateViaCache").into())
-    else {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    };
-    if update_via_cache_value.is_null_or_undefined() {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let Some(update_via_cache_string) = update_via_cache_value.to_string(scope) else {
-        return Err("failed to parse service worker updateViaCache");
-    };
-    ServiceWorkerUpdateViaCache::parse_webidl_token(
-        &update_via_cache_string.to_rust_string_lossy(scope),
-    )
-    .ok_or("invalid service worker updateViaCache")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceWorkerClientUrlError {
+    Invalid,
+    CrossOrigin,
 }
 
 fn service_worker_client_url(
-    scope: &mut v8::PinScope<'_, '_>,
     document_url: &url::Url,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Option<url::Url> {
-    let client = if args.length() > 0 && !args.get(0).is_null_or_undefined() {
-        args.get(0)
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))?
-    } else {
-        String::new()
-    };
-    let mut client_url = document_url.join(&client).ok()?;
+    client: &str,
+) -> Result<url::Url, ServiceWorkerClientUrlError> {
+    let mut client_url = document_url
+        .join(client)
+        .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
+    if !moli_url::same_origin(document_url, &client_url) {
+        return Err(ServiceWorkerClientUrlError::CrossOrigin);
+    }
     client_url.set_fragment(None);
-    Some(client_url)
+    Ok(client_url)
 }
 
 fn default_service_worker_scope_url(script_url: &url::Url) -> url::Url {
@@ -2202,74 +2278,18 @@ fn service_worker_registration_snapshot_script_url(
         .unwrap_or_else(|| snapshot.scope_url().as_str())
 }
 
-fn service_worker_registration_snapshot_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-) -> Option<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot> {
-    let scope_url = service_worker_registration_scope_from_this(scope, registration)?;
-    let owner = service_worker_owner_scope_from_object(scope, registration);
-    context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        let host = unsafe { &mut *host_ptr };
-        let request_context = host.service_worker_window_request_context(owner)?;
-        host.service_worker_registration_for_client(&request_context, &scope_url)
-    })
-}
-
 fn service_worker_registration_worker_for_phase<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration: v8::Local<'s, v8::Object>,
     phase: &'static str,
 ) -> v8::Local<'s, v8::Value> {
-    let Some(snapshot) = service_worker_registration_snapshot_from_object(scope, registration)
-    else {
-        return v8::null(scope).into();
+    let slot = match phase {
+        "installing" => SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT,
+        "waiting" => SERVICE_WORKER_REGISTRATION_WAITING_SLOT,
+        "active" => SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT,
+        _ => return v8::null(scope).into(),
     };
-    let version = match phase {
-        "installing" => snapshot.installing(),
-        "waiting" => snapshot.waiting(),
-        "active" => snapshot.active(),
-        _ => None,
-    };
-    let Some(version) = version else {
-        return v8::null(scope).into();
-    };
-    service_worker_registration_worker_for_snapshot_version(scope, registration, version)
-}
-
-fn service_worker_registration_worker_for_snapshot_version<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-    version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
-) -> v8::Local<'s, v8::Value> {
-    if let Some(worker) = service_worker_registration_cached_worker_for_version(
-        scope,
-        registration,
-        version.version_id(),
-    ) {
-        service_worker_worker_set_state(scope, worker, version.state());
-        define_non_enumerable_value_property(
-            scope,
-            worker,
-            SERVICE_WORKER_WORKER_REGISTRATION_SLOT,
-            registration.into(),
-        );
-        return worker.into();
-    }
-    let worker = build_service_worker_object_for_version(scope, version);
-    define_non_enumerable_value_property(
-        scope,
-        registration,
-        SERVICE_WORKER_REGISTRATION_WORKER_SLOT,
-        worker.into(),
-    );
-    define_non_enumerable_value_property(
-        scope,
-        worker,
-        SERVICE_WORKER_WORKER_REGISTRATION_SLOT,
-        registration.into(),
-    );
-    remember_service_worker_registration_worker(scope, registration, worker);
-    worker.into()
+    get_private_value(scope, registration, slot).unwrap_or_else(|| v8::null(scope).into())
 }
 
 fn service_worker_registration_installing_getter_callback<'s>(
@@ -2352,6 +2372,13 @@ fn build_service_worker_registration_object<'s>(
         SERVICE_WORKER_REGISTRATION_WORKERS_SLOT,
         v8::Array::new(scope, 0).into(),
     );
+    set_service_worker_registration_worker_values(
+        scope,
+        registration,
+        resolved.installing,
+        resolved.waiting,
+        resolved.active,
+    );
     remember_service_worker_registration_workers(scope, registration, resolved);
     watch_service_worker_registration_object_lifecycle(scope, owner, scope_url, registration);
     registration
@@ -2400,6 +2427,9 @@ fn watch_service_worker_registration_object_lifecycle<'s>(
 }
 
 struct ResolvedServiceWorkerRegistrationPhase<'s> {
+    installing: v8::Local<'s, v8::Value>,
+    waiting: v8::Local<'s, v8::Value>,
+    active: v8::Local<'s, v8::Value>,
     update_via_cache: &'static str,
     hidden_worker: v8::Local<'s, v8::Object>,
     cached_workers: Vec<v8::Local<'s, v8::Object>>,
@@ -2411,6 +2441,7 @@ fn resolve_service_worker_registration_phase<'s>(
     script_url: &str,
     phase: ServiceWorkerRegistrationPhase<'_>,
 ) -> ResolvedServiceWorkerRegistrationPhase<'s> {
+    let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
     match phase {
         ServiceWorkerRegistrationPhase::Snapshot(snapshot) => {
             let mut cached_workers = Vec::new();
@@ -2435,6 +2466,9 @@ fn resolve_service_worker_registration_phase<'s>(
                     version,
                 )
             });
+            let installing = installing_worker.map(v8::Local::into).unwrap_or(null_value);
+            let waiting = waiting_worker.map(v8::Local::into).unwrap_or(null_value);
+            let active = active_worker.map(v8::Local::into).unwrap_or(null_value);
             cached_workers.extend(installing_worker);
             cached_workers.extend(waiting_worker);
             cached_workers.extend(active_worker);
@@ -2448,6 +2482,9 @@ fn resolve_service_worker_registration_phase<'s>(
                 })
                 .unwrap_or_else(|| build_service_worker_object(scope, script_url, "redundant"));
             ResolvedServiceWorkerRegistrationPhase {
+                installing,
+                waiting,
+                active,
                 update_via_cache: snapshot.update_via_cache().as_str(),
                 hidden_worker,
                 cached_workers,
@@ -2482,6 +2519,13 @@ fn update_service_worker_registration_object<'s>(
 ) {
     let resolved =
         resolve_service_worker_registration_phase(scope, Some(registration), script_url, phase);
+    set_service_worker_registration_worker_values(
+        scope,
+        registration,
+        resolved.installing,
+        resolved.waiting,
+        resolved.active,
+    );
     set_service_worker_readonly_value(
         scope,
         registration,
@@ -3119,9 +3163,23 @@ fn set_service_worker_registration_worker_values<'s>(
     waiting: v8::Local<'s, v8::Value>,
     active: v8::Local<'s, v8::Value>,
 ) {
-    set_service_worker_readonly_value(scope, registration, "installing", installing);
-    set_service_worker_readonly_value(scope, registration, "waiting", waiting);
-    set_service_worker_readonly_value(scope, registration, "active", active);
+    for (name, slot, value) in [
+        (
+            "installing",
+            SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT,
+            installing,
+        ),
+        ("waiting", SERVICE_WORKER_REGISTRATION_WAITING_SLOT, waiting),
+        ("active", SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT, active),
+    ] {
+        set_private_value(scope, registration, slot, value);
+        if registration
+            .has_own_property(scope, v8str(scope, name).into())
+            .unwrap_or(false)
+        {
+            set_service_worker_readonly_value(scope, registration, name, value);
+        }
+    }
 }
 
 fn dispatch_service_worker_simple_event<'s>(

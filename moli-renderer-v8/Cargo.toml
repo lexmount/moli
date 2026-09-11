@@ -36,6 +36,7 @@ stylo_static_prefs = "0.20"
 moli-action-window = { path = "../moli-action-window" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }
 moli-browser-profile = { path = "../moli-browser-profile" }
+moli-content-type = { path = "../moli-content-type" }
 moli-crypto = { path = "../moli-crypto" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
@@ -93,6 +94,7 @@ html-escape = "0.2.13"
 html5ever = "0.39.0"
 indexmap = "2.6"
 parking_lot = "0.12"
+fastrand = "2.3.0"
 markup5ever = "0.39.0"
 xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -1,6 +1,3 @@
-dom/ranges/Range-insertNode.html
-dom/ranges/Range-mutations-dataChange.html
-dom/ranges/Range-surroundContents.html
 html/browsers/the-window-object/window-open-windowfeatures-values.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait

@@ -198,6 +198,44 @@ fn execute_source_text_on_current_stack_with_completion(
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
 ) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
+    let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+    let result = run_source_text_on_current_stack_with_completion(
+        scope,
+        source,
+        provenance,
+        line_offset,
+        script_nonce,
+        report_target,
+        completion_mode,
+    );
+    drop(execution_scope);
+    // HTML's script cleanup also runs after an exception has been reported.
+    // LogOnly callers report errors themselves before completing that cleanup.
+    // Keep this checkpoint inside the caller's currentScript/parser-nesting
+    // scopes, while leaving nested execution to its enclosing script cleanup.
+    let exception_reported = report_target == UncaughtScriptReportTarget::CurrentWindow
+        && matches!(&result, Err(RawScriptExecutionError::Exception { .. }));
+    if drain_microtasks
+        && (result.is_ok() || exception_reported)
+        && crate::script_cleanup::can_perform_script_cleanup_checkpoint(scope)
+    {
+        ScriptVm::perform_microtask_checkpoints(
+            scope,
+            provenance.map(CompiledStringProvenance::source_url),
+        )?;
+    }
+    result
+}
+
+fn run_source_text_on_current_stack_with_completion(
+    scope: &mut v8::PinScope<'_, '_>,
+    source: &str,
+    provenance: Option<&CompiledStringProvenance>,
+    line_offset: i32,
+    script_nonce: Option<&str>,
+    report_target: UncaughtScriptReportTarget,
+    completion_mode: SourceTextScriptCompletionMode,
+) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     if let Some(provenance) = provenance
@@ -236,6 +274,7 @@ fn execute_source_text_on_current_stack_with_completion(
         scope.thread_safe_handle(),
         SCRIPT_TURN_WATCHDOG_TIMEOUT,
     );
+    let watchdog_timeout = watchdog.timeout();
     let run_result = script.run(&scope);
     let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
     scope.set_continuation_preserved_embedder_data(previous_continuation_data);
@@ -243,7 +282,7 @@ fn execute_source_text_on_current_stack_with_completion(
         if watchdog_timed_out {
             return RawScriptExecutionError::Internal(anyhow!(
                 "script execution exceeded {:?} and was terminated",
-                SCRIPT_TURN_WATCHDOG_TIMEOUT
+                watchdog_timeout
             ));
         }
         let exception = scope.exception();
@@ -263,12 +302,6 @@ fn execute_source_text_on_current_stack_with_completion(
         }
         SourceTextScriptCompletionMode::ValueTypeAware => SourceTextScriptCompletion::NonString,
     };
-    if drain_microtasks {
-        ScriptVm::perform_microtask_checkpoints(
-            &mut scope,
-            provenance.map(CompiledStringProvenance::source_url),
-        )?;
-    }
     Ok(completion)
 }
 
@@ -489,9 +522,10 @@ impl ScriptVm {
     /// Execute source text as the body of an already-selected Page task.
     ///
     /// The caller must return an execution-produced completion fact to the
-    /// unique selected-task dispatcher. This primitive therefore performs no
-    /// microtask checkpoint, child-record synchronization, runtime follow-up,
-    /// or turn-exit style drain of its own.
+    /// unique selected-task dispatcher. Classic script elements additionally
+    /// require their script-cleanup checkpoint before currentScript is restored
+    /// and the parser resumes. This does not complete the enclosing Page task
+    /// or perform its child-record synchronization, follow-up, or style drain.
     pub(super) fn execute_source_text_in_context_ptr_selected_page_task_body(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -501,6 +535,7 @@ impl ScriptVm {
         line_offset: i32,
         script_nonce: Option<&str>,
         completion_mode: SourceTextScriptCompletionMode,
+        clean_up_classic_script: bool,
     ) -> Result<SourceTextScriptCompletion> {
         let provenance = script_url.cloned().map(|source_url| {
             let module_base_url = script_base_url
@@ -514,7 +549,7 @@ impl ScriptVm {
             provenance,
             line_offset,
             script_nonce,
-            false,
+            clean_up_classic_script,
             UncaughtScriptReportTarget::CurrentWindow,
             completion_mode,
         )
@@ -558,7 +593,7 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn perform_microtask_checkpoints(
+    pub(crate) fn perform_microtask_checkpoints(
         scope: &mut v8::PinScope<'_, '_>,
         script_url: Option<&Url>,
     ) -> Result<()> {
@@ -573,12 +608,13 @@ impl ScriptVm {
             scope.thread_safe_handle(),
             SCRIPT_TURN_WATCHDOG_TIMEOUT,
         );
+        let watchdog_timeout = watchdog.timeout();
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
         if watchdog_timed_out {
             return Err(anyhow!(
                 "microtask checkpoint exceeded {:?} and was terminated",
-                SCRIPT_TURN_WATCHDOG_TIMEOUT
+                watchdog_timeout
             ));
         }
         if let Some(script_url) = script_url {
@@ -1031,7 +1067,7 @@ impl ScriptVm {
                                         )
                                     },
                                 );
-                                let error_constructor = error.error_constructor();
+                                let error_value = error.error_value();
                                 let error = error.into_message();
                                 if failure_kind
                                     == crate::dynamic_script_owner::DynamicScriptFailureKind::Immediate
@@ -1049,7 +1085,7 @@ impl ScriptVm {
                                         self.apply_runtime_script_failure_terminal(&script,
                                             &error,
                                             module_failure_policy,
-                                            error_constructor,
+                                            error_value,
                                             lease,
                                         );
                                     }
@@ -1057,13 +1093,13 @@ impl ScriptVm {
                                     self.document_runtime
                                         .runtime_script_work_mut()
                                         .dynamic_scripts
-                                        .note_script_failed_with_kind_and_error_constructor(
+                                        .note_script_failed_with_kind_and_error_value(
                                             id,
                                             &script,
                                             error,
                                             failure_kind,
                                             module_failure_policy,
-                                            error_constructor,
+                                            error_value,
                                         );
                                 }
                                 processed_runnable_this_turn = true;
@@ -1091,20 +1127,20 @@ impl ScriptVm {
                         kind,
                         module_failure_policy,
                         source_network_result,
-                        error_constructor,
+                        error_value,
                     } => {
                         if yield_after_one_runnable && processed_runnable_this_turn {
                             self.document_runtime
                                 .runtime_script_work_mut()
                                 .dynamic_scripts
-                                .requeue_failed_script_front_with_error_constructor(
+                                .requeue_failed_script_front_with_error_value(
                                     id,
                                     script,
                                     message,
                                     kind,
                                     module_failure_policy,
                                     source_network_result,
-                                    error_constructor,
+                                    error_value,
                                 );
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
@@ -1119,14 +1155,14 @@ impl ScriptVm {
                             self.document_runtime
                                 .runtime_script_work_mut()
                                 .dynamic_scripts
-                                .requeue_failed_script_front_with_error_constructor(
+                                .requeue_failed_script_front_with_error_value(
                                     id,
                                     script,
                                     message,
                                     kind,
                                     module_failure_policy,
                                     source_network_result,
-                                    error_constructor,
+                                    error_value,
                                 );
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
@@ -1154,7 +1190,7 @@ impl ScriptVm {
                                 &script,
                                 &message,
                                 module_failure_policy,
-                                error_constructor,
+                                error_value,
                                 lease,
                             );
                         }
@@ -1222,7 +1258,7 @@ impl ScriptVm {
             self.document_runtime
                 .runtime_script_work_mut()
                 .dynamic_scripts
-                .requeue_failed_script_front_with_error_constructor(
+                .requeue_failed_script_front_with_error_value(
                     owner_id,
                     continuation.script,
                     error.message().to_owned(),
@@ -1231,7 +1267,7 @@ impl ScriptVm {
                         &error,
                     )),
                     None,
-                    error.error_constructor(),
+                    error.error_value(),
                 );
         }
     }

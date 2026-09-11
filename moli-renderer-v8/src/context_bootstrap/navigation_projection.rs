@@ -217,7 +217,8 @@ fn entry_origin_url<'s>(
 }
 
 fn child_navigation_entry_url_inherits_origin(url: &url::Url) -> bool {
-    url.scheme() == "about" && matches!(url.as_str(), "about:blank" | "about:srcdoc")
+    url.scheme() == "about"
+        && (url.path().eq_ignore_ascii_case("blank") || url.path().eq_ignore_ascii_case("srcdoc"))
 }
 
 pub(super) fn set_history_length_from_visible_entries<'s>(
@@ -227,7 +228,6 @@ pub(super) fn set_history_length_from_visible_entries<'s>(
 ) {
     let length = history_length_floor_from_visible_entries(scope, history, entries);
     set_history_length(scope, history, length);
-    set_top_history_length_at_least(scope, history, length);
 }
 
 pub(super) fn set_history_length_at_least_visible_entries<'s>(
@@ -239,9 +239,18 @@ pub(super) fn set_history_length_at_least_visible_entries<'s>(
     let current_length = history_length_number(scope, history)
         .unwrap_or(0.0)
         .max(0.0);
-    let length = current_length.max(length);
-    set_history_length(scope, history, length);
-    set_top_history_length_at_least(scope, history, length);
+    let owner = runtime_window_owner(scope, history);
+    if runtime_window_uses_top_level_history_model(scope, owner) {
+        set_history_length(scope, history, current_length.max(length));
+        return;
+    }
+
+    // Same-document child pushes commit synchronously. They add one entry to
+    // the traversable's joint session history even when another child has
+    // already made the top-level length larger than this child's local list.
+    super::increment_top_level_history_length_for_runtime_owner(scope, owner);
+    let joint_length = history_length_floor_from_visible_entries(scope, history, entries);
+    set_history_length(scope, history, current_length.max(length).max(joint_length));
 }
 
 fn history_length_floor_from_visible_entries<'s>(
@@ -260,35 +269,36 @@ fn history_length_floor_from_visible_entries<'s>(
         return visible_length;
     }
 
-    // A child sees the joint session-history length. The primary top-level
-    // runtime keeps one hidden initial about:blank predecessor, while a
-    // lightweight popup's first navigation replaces its initial empty entry.
-    // Project the offset of the owning root instead of assuming every child
-    // belongs to the primary top-level runtime.
+    // A child sees the joint session-history length. Creating its initial
+    // entry does not add a new joint-history step, so start from the current
+    // top-level length and only grow it when the child gains a visible entry.
     let top_owner = runtime_top_window_owner(scope, owner);
-    let root_predecessor_offset = if runtime_window_is_global(scope, top_owner) {
-        1.0
-    } else {
-        0.0
-    };
-    visible_length + root_predecessor_offset
+    let top_length = window_history_for_holder(scope, top_owner)
+        .and_then(|history| history_length_number(scope, history))
+        .unwrap_or(visible_length)
+        .max(0.0);
+    visible_length.max(top_length)
 }
 
-fn set_top_history_length_at_least<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    length: f64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    if runtime_window_uses_top_level_history_model(scope, owner) {
-        return;
+#[cfg(test)]
+mod tests {
+    use super::child_navigation_entry_url_inherits_origin;
+    use url::Url;
+
+    #[test]
+    fn about_document_history_urls_inherit_origin_with_fragments() {
+        for raw_url in [
+            "about:blank",
+            "about:blank#history",
+            "about:srcdoc",
+            "about:srcdoc#history",
+        ] {
+            assert!(child_navigation_entry_url_inherits_origin(
+                &Url::parse(raw_url).expect("about URL should parse")
+            ));
+        }
+        assert!(!child_navigation_entry_url_inherits_origin(
+            &Url::parse("about:other#history").expect("about URL should parse")
+        ));
     }
-    let top_window = runtime_top_window_owner(scope, owner);
-    let Some(top_history) = window_history_for_holder(scope, top_window) else {
-        return;
-    };
-    let current_length = history_length_number(scope, top_history)
-        .unwrap_or(0.0)
-        .max(0.0);
-    set_history_length(scope, top_history, current_length.max(length));
 }

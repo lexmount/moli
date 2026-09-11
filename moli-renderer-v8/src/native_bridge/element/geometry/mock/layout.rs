@@ -160,7 +160,10 @@ fn element_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -> 
     runtime.dom_host().get_attribute(handle, name)
 }
 
-fn element_has_hidden_attribute(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(in crate::native_bridge::element) fn element_has_hidden_attribute(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> bool {
     element_attribute(runtime, handle, "hidden").is_some()
 }
 

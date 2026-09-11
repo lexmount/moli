@@ -1,6 +1,7 @@
 mod async_fetch;
 mod beacon;
 mod bindings;
+mod blob_url_entry;
 mod body;
 mod body_source;
 mod browser_response;
@@ -21,50 +22,53 @@ mod text_track;
 mod url_helpers;
 mod xhr;
 
-use http::StatusCode;
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use moli_webapi_declare::WebApiObject;
 
 use crate::network::ResourceRequestClient;
+
+pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
+pub(crate) use self::blob_url_entry::{CapturedBlobUrl, blob_url_entry, set_blob_url_entry};
 
 pub(crate) use self::async_fetch::{
     browser_request_needs_manual_preflight_redirects,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
+    fetch_browser_subresource_with_preflight_headers_and_network_metadata, fetch_cors_script_text,
     spawn_async_subresource_fetch, spawn_async_subresource_fetch_with_redirect_chain,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
-pub(in crate::network_host) use self::body::{PreparedBodyInit, body_init};
-pub(crate) use self::body::{append_default_body_content_type, has_header};
+pub(in crate::network_host) use self::body::{
+    PreparedBodyInit, body_init, body_is_unusable, body_is_used, readable_body_stream_unusable,
+};
+pub(crate) use self::body::{append_default_body_content_type, body_stream_object};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
-    BODY_FORM_DATA_UNSUPPORTED_CONTENT_TYPE_ERROR_TEXT, NetworkBodyConsumption,
-    NetworkBodyConsumptionKind, clone_filtered_response_internal_body_source,
-    clone_pending_network_body_stream, consume_filtered_response_internal_body_value_from_object,
+    NetworkBodyConsumption, NetworkBodyConsumptionKind,
+    clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
+    consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,
     consume_network_body_value_from_object_with_chunk_callback, network_body_source_from_object,
     network_body_source_object_from_bytes, network_body_stream_from_response_body,
-    network_body_stream_from_subresource_body, network_body_value_is_pending_stream,
-    set_filtered_response_internal_body_from_bytes,
+    network_body_stream_from_subresource_body, set_filtered_response_internal_body_from_bytes,
     set_filtered_response_internal_body_from_pending_stream,
     set_filtered_response_internal_body_from_response_body,
     set_filtered_response_internal_body_from_subresource_body, set_network_body_owned_bytes,
     take_network_body_bytes_from_object, try_network_body_bytes_from_object,
-    try_network_body_value_from_object,
 };
 pub(crate) use self::body_source::{
     PendingNetworkBodySourceState, close_pending_network_body_stream,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream,
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
-    pending_network_body_stream,
+    pending_network_body_stream, release_pending_opaque_response_body,
 };
-pub(in crate::network_host) use self::browser_response::http_status_text;
-pub(crate) use self::browser_response::{local_url_response, local_url_response_result};
+pub(crate) use self::browser_response::{
+    local_url_response, local_url_response_result, local_url_response_with_blob_entry,
+};
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,
@@ -97,9 +101,8 @@ pub(crate) use self::fetch_surface::{
     RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
-    consume_webassembly_streaming_response_value, initialize_fetch_realm_helpers,
-    install_request_bindings, install_response_bindings,
-    set_request_destination_for_service_worker_fetch_event,
+    consume_webassembly_streaming_response_value, install_request_bindings,
+    install_response_bindings, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
     set_request_reload_navigation_for_service_worker_fetch_event,
 };
@@ -124,40 +127,47 @@ pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObse
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
-    mark_request_input_body_used_for_fetch, request_input_snapshot,
-    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child,
+    convert_fetch_arguments, parse_fetch_init, parse_request_redirect_mode_label,
+    request_object_credentials_mode, validate_fetch_body,
 };
 pub(crate) use self::request::{
-    parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
+    mark_request_input_body_used_for_fetch, request_input_snapshot,
+    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
+    try_resolve_request_constructor_url_for_child, validate_request_url_credentials,
 };
 pub(crate) use self::request_scope::effective_subresource_policy_context;
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
     effective_subresource_referrer_policy, effective_subresource_request_scope,
-    observe_subresource_request_cookie_report, subresource_request_scope_for_owner,
+    observe_subresource_request_cookie_report,
+    observe_subresource_request_cookie_report_for_origin, subresource_request_origin_for_owner,
+    subresource_request_scope_for_owner,
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
-    FetchResponseSecurityViolation, MaterializedResponseBody, MaterializedResponseHead,
-    build_fetch_response_object_for_request_mode,
+    FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
+    MaterializedResponseHead, build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    cors_preflight_request_headers, filter_cors_exposed_response_headers,
+    cors_preflight_request_headers_for_origin, cors_request_origin_after_redirects,
+    fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers_for_origin,
     is_cors_policy_failure_message, materialize_response_object_body,
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, response_constructor_callback,
-    validate_cors_preflight_response, validate_cors_response,
+    validate_cors_preflight_response_for_origin, validate_cors_response,
+    validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
+    validate_cross_origin_resource_policy, validate_fetch_response_headers_for_origin,
+    validate_fetch_response_security_policy_for_origin,
     validate_fetch_response_security_policy_with_body,
-    validate_fetch_response_security_policy_with_body_classified,
+    validate_fetch_response_security_policy_with_body_classified_for_origin,
+    validate_fetch_response_security_policy_with_body_for_origin, validated_opaque_response_body,
 };
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
@@ -183,14 +193,13 @@ pub(crate) use self::xhr::{
     prepare_xhr_send_body_from_args, progress_event_constructor_callback,
     reset_xhr_response_for_request_error, set_xhr_state_bool, set_xhr_state_number,
     throw_synchronous_xhr_failure, xhr_author_request_headers, xhr_constructor_callback,
-    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_response_text_decoder,
+    xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
 };
 pub(in crate::network_host) const NETWORK_BODY_SLOT: &str = "__lmBody";
 pub(in crate::network_host) const NETWORK_BODY_BYTES_SLOT: &str = "__lmBodyBytes";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_SLOT: &str = "__lmNetworkBodySource";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_KIND_SLOT: &str = "__lmNetworkBodySourceKind";
-pub(in crate::network_host) const BODY_STREAM_CONSUMER_SLOT: &str = "__lmConsumeReadableStreamBody";
 pub(crate) const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 pub(crate) const FILE_NOT_FOUND_ERROR_TEXT: &str = "net::ERR_FILE_NOT_FOUND";
 pub(crate) const FAILED_ERROR_TEXT: &str = "net::ERR_FAILED";

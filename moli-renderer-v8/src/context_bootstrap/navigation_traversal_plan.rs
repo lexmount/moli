@@ -117,8 +117,7 @@ pub(super) fn history_delta_traversal_target<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) -> Option<TraversalTarget<'s>> {
-    let current_index = pending_history_traversal_target_index(scope, history)
-        .unwrap_or_else(|| history_index(scope, history)) as i64;
+    let current_index = i64::from(history_index(scope, history));
     let entries = history_entries(scope, history)?;
     let next_index = current_index + delta;
     if next_index < 0 || next_index >= entries.length() as i64 {

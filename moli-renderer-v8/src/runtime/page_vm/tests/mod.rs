@@ -1,3 +1,4 @@
+mod bitmap;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -77,6 +78,7 @@ use moli_websocket::test_support::{
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use url::Url;
@@ -108,6 +110,7 @@ mod child_dynamic_import_owner_action;
 mod child_host_load;
 mod child_module_dependency_fetch_start;
 mod child_module_document_script_ready;
+mod child_module_error_reporting;
 mod child_module_script_terminal;
 mod child_module_script_terminal_completion;
 mod child_modulepreload_event_action;
@@ -149,6 +152,7 @@ mod main_runtime_script_completion;
 mod media_element_event;
 mod message_port_delivery;
 mod misc_platform_api;
+mod module_error_reporting;
 mod module_reaction;
 mod modulepreload_start_completion;
 mod navigation_api_task;
@@ -156,7 +160,9 @@ mod opfs;
 mod parser_written_script_residence;
 mod popup_document_completion;
 mod preferred_aspect_ratio;
+mod promise_rejection;
 mod rendering_update;
+mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;
 mod service_worker_internal;
@@ -227,6 +233,7 @@ async fn page_resource_completion_rejects_stale_document_before_application() {
                     source_result: Ok("globalThis.__staleDeferRan = true".to_owned()),
                     source_bytes: None,
                     network_result: network_error.map(|error| Arc::new(Err(error.to_owned()))),
+                    muted_errors: false,
                 },
             )
         };
@@ -2048,12 +2055,20 @@ async fn run_child_interactive_domcontentloaded_then_host_load_for_wait(
     page_vm: &mut PageVm,
     label: &str,
 ) -> ChildFrameSemanticTurnKind {
-    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-        page_vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        &format!("{label} interactive transition"),
-    )
-    .await;
+    if page_vm.has_ready_child_frame_semantic_turn_for_test(
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+    ) {
+        run_expected_child_realm_materialization_for_wait(page_vm, label).await;
+    }
+    if matches!(page_vm.page_task_executor_sources_for_test().next_child_frame_task_target(), Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(target)) if matches!(target.action(), crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)))
+    {
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            page_vm,
+            ChildFrameSemanticTurnKind::DocumentLifecycle,
+            &format!("{label} queued interactive transition"),
+        )
+        .await;
+    }
     run_child_domcontentloaded_then_host_load_for_wait(page_vm, label).await
 }
 
@@ -3428,14 +3443,7 @@ globalThis.__childClassicWaitValue = 91;
                     "external:true|current:external-classic|inline:91",
                     "second DocumentScriptReady should run parser continuation without iframe load"
                 );
-                followup_sources.push(
-                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                        &mut page_vm,
-                        ChildFrameSemanticTurnKind::DocumentLifecycle,
-                        "child classic parser EOF interactive transition",
-                    )
-                    .await,
-                );
+                assert_eq!(page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?, "interactive", "parser EOF must apply interactive synchronously");
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -3524,10 +3532,9 @@ globalThis.__childClassicWaitValue = 91;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
-                ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad
             ],
-            "child classic completion should progress through script, parser continuation, interactive, DOMContentLoaded, complete, and HostLoad turns"
+            "child classic completion should progress through script, parser continuation, DOMContentLoaded, complete, and HostLoad turns"
         );
         assert_eq!(
             final_events,
@@ -3665,17 +3672,10 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     page_vm
                         .vm_mut()
                         .eval("__childParserStylesheetEvents.join('|')")?,
-                    "script:stylesheet-ready:complete",
-                    "stylesheet source must be installed before the parser-blocking script executes"
+                    "script:stylesheet-ready:loading",
+                    "stylesheet source must be installed before the parser-blocking script executes while the document is still loading"
                 );
-                followup_sources.push(
-                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                        &mut page_vm,
-                        ChildFrameSemanticTurnKind::DocumentLifecycle,
-                        "stylesheet-gated child interactive transition",
-                    )
-                    .await,
-                );
+                assert_eq!(page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?, "interactive", "parser EOF must apply interactive synchronously");
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -3739,11 +3739,10 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
-                ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad,
             ]
         );
-        assert_eq!(final_events, "script:stylesheet-ready:complete|load");
+        assert_eq!(final_events, "script:stylesheet-ready:loading|load");
         server.await.expect("child parser stylesheet server should finish");
     })
     .await;
@@ -4505,9 +4504,8 @@ globalThis.__childClassicDeferWaitValue = 73;
                 ChildFrameSemanticTurnKind::RealmMaterialization,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
-            "child defer classic bootstrap should end with the document-owned interactive turn"
+            "child defer classic bootstrap should apply interactive at parser EOF"
         );
         assert_eq!(
             followup_sources,
@@ -4704,22 +4702,9 @@ async fn page_vm_child_defer_classic_source_failure_releases_parser_order_slot()
 #[tokio::test]
 async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module() {
     run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![
-            (
-                "/moved-child-defer.js",
-                "HTTP/1.1 200 OK",
-                "parent.__movedChildDeferEvents.push('classic-ran');".to_owned(),
-                Duration::from_millis(80),
-            ),
-            (
-                "/later-moved-module.js",
-                "HTTP/1.1 200 OK",
-                "parent.__movedChildDeferEvents.push('module-ran');".to_owned(),
-                Duration::ZERO,
-            ),
-        ])
-        .await;
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (base_url, release_classic, server) = spawn_moved_child_defer_http_server().await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse(&format!("{base_url}/page")).expect("page url");
         let page_vm = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
         let local_executor = page_vm.local_executor.clone();
@@ -4764,7 +4749,10 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                 ))?;
 
                 for _ in 0..12 {
-                    let Some(_) = page_vm.run_next_child_frame_task_source_for_semantic_test().await else {
+                    let Some(_) = page_vm
+                        .run_next_child_frame_task_source_for_semantic_test()
+                        .await
+                    else {
                         break;
                     };
                 }
@@ -4775,8 +4763,13 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                 );
 
                 let mut classic_completion = None;
+                let mut module_completion = false;
+                let mut release_classic = Some(release_classic);
                 for _ in 0..4 {
-                    if !page_vm.page_resource_completion_queue().has_ready_completion() {
+                    if !page_vm
+                        .page_resource_completion_queue()
+                        .has_ready_completion()
+                    {
                         tokio::time::timeout(
                             Duration::from_secs(2),
                             wait_for_typed_page_resource_completion(&mut page_vm),
@@ -4784,30 +4777,44 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                         .await
                         .expect("moved child defer completion should arrive");
                     }
-                    let completion =
-                        run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                    let completion = run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
                     if matches!(
                         completion.action.source(),
                         RendererOwnerResourceActivitySource::ChildClassicScript
                     ) {
                         classic_completion = Some(completion);
+                    } else {
+                        assert!(
+                            matches!(
+                                completion.action.source(),
+                                RendererOwnerResourceActivitySource::ModuleGraphFetch
+                            ),
+                            "the only other completion is the later module root"
+                        );
+                        run_expected_child_module_script_terminal_turn(
+                            &mut page_vm,
+                            "module terminal retained behind the moved classic defer",
+                        )
+                        .await;
+                        module_completion = true;
+                        // Make the later module ready while the classic source
+                        // is still pending, without relying on transport timing.
+                        release_classic
+                            .take()
+                            .expect("one module completion")
+                            .send(())
+                            .expect("classic response should still be gated");
+                    }
+                    if classic_completion.is_some() && module_completion {
                         break;
                     }
-                    assert!(
-                        matches!(
-                            completion.action.source(),
-                            RendererOwnerResourceActivitySource::ModuleGraphFetch
-                        ),
-                        "the only completion allowed ahead of the moved classic defer is its later module root"
-                    );
-                    run_expected_child_module_script_terminal_turn(
-                        &mut page_vm,
-                        "module terminal retained behind the moved classic defer",
-                    )
-                    .await;
                 }
                 classic_completion
-                    .expect("classic source completion must arrive after retained module terminals");
+                    .expect("classic source completion must arrive before the script is moved");
+                assert!(
+                    module_completion,
+                    "later module must be ready before testing defer-slot release"
+                );
                 page_vm.vm_mut().eval(
                     r#"
 (() => {
@@ -4855,15 +4862,27 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                         "moved defer complete transition",
                     ),
-                    (ChildFrameSemanticTurnKind::HostLoad, "moved defer iframe load"),
+                    (
+                        ChildFrameSemanticTurnKind::HostLoad,
+                        "moved defer iframe load",
+                    ),
                 ] {
                     sources.push(
-                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(&mut page_vm, source, label)
-                            .await,
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm,
+                            source,
+                            label,
+                        )
+                        .await,
                     );
                 }
                 let final_events = page_vm.vm_mut().eval("__movedChildDeferEvents.join('|')")?;
-                assert_eq!(page_vm.run_next_child_frame_task_source_for_semantic_test().await, None);
+                assert_eq!(
+                    page_vm
+                        .run_next_child_frame_task_source_for_semantic_test()
+                        .await,
+                    None
+                );
                 Ok::<_, anyhow::Error>((events_after_dispose, sources, final_events))
             })
             .await
@@ -4884,7 +4903,9 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
             final_events,
             "before|after|ready:interactive|moved|module-ran|module-load|dcl|ready:complete|load"
         );
-        server.await.expect("moved child defer server should finish");
+        server
+            .await
+            .expect("moved child defer server should finish");
     })
     .await;
 }
@@ -5066,7 +5087,6 @@ globalThis.__childClassicAsyncWaitValue = 41;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "child async bootstrap should dispatch interactive and DCL before the later async completion"
         );
@@ -5313,7 +5333,6 @@ parent.__childClassicDeferOrderEvents.push("current:" + document.currentScript.i
                 ChildFrameSemanticTurnKind::RealmMaterialization,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "child defer ordering bootstrap should reach interactive before either source completion"
         );
@@ -5748,8 +5767,8 @@ async fn page_vm_child_parser_defer_preserves_cross_kind_document_order() {
                     "parser EOF must not execute any mixed parser-deferred script"
                 );
                 assert!(
-                    bootstrap_sources.contains(&ChildFrameSemanticTurnKind::DocumentLifecycle),
-                    "mixed parser-deferred document should reach interactive"
+                    page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")? == "interactive",
+                    "mixed parser-deferred document should become interactive at parser EOF"
                 );
                 assert_eq!(
                     bootstrap_sources
@@ -5988,6 +6007,13 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
     <script id="first-module-defer-success" type="module" src="{first_script_url}"><\/script>
     <script id="second-module-defer-failure" type="module" src="{second_script_url}"><\/script>
     <script>
+      addEventListener("error", event => {{
+        parent.__childModuleDeferFailureOrderEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
       document.getElementById("first-module-defer-success").addEventListener("load", () => {{
         parent.__childModuleDeferFailureOrderEvents.push("first-load");
       }});
@@ -6122,8 +6148,8 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
                     page_vm
                         .vm_mut()
                         .eval("__childModuleDeferFailureOrderEvents.join('|')")?,
-                    "before:true|after:undefined|first-module:true|first-load|second-error",
-                    "later graph failure should dispatch only after the earlier module-defer completes"
+                    "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load",
+                    "later parse failure should report to its Window and fire external script load only after the earlier module-defer completes"
                 );
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
@@ -6184,7 +6210,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_second_completion, "before:true|after:undefined",
-            "faster second graph failure completion must not dispatch script error before earlier parser module"
+            "faster second graph failure completion must not report an exception before the earlier parser module"
         );
         assert_eq!(
             events_after_second_module_owner, "before:true|after:undefined",
@@ -6196,7 +6222,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_blocked_second_terminal, "before:true|after:undefined",
-            "blocked later graph failure should not dispatch script error or iframe load"
+            "blocked later graph failure should not report an exception or dispatch script or iframe load"
         );
         assert!(matches!(
             first_completion.action.source(),
@@ -6223,7 +6249,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             final_events,
-            "before:true|after:undefined|first-module:true|first-load|second-error|load",
+            "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load|load",
             "later graph failure should preserve parser module document order and keep iframe load on HostLoad"
         );
 
@@ -6452,7 +6478,6 @@ globalThis.__childParserModuleWaitValue = 188;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::ParserModuleRootStart,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "the typed root fetch-start must preserve parser discovery FIFO, then the parser should run the following inline script and reach interactive"
         );
@@ -7830,7 +7855,7 @@ globalThis.__childDynamicImportLeafValue = 701;
 }
 
 #[tokio::test]
-async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatches() {
+async fn page_vm_child_module_parse_failure_blocks_host_load_until_exception_is_reported() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
             "/child-bad-module.js",
@@ -7870,6 +7895,13 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
     <script>parent.__childModuleFailureHostLoadEvents.push("before:" + (globalThis === self));<\/script>
     <script id="bad-module" type="module" src="{script_url}"><\/script>
     <script>
+      addEventListener("error", event => {{
+        parent.__childModuleFailureHostLoadEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
       document.getElementById("bad-module").addEventListener("load", () => {{
         parent.__childModuleFailureHostLoadEvents.push("script-load");
       }});
@@ -7977,7 +8009,7 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
         );
         assert_eq!(
             events_after_module_owner, "before:true|after",
-            "module owner event should not dispatch script error or iframe load inline"
+            "module owner event should not report an exception or dispatch script or iframe load inline"
         );
         assert_eq!(
             graph_failure_source,
@@ -7985,8 +8017,8 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
             "graph failure should dispatch through DocumentScriptReady"
         );
         assert_eq!(
-            events_after_graph_failure, "before:true|after|script-error",
-            "graph failure should dispatch script error without iframe load"
+            events_after_graph_failure, "before:true|after|window-error:true|script-load",
+            "parse failure should report to its Window and fire external script load without iframe load"
         );
         assert_eq!(
             host_load_source,
@@ -7994,7 +8026,7 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
             "iframe load should remain a later HostLoad source after graph failure"
         );
         assert_eq!(
-            final_events, "before:true|after|script-error|frame-load",
+            final_events, "before:true|after|window-error:true|script-load|frame-load",
             "HostLoad should dispatch iframe load only after graph failure finalizes"
         );
 
@@ -8817,8 +8849,8 @@ async fn page_vm_child_modulepreload_terminal_event_does_not_delay_complete() {
                 .iter()
                 .filter(|source| **source == ChildFrameSemanticTurnKind::DocumentLifecycle)
                 .count()
-                >= 3,
-            "interactive, DOMContentLoaded, and complete must advance while the terminal link event remains queued: {lifecycle_turns:?}"
+                == 2,
+            "DOMContentLoaded and complete must each take a queued turn while the terminal link event remains queued: {lifecycle_turns:?}"
         );
         assert!(
             lifecycle_turns.contains(&ChildFrameSemanticTurnKind::HostLoad),
@@ -9034,8 +9066,8 @@ async fn page_vm_child_modulepreload_fetch_does_not_delay_iframe_load() {
                 .iter()
                 .filter(|source| **source == ChildFrameSemanticTurnKind::DocumentLifecycle)
                 .count()
-                >= 3,
-            "interactive, DOMContentLoaded and complete should run while modulepreload fetch is pending: {startup_sources:?}"
+                == 2,
+            "DOMContentLoaded and complete should each take a queued turn while modulepreload fetch is pending: {startup_sources:?}"
         );
         assert!(startup_sources.contains(&ChildFrameSemanticTurnKind::HostLoad));
         assert_eq!(
@@ -9517,7 +9549,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
             first_followup_source,
             events_after_first_followup,
             lifecycle_ready_after_first_followup,
-            interactive_source,
+            interactive_state,
             host_load_source,
             final_events,
         ) = local_executor
@@ -9596,12 +9628,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                     );
 
-                let interactive_source = run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                    &mut page_vm,
-                    ChildFrameSemanticTurnKind::DocumentLifecycle,
-                    "child document parser EOF interactive transition",
-                )
-                .await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = run_child_domcontentloaded_then_host_load_for_wait(
                     &mut page_vm,
                     "child document iframe load",
@@ -9624,7 +9651,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
                     first_followup_source,
                     events_after_first_followup,
                     lifecycle_ready_after_first_followup,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     final_events,
                 ))
@@ -9662,8 +9689,8 @@ globalThis.__childDocumentLoadWaitValue = 42;
             "document-script ready should make the later lifecycle turn runnable"
         );
         assert_eq!(
-            interactive_source,
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
+            interactive_state,
+            "interactive",
             "parser EOF should become interactive before HostLoad"
         );
         assert_eq!(
@@ -9837,8 +9864,6 @@ parent.__multiChildDocumentEvents.push("child-b-script:" + (globalThis === self)
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await,
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                 ];
                 let first_host_load_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
                 let events_after_first_host_load = page_vm
@@ -9918,8 +9943,8 @@ parent.__multiChildDocumentEvents.push("child-b-script:" + (globalThis === self)
         );
         assert_eq!(
             lifecycle_sources,
-            vec![Some(ChildFrameSemanticTurnKind::DocumentLifecycle); 6],
-            "interactive, DOMContentLoaded and complete must each consume one lifecycle turn per child"
+            vec![Some(ChildFrameSemanticTurnKind::DocumentLifecycle); 4],
+            "DOMContentLoaded and complete must each consume one lifecycle turn per child"
         );
         assert_eq!(
             first_host_load_source,
@@ -9986,7 +10011,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
             script_ready_source,
             events_after_script_ready,
             lifecycle_ready_after_script,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
         ) = local_executor
@@ -10044,7 +10069,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                     );
 
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -10063,7 +10088,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
                     script_ready_source,
                     events_after_script_ready,
                     lifecycle_ready_after_script,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                 ))
@@ -10098,8 +10123,8 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
             "DocumentScriptReady should make the later lifecycle turn runnable"
         );
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "parser EOF should dispatch interactive before HostLoad"
         );
         assert_eq!(
@@ -10721,7 +10746,7 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await,
             Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
-            "outer parser EOF should become interactive before nested document work"
+            "outer DOMContentLoaded must precede nested parser work admitted after it"
         );
         assert_eq!(
             page_vm
@@ -10742,7 +10767,7 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await,
             Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
-            "outer DOMContentLoaded should remain a later FIFO turn after nested work already admitted by realm materialization"
+            "nested DOMContentLoaded must remain a later FIFO turn after its parser work"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -11312,12 +11337,12 @@ onload = () => {
             host_load_pending_after_completion,
             script_ready_source,
             events_after_script_ready,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
             nested_script_ready_source,
             events_after_nested_script_ready,
-            nested_interactive_source,
+            nested_interactive_state,
             nested_host_load_source,
             events_after_nested_host_load,
         ) = local_executor
@@ -11361,7 +11386,7 @@ onload = () => {
                 let events_after_script_ready = page_vm
                     .vm_mut()
                     .eval("__hostLoadNestedEvents.join('|')")?;
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -11387,8 +11412,7 @@ onload = () => {
                 let events_after_nested_script_ready = page_vm
                     .vm_mut()
                     .eval("__hostLoadNestedEvents.join('|')")?;
-                let nested_interactive_source =
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let nested_interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.querySelector('iframe').contentDocument.readyState")?;
                 let nested_host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -11406,12 +11430,12 @@ onload = () => {
                     host_load_pending_after_completion,
                     script_ready_source,
                     events_after_script_ready,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                     nested_script_ready_source,
                     events_after_nested_script_ready,
-                    nested_interactive_source,
+                    nested_interactive_state,
                     nested_host_load_source,
                     events_after_nested_host_load,
                 ))
@@ -11439,8 +11463,8 @@ onload = () => {
         );
         assert_eq!(events_after_script_ready, "child-script");
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "child parser EOF should become interactive before window load"
         );
         assert_eq!(
@@ -11462,8 +11486,8 @@ onload = () => {
             "nested script should run on the later DocumentScriptReady turn"
         );
         assert_eq!(
-            nested_interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            nested_interactive_state,
+            "interactive",
             "nested parser EOF should become interactive before nested HostLoad"
         );
         assert_eq!(
@@ -11554,7 +11578,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
             completion_source,
             script_ready_source,
             events_after_script_ready,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
             pending_after_host_load,
@@ -11606,7 +11630,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
                     .vm_mut()
                     .eval("__childLoadNavigationEvents.join('|')")?;
 
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -11656,7 +11680,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
                     completion_source,
                     script_ready_source,
                     events_after_script_ready,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                     pending_after_host_load,
@@ -11691,8 +11715,8 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
             "DocumentScriptReady should not dispatch child window load inline"
         );
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "child document should become interactive before its window load"
         );
         assert_eq!(
@@ -11947,15 +11971,19 @@ async fn stream_declared_controller_and_writer_surface_ignores_reflection_and_sp
 async fn parser_inline_module_runs_from_parser_after_parsing_order() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(
+            "https://example.com/page.html?case=inline-module#document-fragment",
+        )
+        .expect("document URL");
         let mut page_vm = test_page_vm_with_loader_and_document_url(
             &loader,
             Vec::new(),
-            Url::parse("https://example.com/page.html").expect("document URL"),
+            document_url.clone(),
         );
         let script = prepared_inline_module_for_page_vm_test(
             &page_vm,
             9002,
-            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; export const value = 1;",
+            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; globalThis.__inlineParserModuleUrl = import.meta.url; export const value = 1;",
         );
 
         let parser_module_work = install_parser_module_defer_work(&mut page_vm, script);
@@ -11990,6 +12018,14 @@ async fn parser_inline_module_runs_from_parser_after_parsing_order() {
                 .expect("read module side effect after page task"),
             "1",
             "parser after-parsing release should evaluate the prewarmed inline graph once"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("globalThis.__inlineParserModuleUrl")
+                .expect("read inline module URL after page task"),
+            document_url.as_str(),
+            "an inline module must expose its document base URL, not its internal module-map key"
         );
     })
     .await;
@@ -12765,6 +12801,77 @@ queueMicrotask(() => globalThis.__mainParserDeferCheckpointEvents.push('script-m
                 .expect("defer checkpoint events should evaluate"),
             "script|script-microtask|load|load-microtask",
             "classic-defer evaluation reactions must settle before load and the selected parser task must then settle load reactions"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn main_parser_classic_defer_records_its_timer_range_for_domcontentloaded() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/defer-timer.html").expect("document URL"),
+        );
+        page_vm
+            .vm_mut()
+            .eval(
+                "globalThis.__mainParserDeferTimerEvents = []; \
+                 setTimeout(() => __mainParserDeferTimerEvents.push('outside'), 0);",
+            )
+            .expect("defer timer state should initialize");
+        let script = append_parser_owned_external_classic_defer_for_page_vm_test(
+            &mut page_vm,
+            1,
+            "timer-defer",
+            Url::parse("https://example.com/timer-defer.js").expect("script URL"),
+            ScriptSource::Loaded(
+                "setTimeout(() => __mainParserDeferTimerEvents.push('defer'), 0);".to_owned(),
+            ),
+            ("onload", ""),
+        );
+        let task_owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("defer timer test requires a document owner");
+        assert!(
+            page_vm
+                .vm_mut()
+                .claim_main_parser_deferred_script(
+                    task_owner,
+                    script,
+                    None,
+                    None,
+                    Default::default(),
+                )
+                .expect("loaded classic defer should be accepted")
+        );
+        page_vm
+            .seal_main_parser_deferred_scripts(task_owner)
+            .expect("defer timer queue should seal");
+
+        run_ready_parser_deferred_body_for_test(&mut page_vm, &loader, "timer classic defer").await;
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .has_ready_timeout_queued_by_classic_defer_script(),
+            "the specialized main-parser defer executor must retain its task-local timer range"
+        );
+        page_vm
+            .run_classic_defer_timer_before_domcontentloaded(&loader)
+            .await
+            .expect("the recorded defer timer should be selected");
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__mainParserDeferTimerEvents.join('|')")
+                .expect("defer timer events should evaluate"),
+            "defer",
+            "the older unrelated timer must not enter the pre-DOMContentLoaded range"
         );
     })
     .await;
@@ -14092,6 +14199,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
     let request_url = Url::parse("https://example.com/module.js").expect("request URL");
     let response = crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url.clone(),
             status: 200,
             headers: vec![("content-type".to_owned(), "text/javascript".to_owned())],
@@ -14442,6 +14550,53 @@ async fn spawn_path_response_http_server(
         }
     });
     (format!("http://{addr}"), server)
+}
+
+async fn spawn_moved_child_defer_http_server() -> (String, oneshot::Sender<()>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind defer fixture");
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (release_classic, classic_released) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut classic_released = Some(classic_released);
+        let mut responses = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("accept script request");
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let (body, gate) = match path {
+                "/moved-child-defer.js" => (
+                    "parent.__movedChildDeferEvents.push('classic-ran');",
+                    Some(classic_released.take().expect("one classic request")),
+                ),
+                "/later-moved-module.js" => {
+                    ("parent.__movedChildDeferEvents.push('module-ran');", None)
+                }
+                _ => panic!("unexpected script path: {path}"),
+            };
+            responses.push(tokio::spawn(async move {
+                if let Some(gate) = gate {
+                    gate.await.expect("test should release classic response");
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }));
+        }
+        for response in responses {
+            response.await.expect("script response task");
+        }
+    });
+    (base_url, release_classic, task)
 }
 
 async fn spawn_concurrent_path_response_http_server(

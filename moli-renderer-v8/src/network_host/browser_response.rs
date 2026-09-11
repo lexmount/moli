@@ -1,21 +1,19 @@
 use super::*;
 use moli_web_mime::data_url_body_and_mime_type;
 
-pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
-    StatusCode::from_u16(status)
-        .ok()
-        .and_then(|status| status.canonical_reason())
-        .unwrap_or("")
-}
-
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
+    Some(blob_response(url, body_bytes, mime_type))
+}
+
+pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: String) -> Response {
     let mut headers = Vec::new();
     if !mime_type.is_empty() {
         headers.push(("Content-Type".to_owned(), mime_type));
     }
-    Some(Response::from_head_and_lossy_body_bytes(
+    Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers,
@@ -27,13 +25,14 @@ pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
             negotiated_http_version: None,
         },
         body_bytes,
-    ))
+    )
 }
 
 pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = data_url_body_and_mime_type(url.as_str())?;
     Some(Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), mime_type)],
@@ -48,8 +47,9 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
     ))
 }
 
+/// Reads a local resource for consumers whose requests always use GET.
 pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
-    local_url_response_result(url).and_then(Result::ok)
+    local_url_response_result(url, "GET").and_then(Result::ok)
 }
 
 /// Resolves renderer-owned URL schemes without falling through to the network
@@ -58,10 +58,29 @@ pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
 /// `None` means that the URL is not owned by this resolver. `Some(Err(..))`
 /// means that it is a local URL and therefore must fail locally instead of
 /// being handed to libcurl.
-pub(crate) fn local_url_response_result(url: &url::Url) -> Option<Result<Response, String>> {
+/// `method` is the request's already normalized method.
+pub(crate) fn local_url_response_result(
+    url: &url::Url,
+    method: &str,
+) -> Option<Result<Response, String>> {
+    local_url_response_with_blob_entry(url, method, None)
+}
+
+pub(crate) fn local_url_response_with_blob_entry(
+    url: &url::Url,
+    method: &str,
+    entry: Option<&CapturedBlobUrl>,
+) -> Option<Result<Response, String>> {
     match url.scheme() {
+        "blob" if method != "GET" => {
+            Some(Err(format!("blob URL fetch requires GET, got `{method}`")))
+        }
         "blob" => {
-            Some(blob_url_response(url).ok_or_else(|| format!("blob URL `{url}` is unavailable")))
+            let response = match entry.filter(|entry| entry.matches(url)) {
+                Some(entry) => entry.response(url),
+                None => blob_url_response(url),
+            };
+            Some(response.ok_or_else(|| format!("blob URL `{url}` is unavailable")))
         }
         "data" => {
             Some(data_url_response(url).ok_or_else(|| format!("data URL `{url}` is invalid")))
@@ -107,7 +126,7 @@ mod tests {
     fn unavailable_blob_url_is_a_local_failure() {
         let url = url::Url::parse("blob:https://example.test/not-registered").unwrap();
 
-        let error = local_url_response_result(&url)
+        let error = local_url_response_result(&url, "GET")
             .expect("blob URL must be owned by the local resolver")
             .expect_err("an unregistered blob URL must fail locally");
 

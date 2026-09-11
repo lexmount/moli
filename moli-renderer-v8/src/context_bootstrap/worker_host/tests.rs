@@ -1443,6 +1443,72 @@ async fn constructor_onerror_has_event_fields() {
 }
 
 #[tokio::test]
+async fn constructor_onerror_return_true_does_not_cancel_syntax_error_event() {
+    ensure_v8();
+    let (mut isolate, ctx) = setup_worker_context();
+
+    eval_ok(
+        &mut isolate,
+        &ctx,
+        r#"
+            var errorReturnObservations = null;
+            var w = new Worker("function {");
+            w.onerror = function(e) {
+              errorReturnObservations = [arguments.length, e.defaultPrevented === true];
+              return true;
+            };
+            w.addEventListener("error", function(e) {
+              errorReturnObservations.push(e.defaultPrevented === true);
+            });
+            "#,
+    );
+
+    for _ in 0..50 {
+        sleep(Duration::from_millis(20)).await;
+        let result = eval_ok(
+            &mut isolate,
+            &ctx,
+            "__drainWorkerMessages(w); JSON.stringify(errorReturnObservations)",
+        );
+        if result != "null" {
+            assert_eq!(result, "[1,false,false]");
+            eval_ok(&mut isolate, &ctx, "w.terminate()");
+            return;
+        }
+    }
+    panic!("timed out waiting for worker syntax error event");
+}
+
+#[test]
+fn worker_event_handler_only_boolean_false_cancels_synthetic_event() {
+    ensure_v8();
+    let (mut isolate, ctx) = setup_worker_context();
+
+    let result = eval_ok(
+        &mut isolate,
+        &ctx,
+        r#"
+        (() => {
+          const w = new Worker("");
+          const run = returned => {
+            w.onerror = () => returned;
+            const event = { type: "error", cancelable: true, defaultPrevented: false };
+            return [w.dispatchEvent(event), event.defaultPrevented];
+          };
+          const observations = [run(true), run(false), run(0), run("")];
+          w.terminate();
+          return JSON.stringify(observations);
+        })()
+        "#,
+    );
+
+    assert_eq!(
+        result,
+        "[[true,false],[false,true],[true,false],[true,false]]"
+    );
+}
+
+#[tokio::test]
 async fn constructor_error_listener_receives_event() {
     ensure_v8();
     let (mut isolate, ctx) = setup_worker_context();

@@ -44,17 +44,37 @@ pub(super) fn xhr_set_request_header_callback<'s>(
         return;
     }
 
+    let value = parsed.value.trim_matches(['\t', '\n', '\r', ' ']);
+    if HeaderName::from_bytes(parsed.name.as_bytes()).is_err()
+        || value
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\n' | b'\r'))
+    {
+        throw_dom_exception(
+            scope,
+            "SyntaxError",
+            12,
+            "Invalid XMLHttpRequest request header.",
+        );
+        return;
+    }
+    if moli_fetch::is_forbidden_request_header_name(&parsed.name)
+        || moli_fetch::is_forbidden_request_header_override_value(&parsed.name, value)
+    {
+        return;
+    }
+
     let existing_json = xhr_state_string_property(scope, xhr, XHR_REQUEST_HEADERS_SLOT)
         .unwrap_or_else(|| "[]".to_owned());
     let mut pairs: Vec<[String; 2]> = serde_json::from_str(&existing_json).unwrap_or_default();
-    let lower_name = parsed.name.to_ascii_lowercase();
     if let Some(pair) = pairs
         .iter_mut()
-        .find(|pair| pair[0].to_ascii_lowercase() == lower_name)
+        .find(|pair| pair[0].eq_ignore_ascii_case(&parsed.name))
     {
-        pair[1] = parsed.value;
+        pair[1].push_str(", ");
+        pair[1].push_str(value);
     } else {
-        pairs.push([parsed.name, parsed.value]);
+        pairs.push([parsed.name, value.to_owned()]);
     }
     let new_json = serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".to_owned());
     set_xhr_state_string(scope, xhr, XHR_REQUEST_HEADERS_SLOT, &new_json);
@@ -145,7 +165,10 @@ pub(super) fn xhr_override_mime_type_callback<'s>(
         );
         return;
     }
-    set_xhr_state_string(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT, &parsed.mime);
+    let mime = moli_content_type::parse_mime_type(&parsed.mime)
+        .map(|mime| mime.to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    set_xhr_state_string(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT, &mime);
     rv.set_undefined();
 }
 

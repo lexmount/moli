@@ -5,13 +5,16 @@ use url::Url;
 
 use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
+    content_security_policy_non_url_violation_with_source, content_security_policy_report_requests,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
-    create_security_policy_violation_event, send_content_security_policy_reports,
+    create_security_policy_violation_event, current_script_violation_location,
+    send_content_security_policy_reports,
 };
 use crate::context_bootstrap::dispatch_simple_event_target_event;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
@@ -25,7 +28,7 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
 use crate::worker::handle::WorkerPendingSubresourceFetch;
-use crate::worker::{WorkerPendingFetchContinue, WorkerToParentMessage};
+use crate::worker::{WorkerMessage, WorkerPendingFetchContinue, WorkerToParentMessage};
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestResourceType,
     should_request_be_blocked_due_to_bad_port,
@@ -88,22 +91,103 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
     sink: &str,
     sample: &str,
 ) {
-    let violation = {
+    let violations = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return;
         };
-        content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_policies,
-                protected_url,
-                sink,
-                sample,
-                ContentSecurityPolicyDisposition::Enforce,
-                &state_ref.content_security_reporting_endpoints,
-        )
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    protected_url,
+                    sink,
+                    sample,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
     };
-    if let Some(violation) = violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    queue_worker_trusted_types_violations(scope, state, violations);
+}
+
+pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
+    let violations: Vec<_> = {
+        let state_ref = state.borrow();
+        let Some(protected_url) = state_ref.current_script_url.as_ref() else {
+            return true;
+        };
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    protected_url,
+                    policy_name,
+                    is_duplicate,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
+    };
+    let allowed = !violations
+        .iter()
+        .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
+    queue_worker_trusted_types_violations(scope, state, violations);
+    allowed
+}
+
+fn trusted_types_policies(
+    state: &WorkerGlobalState,
+) -> impl Iterator<Item = (&str, ContentSecurityPolicyDisposition)> {
+    // Preserve the same partition ordering as document reporting. Identical
+    // policies remain distinct entries and each can produce a report.
+    [
+        (
+            &state.content_security_policies,
+            ContentSecurityPolicyDisposition::Enforce,
+        ),
+        (
+            &state.content_security_report_only_policies,
+            ContentSecurityPolicyDisposition::Report,
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(policies, disposition)| {
+        policies
+            .iter()
+            .map(move |policy| (policy.as_str(), disposition))
+    })
+}
+
+fn queue_worker_trusted_types_violations(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violations: Vec<ContentSecurityPolicyUrlViolation>,
+) {
+    if violations.is_empty() {
+        return;
+    }
+    // Capture the caller before returning from the sink, but deliver events
+    // in a later task. In particular, a listener must not reenter createPolicy
+    // before the original call has recorded the newly created policy name.
+    let location = current_script_violation_location(scope);
+    let wake_tx = state.borrow().worker_wake_tx.clone();
+    for mut violation in violations {
+        if let Some((source_file, line_number, column_number)) = &location {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        }
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
     }
 }
 
@@ -785,6 +869,34 @@ pub(super) fn worker_content_security_policy_violation(
         kind,
         ContentSecurityPolicyRedirectStatus::NoRedirect,
     )
+}
+
+pub(super) fn worker_eval_content_security_policy_violation(
+    state: &WorkerGlobalState,
+    protected_url: &Url,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    let policies = match disposition {
+        ContentSecurityPolicyDisposition::Enforce => &state.content_security_policies,
+        ContentSecurityPolicyDisposition::Report => &state.content_security_report_only_policies,
+    };
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    policies.iter().find_map(|policy| {
+        content_security_policy_non_url_violation_with_source(
+            policy,
+            protected_url,
+            kind,
+            source,
+            disposition,
+            &state.content_security_reporting_endpoints,
+        )
+    })
 }
 
 pub(super) fn worker_content_security_policy_violation_with_redirect_status(

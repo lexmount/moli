@@ -30,85 +30,6 @@ async fn run_one_canvas_image_load_event_task(
 }
 
 #[test]
-fn create_image_bitmap_matches_chromium_offscreen_canvas_and_close_contract() {
-    let mut vm = new_storage_test_vm("https://image-bitmap-surface.test/");
-
-    vm.exec(
-        r#"
-        (() => {
-          const caughtName = callback => {
-            try {
-              callback();
-              return "none";
-            } catch (error) {
-              return error.name;
-            }
-          };
-          const descriptor = Object.getOwnPropertyDescriptor(window, "createImageBitmap");
-          const blank = new OffscreenCanvas(16, 9);
-          const drawn = new OffscreenCanvas(16, 9);
-          drawn.getContext("2d").fillRect(0, 0, 1, 1);
-          globalThis.__imageBitmapProbe = {
-            functionShape: [
-              typeof createImageBitmap,
-              createImageBitmap.name,
-              createImageBitmap.length,
-              Object.prototype.hasOwnProperty.call(createImageBitmap, "prototype"),
-              descriptor.enumerable,
-              descriptor.configurable,
-              descriptor.writable,
-              caughtName(() => new createImageBitmap(drawn)),
-              caughtName(() => createImageBitmap()),
-            ],
-            constructorShape: [
-              typeof ImageBitmap,
-              ImageBitmap.name,
-              ImageBitmap.length,
-              Object.prototype.toString.call(ImageBitmap.prototype),
-              Object.getPrototypeOf(ImageBitmap.prototype) === Object.prototype,
-              caughtName(() => new ImageBitmap()),
-            ],
-            settled: false,
-          };
-          Promise.all([
-            createImageBitmap(blank).then(
-              () => "resolved",
-              error => `rejected:${error.name}`,
-            ),
-            createImageBitmap(drawn).then(bitmap => {
-              const before = [
-                Object.prototype.toString.call(bitmap),
-                bitmap instanceof ImageBitmap,
-                Object.getPrototypeOf(bitmap) === ImageBitmap.prototype,
-                Object.getOwnPropertyNames(bitmap).length,
-                bitmap.width,
-                bitmap.height,
-                typeof bitmap.close,
-              ];
-              const closeResult = bitmap.close();
-              return [before, typeof closeResult, bitmap.width, bitmap.height];
-            }),
-          ]).then(([blankOutcome, bitmapOutcome]) => {
-            __imageBitmapProbe.blankOutcome = blankOutcome;
-            __imageBitmapProbe.bitmapOutcome = bitmapOutcome;
-            __imageBitmapProbe.settled = true;
-          });
-        })()
-        "#,
-        None,
-    )
-    .expect("createImageBitmap probe should execute");
-
-    let result = vm
-        .eval("JSON.stringify(globalThis.__imageBitmapProbe)")
-        .expect("createImageBitmap probe should be readable");
-    assert_eq!(
-        result,
-        r#"{"functionShape":["function","createImageBitmap",1,false,true,true,true,"TypeError","TypeError"],"constructorShape":["function","ImageBitmap",0,"[object ImageBitmap]",true,"TypeError"],"settled":true,"blankOutcome":"rejected:InvalidStateError","bitmapOutcome":[["[object ImageBitmap]",true,true,0,16,9,"function"],"undefined",0,0]}"#
-    );
-}
-
-#[test]
 fn webgl_viewport_state_matches_chromium_on_html_and_offscreen_contexts() {
     let mut vm = new_storage_test_vm("https://webgl-viewport.test/");
     let result = vm
@@ -2357,6 +2278,7 @@ fn html_image_data_gif_exposes_intrinsic_dimensions() {
             r#"
 (() => {
   const img = new Image(4, 5);
+  globalThis.__lmDataGifImage = img;
   img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   return [
     img.complete,
@@ -2370,7 +2292,16 @@ fn html_image_data_gif_exposes_intrinsic_dimensions() {
         )
         .expect("data image dimensions should be readable");
 
-    assert_eq!(result, "true|4|5|1|1");
+    assert_eq!(result, "true|4|5|0|0");
+    assert_eq!(
+        vm.eval(
+            "[__lmDataGifImage.complete, __lmDataGifImage.width, \
+             __lmDataGifImage.height, __lmDataGifImage.naturalWidth, \
+             __lmDataGifImage.naturalHeight].join('|')",
+        )
+        .expect("data image dimensions should settle at the task checkpoint"),
+        "true|4|5|1|1"
+    );
 }
 
 #[test]
@@ -2433,6 +2364,13 @@ fn html_image_data_svg_exposes_intrinsic_dimensions() {
   const fractionalConcreteHeight = new Image();
   fractionalConcreteHeight.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 12"/>';
 
+  globalThis.__lmDataSvgImages = {
+    sized,
+    ratioWidth,
+    noSize,
+    fractionalConcreteHeight
+  };
+
   return [
     [sized.naturalWidth, sized.naturalHeight].join('x'),
     [ratioWidth.naturalWidth, ratioWidth.naturalHeight].join('x'),
@@ -2443,6 +2381,24 @@ fn html_image_data_svg_exposes_intrinsic_dimensions() {
 "#,
         )
         .expect("data SVG image dimensions should be readable");
+
+    assert_eq!(result, "0x0|0x0|0x0|0x0");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const { sized, ratioWidth, noSize, fractionalConcreteHeight } = __lmDataSvgImages;
+  return [
+    [sized.naturalWidth, sized.naturalHeight].join('x'),
+    [ratioWidth.naturalWidth, ratioWidth.naturalHeight].join('x'),
+    [noSize.naturalWidth, noSize.naturalHeight].join('x'),
+    [fractionalConcreteHeight.naturalWidth, fractionalConcreteHeight.naturalHeight].join('x')
+  ].join('|');
+})()
+"#,
+        )
+        .expect("data SVG dimensions should settle at the task checkpoint");
 
     // Blink resolves an external SVG with neither dimensions nor a viewBox
     // against the replaced-element default object size.
@@ -2494,6 +2450,72 @@ fn html_legacy_factory_constructors_use_element_interface_prototypes() {
     );
 }
 
+#[test]
+fn html_legacy_factory_constructors_honor_new_target_prototypes() {
+    let mut vm = new_storage_test_vm("https://legacy-factory-new-target.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  function check(ctor, iface, localName, args) {
+    const Derived = class extends ctor {};
+    const instance = Reflect.construct(ctor, args, Derived);
+    return [
+      Object.getPrototypeOf(instance) === Derived.prototype,
+      instance instanceof Derived,
+      instance instanceof iface,
+      instance.localName === localName
+    ].join(':');
+  }
+
+  function fallback(ctor, iface) {
+    function BadNewTarget() {}
+    BadNewTarget.prototype = 1;
+    const instance = Reflect.construct(ctor, [], BadNewTarget);
+    return [
+      Object.getPrototypeOf(instance) === iface.prototype,
+      instance instanceof iface
+    ].join(':');
+  }
+
+  let prototypeGets = 0;
+  const proxyPrototype = Object.create(HTMLImageElement.prototype);
+  const ProxyNewTarget = new Proxy(function() {}, {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        prototypeGets++;
+        return proxyPrototype;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+  const proxyImage = Reflect.construct(Image, [], ProxyNewTarget);
+
+  return [
+    check(Audio, HTMLAudioElement, 'audio', ['clip.mp3']),
+    check(Image, HTMLImageElement, 'img', [4, 5]),
+    check(Option, HTMLOptionElement, 'option', ['label', 'value']),
+    fallback(Audio, HTMLAudioElement),
+    fallback(Image, HTMLImageElement),
+    fallback(Option, HTMLOptionElement),
+    prototypeGets,
+    Object.getPrototypeOf(proxyImage) === proxyPrototype
+  ].join('|');
+})()
+"#,
+        )
+        .expect("legacy factory NewTarget prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true:true:true:true|true:true:true:true|true:true:true:true|",
+            "true:true|true:true|true:true|1|true"
+        )
+    );
+}
+
 #[tokio::test]
 async fn html_image_load_runs_on_its_dom_task_not_window_load_dispatch() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -2526,7 +2548,7 @@ async fn html_image_load_runs_on_its_dom_task_not_window_load_dispatch() {
         )
         .expect("image setup should evaluate");
 
-    assert_eq!(before_load, "1|1|1|1|pending");
+    assert_eq!(before_load, "0|0|0|0|pending");
 
     vm.dispatch_window_load_event()
         .expect("window load should not dispatch pending image loads");
@@ -2677,8 +2699,8 @@ async fn html_image_complete_tracks_pending_src_and_srcset_loads() {
 
     assert_eq!(
         drain_canvas_image_load_event_tasks(&mut vm, &loader).await,
-        4,
-        "src, srcset, empty-src, and retired-source work must each settle one queued task"
+        3,
+        "src, srcset, and empty-src work must settle queued tasks; the retired source is cancelled before its update microtask can manufacture one"
     );
 
     let after_load = vm
@@ -2974,6 +2996,8 @@ async fn parser_image_load_honors_meta_img_src_csp() {
         .expect("parser EOF should prepare interactive");
     vm.apply_main_document_interactive_lifecycle_action(interactive)
         .expect("interactive transition should register the parser image");
+    vm.perform_script_task_checkpoint(None)
+        .expect("parser task-end checkpoint should select the image request");
     run_one_canvas_image_load_event_task(&mut vm, &loader).await;
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
@@ -3566,6 +3590,8 @@ async fn html_image_lazy_detached_sources_wait_until_inserted() {
         vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
             .expect("inserted lazy-image layout refresh should succeed")
     );
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("layout task should finish its image-update microtask checkpoint");
     assert!(
         drain_canvas_image_load_event_tasks(&mut vm, &loader).await > 0,
         "inserted lazy image events should dispatch"
@@ -3659,6 +3685,8 @@ async fn html_image_below_viewport_lazy_waits_until_scroll_reveal() {
         vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
             .expect("initial lazy-image layout refresh should succeed")
     );
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("layout task should finish its image-update microtask checkpoint");
     assert!(
         drain_canvas_image_load_event_tasks(&mut vm, &loader).await > 0,
         "the near-viewport lazy image should be admitted"

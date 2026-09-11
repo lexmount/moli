@@ -7,6 +7,7 @@ use std::{
 
 use url::Url;
 
+mod destructive_writes;
 mod devtools_mutations;
 mod document_write;
 mod dom_facade;
@@ -75,6 +76,7 @@ pub(crate) use devtools_mutations::{
 };
 pub(crate) use inspector_issues::PendingInspectorIssue;
 pub(crate) use meta_refresh::MetaRefreshNavigation;
+use moli_time::{TimerScheduleRange, TimerScheduleSnapshot};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;
 pub(crate) use script_lifecycle::{
     DeferredPageTask, DeferredPageTaskLane, DeferredPageTaskState, DocumentScriptLifecycle,
@@ -764,7 +766,6 @@ pub(super) struct DocumentRuntime {
     selector_engine: QueryEngine,
     selector_debug: SelectorDebugCounters,
     document: HostDocumentState,
-    design_mode_documents: HashSet<DomHandle>,
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     author_styles_disabled: bool,
     bypass_content_security_policy: bool,
@@ -774,6 +775,8 @@ pub(super) struct DocumentRuntime {
     document_character_set: String,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
+    destructive_write_counters: destructive_writes::DocumentWriteCounters,
+    document_unload_counters: destructive_writes::DocumentWriteCounters,
     root_document_parser: Option<DocumentParserSession>,
     post_parse_schedule_invalidated: bool,
     stylesheet_lifecycle: StylesheetLifecycleState,
@@ -794,12 +797,15 @@ pub(super) struct DocumentRuntime {
     script_lifecycle: DocumentScriptLifecycle,
     parser_script_start_positions: HashMap<DomHandle, ParserScriptStartPosition>,
     timeouts: HostTimeoutScheduler,
+    classic_defer_timer_schedule_start: Option<TimerScheduleSnapshot>,
+    classic_defer_timer_schedule_ranges: Vec<TimerScheduleRange>,
     events: HostEventTargetRegistry,
     mutations: MutationCoordinator,
     meta_refresh_scheduler: meta_refresh::MetaRefreshScheduler,
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
+    autofocus_processed: bool,
     document_incarnation: DocumentRuntimeIncarnationIdentity,
     document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,
@@ -1287,6 +1293,12 @@ impl super::stylesheet_blocking::StylesheetBlockingReadView for LiveRuntimeDomHo
         self.borrow().document_node_id()
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        <DomHost as super::stylesheet_blocking::StylesheetBlockingReadView>::document_is_quirks_mode(
+            self.borrow(),
+        )
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<NodeId>,
@@ -1395,6 +1407,24 @@ mod tests {
             ),
             Some(expected)
         );
+    }
+
+    #[test]
+    fn live_runtime_dom_host_forwards_quirks_mode_for_stylesheet_processing() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/page.html").unwrap(),
+            "<html><head><link rel=stylesheet href=app.css></head></html>".to_owned(),
+        );
+        let link = first_element_handle(&document, "link");
+        let host = LiveRuntimeDomHost::from_dom_host(DomHost::from_dom(document));
+
+        let disposition = crate::stylesheet_blocking::stylesheet_link_disposition(
+            &host,
+            NodeId::new(link.index()),
+        )
+        .expect("stylesheet disposition");
+
+        assert!(disposition.options().quirks_mode_mime_compatibility());
     }
 
     #[test]

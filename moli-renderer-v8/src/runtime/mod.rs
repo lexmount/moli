@@ -90,6 +90,7 @@ pub(crate) use self::page_turn_scheduler::{
     PageOwnerBlockedReason, PageOwnerTurnOutcome, PageOwnerTurnReadiness,
 };
 pub(crate) use self::page_vm::AuthorizedCurrentBroadcastChannelDelivery;
+pub(crate) use self::page_vm::AuthorizedCurrentPageBitmapTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildClassicScriptSourceLoad;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildDocumentLifecycle;
 pub(crate) use self::page_vm::AuthorizedCurrentPageChildDocumentScriptReady;
@@ -111,8 +112,11 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageMiscPlatformApiTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageModuleReaction;
 pub(crate) use self::page_vm::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageOpfsTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPagePopupClose;
 pub(crate) use self::page_vm::AuthorizedCurrentPagePopupLoadEvent;
+pub(crate) use self::page_vm::AuthorizedCurrentPagePromiseRejection;
 pub(crate) use self::page_vm::AuthorizedCurrentPageRenderingUpdate;
+pub(crate) use self::page_vm::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerInternalTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageSharedWorkerClientEvent;

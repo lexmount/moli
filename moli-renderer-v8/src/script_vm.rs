@@ -720,6 +720,8 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod promise_rejection_task;
+mod script_preparation_error;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod isolated_worlds;
 mod main_document_lifecycle;
@@ -748,6 +750,7 @@ mod page_task_enqueue;
 mod parser_owned_classic;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
+mod popup_close;
 mod popup_load_event;
 mod post_parse;
 mod post_parse_lifecycle;
@@ -761,6 +764,7 @@ pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 #[cfg(test)]
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
 mod security_policy;
+pub(crate) use security_policy::string_code_generation_check_callback;
 mod service_worker_client_message_body;
 #[cfg(test)]
 mod service_worker_client_message_test_support;
@@ -782,6 +786,7 @@ mod subresource_command_completion;
 mod subresource_fetch;
 pub(crate) use subresource_command_completion::AsyncSubresourceCommandExecution;
 pub(crate) use subresource_fetch::AsyncSubresourceFetchBodyActivity;
+mod bitmap_tasks;
 mod page_resource_completion_task_completion;
 mod text_search;
 mod text_track_default_mode;
@@ -868,6 +873,7 @@ pub(crate) use inspector::{
 };
 use isolated_worlds::*;
 pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
+pub(crate) use runtime_bindings::PromiseRejectionTaskPayload;
 pub(crate) use runtime_bindings::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use runtime_bindings::*;
 pub(crate) use runtime_work::*;
@@ -2642,6 +2648,16 @@ impl ScriptVm {
         let Some(root) = root else {
             return;
         };
+        let skip_pristine_document = {
+            let host = self._context_host.borrow();
+            let document = host.document_handle();
+            host.document_web_font_sidecar_is_pristine()
+                && !host.document_has_style_state(document)
+                && !host.document_has_active_author_stylesheet_sources(document)
+        };
+        if skip_pristine_document {
+            return;
+        }
         let Some(resources) = crate::layout_renderer::current_native_stylesheet_resources(
             &self._context_host.borrow(),
             root,
@@ -3575,6 +3591,7 @@ impl ScriptVm {
                     .borrow_mut()
                     .retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
+                        self.resource_owner_id,
                     );
                 let context_ptr = &context.context as *const v8::Global<v8::Context>;
                 self.renderer_document_isolate
@@ -3711,6 +3728,7 @@ impl ScriptVm {
                 for context in &stale_prebootstrapped_contexts {
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
+                        self.resource_owner_id,
                     );
                 }
             }
@@ -3769,6 +3787,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3792,6 +3812,7 @@ impl ScriptVm {
             let retired_window_execution_context_count = host
                 .retire_window_execution_contexts_for_context_token(
                     context.runtime_observable_context_token,
+                    self.resource_owner_id,
                 );
             (
                 runtime_binding_retirement,
@@ -3799,6 +3820,7 @@ impl ScriptVm {
                 retired_message_port_count,
                 retired_window_message_count,
                 retired_window_execution_context_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3815,12 +3837,13 @@ impl ScriptVm {
             retired_message_port_count = runtime_binding_retirement.2,
             retired_window_message_count = runtime_binding_retirement.3,
             retired_window_execution_context_count = runtime_binding_retirement.4,
-            retired_webcrypto_count = runtime_binding_retirement.5,
-            retired_worker_count = runtime_binding_retirement.6,
-            retired_shared_worker_count = runtime_binding_retirement.7,
-            retired_xhr_count = runtime_binding_retirement.8,
-            aborted_fetch_count = runtime_binding_retirement.9.0,
-            detached_keepalive_fetch_count = runtime_binding_retirement.9.1,
+            retired_bitmap_count = runtime_binding_retirement.5,
+            retired_webcrypto_count = runtime_binding_retirement.6,
+            retired_worker_count = runtime_binding_retirement.7,
+            retired_shared_worker_count = runtime_binding_retirement.8,
+            retired_xhr_count = runtime_binding_retirement.9,
+            aborted_fetch_count = runtime_binding_retirement.10.0,
+            detached_keepalive_fetch_count = runtime_binding_retirement.10.1,
             retired_timer_count,
             "retired child Runtime binding context"
         );
@@ -3880,6 +3903,7 @@ impl ScriptVm {
             runtime_binding_retirement,
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -3892,6 +3916,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3914,6 +3940,7 @@ impl ScriptVm {
                 runtime_binding_retirement,
                 retired_image_decode_count,
                 retired_message_port_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3934,7 +3961,10 @@ impl ScriptVm {
         let retired_window_execution_context_realm_count = self
             ._context_host
             .borrow_mut()
-            .retire_isolated_window_execution_context(context.runtime_observable_context_token);
+            .retire_isolated_window_execution_context(
+                context.runtime_observable_context_token,
+                self.resource_owner_id,
+            );
         tracing::debug!(
             execution_context_id,
             context_token = ?context.runtime_observable_context_token,
@@ -3942,6 +3972,7 @@ impl ScriptVm {
                 .retired_execution_context_count(),
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -4664,7 +4695,6 @@ impl ScriptVm {
     pub(crate) fn create_and_construct_parser_custom_element_direct_in_default_context(
         &mut self,
         document_handle: DomHandle,
-        document_has_body: bool,
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
@@ -4689,7 +4719,6 @@ impl ScriptVm {
                         scope,
                         host_ptr,
                         document_handle,
-                        document_has_body,
                         local_name,
                         namespace,
                         prefix,
@@ -5299,8 +5328,39 @@ impl ScriptVm {
     ) -> bool {
         use crate::{
             frame_owner_model::ChildFrameSemanticTurnKind,
-            page_task_queue::RendererPageChildFrameTaskTarget,
+            page_task_queue::{
+                RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+                RendererPageReadyDescriptor,
+            },
         };
+
+        if expected == ChildFrameSemanticTurnKind::HostLoad {
+            return self
+                ._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("semantic fixture must retain its sources")
+                .task_sources()
+                .has_scheduler_task_for_executor_test(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::DomManipulation {
+                            owner: RendererPageDomManipulationOwner::ChildHostLoad(_),
+                            ..
+                        }
+                    )
+                });
+        }
+
+        if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
+            return self._page_task_residence_for_executor_test.as_ref().expect("semantic fixture must retain its sources").task_sources().has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(descriptor,
+                    RendererPageReadyDescriptor::DomManipulation { owner: RendererPageDomManipulationOwner::ChildDocumentLifecycle(_), .. }
+                ) || matches!(descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                        if matches!(owner.target(), RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+                )
+            });
+        }
 
         let Some(target) = self
             ._page_task_residence_for_executor_test
@@ -5354,7 +5414,14 @@ impl ScriptVm {
         {
             return Some(ChildFrameSemanticTurnKind::NavigationCommit);
         }
-        if self
+        if matches!(
+            self._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("child fixture must retain its sources")
+                .task_sources()
+                .next_child_semantic_task_target(),
+            Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+        ) && self
             .run_child_document_lifecycle_body_for_test()
             .expect("typed child lifecycle executor turn should succeed")
             .is_some()
@@ -5862,6 +5929,17 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn sync_selectedcontents_after_parser_option_finished_in_default_context(
+        &mut self,
+        option: NativeNodeId,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }
+                .sync_selectedcontents_after_parser_option_finished(scope, host_ptr, option);
+            Ok(())
+        })
+    }
+
     pub(crate) fn apply_parser_created_null_registry_associations_in_default_context(
         &mut self,
         handles: &[NativeNodeId],
@@ -5970,6 +6048,18 @@ impl ScriptVm {
         selection: crate::page_task_queue::RendererPageTimerSelection,
     ) -> Result<HostTimeoutRunResult> {
         let result = self.run_next_timeout_body(selection)?;
+        if let HostTimeoutRunResult::CallbackError(error) = &result {
+            self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
+        }
+        Ok(result)
+    }
+
+    /// Execute one ready timer whose scheduling sequence belongs to a classic
+    /// defer script, without committing its task-end callback completion.
+    pub(crate) fn run_next_classic_defer_timer_callback_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        let result = self.run_next_timeout_queued_by_classic_defer_script_body()?;
         if let HostTimeoutRunResult::CallbackError(error) = &result {
             self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
         }
@@ -6475,6 +6565,12 @@ impl ScriptVm {
             "prepared script execution requires a live registered handle"
         );
         false
+    }
+
+    pub(crate) fn perform_parser_script_preparation_checkpoint(&mut self) -> Result<()> {
+        self.with_default_context_scope(|scope, _| {
+            crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
+        })
     }
 
     /// Run one explicit page-task microtask checkpoint before a queued script task.
@@ -7281,6 +7377,9 @@ impl ScriptVm {
             .dedicated_worker_running_worker_isolate_count_for_diagnostics()
     }
 
+    pub(crate) fn has_pending_bitmap_tasks(&self) -> bool {
+        self._context_host.borrow().has_pending_bitmap_tasks()
+    }
     pub(crate) fn has_pending_webcrypto_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_webcrypto_tasks()
     }
@@ -8504,6 +8603,7 @@ impl ScriptVm {
                     Err(eval_exec::RawScriptExecutionError::Exception { report, .. }) => {
                         self.report_classic_script_exception_and_finish_evaluation_best_effort(
                             &report,
+                            fetch_metadata.muted_errors,
                         );
                         Ok(LoadedScriptExecutionOutcome::Completed(
                             PreparedScriptBodyActivity::Entered,

@@ -763,11 +763,25 @@ pub(super) fn select_page_scheduler_turn(
         !lifecycle_is_deferred && entry.document_lifecycle_owner_turn_is_runnable();
     let has_ready_main_parser_script_continuation =
         !lifecycle_is_deferred && entry.has_ready_main_parser_script_continuation();
-    let document_lifecycle = DocumentLifecycleClassReadiness::from_resident_state(
+    let mut document_lifecycle = DocumentLifecycleClassReadiness::from_resident_state(
         has_pending_document_lifecycle_turn,
         document_lifecycle_owner_turn_is_runnable,
         has_ready_main_parser_script_continuation,
     );
+    let has_lifecycle_dom_task = task_sources.has_queued_document_lifecycle_dom_task(|owner| {
+        entry
+            .page_vm()
+            .document_lifecycle_dom_owner_is_current(owner)
+    });
+    if has_lifecycle_dom_task
+        && !matches!(
+            document_lifecycle,
+            DocumentLifecycleClassReadiness::RunnableContinuation
+                | DocumentLifecycleClassReadiness::ReadyMainParserScriptContinuation
+        )
+    {
+        document_lifecycle = DocumentLifecycleClassReadiness::QueuedDomTask;
+    }
     let gate_policy = lifecycle_gate
         .as_mut()
         .map(|gate| gate.turn_policy(entry, !snapshot.eligible.is_empty()))
@@ -794,8 +808,26 @@ pub(super) fn select_page_scheduler_turn(
             ),
         },
         Some(PageTurnClass::Ordinary) => {
+            // Preserve parser-finish priority across task sources while the
+            // lifecycle event occupies its real DOM FIFO position. Earlier DOM
+            // tasks run first; no descriptor can jump to the lifecycle payload.
+            let dom_head_is_eligible = snapshot.eligible.iter().any(|descriptor| {
+                matches!(
+                    descriptor,
+                    crate::page_task_queue::RendererPageReadyDescriptor::DomManipulation { .. }
+                )
+            });
+            // A child lifecycle head can be awaiting its exact realm. Allow
+            // that prerequisite source to run before restoring DOM priority.
+            let eligible = if has_lifecycle_dom_task && dom_head_is_eligible {
+                snapshot.eligible.into_iter().filter(|descriptor| {
+                    matches!(descriptor, crate::page_task_queue::RendererPageReadyDescriptor::DomManipulation { .. })
+                }).collect()
+            } else {
+                snapshot.eligible
+            };
             let selected = scheduler
-                .select_ready_descriptor(snapshot.eligible)
+                .select_ready_descriptor(eligible)
                 .expect("selected ordinary Page-turn class must retain an eligible descriptor");
             let task = task_sources.take_task(selected);
             RendererPageScheduledTurn::Ordinary(Box::new(task))
@@ -815,6 +847,12 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
 ) -> (LivePageEntry, Result<()>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
+            let main_lifecycle_owner = match &task {
+                RendererPageSchedulerTask::DomManipulation(
+                    crate::page_task_queue::RendererPageDomManipulationTask::MainDocumentLifecycle(task),
+                ) => Some(task.owner),
+                _ => None,
+            };
             let replacement_lifecycle_snapshot = entry
                 .page_vm()
                 .document_replacement_lifecycle_action_snapshot();
@@ -846,6 +884,21 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
                     )
                     .await
             };
+
+            if application.is_ok()
+                && main_lifecycle_owner.is_some_and(|owner| {
+                    owner.root_document == entry.page_vm().document_lifecycle.identity().document
+                        && entry.page_vm().vm().current_main_document_task_owner() == Some(owner.body.owner())
+                })
+            {
+                let (_, pending) = entry.page_vm_and_document_lifecycle_turn_mut();
+                if let Some(pending) = pending {
+                    // Resume the exact driver to consume its receipt. An
+                    // executed event publishes the reached stage before other
+                    // sources run; a blocked load returns to its prerequisites.
+                    pending.owner_turn_is_runnable = true;
+                }
+            }
 
             match (application, reconciliation) {
                 (Ok(()), Ok(_)) => Ok(()),

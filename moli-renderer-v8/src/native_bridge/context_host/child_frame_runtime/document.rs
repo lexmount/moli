@@ -1,14 +1,16 @@
 use super::super::JsContextHost;
 use super::document_slots::sync_child_document_window_slots;
+use crate::context_bootstrap::WINDOW_DOCUMENT_SLOT;
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
 use crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT;
 use crate::native_bridge::{
-    document::detached_native_handle_for_runtime, node::remove_child_to_current_reaction_queue,
+    document::{detached_native_handle_for_runtime, is_html_document},
+    node::remove_child_to_current_reaction_queue,
     throw_dom_exception,
 };
-use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8_string, v8str};
+use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
@@ -104,6 +106,7 @@ impl JsContextHost {
                     "document",
                     document.into(),
                 );
+                set_private_value(scope, window, WINDOW_DOCUMENT_SLOT, document.into());
             }
             ready_work.extend(
                 self.sync_child_browsing_context_subtree_into_ready_work(scope, document_handle),
@@ -248,31 +251,6 @@ fn install_child_document_stream_methods<'s>(
             child_document_native_handle_for_runtime(scope, runtime_ptr, document)
     {
         let runtime = unsafe { &mut *runtime_ptr };
-        let base_url = runtime
-            .child_browsing_context_base_url(handle)
-            .map(|base_url| {
-                if moli_url::is_about_blank(&base_url)
-                    && runtime
-                        .child_browsing_context_current_url(handle)
-                        .as_ref()
-                        .is_some_and(moli_url::is_about_blank)
-                    && runtime.child_browsing_context_inherits_parent_origin(handle)
-                {
-                    runtime.document_base_url_for_child_context(handle)
-                } else {
-                    base_url
-                }
-            });
-        if let Some(base_url) = base_url
-            && let Some(value) = v8_string(scope, base_url.as_str())
-        {
-            crate::native_bridge::helpers::set_object_slot(
-                scope,
-                document,
-                "baseURI",
-                value.into(),
-            );
-        }
         if !runtime.dom_host().is_connected(document_handle) {
             runtime
                 .dom_host_mut()
@@ -309,8 +287,8 @@ fn child_document_open_callback<'s>(
         redirect_child_document_open_to_window_open(scope, handle, document, &args, &mut rv);
         return;
     }
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-        throw_dynamic_markup_invalid_state(scope);
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
+        throw_dynamic_markup_invalid_state(scope, document);
         return;
     }
     let _ = begin_child_document_stream_replacement(scope, handle, document);
@@ -344,10 +322,6 @@ fn child_document_write_or_writeln_callback<'s>(
         return;
     };
     let document = args.this();
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-        throw_dynamic_markup_invalid_state(scope);
-        return;
-    }
     let mut chunk = String::new();
     for index in 0..args.length() {
         let Some(value) = args.get(index).to_string(scope) else {
@@ -358,12 +332,33 @@ fn child_document_write_or_writeln_callback<'s>(
     if append_newline {
         chunk.push('\n');
     }
+    // Argument conversion precedes both the XML and parser-constructor guards.
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
+        throw_dynamic_markup_invalid_state(scope, document);
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
     };
     let host = unsafe { &mut *host_ptr };
     if host.child_document_stream_is_blocked_by_navigation(handle) {
+        rv.set_undefined();
+        return;
+    }
+    let Some(document_handle) = child_document_native_handle_for_runtime(scope, host_ptr, document)
+    else {
+        rv.set_undefined();
+        return;
+    };
+    let has_open_stream = host
+        .frame_owner_store
+        .current_child_document_owner(handle)
+        .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner));
+    if host.has_ignore_destructive_writes_counter(document_handle)
+        && !has_open_stream
+        && !host.child_document_is_executing_parser_script(document_handle)
+    {
         rv.set_undefined();
         return;
     }
@@ -388,11 +383,6 @@ fn child_document_write_or_writeln_callback<'s>(
         };
         context
     };
-    let Some(document_handle) = child_document_native_handle_for_runtime(scope, host_ptr, document)
-    else {
-        rv.set_undefined();
-        return;
-    };
     let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
         scope,
         script_context,
@@ -414,8 +404,8 @@ fn child_document_close_callback<'s>(
         return;
     };
     let document = args.this();
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-        throw_dynamic_markup_invalid_state(scope);
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
+        throw_dynamic_markup_invalid_state(scope, document);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -432,10 +422,13 @@ fn child_document_close_callback<'s>(
         rv.set_undefined();
         return;
     }
-    if host.child_document_parser_is_active(handle)
-        && host
-            .child_current_script_handle_for_document(document_handle)
-            .is_some()
+    // close() only applies to a script-created parser. An executing parser
+    // script must still record EOF; the session defers finishing until that
+    // script exits instead of losing the close request here.
+    if !host
+        .frame_owner_store
+        .current_child_document_owner(handle)
+        .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner))
     {
         rv.set_undefined();
         return;
@@ -517,22 +510,30 @@ fn child_document_default_view<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn child_document_has_throw_on_dynamic_markup_insertion_counter<'s>(
+fn child_document_has_invalid_dynamic_markup_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> bool {
     context_host_ptr_from_global_bridge(scope)
         .and_then(|host_ptr| {
             let host = unsafe { &*host_ptr };
-            child_document_native_handle_for_runtime(scope, host_ptr, document)
-                .map(|document| host.has_throw_on_dynamic_markup_insertion_counter(document))
+            child_document_native_handle_for_runtime(scope, host_ptr, document).map(|document| {
+                !is_html_document(host, document)
+                    || host.has_throw_on_dynamic_markup_insertion_counter(document)
+            })
         })
         .unwrap_or(false)
 }
 
-fn throw_dynamic_markup_invalid_state(scope: &mut v8::PinScope<'_, '_>) {
+fn throw_dynamic_markup_invalid_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) {
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let relevant_scope = &mut v8::ContextScope::new(scope, relevant_context);
     throw_dom_exception(
-        scope,
+        relevant_scope,
         "InvalidStateError",
         11,
         "The object is in an invalid state.",
@@ -564,6 +565,9 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Context>> {
         debug_assert!(std::ptr::eq(host_ptr, self));
         if self.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+            return None;
+        }
+        if self.has_document_unload_counter(document_handle) {
             return None;
         }
         if self.child_document_stream_is_blocked_by_navigation(child_handle) {

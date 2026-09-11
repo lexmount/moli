@@ -83,12 +83,13 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/xml5ever-0.39.0"]
+exclude = ["vendor/xml5ever-0.39.0", "vendor/url-2.5.8"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+url = { path = "vendor/url-2.5.8" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }
 curl-sys = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }

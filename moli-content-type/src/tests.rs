@@ -38,6 +38,20 @@ fn whatwg_parser_validates_the_mime_essence() {
 }
 
 #[test]
+fn replacing_a_mime_parameter_preserves_order_and_quoted_value_serialization() {
+    let mut mime = parse_mime_type(
+        r#"Text/Plain; title="alpha; \"beta\""; Charset=ASCII; charset=gbk; keep=Value"#,
+    )
+    .unwrap();
+    *mime.parameter_mut("CHARSET").unwrap() = "UTF-8".to_owned();
+    assert_eq!(
+        mime.to_string(),
+        r#"text/plain;title="alpha; \"beta\"";charset=UTF-8;keep=Value"#
+    );
+    assert!(mime.parameter_mut("missing").is_none());
+}
+
+#[test]
 fn whatwg_parser_recovers_valid_parameters() {
     assert_eq!(
         mime_parameter("text/plain; title=\"alpha;beta\"", "title").as_deref(),

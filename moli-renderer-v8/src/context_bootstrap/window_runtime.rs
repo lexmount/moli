@@ -15,6 +15,7 @@ pub(super) use base64::{window_atob_callback, window_btoa_callback};
 pub(super) use date_locale::{
     current_date_locale_overrides, date_to_locale_date_string_callback,
     date_to_locale_string_callback, date_to_locale_time_string_callback,
+    preserve_original_date_locale_methods,
 };
 pub(crate) use date_locale::{
     set_date_locale_override_for_current_context, set_date_timezone_override_for_current_context,
@@ -22,7 +23,8 @@ pub(crate) use date_locale::{
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
-    window_const_false_callback, window_noop_callback, window_open_callback, window_stop_callback,
+    window_blur_callback, window_const_false_callback, window_focus_callback, window_noop_callback,
+    window_open_callback, window_stop_callback,
 };
 pub(crate) use navigator::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
@@ -76,7 +78,7 @@ struct ChildWindowOwnMethodsDeclaration {
     open: (),
     #[webapi(method, length = 0, callback = window_noop_callback)]
     close: (),
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_blur_callback)]
     blur: (),
     #[webapi(method, length = 0, callback = window_const_false_callback)]
     find: (),

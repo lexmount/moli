@@ -22,12 +22,12 @@ use super::{
         ParserBlockingStylesheetPause, ParserFinishDiscoverySignals, ParserInputQueue,
         ParserInputSession, ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition,
         ParserScriptHandoff, ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure,
-        ParserYield,
+        ParserScriptPreparationRequest, ParserYield,
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
-        HtmlParserSession, HtmlParserSessionResult, new_fragment_html_tree_sink_session,
-        new_html_tree_sink_session,
+        HtmlParserSession, HtmlParserSessionResult, HtmlTreeSinkSession,
+        new_fragment_html_tree_sink_session, new_html_tree_sink_session,
     },
 };
 
@@ -36,6 +36,7 @@ pub(super) struct HtmlTreeSinkStream {
     script_input: ParserInputQueue,
     parser_script_positions: HashMap<NativeNodeId, usize>,
     next_parser_script_position: usize,
+    defer_script_preparation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -382,12 +383,14 @@ fn prepare_parser_script(
             }
         },
         PrepareScriptOutcome::UrlResolutionFailed(error)
-        | PrepareScriptOutcome::EmptyExternalSource(error) => failed_parser_script(
-            position,
-            mode,
-            error,
-            ParserScriptElementStateTransition::MarkAlreadyStarted,
-        ),
+        | PrepareScriptOutcome::EmptyExternalSource(error) => {
+            ParserScriptPreparation::PreparationFailure(
+                ParserScriptPreparationFailure::external_source(position, mode, error)
+                    .with_element_state_transition(
+                        ParserScriptElementStateTransition::MarkAlreadyStarted,
+                    ),
+            )
+        }
         PrepareScriptOutcome::EmptyInlineSource => skipped_parser_script(
             document,
             node_id,
@@ -425,17 +428,35 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document(
 }
 
 impl HtmlTreeSinkStream {
-    pub(super) fn from_target_with_scripting(
-        target: ParserStreamHtmlTreeSinkTarget,
-        scripting_enabled: bool,
-    ) -> Self {
-        let session = new_html_tree_sink_session(target, scripting_enabled);
+    fn from_session(session: HtmlTreeSinkSession) -> Self {
         Self {
             parser: session.parser,
             script_input: session.script_input,
             parser_script_positions: HashMap::new(),
             next_parser_script_position: 0,
+            defer_script_preparation: false,
         }
+    }
+
+    pub fn defer_script_preparation_to_owner(&mut self) {
+        self.defer_script_preparation = true;
+    }
+
+    pub fn prepare_script(&self, request: ParserScriptPreparationRequest) -> ParserScriptHandoff {
+        let target = self.parser.sink().borrow_target();
+        prepare_parser_script(&*target, request.node_id, Some(request.position)).into_handoff(
+            request.node_id,
+            request.start_line,
+            request.start_column,
+            request.blocking_signatures_before,
+        )
+    }
+
+    pub(super) fn from_target_with_scripting(
+        target: ParserStreamHtmlTreeSinkTarget,
+        scripting_enabled: bool,
+    ) -> Self {
+        Self::from_session(new_html_tree_sink_session(target, scripting_enabled))
     }
 
     pub(super) fn from_fragment_target(
@@ -452,12 +473,7 @@ impl HtmlTreeSinkStream {
             context_local_name,
             scripting_enabled,
         );
-        Self {
-            parser: session.parser,
-            script_input: session.script_input,
-            parser_script_positions: HashMap::new(),
-            next_parser_script_position: 0,
-        }
+        Self::from_session(session)
     }
 
     fn parser_script_position(&mut self, node_id: NativeNodeId) -> usize {
@@ -588,6 +604,56 @@ impl HtmlTreeSinkStream {
             | RawParserStep::InputDrained => None,
         };
 
+        let defer_script_preparation = self.defer_script_preparation
+            && self
+                .parser
+                .sink()
+                .borrow_target()
+                .has_runtime_dom_consumer();
+        if defer_script_preparation {
+            // A speculative fetch is distinct from preparing a parser script.
+            // The live owner admits async execution only after its checkpoint;
+            // ordinary preload discovery continues on the separate preload lane.
+            let result = match result {
+                RawParserStep::Script(node_id) => {
+                    let target = self.parser.sink().borrow_target();
+                    let (start_line, start_column) =
+                        target.script_start_position(node_id).unwrap_or((0, 0));
+                    ParserPumpStep::Yield(ParserYield::ScriptPreparation(Box::new(
+                        ParserScriptPreparationRequest {
+                            node_id,
+                            start_line,
+                            start_column,
+                            position: handoff_parser_position.expect("script has parser position"),
+                            needs_microtask_checkpoint: target
+                                .read_is_html_element_named(node_id, "script"),
+                            blocking_signatures_before: captured_blocking_stylesheet_signatures,
+                        },
+                    )))
+                }
+                RawParserStep::BlockingStylesheet(node_id) => {
+                    assert_eq!(self.pop_pending_blocking_stylesheet_pause(), Some(node_id));
+                    ParserPumpStep::Yield(ParserYield::BlockingStylesheet(
+                        ParserBlockingStylesheetPause { node_id },
+                    ))
+                }
+                RawParserStep::CustomElementConstruction => {
+                    ParserPumpStep::Yield(ParserYield::CustomElementConstruction(Box::new(
+                        self.pop_pending_custom_element_construction_handoff()
+                            .expect("custom element boundary has a construction handoff"),
+                    )))
+                }
+                RawParserStep::InputDrained => ParserPumpStep::InputDrained,
+            };
+            return ParserPumpOutcome {
+                result,
+                discovered_async_prefetch_scripts: Vec::new(),
+                discovered_modulepreload_link_candidates:
+                    discovered_modulepreload_link_candidate_node_ids,
+                discovered_blocking_stylesheet_inputs,
+            };
+        }
+
         let (
             result,
             discovered_async_prefetch_scripts,
@@ -695,6 +761,7 @@ impl HtmlTreeSinkStream {
             script_input: _,
             parser_script_positions: _,
             next_parser_script_position: _,
+            defer_script_preparation: _,
         } = self;
         parser.finish_live_runtime_dom_sink_parser()
     }
@@ -855,6 +922,7 @@ impl HtmlTreeSinkStream {
             script_input: _,
             parser_script_positions: _,
             next_parser_script_position: _,
+            defer_script_preparation: _,
         } = self;
         let mut target = parser.finish();
         let signals = ParserFinishDiscoverySignals {
@@ -1143,6 +1211,11 @@ mod tests {
         fn mark_script_already_started_for_parser(&mut self, node_id: NativeNodeId) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
+        }
+
+        fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+            // SAFETY: the test keeps the DomHost alive for this parser pump step.
+            let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
         }
 
         fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
@@ -1663,6 +1736,7 @@ mod tests {
         let ParserScriptHandoff::PreparationFailure { failure, .. } = *handoff else {
             panic!("empty src must not become a blocking classic fetch");
         };
+        assert!(failure.is_external_source_failure());
         assert_eq!(
             failure.element_state_transition(),
             crate::ParserScriptElementStateTransition::MarkAlreadyStarted
@@ -1671,6 +1745,16 @@ mod tests {
         assert_eq!(position, 0);
         assert_eq!(mode, ScriptMode::Normal);
         assert_eq!(message, "empty script src is not fetchable");
+    }
+
+    #[test]
+    fn internal_parser_script_preparation_failure_is_not_an_external_source_error() {
+        let failure = crate::ParserScriptPreparationFailure::new(
+            0,
+            ScriptMode::Normal,
+            "document URL missing during parser script preparation".to_owned(),
+        );
+        assert!(!failure.is_external_source_failure());
     }
 
     #[test]
@@ -1688,6 +1772,7 @@ mod tests {
         let ParserScriptHandoff::PreparationFailure { failure, .. } = *handoff else {
             panic!("invalid src must stay a failed parser preparation");
         };
+        assert!(failure.is_external_source_failure());
         assert_eq!(
             failure.element_state_transition(),
             crate::ParserScriptElementStateTransition::MarkAlreadyStarted
@@ -1699,6 +1784,42 @@ mod tests {
             failure.contains("failed to resolve script src"),
             "invalid src failure should survive the parser boundary"
         );
+    }
+
+    #[test]
+    fn parser_script_handoff_only_exposes_nonceable_nonces() {
+        fn handoff_nonce(markup: &str) -> Option<String> {
+            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://example.test/page.html").expect("test url"),
+            );
+            let outcome = stream.pump_parser_step(markup);
+            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = outcome.result else {
+                panic!("expected parser script handoff for {markup:?}");
+            };
+            let ParserScriptHandoff::BlockingClassic { script, .. } = *handoff else {
+                panic!("expected blocking classic script for {markup:?}");
+            };
+            script.fetch_metadata.nonce
+        }
+
+        assert_eq!(
+            handoff_nonce("<script nonce=abc>safe()</script>"),
+            Some("abc".to_owned()),
+            "ordinary parser script nonce should remain usable"
+        );
+        for markup in [
+            "<script attribute<script nonce=abc>blocked()</script>",
+            "<script data-marker='value<StYlE' nonce=abc>blocked()</script>",
+            "<script data-marker='value<LiNk' nonce=abc>blocked()</script>",
+            "<script duplicate duplicate nonce=abc>blocked()</script>",
+            "<svg><script duplicate duplicate nonce=abc>blocked()</script></svg>",
+        ] {
+            assert_eq!(
+                handoff_nonce(markup),
+                None,
+                "nonnonceable parser script must not expose its nonce: {markup:?}"
+            );
+        }
     }
 
     #[test]

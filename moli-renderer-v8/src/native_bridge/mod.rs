@@ -15,6 +15,7 @@ pub(crate) use current_input::{
 };
 pub(crate) mod document;
 pub(crate) mod element;
+pub(crate) mod fullscreen;
 mod helpers;
 mod history_queue;
 pub(super) mod identity;

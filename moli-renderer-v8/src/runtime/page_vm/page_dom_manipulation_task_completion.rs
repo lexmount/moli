@@ -18,6 +18,15 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         let completion = match action {
+            PageDomManipulationTurnAction::ChildHostLoad(action) => {
+                action.into_page_task_completion()
+            }
+            PageDomManipulationTurnAction::ChildDocumentLifecycle(action) => {
+                action.into_page_task_completion()
+            }
+            PageDomManipulationTurnAction::MainDocumentLifecycle(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::BroadcastChannel(action) => {
                 action.into_page_task_completion()
             }
@@ -31,14 +40,23 @@ impl PageVm {
             PageDomManipulationTurnAction::FileEntryFileCallback(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::ScriptPreparationError(action) => {
+                action.into_page_task_completion()
+            }
+            PageDomManipulationTurnAction::PromiseRejection(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::ImageLoadEvent(action) => {
                 action.into_page_task_completion()
             }
             PageDomManipulationTurnAction::PopupLoadEvent(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::PopupClose(action) => action.into_page_task_completion(),
             PageDomManipulationTurnAction::ConnectedStyleEvent(action) => {
-                action.into_page_task_completion()
+                return self
+                    .finish_selected_page_connected_style_event_task(action, loader)
+                    .await;
             }
             PageDomManipulationTurnAction::TextTrackDefaultMode(action) => {
                 action.into_page_task_completion()

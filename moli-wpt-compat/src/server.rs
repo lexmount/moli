@@ -2460,7 +2460,11 @@ async fn wpt_cors_redirect_same_origin_echo(headers: HeaderMap) -> Response {
         "origin": header_value(&headers, ORIGIN.as_str()),
         "response": "cors-redirect-same-origin-echo",
     });
-    json_string_response(payload.to_string())
+    // A cross-origin redirect back here is still CORS-tainted and carries
+    // Origin: null; returning to the initial host does not waive authorization.
+    let mut response = json_string_response(payload.to_string());
+    add_cors_allow_origin_header(&mut response, &headers);
+    response
 }
 
 async fn wpt_cors_credentials_allow(headers: HeaderMap) -> Response {

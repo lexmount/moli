@@ -2,7 +2,10 @@ use super::{FrameDocumentLoadDeliveryTask, JsContextHost};
 use crate::{
     context_bootstrap::{
         LocationNavigationKind, construct_original_event, construct_original_page_transition_event,
-        meta_refresh_navigation_kind, navigate_location_object_with_child_navigate_event,
+        meta_refresh_navigation_kind,
+        navigate_location_object_with_child_navigate_event_and_initiator_url,
+        record_performance_load_event_end_for_window,
+        record_performance_load_event_start_for_window,
     },
     document_runtime::{DomHandle, EventTargetHandle, MetaRefreshNavigation},
     frame_owner_model::{
@@ -147,8 +150,13 @@ impl JsContextHost {
             return false;
         };
         let routed = self
-            .page_child_frame_task_sender()
-            .send_host_load(crate::page_task_queue::RendererPageChildHostLoadTarget::new(admission))
+            .page_task_capabilities
+            .get()
+            .expect("child load delivery must retain its Page task capabilities")
+            .dom_manipulation()
+            .send_child_host_load(
+                crate::page_task_queue::RendererPageChildHostLoadTarget::new(admission),
+            )
             .is_ok();
         if !routed {
             let _ = self
@@ -159,7 +167,7 @@ impl JsContextHost {
         tracing::debug!(
             child_handle = ?task.child_handle,
             owner = ?task.owner,
-            "queued exact child load delivery on the stable child-frame source"
+            "queued exact child load delivery on the DOM manipulation source"
         );
         true
     }
@@ -400,13 +408,20 @@ impl JsContextHost {
         action: FrameDocumentLoadDeliveryAction,
     ) -> ChildFrameLoadDeliveryPhaseResult {
         let handle = action.child_handle();
+        let performance_window = self.existing_child_browsing_context_window_wrapper(scope, handle);
         let Some(event) = construct_original_event(scope, "load") else {
             self.abort_and_requeue_child_load_delivery(action);
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
+        if let Some(window) = performance_window {
+            record_performance_load_event_start_for_window(scope, window);
+        }
         self.enter_child_browsing_context_host_load_dispatch(handle);
-        self.dispatch_child_window_event(scope, handle, "load", event);
+        self.dispatch_child_window_event_with_target_override(scope, handle, "load", event, true);
         self.leave_child_browsing_context_host_load_dispatch(handle);
+        if let Some(window) = performance_window {
+            record_performance_load_event_end_for_window(scope, window);
+        }
         let progress = self
             .frame_owner_store
             .finish_current_child_document_load_delivery(action);
@@ -458,7 +473,13 @@ impl JsContextHost {
         let callback_dispatched = if let Some(event) =
             construct_original_page_transition_event(scope, "pageshow", false)
         {
-            self.dispatch_child_window_event(scope, action.child_handle(), "pageshow", event);
+            self.dispatch_child_window_event_with_target_override(
+                scope,
+                action.child_handle(),
+                "pageshow",
+                event,
+                true,
+            );
             true
         } else {
             false
@@ -785,6 +806,9 @@ fn child_meta_refresh_callback<'s>(
     if host.current_child_document_task_owner(handle) != Some(task.owner) {
         return;
     }
+    let Some(initiator_url) = host.child_browsing_context_current_url(handle) else {
+        return;
+    };
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
         return;
     };
@@ -794,11 +818,12 @@ fn child_meta_refresh_callback<'s>(
     else {
         return;
     };
-    navigate_location_object_with_child_navigate_event(
+    navigate_location_object_with_child_navigate_event_and_initiator_url(
         scope,
         location,
         task.navigation_kind,
         Some(task.target_url.to_string()),
+        initiator_url,
     );
 }
 

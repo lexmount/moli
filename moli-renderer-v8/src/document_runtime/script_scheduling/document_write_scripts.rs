@@ -20,7 +20,9 @@ pub(in crate::document_runtime) enum DocumentWriteCurrentScriptEventBehavior {
 }
 
 fn perform_document_write_microtask_checkpoints(scope: &mut v8::PinScope<'_, '_>) {
-    perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    if crate::script_cleanup::can_perform_script_cleanup_checkpoint(scope) {
+        perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    }
 }
 
 impl DocumentRuntime {

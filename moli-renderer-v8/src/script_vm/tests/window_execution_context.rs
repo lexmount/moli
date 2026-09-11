@@ -362,9 +362,13 @@ fn chromium_discarded_window_fetch_rejects_in_the_detached_function_realm() {
     );
 }
 
-#[test]
-fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
-    let mut vm = new_storage_test_vm("https://borrowed-fetch-context.test/top/");
+#[tokio::test(flavor = "current_thread")]
+async fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://borrowed-fetch-context.test/top/",
+        &loader,
+    );
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
     vm.eval(
         r#"
@@ -376,8 +380,21 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
         "#,
     )
     .expect("borrowed Fetch child should be exposed");
-    let child_context_id =
-        materialize_single_child_default_realm_for_test(&mut vm, "borrowed Fetch target");
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            crate::frame_owner_model::ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader,
+        )
+        .await
+        .expect("borrowed Fetch child realm task")
+    );
+    let realms = vm.live_child_default_runtime_realm_inventory();
+    assert_eq!(
+        realms.len(),
+        1,
+        "one materialized borrowed Fetch child realm"
+    );
+    let child_context_id = realms[0].context_id;
     let child_handle = vm
         .child_frame_realm_store
         .get(&child_context_id)
@@ -535,6 +552,22 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
         "child-response:true",
         "Response construction and Promise settlement must use the receiver relevant realm"
     );
+    assert_eq!(
+        vm.eval("JSON.stringify(__borrowedFetchRejections)")
+            .unwrap(),
+        "[]",
+        "Promise reactions queue notifications without dispatching them at the checkpoint"
+    );
+    for _ in 0..2 {
+        assert!(
+            vm.run_one_dom_manipulation_task_executor_turn(
+                PageDomManipulationTestFamily::PromiseRejection,
+                &loader,
+            )
+            .await
+            .expect("realm-owned rejection notification")
+        );
+    }
     assert_eq!(
         vm.eval("JSON.stringify(__borrowedFetchRejections)")
             .expect("borrowed Fetch rejection routing should evaluate"),

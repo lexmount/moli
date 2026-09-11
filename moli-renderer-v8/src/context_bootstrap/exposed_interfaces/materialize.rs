@@ -287,7 +287,7 @@ fn materialize_uninitialized_interface<'s>(
         public_interface,
     )?;
     realm.set_state(id, RealmInterfaceState::Finalizing)?;
-    finalize_materialized_interface(scope, metadata.name)?;
+    finalize_materialized_interface(scope, metadata.name, realm.realm_kind())?;
     realm.set_state(id, RealmInterfaceState::Ready)?;
     registry.record_materialization(id);
     Ok(public_interface.into())

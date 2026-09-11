@@ -22,6 +22,7 @@
       document.fonts.addEventListener('loading', onLoadingB);
       document.fonts.addEventListener('loadingdone', onLoadingDone);
       document.fonts.removeEventListener('loading', onLoadingA);
+      document.fonts.add(new FontFace('Roboto', 'url(roboto.woff2)'));
       document.fonts.load('italic bold 16px Roboto');
 
       document.body.setAttribute('data-loading-a', String(loadingA));

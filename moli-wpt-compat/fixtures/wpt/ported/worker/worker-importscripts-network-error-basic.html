@@ -58,9 +58,9 @@ promise_test(async function () {
       directResult.domException,
       "direct cross-origin importScripts should throw a DOMException",
     );
-    assert_false(
+    assert_true(
       directResult.loaded,
-      "direct cross-origin importScripts should not execute the target script",
+      "direct cross-origin script executes before its exception is replaced with NetworkError",
     );
 
     assert_equals(
@@ -72,12 +72,12 @@ promise_test(async function () {
       redirectResult.domException,
       "redirected cross-origin importScripts should throw a DOMException",
     );
-    assert_false(
+    assert_true(
       redirectResult.loaded,
-      "redirected cross-origin importScripts should not execute the target script",
+      "redirected cross-origin script executes before its exception is replaced with NetworkError",
     );
   } finally {
     worker.terminate();
   }
-}, "Dedicated workers reject cross-origin importScripts loads, including redirected targets");
+}, "Dedicated workers execute cross-origin imported scripts and mute their exceptions, including redirected targets");
 </script>

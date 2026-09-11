@@ -69,7 +69,7 @@ promise_test(async function () {
 promise_test(async function () {
   const result = await run_worker_case("fetch-cross-to-same");
   assert_equals(result.error, undefined, "worker fetch should resolve");
-  assert_equals(result.type, "basic", "fetch response type");
+  assert_equals(result.type, "cors", "fetch response type");
   assert_true(result.redirected, "fetch response should expose redirect state");
   assert_true(
     result.url.endsWith("/wpt/runtime/cors/redirect/same-origin-echo"),
@@ -95,7 +95,7 @@ promise_test(async function () {
 promise_test(async function () {
   const result = await run_worker_case("fetch-cross-site-chain-to-same");
   assert_equals(result.error, undefined, "worker fetch should resolve");
-  assert_equals(result.type, "basic", "fetch response type");
+  assert_equals(result.type, "cors", "fetch response type");
   assert_true(result.redirected, "fetch response should expose redirect state");
   assert_true(
     result.url.endsWith("/wpt/runtime/cors/redirect/same-origin-echo"),

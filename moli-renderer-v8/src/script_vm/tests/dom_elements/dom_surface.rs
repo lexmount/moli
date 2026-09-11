@@ -151,6 +151,89 @@ fn dom_api_known_pseudo_element_selectors_with_after_part_pseudo_classes_return_
 }
 
 #[test]
+fn element_heading_reflections_drive_flat_tree_heading_matching() {
+    let mut vm = new_storage_test_vm("https://heading-offset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const descriptor = name => Object.getOwnPropertyDescriptor(Element.prototype, name);
+              const outcome = callback => {
+                try {
+                  return `ok:${String(callback())}`;
+                } catch (error) {
+                  return `throw:${error && error.name}`;
+                }
+              };
+
+              const parent = document.createElement("div");
+              const heading = document.createElement("h1");
+              parent.append(heading);
+              const mount = document.body || document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              mount.append(parent);
+              const initial = [heading.headingOffset, heading.headingReset, heading.matches(":heading(1)")];
+              parent.headingOffset = 3;
+              const parentOffset = [parent.getAttribute("headingoffset"), heading.matches(":heading(4)")];
+              heading.headingReset = true;
+              const reset = [heading.hasAttribute("headingreset"), heading.matches(":heading(1)")];
+              heading.headingReset = false;
+              heading.headingOffset = 20;
+              const clamped = [heading.getAttribute("headingoffset"), heading.headingOffset, heading.matches(":heading(9)")];
+
+              const host = document.createElement("section");
+              host.headingOffset = 1;
+              const root = host.attachShadow({ mode: "open" });
+              const container = document.createElement("div");
+              container.headingOffset = 1;
+              const slot = document.createElement("slot");
+              container.append(slot);
+              root.append(container);
+              const slotted = document.createElement("h2");
+              host.append(slotted);
+              mount.append(host);
+
+              const modalParent = document.createElement("div");
+              modalParent.headingOffset = 8;
+              const modal = document.createElement("dialog");
+              const modalHeading = document.createElement("h1");
+              modal.append(modalHeading);
+              modalParent.append(modal);
+              mount.append(modalParent);
+              const modalBefore = modal.headingReset;
+              modal.showModal();
+              const modalState = [modalBefore, modal.headingReset, modalHeading.matches(":heading(1)")];
+              modal.close();
+
+              return JSON.stringify({
+                owner: [
+                  Object.prototype.hasOwnProperty.call(Element.prototype, "headingOffset"),
+                  Object.prototype.hasOwnProperty.call(HTMLElement.prototype, "headingOffset"),
+                  descriptor("headingOffset").enumerable,
+                  descriptor("headingReset").enumerable
+                ],
+                initial,
+                parentOffset,
+                reset,
+                clamped,
+                slotted: slotted.matches(":heading(4)"),
+                modalState,
+                badGetter: outcome(() => descriptor("headingOffset").get.call({})),
+                badSetter: outcome(() => descriptor("headingReset").set.call({}, true))
+              });
+            })()
+            "#,
+        )
+        .expect("heading reflection and selector probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"owner":[true,false,true,true],"initial":[0,false,true],"parentOffset":["3",true],"reset":[true,true],"clamped":["20",8,true],"slotted":true,"modalState":[false,true,true],"badGetter":"throw:TypeError","badSetter":"throw:TypeError"}"#
+    );
+}
+
+#[test]
 fn element_scroll_into_view_surface_is_available() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -549,7 +632,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
               const frame = document.getElementById('input-frame');
               const child = frame.contentDocument;
               return JSON.stringify({
-                hovered: child.getElementById('hover-target').matches(':hover'),
+                hovered: child.getElementById('hover-target').matches('#hover-target:hover'),
                 wheelTop: child.getElementById('wheel-target').scrollTop,
                 rootTop: document.scrollingElement.scrollTop,
                 events: frame.contentWindow.__inputEvents
@@ -844,7 +927,7 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
                 parentScroll: window.scrollY,
                 parentActive: document.activeElement === frame,
                 childActive: child.activeElement === child.getElementById('focus-target'),
-                hovered: child.getElementById('focus-target').matches(':hover'),
+                hovered: child.getElementById('focus-target').matches('#focus-target:hover'),
                 events: frame.contentWindow.__focusEvents
               });
             })()
@@ -1200,6 +1283,69 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     assert!(result["left"].as_f64().is_some_and(|value| value > 50.0));
     assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
     assert_eq!(result["events"], serde_json::json!([]));
+}
+
+#[test]
+fn single_line_text_input_preserves_programmatic_scroll_across_select() {
+    let mut vm = new_storage_test_vm("https://text-input-scroll.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          const previous = document.createElement("input");
+          previous.value = "0123456789".repeat(100);
+          document.body.append(previous);
+          globalThis.__previousScrollInput = previous;
+          return "installed";
+        })()
+        "#,
+    )
+    .expect("text input scroll fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    vm.eval("__previousScrollInput.scrollLeft")
+        .expect("the previous input should retain the frozen layout");
+
+    vm.eval(
+        r#"
+        (() => {
+          __previousScrollInput.remove();
+          const input = document.createElement("input");
+          input.value = "0123456789".repeat(100);
+          document.body.append(input);
+          globalThis.__scrollInput = input;
+          return "replaced";
+        })()
+        "#,
+    )
+    .expect("the previous text input should be replaced");
+
+    vm.eval("__scrollInput.scrollLeft = 33")
+        .expect("text input should accept a programmatic scroll");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollWidth > __scrollInput.clientWidth")
+            .expect("text input overflow should be observable"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("text input scroll should remain observable"),
+        "33"
+    );
+
+    vm.eval("__scrollInput.select()")
+        .expect("selecting the input contents should succeed");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("selection should preserve the text input scroll"),
+        "33"
+    );
 }
 
 #[test]
@@ -2950,6 +3096,105 @@ fn document_own_enumerable_surface_matches_browser_location_shape() {
         r#"{"keys":["location"],"internalOwnNames":[],"ownLocation":true,"locationEnumerable":true,"locationConfigurable":false,"locationIdentity":true}"#
     );
 }
+
+#[test]
+fn constructed_documents_share_legacy_unforgeable_location_accessors() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const first = new Document();
+              const second = new Document();
+              const firstDescriptor = Object.getOwnPropertyDescriptor(first, "location");
+              const secondDescriptor = Object.getOwnPropertyDescriptor(second, "location");
+              const throwsName = callback => {
+                try {
+                  callback();
+                  return "returned";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              return JSON.stringify({
+                firstValue: first.location,
+                secondValue: second.location,
+                own: Object.prototype.hasOwnProperty.call(first, "location"),
+                getType: typeof firstDescriptor.get,
+                setType: typeof firstDescriptor.set,
+                getName: firstDescriptor.get.name,
+                getLength: firstDescriptor.get.length,
+                setName: firstDescriptor.set.name,
+                setLength: firstDescriptor.set.length,
+                getSame: firstDescriptor.get === secondDescriptor.get,
+                setSame: firstDescriptor.set === secondDescriptor.set,
+                enumerable: firstDescriptor.enumerable,
+                configurable: firstDescriptor.configurable,
+                assign: throwsName(() => {
+                  "use strict";
+                  first.location = "https://example.org/";
+                }),
+                badGet: throwsName(() => firstDescriptor.get.call({})),
+                badSet: throwsName(() => firstDescriptor.set.call({}, "x")),
+              });
+            })()
+            "#,
+        )
+        .expect("constructed Document location accessor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError"}"#
+    );
+}
+
+#[test]
+fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
+    let mut vm = new_storage_test_vm("https://example.com/current/path");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement("html"));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement("body"));
+              }
+
+              const originalLocation = document.location;
+              const originalPathname = originalLocation.pathname;
+              const locationForm = document.createElement("form");
+              locationForm.name = "location";
+              const ordinaryForm = document.createElement("form");
+              ordinaryForm.name = "namedProbe";
+              document.body.append(locationForm, ordinaryForm);
+
+              const whileConnected = [
+                document.location === originalLocation,
+                document.location.pathname === originalPathname,
+                document.namedProbe === ordinaryForm,
+              ];
+              locationForm.remove();
+
+              return JSON.stringify({
+                whileConnected,
+                afterRemoval: document.location === originalLocation,
+              });
+            })()
+            "#,
+        )
+        .expect("legacy-unforgeable document location probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"whileConnected":[true,true,true],"afterRemoval":true}"#
+    );
+}
+
 #[test]
 fn customized_built_in_constructors_can_extend_specialized_html_elements() {
     let mut vm = new_storage_test_vm("https://example.com/");
@@ -3977,10 +4222,12 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   body.textContent = "";
   body.append(
     document.createTextNode("Here is a text node you can't select while the dialog is open."),
-    document.createElement("dialog"),
+    document.createElement("div"),
     document.createTextNode("Trailing text.")
   );
-  const dialog = body.querySelector("dialog");
+  const wrapper = body.querySelector("div");
+  const dialog = document.createElement("dialog");
+  wrapper.appendChild(dialog);
   dialog.textContent = "I'm selectable.";
   const selection = getSelection();
 
@@ -3998,6 +4245,11 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandRange.endContainer === dialog &&
     commandRange.endOffset === dialog.childNodes.length;
 
+  wrapper.inert = true;
+  selection.selectAllChildren(body);
+  const inertAncestorText = selection.toString();
+  wrapper.inert = false;
+
   dialog.close();
   selection.selectAllChildren(body);
   const afterCloseText = selection.toString();
@@ -4007,6 +4259,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandReturned,
     commandText,
     commandRangeSpansDialog,
+    inertAncestorText,
     afterCloseHasOutside: afterCloseText.includes("text node you can't select"),
     afterCloseHasDialog: afterCloseText.includes("I'm selectable."),
     afterCloseHasTrailing: afterCloseText.includes("Trailing text.")
@@ -4018,7 +4271,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
 
     assert_eq!(
         result,
-        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
+        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"inertAncestorText":"I'm selectable.","afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
     );
 }
 
@@ -4230,7 +4483,11 @@ fn selection_to_string_uses_rendered_native_range_projection() {
   const contentHidden = document.createElement("div");
   contentHidden.setAttribute("style", "content-visibility: hidden");
   contentHidden.textContent = "hidden content";
-  root.append(basic, nested, container, contentHidden);
+  const inlineWhitespace = document.createElement("div");
+  inlineWhitespace.append("alpha\n  ", Object.assign(document.createElement("span"), {
+    textContent: "\n beta\n"
+  }), "\n gamma");
+  root.append(basic, nested, container, contentHidden, inlineWhitespace);
   const scriptStyleRange = document.createRange();
   scriptStyleRange.selectNode(p);
   const scriptStyle = selectedStringFor(scriptStyleRange).replace(/\r\n/g, "\n");
@@ -4247,7 +4504,8 @@ fn selection_to_string_uses_rendered_native_range_projection() {
     selectContents(basic),
     selectContents(nested),
     selectContents(container),
-    selectContents(contentHidden)
+    selectContents(contentHidden),
+    selectContents(inlineWhitespace)
   ].join("|");
 })()
 "##,
@@ -4256,8 +4514,71 @@ fn selection_to_string_uses_rendered_native_range_projection() {
 
     assert_eq!(
         result,
-        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext|"
+        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext||alpha beta gamma"
     );
+}
+
+#[test]
+fn selection_only_applies_inert_attribute_to_html_elements() {
+    let mut vm = new_storage_test_vm("https://selection-html-inert-namespace.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const root = document.createElement('div');
+  body.appendChild(root);
+  const selection = getSelection();
+  const mathml = 'http://www.w3.org/1998/Math/MathML';
+
+  const selectedText = element => {
+    selection.removeAllRanges();
+    selection.selectAllChildren(element);
+    return selection.toString();
+  };
+  const mathWithText = text => {
+    const math = document.createElementNS(mathml, 'math');
+    const mi = document.createElementNS(mathml, 'mi');
+    mi.textContent = text;
+    math.appendChild(mi);
+    return { math, mi };
+  };
+
+  const own = mathWithText('math own');
+  own.math.setAttribute('inert', '');
+  own.mi.setAttribute('inert', '');
+  root.appendChild(own.math);
+
+  const nested = mathWithText('math ancestors');
+  nested.math.setAttribute('inert', '');
+  nested.mi.setAttribute('inert', '');
+  root.appendChild(nested.math);
+
+  const htmlChild = document.createElement('span');
+  htmlChild.textContent = 'html child';
+  htmlChild.inert = true;
+  root.appendChild(htmlChild);
+
+  const htmlAncestor = document.createElement('div');
+  htmlAncestor.inert = true;
+  const inherited = mathWithText('html ancestor');
+  htmlAncestor.appendChild(inherited.math);
+  root.appendChild(htmlAncestor);
+
+  return [
+    selectedText(own.math),
+    selectedText(nested.math),
+    selectedText(htmlChild),
+    selectedText(htmlAncestor)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("Selection inert namespace probe should evaluate");
+
+    assert_eq!(result, "math own|math ancestors||");
 }
 
 #[test]
@@ -6363,7 +6684,7 @@ async fn element_matches_delegates_loaded_child_document_elements() {
             r##"
 (() => {
   const doc = document.querySelector("iframe").contentDocument;
-  doc.defaultView.history.replaceState(null, "", "#target");
+  doc.defaultView.history.replaceState(null, "", "about:srcdoc#target");
   const code = doc.getElementById("code");
   return [
     code.ownerDocument === doc,
@@ -6391,6 +6712,154 @@ async fn element_matches_delegates_loaded_child_document_elements() {
         result,
         "true|15|true|true|true|true|true|true|true|true|true|true|true|true|true"
     );
+}
+
+#[tokio::test]
+async fn child_parser_eof_syncs_selectedcontent_for_navigation_and_document_write() {
+    let mut vm = new_storage_test_vm("https://child-selectedcontent-parser.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc = "<select><button><selectedcontent></button><option>X";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child selectedcontent navigation setup should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "child selectedcontent navigation")
+        .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [selectedcontent.textContent, selectedcontent.firstChild !== source.firstChild].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent navigation state should evaluate"),
+        "X|true"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  doc.open();
+  doc.write("<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b");
+  doc.close();
+})()
+"#,
+    )
+    .expect("child selectedcontent document.write setup should evaluate");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [
+    selectedcontent.textContent,
+    selectedcontent.innerHTML === source.innerHTML,
+    selectedcontent.firstChild !== source.firstChild,
+    selectedcontent.querySelector("i") !== source.querySelector("i"),
+    selectedcontent.querySelectorAll("b").length
+  ].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent document.write state should evaluate"),
+        "xiibb|true|true|true|2"
+    );
+}
+
+#[tokio::test]
+async fn child_navigation_performance_name_updates_after_iframe_src_change() {
+    let mut vm = new_storage_test_vm("https://child-navigation-performance.test/page.html");
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__childNavigationLoadCount = 0;
+  const frame = document.createElement("iframe");
+  globalThis.__childNavigationFrame = frame;
+  frame.onload = () => {
+    globalThis.__childNavigationLoadCount++;
+  };
+  frame.src = "/src/browser/tests/navigation-timing/resources/blank_page_green.html";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child navigation performance setup should evaluate");
+    let loads_before_initial_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("initial child navigation load count should evaluate");
+    assert_eq!(loads_before_initial_dispatch, "0");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "initial child navigation performance load",
+    )
+    .await;
+    let first = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  const timing = frame.contentWindow.performance.timing;
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_green.html"),
+    globalThis.__childNavigationLoadCount,
+    timing.domInteractive > timing.navigationStart,
+    timing.loadEventStart >= timing.domInteractive,
+    timing.loadEventEnd >= timing.loadEventStart,
+    frame.contentWindow.performance.now() >=
+      timing.loadEventEnd - timing.navigationStart
+  ].join(":");
+})()
+"#,
+        )
+        .expect("first child navigation performance probe should evaluate");
+    assert_eq!(first, "true:true:1:true:true:true:true");
+
+    vm.eval(
+        r#"__childNavigationFrame.src = "/src/browser/tests/navigation-timing/resources/blank_page_yellow.html";"#,
+    )
+    .expect("second child navigation should queue");
+    let loads_before_second_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("second child navigation pre-HostLoad load count should evaluate");
+    assert_eq!(loads_before_second_dispatch, "1");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "second child navigation performance load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_yellow.html"),
+    globalThis.__childNavigationLoadCount
+  ].join(":");
+})()
+"#,
+        )
+        .expect("second child navigation performance probe should evaluate");
+
+    assert_eq!(result, "true:true:2");
 }
 
 #[tokio::test]
@@ -7822,6 +8291,239 @@ fn svg_list_objects_keep_declared_brand_and_members() {
 }
 
 #[test]
+fn svg_value_lists_enforce_item_types_indices_and_read_only_anim_values() {
+    let mut vm = new_storage_test_vm("https://svg-value-list-semantics.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const SVG_NS = "http://www.w3.org/2000/svg";
+              const text = document.createElementNS(SVG_NS, "text");
+              const svg = document.createElementNS(SVG_NS, "svg");
+              text.setAttribute("x", "10 20");
+              text.setAttribute("rotate", "15 30");
+
+              const lengths = text.x;
+              const lengthBase = lengths.baseVal;
+              const lengthAnim = lengths.animVal;
+              const numbers = text.rotate;
+              const numberBase = numbers.baseVal;
+              const numberAnim = numbers.animVal;
+              const invalidItems = [30, "invalid", text, null];
+
+              for (const item of invalidItems) {
+                assert(errorName(() => lengthBase.initialize(item)) === "TypeError",
+                  "SVGLengthList.initialize item type");
+                assert(errorName(() => lengthBase.insertItemBefore(item, 0)) === "TypeError",
+                  "SVGLengthList.insertItemBefore item type");
+                assert(errorName(() => lengthBase.replaceItem(item, 0)) === "TypeError",
+                  "SVGLengthList.replaceItem item type");
+                assert(errorName(() => lengthBase.appendItem(item)) === "TypeError",
+                  "SVGLengthList.appendItem item type");
+                assert(errorName(() => { lengthBase[0] = item; }) === "TypeError",
+                  "SVGLengthList indexed setter item type");
+              }
+
+              const length = svg.createSVGLength();
+              length.value = 42;
+              lengthBase[0] = length;
+              assert(lengthBase[0] === length, "SVGLengthList indexed getter");
+              assert(text.getAttribute("x") === "42 20", "SVGLengthList indexed reflection");
+
+              const number = svg.createSVGNumber();
+              number.value = 7;
+              numberBase[1] = number;
+              assert(numberBase[1] === number, "SVGNumberList indexed getter");
+              assert(text.getAttribute("rotate") === "15 7", "SVGNumberList indexed reflection");
+              assert(errorName(() => lengthBase.appendItem(number)) === "TypeError",
+                "SVGLengthList rejects SVGNumber");
+              assert(errorName(() => numberBase.appendItem(length)) === "TypeError",
+                "SVGNumberList rejects SVGLength");
+
+              text.setAttribute("x", "1 2 3");
+              assert(lengthBase.length === 3 && lengthBase[2].value === 3,
+                "saved baseVal resynchronizes");
+              assert(text.x.animVal.length === 3 && text.x.animVal[2].value === 3,
+                "animVal resynchronizes after direct baseVal access");
+
+              assert(errorName(() => lengthAnim.clear()) === "NoModificationAllowedError",
+                "SVGLengthList animVal clear");
+              assert(errorName(() => { lengthAnim[0] = length; }) === "NoModificationAllowedError",
+                "SVGLengthList animVal indexed setter");
+              assert(errorName(() => numberAnim.appendItem(number)) === "NoModificationAllowedError",
+                "SVGNumberList animVal appendItem");
+              assert(errorName(() => SVGLengthList.prototype.clear.call({})) === "TypeError",
+                "SVGLengthList receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG value list semantics probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_point_lists_are_live_mutable_and_clear_invalid_content() {
+    let mut vm = new_storage_test_vm("https://svg-point-list-semantics.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const polygon = document.createElementNS(ns, "polygon");
+              const polyline = document.createElementNS(ns, "polyline");
+              const svg = document.createElementNS(ns, "svg");
+
+              assert(typeof SVGPointList === "function", "constructor exposed");
+              assert(errorName(() => new SVGPointList()) === "TypeError",
+                "illegal constructor");
+              for (const [constructor, element] of [
+                [SVGPolygonElement, polygon],
+                [SVGPolylineElement, polyline],
+              ]) {
+                const pointsDescriptor = Object.getOwnPropertyDescriptor(
+                  constructor.prototype,
+                  "points",
+                );
+                const animatedDescriptor = Object.getOwnPropertyDescriptor(
+                  constructor.prototype,
+                  "animatedPoints",
+                );
+                assert(typeof pointsDescriptor.get === "function" &&
+                  pointsDescriptor.set === undefined, `${constructor.name}.points descriptor`);
+                assert(typeof animatedDescriptor.get === "function" &&
+                  animatedDescriptor.set === undefined,
+                  `${constructor.name}.animatedPoints descriptor`);
+                assert(pointsDescriptor.enumerable && pointsDescriptor.configurable &&
+                  animatedDescriptor.enumerable && animatedDescriptor.configurable,
+                  `${constructor.name} descriptor flags`);
+                assert(element.points instanceof SVGPointList &&
+                  element.animatedPoints instanceof SVGPointList,
+                  `${constructor.name} point list interfaces`);
+                assert(element.points === element.points &&
+                  element.animatedPoints === element.animatedPoints &&
+                  element.points !== element.animatedPoints,
+                  `${constructor.name} SameObject lists`);
+              }
+
+              polygon.setAttribute("points", "0,0 100,0 100,100 0,100");
+              const points = polygon.points;
+              const animatedPoints = polygon.animatedPoints;
+              assert(Object.prototype.toString.call(points) === "[object SVGPointList]",
+                "point list tag");
+              assert(points.length === 4 && points.numberOfItems === 4,
+                "valid content points");
+              assert(points.getItem(1) === points[1] && points[1] instanceof DOMPoint &&
+                points[1] instanceof SVGPoint && points[1].x === 100 && points[1].y === 0,
+                "indexed point identity and values");
+
+              polygon.setAttribute("points", "0,0 100,0 INVALID");
+              assert(points.numberOfItems === 0,
+                "invalid token clears the whole point list");
+              polygon.setAttribute("points", "0,0 100,0 20");
+              assert(points.numberOfItems === 2,
+                "missing final y coordinate truncates the point list");
+              polygon.setAttribute("points", "0,0 100,0 20,");
+              assert(points.numberOfItems === 2,
+                "trailing comma with missing y truncates the point list");
+
+              polygon.setAttribute("points", "0,0 10,20");
+              const first = points[0];
+              first.x = 2;
+              assert(polygon.getAttribute("points") === "2 0 10 20",
+                "point coordinate mutation reflects to content");
+
+              const point = svg.createSVGPoint();
+              point.x = 5;
+              point.y = 6;
+              points.clear();
+              assert(points.length === 0 && polygon.getAttribute("points") === "",
+                "clear reflects an empty list");
+              assert(points.initialize(point) === point && points[0] === point,
+                "initialize keeps point identity");
+              assert(polygon.getAttribute("points") === "5 6", "initialize reflection");
+              point.x = 7;
+              assert(polygon.getAttribute("points") === "7 6", "owned point stays live");
+
+              const second = svg.createSVGPoint();
+              second.x = 8;
+              second.y = 9;
+              assert(points.appendItem(second) === second && points.length === 2,
+                "appendItem");
+              const third = svg.createSVGPoint();
+              third.x = 10;
+              third.y = 11;
+              assert(points.insertItemBefore(third, 1) === third && points.length === 3,
+                "insertItemBefore");
+              const replacement = svg.createSVGPoint();
+              replacement.x = 12;
+              replacement.y = 13;
+              assert(points.replaceItem(replacement, 0) === replacement &&
+                points[0] === replacement,
+                "replaceItem");
+              assert(points.removeItem(1) === third && points.length === 2,
+                "removeItem");
+              points[0] = point;
+              assert(points[0] === point, "indexed setter");
+
+              for (const invalid of [1, "point", polygon, null]) {
+                assert(errorName(() => points.appendItem(invalid)) === "TypeError",
+                  "point item type enforcement");
+              }
+              assert(errorName(() => points.getItem(99)) === "IndexSizeError",
+                "getItem bounds");
+
+              polygon.setAttribute("points", "1,2 3,4");
+              assert(animatedPoints.length === 2 && animatedPoints[1].x === 3,
+                "animatedPoints live synchronization");
+              assert(errorName(() => animatedPoints.clear()) === "NoModificationAllowedError",
+                "animatedPoints list is read-only");
+              assert(errorName(() => { animatedPoints[0].x = 9; }) ===
+                "NoModificationAllowedError", "animated point is read-only");
+              assert(errorName(() => SVGPointList.prototype.clear.call({})) === "TypeError",
+                "point list receiver brand");
+
+              const pointsDescriptor = Object.getOwnPropertyDescriptor(
+                SVGPolygonElement.prototype,
+                "points",
+              );
+              assert(errorName(() => pointsDescriptor.get.call(svg)) === "TypeError",
+                "animated points receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG point list semantics probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-method-descriptors.test/");
 
@@ -7856,6 +8558,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
                 numberInsertItemBefore: methodDescriptor(numberList, "insertItemBefore"),
                 transformListCreate: methodDescriptor(transformList, "createSVGTransformFromMatrix"),
                 transformListConsolidate: methodDescriptor(transformList, "consolidate"),
+                transformSetMatrix: methodDescriptor(transform, "setMatrix"),
                 transformSetRotate: methodDescriptor(transform, "setRotate"),
                 transformSetSkewX: methodDescriptor(transform, "setSkewX"),
                 matrixScaleNonUniform: methodDescriptor(matrix, "scaleNonUniform"),
@@ -7875,7 +8578,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,1","transformListConsolidate":"false,true,true,consolidate,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
+        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"false,true,true,consolidate,0","transformSetMatrix":"false,true,true,setMatrix,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
     );
 }
 
@@ -8133,6 +8836,291 @@ fn html_link_rel_list_exposes_supported_tokens() {
         result,
         r#"{"beforeAdd":{"tag":"[object DOMTokenList]","stable":true,"supportsType":"function","supportsPreload":true,"supportsModulepreload":true,"supportsUnknown":false,"supportsEmpty":false,"supportsMissing":"throw:TypeError","length":2,"item0":"preload","item1":"stylesheet","containsPreload":true,"value":"preload stylesheet preload","stringValue":"preload stylesheet preload"},"afterAddRel":"preload stylesheet prefetch","afterSetterRel":"preconnect","afterSetterLength":1,"afterSetterContainsPreconnect":true}"#
     );
+}
+
+#[test]
+fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
+    let mut vm = new_storage_test_vm("https://reflected-token-lists.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const detached = document.implementation.createHTMLDocument("");
+              const descriptors = [
+                [HTMLIFrameElement.prototype, "sandbox"],
+                [HTMLLinkElement.prototype, "sizes"],
+                [HTMLOutputElement.prototype, "htmlFor"],
+                [SVGAElement.prototype, "relList"]
+              ];
+              for (const [prototype, name] of descriptors) {
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor`);
+                assert(typeof descriptor.get === "function", `${name} getter`);
+                assert(typeof descriptor.set === "function", `${name} PutForwards setter`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+              }
+
+              const noSupportedTokens = list => {
+                try {
+                  list.supports("anything");
+                  return false;
+                } catch (error) {
+                  return error && error.name === "TypeError";
+                }
+              };
+              const exercise = ownerDocument => {
+                const iframe = ownerDocument.createElement("iframe");
+                const sandbox = iframe.sandbox;
+                assert(Object.prototype.toString.call(sandbox) === "[object DOMTokenList]", "sandbox type");
+                assert(sandbox === iframe.sandbox, "sandbox SameObject");
+                iframe.sandbox = "allow-scripts allow-forms allow-scripts";
+                assert(sandbox.length === 2 && sandbox.contains("allow-forms"), "sandbox tokens");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-scripts", "sandbox PutForwards");
+                assert(sandbox.supports("ALLOW-SCRIPTS"), "sandbox supports ASCII case-insensitively");
+                assert(sandbox.supports("allow-storage-access-by-user-activation"), "sandbox storage-access token");
+                assert(!sandbox.supports("unknown"), "sandbox rejects unknown token");
+                sandbox.add("allow-popups");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-popups", "sandbox mutation reflects");
+
+                const output = ownerDocument.createElement("output");
+                const htmlFor = output.htmlFor;
+                assert(Object.prototype.toString.call(htmlFor) === "[object DOMTokenList]", "htmlFor type");
+                assert(htmlFor === output.htmlFor, "htmlFor SameObject");
+                output.htmlFor = "first second first";
+                htmlFor.add("third");
+                assert(output.getAttribute("for") === "first second third", "htmlFor reflects for");
+                assert(noSupportedTokens(htmlFor), "htmlFor has no supported tokens");
+
+                const link = ownerDocument.createElement("link");
+                const sizes = link.sizes;
+                assert(Object.prototype.toString.call(sizes) === "[object DOMTokenList]", "sizes type");
+                assert(sizes === link.sizes, "sizes SameObject");
+                assert(sizes !== link.relList, "link token lists have distinct identity");
+                link.sizes = "16x16 32x32 16x16";
+                sizes.remove("16x16");
+                assert(link.getAttribute("sizes") === "32x32", "sizes mutation reflects");
+                assert(noSupportedTokens(sizes), "sizes has no supported tokens");
+
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const relList = anchor.relList;
+                assert(Object.prototype.toString.call(relList) === "[object DOMTokenList]", "SVG relList type");
+                assert(relList === anchor.relList, "SVG relList SameObject");
+                anchor.relList = "noopener noreferrer";
+                relList.add("opener");
+                assert(anchor.getAttribute("rel") === "noopener noreferrer opener", "SVG relList reflects rel");
+                assert(relList.supports("NOOPENER"), "SVG relList supported tokens");
+              };
+
+              exercise(document);
+              exercise(detached);
+
+              const div = document.createElement("div");
+              for (const name of ["htmlFor", "sandbox", "sizes", "relList"]) {
+                assert(div[name] === undefined, `div.${name} should be undefined`);
+              }
+              assert(document.createElementNS(svg, "link").sizes === undefined, "SVG link.sizes");
+              assert(document.createElementNS(svg, "output").htmlFor === undefined, "SVG output.htmlFor");
+              assert(document.createElementNS(svg, "iframe").sandbox === undefined, "SVG iframe.sandbox");
+              assert(document.createElement("svg").relList === undefined, "HTML svg.relList");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("reflected DOMTokenList attributes should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-deselect-all.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svgNamespace = "http://www.w3.org/2000/svg";
+              const outer = document.createElementNS(svgNamespace, "svg");
+              const inner = document.createElementNS(svgNamespace, "svg");
+              const svgText = document.createElementNS(svgNamespace, "text");
+              const htmlText = document.createElement("p");
+              svgText.textContent = "SVG selection";
+              htmlText.textContent = "HTML selection";
+              inner.appendChild(svgText);
+              outer.appendChild(inner);
+              document.body.append(outer, htmlText);
+
+              const descriptor = Object.getOwnPropertyDescriptor(
+                SVGSVGElement.prototype,
+                "deselectAll"
+              );
+              assert(!!descriptor, "deselectAll descriptor");
+              assert(typeof descriptor.value === "function", "deselectAll function");
+              assert(descriptor.value.name === "deselectAll", "deselectAll name");
+              assert(descriptor.value.length === 0, "deselectAll length");
+              assert(descriptor.enumerable && descriptor.writable && descriptor.configurable,
+                "deselectAll descriptor flags");
+
+              const selection = window.getSelection();
+              const select = node => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                assert(selection.rangeCount === 1, "selection precondition");
+              };
+
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "empty selection stays empty");
+
+              select(svgText);
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "outer svg clears SVG selection");
+
+              select(htmlText);
+              inner.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "inner svg clears selection outside its subtree");
+
+              select(svgText);
+              const originalDocumentGetSelection = document.getSelection;
+              const originalRemoveAllRanges = Selection.prototype.removeAllRanges;
+              document.getSelection = () => { throw new Error("observable getSelection call"); };
+              Selection.prototype.removeAllRanges = () => {
+                throw new Error("observable removeAllRanges call");
+              };
+              Object.defineProperty(outer, "ownerDocument", {
+                value: null,
+                configurable: true
+              });
+              Object.defineProperty(document, "defaultView", {
+                value: null,
+                configurable: true
+              });
+              try {
+                outer.deselectAll();
+              } finally {
+                delete outer.ownerDocument;
+                delete document.defaultView;
+                document.getSelection = originalDocumentGetSelection;
+                Selection.prototype.removeAllRanges = originalRemoveAllRanges;
+              }
+              assert(selection.rangeCount === 0, "deselectAll uses internal selection state");
+
+              let borrowed = "returned";
+              try {
+                descriptor.value.call(document.createElement("div"));
+              } catch (error) {
+                borrowed = error && error.name;
+              }
+              assert(borrowed === "TypeError", "deselectAll receiver brand");
+
+              const detachedDocument = document.implementation.createHTMLDocument("");
+              const detachedSvg = detachedDocument.createElementNS(svgNamespace, "svg");
+              detachedSvg.deselectAll();
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVGSVGElement.deselectAll should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_href_animated_string_prefers_href_and_falls_back_to_xlink_href() {
+    let mut vm = new_storage_test_vm("https://svg-href-reflection.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const xlink = "http://www.w3.org/1999/xlink";
+              const unrelated = "https://namespaced-href.test/";
+              const exercise = ownerDocument => {
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const href = anchor.href;
+                assert(href === anchor.href, "href is SameObject");
+
+                anchor.setAttributeNS(xlink, "href", "xlink-unprefixed");
+                assert(href.baseVal === "xlink-unprefixed", "unprefixed XLink fallback");
+                assert(href.animVal === "xlink-unprefixed", "XLink animVal fallback");
+                href.baseVal = "xlink-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "baseVal updates the XLink attribute");
+                assert(!anchor.hasAttributeNS(null, "href"),
+                  "XLink update does not create href");
+
+                anchor.setAttributeNS(null, "href", "preferred");
+                assert(href.baseVal === "preferred", "href wins regardless of insertion order");
+                href.baseVal = "preferred-updated";
+                assert(anchor.getAttributeNS(null, "href") === "preferred-updated",
+                  "baseVal updates preferred href");
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "preferred href leaves XLink unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                assert(href.baseVal === "xlink-updated", "removing href restores fallback");
+                anchor.removeAttributeNS(xlink, "href");
+                assert(href.baseVal === "" && href.animVal === "", "removing fallback resets values");
+
+                anchor.setAttributeNS(xlink, "xlink:href", "xlink-prefixed");
+                assert(href.baseVal === "xlink-prefixed", "prefixed XLink fallback");
+                href.baseVal = "xlink-prefixed-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-prefixed-updated",
+                  "baseVal updates prefixed XLink attribute");
+                assert(anchor.getAttributeNames().includes("xlink:href"),
+                  "baseVal preserves the XLink prefix");
+
+                anchor.removeAttributeNS(xlink, "href");
+                anchor.setAttributeNS(unrelated, "href", "unrelated");
+                assert(href.baseVal === "", "unrelated namespaced href is ignored");
+                href.baseVal = "created";
+                assert(anchor.getAttributeNS(null, "href") === "created",
+                  "baseVal creates an unnamespaced href");
+                assert(anchor.getAttributeNS(unrelated, "href") === "unrelated",
+                  "baseVal leaves unrelated namespaced href unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                anchor.setAttributeNS(xlink, "xlink:href", "side-effect-fallback");
+                href.baseVal = {
+                  toString() {
+                    anchor.setAttributeNS(null, "href", "created-during-conversion");
+                    return "converted";
+                  }
+                };
+                assert(anchor.getAttributeNS(null, "href") === "converted",
+                  "baseVal chooses its backing attribute after value conversion");
+                assert(anchor.getAttributeNS(xlink, "href") === "side-effect-fallback",
+                  "conversion-created href leaves XLink fallback unchanged");
+              };
+
+              exercise(document);
+              exercise(document.implementation.createHTMLDocument(""));
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG href reflection should evaluate");
+
+    assert_eq!(result, "ok");
 }
 
 #[test]
@@ -8906,6 +9894,151 @@ fn main_and_child_window_proxies_have_immutable_prototypes() {
 }
 
 #[test]
+fn window_named_properties_implement_webidl_exotic_object_operations() {
+    let mut vm = new_storage_test_vm("https://window-named-properties.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                "use strict";
+                if (!document.documentElement) {
+                    document.appendChild(document.createElement("html"));
+                }
+                if (!document.body) {
+                    document.documentElement.appendChild(document.createElement("body"));
+                }
+
+                const frame = document.createElement("iframe");
+                document.body.appendChild(frame);
+                const w = frame.contentWindow;
+                const wp = Object.getPrototypeOf(w.Window.prototype);
+                const originalPrototype = Object.getPrototypeOf(wp);
+
+                const named = w.document.createElement("div");
+                named.id = "a";
+                w.document.body.appendChild(named);
+                const indexed = w.document.createElement("div");
+                indexed.id = "0";
+                w.document.body.appendChild(indexed);
+
+                let differentPrototypeThrows = false;
+                let childPrototypeSetterThrows = false;
+                let preventExtensionsThrows = false;
+                let directSetThrows = false;
+                try {
+                    Object.setPrototypeOf(wp, {});
+                } catch (error) {
+                    differentPrototypeThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.__proto__ = null;
+                } catch (error) {
+                    childPrototypeSetterThrows = error instanceof w.TypeError;
+                }
+                try {
+                    Object.preventExtensions(wp);
+                } catch (error) {
+                    preventExtensionsThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.a = 1;
+                } catch (error) {
+                    directSetThrows = error instanceof TypeError;
+                }
+
+                let setterThis;
+                let directSetterThis;
+                Object.defineProperty(w.Object.prototype, "setterProbe", {
+                    configurable: true,
+                    set() { setterThis = this; }
+                });
+                Object.defineProperty(w.Object.prototype, "directSetterProbe", {
+                    configurable: true,
+                    set() { directSetterThis = this; }
+                });
+                Object.defineProperty(w.EventTarget.prototype, "blockedProbe", {
+                    configurable: true,
+                    value: 1,
+                    writable: false
+                });
+                const receiver = Object.create(wp);
+                const namedDescriptor = Object.getOwnPropertyDescriptor(wp, "a");
+                const indexedDescriptor = Reflect.getOwnPropertyDescriptor(wp, 0);
+
+                const observations = {
+                    prototype: [
+                        Reflect.setPrototypeOf(wp, originalPrototype),
+                        !Reflect.setPrototypeOf(wp, w.Object.prototype),
+                        Object.getPrototypeOf(wp) === originalPrototype,
+                        differentPrototypeThrows,
+                        childPrototypeSetterThrows
+                    ],
+                    extensibility: [
+                        !Reflect.preventExtensions(wp),
+                        Object.isExtensible(wp),
+                        preventExtensionsThrows
+                    ],
+                    properties: [
+                        wp.a === named,
+                        wp[0] === indexed,
+                        "a" in wp,
+                        Reflect.has(wp, 0),
+                        namedDescriptor.value === named,
+                        namedDescriptor.writable && !namedDescriptor.enumerable &&
+                            namedDescriptor.configurable,
+                        indexedDescriptor.value === indexed,
+                        indexedDescriptor.writable && !indexedDescriptor.enumerable &&
+                            indexedDescriptor.configurable
+                    ],
+                    directMutation: [
+                        !Reflect.defineProperty(wp, "a", {}),
+                        !Reflect.defineProperty(wp, Symbol(), {}),
+                        !Reflect.set(wp, "a", 1),
+                        !Reflect.set(wp, "missing", 1),
+                        !Reflect.set(wp, Symbol(), 1),
+                        directSetThrows,
+                        !Reflect.deleteProperty(wp, "a"),
+                        !Reflect.deleteProperty(wp, "missing"),
+                        !Reflect.deleteProperty(wp, Symbol.toStringTag),
+                        Reflect.set(wp, "directSetterProbe", 50),
+                        directSetterThis === wp
+                    ],
+                    receiverSet: [
+                        Reflect.set(wp, "a", 10, receiver),
+                        Reflect.set(wp, 0, 20, receiver),
+                        Reflect.set(wp, "setterProbe", 30, receiver),
+                        !Reflect.set(wp, "blockedProbe", 40, receiver),
+                        receiver.a === 10,
+                        receiver[0] === 20,
+                        setterThis === receiver,
+                        !Object.hasOwn(receiver, "setterProbe"),
+                        !Object.hasOwn(receiver, "blockedProbe")
+                    ],
+                    keys: [
+                        Object.getOwnPropertyNames(wp).length === 0,
+                        Reflect.ownKeys(wp).length === 1,
+                        Reflect.ownKeys(wp)[0] === Symbol.toStringTag
+                    ]
+                };
+
+                delete w.Object.prototype.setterProbe;
+                delete w.Object.prototype.directSetterProbe;
+                delete w.EventTarget.prototype.blockedProbe;
+                frame.remove();
+                return JSON.stringify(observations);
+            })()
+            "#,
+        )
+        .expect("WindowProperties exotic object operations should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"prototype":[true,true,true,true,true],"extensibility":[true,true,true],"properties":[true,true,true,true,true,true,true,true],"directMutation":[true,true,true,true,true,true,true,true,true,true,true],"receiverSet":[true,true,true,true,true,true,true,true,true],"keys":[true,true,true]}"#
+    );
+}
+
+#[test]
 fn window_internal_child_context_identity_is_not_read_from_web_properties() {
     let mut vm = new_storage_test_vm("https://window-private-identity.test/");
 
@@ -9068,7 +10201,7 @@ document.getElementById('frame').srcdoc =
 }
 
 #[test]
-fn iframe_in_shadow_tree_is_not_a_named_window_property() {
+fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
 
     let result = vm
@@ -9084,6 +10217,10 @@ const lightFrame = document.createElement('iframe');
 lightFrame.name = 'lightTarget';
 (document.body || document.documentElement || document).appendChild(lightFrame);
 [
+  window.length,
+  window.frames.length,
+  window[0] === lightFrame.contentWindow,
+  window[1] === undefined,
   'shadowTarget' in window,
   window.shadowTarget === undefined,
   shadowFrame.contentWindow !== null,
@@ -9094,7 +10231,7 @@ lightFrame.name = 'lightTarget';
         )
         .expect("shadow iframe named property probe should evaluate");
 
-    assert_eq!(result, "false|true|true|true|true");
+    assert_eq!(result, "1|1|true|true|false|true|true|true|true");
 }
 #[test]
 fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() {
@@ -9241,6 +10378,168 @@ const after = [
         .expect("detached iframe navigation entry should evaluate");
 
     assert_eq!(result, "true,true,true,true,0|false,true,,,-1");
+}
+
+#[test]
+fn removing_iframe_discards_retained_window_relations_synchronously() {
+    let mut vm = new_storage_test_vm("https://iframe-discard-window-relations.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(child);
+  const childWindow = child.contentWindow;
+  const childDocument = childWindow.document;
+
+  const grandchild = childDocument.createElement("iframe");
+  childDocument.body.appendChild(grandchild);
+  const grandchildWindow = grandchild.contentWindow;
+  const grandchildDocument = grandchildWindow.document;
+
+  const before = {
+    childContentWindowIsStable: child.contentWindow === childWindow,
+    childParentIsTop: childWindow.parent === window,
+    childTopIsTop: childWindow.top === window,
+    childFrameElementIsOwner: childWindow.frameElement === child,
+    grandchildContentWindowIsStable: grandchild.contentWindow === grandchildWindow,
+    grandchildParentIsChild: grandchildWindow.parent === childWindow,
+    grandchildTopIsTop: grandchildWindow.top === window,
+    grandchildFrameElementIsOwner: grandchildWindow.frameElement === grandchild
+  };
+
+  child.parentNode.removeChild(child);
+  const after = {
+    childContentWindowIsNull: child.contentWindow === null,
+    childParentIsNull: childWindow.parent === null,
+    childTopIsNull: childWindow.top === null,
+    childFrameElementIsNull: childWindow.frameElement === null,
+    childDocumentIsRetained: childWindow.document === childDocument,
+    grandchildContentWindowIsNull: grandchild.contentWindow === null,
+    grandchildParentIsNull: grandchildWindow.parent === null,
+    grandchildTopIsNull: grandchildWindow.top === null,
+    grandchildFrameElementIsNull: grandchildWindow.frameElement === null,
+    grandchildDocumentIsRetained: grandchildWindow.document === grandchildDocument
+  };
+  return JSON.stringify({ before, after });
+})()
+"#,
+        )
+        .expect("iframe discard relation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"childContentWindowIsStable":true,"childParentIsTop":true,"childTopIsTop":true,"childFrameElementIsOwner":true,"grandchildContentWindowIsStable":true,"grandchildParentIsChild":true,"grandchildTopIsTop":true,"grandchildFrameElementIsOwner":true},"after":{"childContentWindowIsNull":true,"childParentIsNull":true,"childTopIsNull":true,"childFrameElementIsNull":true,"childDocumentIsRetained":true,"grandchildContentWindowIsNull":true,"grandchildParentIsNull":true,"grandchildTopIsNull":true,"grandchildFrameElementIsNull":true,"grandchildDocumentIsRetained":true}}"#
+    );
+}
+
+#[test]
+fn reattaching_iframe_does_not_resurrect_retired_window_relations() {
+    let mut vm = new_storage_test_vm("https://loaded-iframe-discard-relations.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const child = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(child);
+  const grandchild = child.contentDocument.createElement("iframe");
+  grandchild.srcdoc = "<!doctype html><p>loaded grandchild</p>";
+  child.contentDocument.body.appendChild(grandchild);
+  globalThis.__loadedDiscardChild = child;
+  globalThis.__loadedDiscardGrandchild = grandchild;
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("loaded descendant frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = globalThis.__loadedDiscardChild;
+  const grandchild = globalThis.__loadedDiscardGrandchild;
+  const childWindow = child.contentWindow;
+  const grandchildWindow = grandchild.contentWindow;
+  const before = {
+    grandchildLoaded: grandchildWindow.document.body.textContent === "loaded grandchild",
+    childParentIsTop: childWindow.parent === window,
+    childTopIsTop: childWindow.top === window,
+    grandchildParentIsChild: grandchildWindow.parent === childWindow,
+    grandchildTopIsTop: grandchildWindow.top === window
+  };
+
+  child.remove();
+  const detached = {
+    childParentIsNull: childWindow.parent === null,
+    childTopIsNull: childWindow.top === null,
+    grandchildParentIsNull: grandchildWindow.parent === null,
+    grandchildTopIsNull: grandchildWindow.top === null
+  };
+
+  (document.body || document.documentElement || document).appendChild(child);
+  const reattached = {
+    newChildWindow: child.contentWindow !== childWindow,
+    oldChildParentIsNull: childWindow.parent === null,
+    oldChildTopIsNull: childWindow.top === null,
+    oldGrandchildParentIsNull: grandchildWindow.parent === null,
+    oldGrandchildTopIsNull: grandchildWindow.top === null,
+    oldGrandchildRemoved: child.contentDocument.querySelector("iframe") === null
+  };
+  return JSON.stringify({ before, detached, reattached });
+})()
+"#,
+        )
+        .expect("loaded descendant frame discard probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"grandchildLoaded":true,"childParentIsTop":true,"childTopIsTop":true,"grandchildParentIsChild":true,"grandchildTopIsTop":true},"detached":{"childParentIsNull":true,"childTopIsNull":true,"grandchildParentIsNull":true,"grandchildTopIsNull":true},"reattached":{"newChildWindow":true,"oldChildParentIsNull":true,"oldChildTopIsNull":true,"oldGrandchildParentIsNull":true,"oldGrandchildTopIsNull":true,"oldGrandchildRemoved":true}}"#
+    );
+}
+
+#[test]
+fn moving_iframe_into_own_child_document_discards_retained_window_relations() {
+    let mut vm = new_storage_test_vm("https://iframe-own-child-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(iframe);
+  const childWindow = iframe.contentWindow;
+  const childDocument = childWindow.document;
+
+  const before = {
+    parentIsTop: childWindow.parent === window,
+    topIsTop: childWindow.top === window,
+    frameElementIsOwner: childWindow.frameElement === iframe,
+    contentWindowIsStable: iframe.contentWindow === childWindow
+  };
+
+  childDocument.body.appendChild(iframe);
+  const after = {
+    parentIsNull: childWindow.parent === null,
+    topIsNull: childWindow.top === null,
+    frameElementIsNull: childWindow.frameElement === null,
+    contentWindowIsNull: iframe.contentWindow === null,
+    documentIsRetained: childWindow.document === childDocument,
+    movedIntoChildDocument: iframe.ownerDocument === childDocument,
+    remainsInserted: childDocument.body.firstChild === iframe
+  };
+  return JSON.stringify({ before, after });
+})()
+"#,
+        )
+        .expect("self-descendant iframe move probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"parentIsTop":true,"topIsTop":true,"frameElementIsOwner":true,"contentWindowIsStable":true},"after":{"parentIsNull":true,"topIsNull":true,"frameElementIsNull":true,"contentWindowIsNull":true,"documentIsRetained":true,"movedIntoChildDocument":true,"remainsInserted":true}}"#
+    );
 }
 
 #[test]
@@ -9450,6 +10749,112 @@ seen.join('|')
         "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn base_target_navigation_exposes_replacement_document_before_iframe_load() {
+    const HOST: &str = "anchor-base-target.test";
+
+    let server = StaticHttpServer::spawn(3).await;
+    let top_url = server.url_for_host(HOST, "/path/page.html");
+    let replacement_url = server.url_for_host(HOST, "/replacement.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__targetLoadCount = 0;
+  globalThis.__targetLoadAccess = "pending";
+  globalThis.__frameLoadCount = 0;
+  globalThis.__baseTargetOwnerRealm = "pending";
+
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  document.addEventListener('load', () => { __frameLoadCount += 1; }, true);
+  body.innerHTML = `
+    <iframe id="base-target-source" name="sourceFrame" src="/source.html"></iframe>
+    <iframe id="base-target-target" name="targetFrame" src="/target.html"></iframe>
+  `;
+})()
+"#,
+    )
+    .expect("base-target network child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__frameLoadCount)",
+        "2",
+        "initial parser-created base-target child documents should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const source = document.getElementById('base-target-source');
+  const target = document.getElementById('base-target-target');
+  __baseTargetOwnerRealm = [
+    source instanceof HTMLIFrameElement,
+    target instanceof HTMLIFrameElement,
+    target instanceof target.contentWindow.HTMLIFrameElement,
+    target.contentWindow.frameElement === target
+  ].join('|');
+
+  const doc = source.contentDocument;
+  const firstBase = doc.createElement('base');
+  firstBase.target = 'targetFrame';
+  const secondBase = doc.createElement('base');
+  secondBase.target = '_self';
+  doc.head.append(firstBase, secondBase);
+
+  const link = doc.createElement('a');
+  link.href = '/replacement.html';
+  link.setAttribute('target', '');
+  doc.body.appendChild(link);
+
+  target.addEventListener('load', () => {
+    __targetLoadCount += 1;
+    try {
+      __targetLoadAccess = target.contentDocument.location.href;
+    } catch (error) {
+      __targetLoadAccess = `${error && error.name}:${error && error.message}`;
+    }
+  }, true);
+  link.click();
+})()
+"#,
+    )
+    .expect("base-target replacement navigation should start");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__targetLoadCount)",
+        "1",
+        "base-target replacement document should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("__baseTargetOwnerRealm")
+            .expect("base-target frame owner realm result should evaluate"),
+        "true|true|false|true",
+        "parser-created frame elements and window.frameElement must use the owner Document realm"
+    );
+    assert_eq!(
+        vm.eval("__targetLoadAccess")
+            .expect("target load callback access result should evaluate"),
+        replacement_url.as_str(),
+        "the replacement Document must be same-origin accessible during the iframe load callback"
+    );
+
+    let mut targets = server.finish_targets().await;
+    targets.sort();
+    assert_eq!(
+        targets,
+        ["/replacement.html", "/source.html", "/target.html"]
+    );
+}
+
 #[test]
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
     let mut vm = new_storage_test_vm("https://targeted-child-hash.test/page.html");
@@ -9461,9 +10866,9 @@ const frame = document.createElement('iframe');
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
-frame.contentWindow.history.pushState(null, '', '/child.html');
+frame.contentWindow.history.replaceState(null, '', 'about:blank#child');
 const link = document.createElement('a');
-link.href = '/child.html#next';
+link.href = 'about:blank#next';
 link.target = 'target';
 root.appendChild(link);
 let seen = [];
@@ -9481,10 +10886,7 @@ seen.join('|')
         )
         .expect("targeted same-document anchor click should dispatch child navigate");
 
-    assert_eq!(
-        result,
-        "true,true,https://targeted-child-hash.test/child.html#next,-1"
-    );
+    assert_eq!(result, "true,true,about:blank#next,-1");
 }
 #[test]
 fn anchor_click_to_identical_url_dispatches_replace_navigate_event() {
@@ -9605,6 +11007,78 @@ fn document_open_with_three_arguments_uses_associated_window() {
 
     assert_eq!(result, "true|true|true|InvalidAccessError:15");
 }
+
+#[tokio::test]
+async fn embed_and_object_javascript_attributes_use_resource_fetch_not_script_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://embedded-javascript-attribute.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__embeddedJavascriptAttributeEvents = [];
+  const root = document.body || document.documentElement || document;
+  for (const [tag, attribute] of [["embed", "src"], ["object", "data"]]) {
+    const element = document.createElement(tag);
+    element[attribute] =
+      `javascript:parent.__embeddedJavascriptAttributeEvents.push("executed-${tag}")`;
+    element.onload = () => {
+      __embeddedJavascriptAttributeEvents.push(`load-${tag}`);
+    };
+    if (tag === "object") {
+      element.onerror = event => {
+        __embeddedJavascriptAttributeEvents.push(
+          `error-object:${event.isTrusted}:${element.contentDocument === null}`
+        );
+      };
+    }
+    root.appendChild(element);
+  }
+})()
+"#,
+    )
+    .expect("embedded javascript attribute setup should evaluate");
+
+    for element in ["embed", "object"] {
+        expect_page_child_frame_task_source_after_realm_prerequisite(
+            &mut vm,
+            &loader,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            &format!("{element} javascript attribute should enter its navigation commit turn"),
+        )
+        .await;
+    }
+    assert!(
+        vm._context_host.borrow().has_pending_child_document_loads(),
+        "embed and object javascript attributes should start resource fetches"
+    );
+    assert!(
+        !vm.has_pending_child_frame_realm_materialization(),
+        "resource attributes must not schedule javascript execution in child realms"
+    );
+    for element in ["embed", "object"] {
+        wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+            &mut vm,
+            &loader,
+            &format!("{element} javascript attribute fetch failure"),
+        )
+        .await;
+    }
+    assert!(
+        !vm._context_host.borrow().has_pending_child_document_loads(),
+        "both embedded resource fetch failures should settle"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__embeddedJavascriptAttributeEvents)")
+            .expect("embedded javascript attribute events should evaluate"),
+        r#"["error-object:true:true"]"#,
+        "resource failures must not execute javascript or load, and object must enter fallback"
+    );
+}
+
 #[tokio::test]
 async fn iframe_javascript_url_string_completion_replaces_child_document() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url.test/");
@@ -9643,7 +11117,7 @@ async fn iframe_javascript_url_string_completion_replaces_child_document() {
         "javascript URL should execute on DocumentScriptReady",
     )
     .await;
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -9788,6 +11262,201 @@ async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload()
         server.finish_targets().await,
         vec!["/blank.html", "/blank.html"]
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_location_function_uses_executing_document_as_navigation_referrer() {
+    const HOST: &str = "child-location-referrer.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/source/navigate-child-function.html");
+    let child_url = server.url_for_host(HOST, "/source/support/location-set.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__childLocationReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__childLocationReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize child URL")
+    ))
+    .expect("child Location referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childLocationReferrerLoadCount)",
+        "1",
+        "initial child document should load",
+    )
+    .await;
+
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("loaded child realm should exist");
+    vm.eval_in_child_default_context(
+        child_context_id,
+        "globalThis.go = function() { location.href = 'support/dummy.html'; }",
+    )
+    .expect("child navigation function should install");
+    vm.eval("document.querySelector('iframe').contentWindow.go()")
+        .expect("parent should call the child navigation function");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childLocationReferrerLoadCount)",
+        "2",
+        "child Location navigation should load",
+    )
+    .await;
+
+    let document_referrer = vm
+        .eval("document.querySelector('iframe').contentDocument.referrer")
+        .expect("child navigation referrer should evaluate");
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/source/support/location-set.html");
+    assert_eq!(
+        requests[1].header_value("referer"),
+        Some(child_url.as_str())
+    );
+    assert_eq!(document_referrer, child_url.as_str());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_meta_refresh_after_same_document_navigation_uses_child_referrer() {
+    const HOST: &str = "child-meta-refresh-referrer.test";
+
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        r#"<!doctype html>
+<script>location.hash = '#section'</script>
+<meta http-equiv="refresh" content="0; url=/refresh/target.html">"#
+            .to_owned(),
+        "<!doctype html><body>refresh target</body>".to_owned(),
+    ])
+    .await;
+    let top_url = server.url_for_host(HOST, "/refresh/parent.html");
+    let child_url = server.url_for_host(HOST, "/refresh/source.html");
+    let target_url = server.url_for_host(HOST, "/refresh/target.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__childMetaRefreshReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__childMetaRefreshReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize meta refresh child URL")
+    ))
+    .expect("child meta refresh referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshReferrerLoadCount)",
+        "1",
+        "initial meta refresh child document should load",
+    )
+    .await;
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshReferrerLoadCount)",
+        "2",
+        "child meta refresh navigation should load",
+    )
+    .await;
+
+    let state = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.querySelector('iframe');
+  return [frame.contentWindow.location.href, frame.contentDocument.referrer].join('|');
+})()
+"#,
+        )
+        .expect("child meta refresh referrer state should evaluate");
+    assert_eq!(state, format!("{target_url}|{child_url}"));
+
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/refresh/source.html");
+    assert_eq!(requests[0].header_value("referer"), Some(top_url.as_str()));
+    assert_eq!(requests[1].target, "/refresh/target.html");
+    assert_eq!(
+        requests[1].header_value("referer"),
+        Some(child_url.as_str())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parent_location_assignment_uses_parent_document_as_navigation_referrer() {
+    const HOST: &str = "parent-location-referrer.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/source/navigate-child-function-parent.html");
+    let child_url = server.url_for_host(HOST, "/source/initial.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__parentLocationReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__parentLocationReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize child URL")
+    ))
+    .expect("parent Location referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__parentLocationReferrerLoadCount)",
+        "1",
+        "initial child document should load",
+    )
+    .await;
+
+    vm.eval("document.querySelector('iframe').contentWindow.location = 'support/dummy.html'")
+        .expect("parent should navigate the child Location");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__parentLocationReferrerLoadCount)",
+        "2",
+        "parent-initiated child Location navigation should load",
+    )
+    .await;
+
+    let document_referrer = vm
+        .eval("document.querySelector('iframe').contentDocument.referrer")
+        .expect("parent-initiated child navigation referrer should evaluate");
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/source/initial.html");
+    assert_eq!(requests[1].header_value("referer"), Some(top_url.as_str()));
+    assert_eq!(document_referrer, top_url.as_str());
 }
 
 #[tokio::test]
@@ -10100,6 +11769,51 @@ return [
 }
 
 #[test]
+fn iframe_src_navigation_uses_owner_document_encoding_for_query() {
+    let mut vm = new_storage_test_vm("https://iframe-src-encoding.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+
+    let reflected_src = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "encoded-src-frame";
+  frame.src = "resources/frame.html?\u00DF";
+  (document.body || document.documentElement || document).appendChild(frame);
+  return frame.src;
+})()
+"#,
+        )
+        .expect("legacy-encoded iframe src setup should evaluate");
+    assert_eq!(
+        reflected_src,
+        "https://iframe-src-encoding.test/resources/frame.html?%DF"
+    );
+
+    let child_handle = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("encoded-src-frame")
+        .expect("encoded src iframe owner");
+    let attribute_bootstrap = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_attribute_bootstrap_for_test(child_handle)
+        .expect("encoded src attribute bootstrap should exist");
+    assert!(
+        matches!(
+            attribute_bootstrap,
+            crate::native_bridge::ChildBrowsingContextBootstrap::Url(ref url)
+                if url.as_str()
+                    == "https://iframe-src-encoding.test/resources/frame.html?%DF"
+        ),
+        "iframe navigation must use the same owner-document encoding as its reflected src: {attribute_bootstrap:?}"
+    );
+}
+
+#[test]
 fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
     let mut vm = new_storage_test_vm("https://iframe-initial-load-timing.test/");
 
@@ -10142,6 +11856,284 @@ fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
     );
 }
 
+#[test]
+fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronously() {
+    let mut vm = new_storage_test_vm("https://iframe-explicit-initial-blank.test/page.html");
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const variants = ["about:blank", "about:blank#foo", "about:blank?foo"];
+  const initialJointLength = history.length;
+  globalThis.__explicitInitialBlankFrames = [];
+  const observed = variants.map(src => {
+    const frame = document.createElement("iframe");
+    const frameEvents = [];
+    frame.addEventListener("load", () => frameEvents.push("load"));
+    frame.src = src;
+    root.appendChild(frame);
+    const child = frame.contentWindow;
+    const windowEvents = [];
+    child.addEventListener("load", () => windowEvents.push("load"));
+    child.addEventListener("pageshow", () => windowEvents.push("pageshow"));
+    child.document.body.textContent = src;
+    globalThis.__explicitInitialBlankFrames.push({frame, child, windowEvents});
+    return [
+      frameEvents.join(","),
+      child.location.href,
+      child.document.URL,
+      child.document.body.textContent,
+      child.navigation.entries().map(entry => entry.url).join(","),
+      child.navigation.activation === null,
+      child.history.length,
+      history.length,
+    ].join("|");
+  });
+  return JSON.stringify({initialJointLength, observed});
+})()
+"##,
+        )
+        .expect("explicit initial about:blank variants should evaluate");
+
+    assert_eq!(
+        result,
+        r##"{"initialJointLength":1,"observed":["load|about:blank|about:blank|about:blank|about:blank|true|1|1","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true|1|1","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true|1|1"]}"##
+    );
+    assert!(
+        !vm.has_pending_child_navigation_commit_for_test(),
+        "matching about:blank iframe URLs must not schedule a replacement NavigationCommit"
+    );
+    assert!(
+        !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "synchronous matching about:blank loads must not leave HostLoad work"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r##"
+JSON.stringify({
+  jointLength: history.length,
+  frames: __explicitInitialBlankFrames.map(({child, windowEvents}) => [
+    child.location.href,
+    child.document.body.textContent,
+    child.history.length,
+    windowEvents.join(","),
+  ]),
+})
+"##,
+        )
+        .expect("explicit initial about:blank state should remain stable"),
+        r##"{"jointLength":1,"frames":[["about:blank","about:blank",1,""],["about:blank#foo","about:blank#foo",1,""],["about:blank?foo","about:blank?foo",1,""]]}"##
+    );
+}
+
+#[test]
+fn dynamic_about_blank_iframe_navigation_uses_origin_referrer() {
+    let mut vm = new_storage_test_vm(
+        "http://dynamic-about-blank-referrer.test/source/parent.html?query#fragment",
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__dynamicBlankFrame = frame;
+})()
+"#,
+    )
+    .expect("initial about:blank child should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__dynamicBlankLoadCount = 0;
+  __dynamicBlankFrame.onload = () => globalThis.__dynamicBlankLoadCount++;
+  __dynamicBlankFrame.src = 'about:blank';
+})()
+"#,
+    )
+    .expect("dynamic about:blank navigation should evaluate");
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+  const frame = document.querySelector('iframe');
+  return JSON.stringify({
+    referrer: frame.contentDocument.referrer,
+    loads: __dynamicBlankLoadCount,
+    href: frame.contentWindow.location.href,
+    historyLength: frame.contentWindow.history.length
+  });
+})()"#,
+        )
+        .expect("dynamic about:blank result should evaluate"),
+        r#"{"referrer":"http://dynamic-about-blank-referrer.test/","loads":1,"href":"about:blank","historyLength":1}"#
+    );
+}
+
+#[test]
+fn no_src_iframe_initial_about_blank_has_a_quirks_empty_document() {
+    let mut vm = new_storage_test_vm("https://iframe-initial-document.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const doc = frame.contentDocument;
+  return JSON.stringify({
+    compatMode: doc.compatMode,
+    contentType: doc.contentType,
+    readyState: doc.readyState,
+    documentURI: doc.documentURI,
+    url: doc.URL,
+    doctypeIsNull: doc.doctype === null,
+    characterSet: doc.characterSet,
+    documentChildCount: doc.childNodes.length,
+    documentElement: doc.documentElement.tagName,
+    documentElementChildCount: doc.documentElement.childNodes.length,
+    head: doc.documentElement.firstChild.tagName,
+    headChildCount: doc.head.childNodes.length,
+    body: doc.documentElement.lastChild.tagName,
+    bodyChildCount: doc.body.childNodes.length
+  });
+})()
+"#,
+        )
+        .expect("initial about:blank document shape should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"compatMode":"BackCompat","contentType":"text/html","readyState":"complete","documentURI":"about:blank","url":"about:blank","doctypeIsNull":true,"characterSet":"UTF-8","documentChildCount":1,"documentElement":"HTML","documentElementChildCount":2,"head":"HEAD","headChildCount":0,"body":"BODY","bodyChildCount":0}"#
+    );
+}
+
+#[test]
+fn child_joint_history_pushes_accumulate_across_distinct_frames() {
+    let mut vm = new_storage_test_vm("https://joint-child-length.test/page.html");
+
+    vm.exec(
+        r#"
+const first = document.createElement('iframe');
+first.srcdoc = '<p>first</p>';
+(document.body || document.documentElement || document).appendChild(first);
+globalThis.__firstJointLengthFrame = first;
+"#,
+        None,
+    )
+    .expect("first child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const child = __firstJointLengthFrame.contentWindow;
+  const before = history.length;
+  child.history.pushState(null, '', 'about:srcdoc#first');
+  return [before, history.length, child.history.length].join('|');
+})()
+"#,
+        )
+        .expect("first child history push should evaluate"),
+        "1|2|2"
+    );
+
+    vm.exec(
+        r#"
+__firstJointLengthFrame.remove();
+const second = document.createElement('iframe');
+second.srcdoc = '<p>second</p>';
+(document.body || document.documentElement || document).appendChild(second);
+globalThis.__secondJointLengthFrame = second;
+"#,
+        None,
+    )
+    .expect("second child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const child = __secondJointLengthFrame.contentWindow;
+  const before = history.length;
+  child.history.pushState(null, '', 'about:srcdoc#second');
+  return [before, history.length, child.history.length].join('|');
+})()
+"#,
+        )
+        .expect("second child history push should evaluate"),
+        "2|3|3"
+    );
+}
+
+#[test]
+fn initial_empty_child_history_can_rewrite_about_blank_fragment() {
+    let mut vm = new_storage_test_vm("https://initial-empty-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const before = history.length;
+  child.history.pushState({ step: 1 }, '', 'about:blank#pushed');
+  child.history.replaceState({ step: 2 }, '', 'about:blank#replaced');
+  return [
+    child.location.href,
+    child.history.state.step,
+    history.length,
+    before,
+  ].join('|');
+})()
+"#,
+        )
+        .expect("initial empty child history mutation should evaluate"),
+        "about:blank#replaced|2|1|1"
+    );
+}
+
+#[test]
+fn initial_empty_child_history_mutation_preserves_pending_srcdoc_navigation() {
+    let mut vm = new_storage_test_vm("https://pending-child-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '<p id="committed">child</p>';
+  (document.body || document.documentElement || document).appendChild(frame);
+  frame.contentWindow.history.pushState(null, '', 'about:blank#before-commit');
+  globalThis.__pendingHistoryFrame = frame;
+  return frame.contentWindow.location.href;
+})()
+"#,
+        )
+        .expect("pending child history mutation should evaluate"),
+        "about:blank#before-commit"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            "[__pendingHistoryFrame.contentWindow.location.href, Boolean(__pendingHistoryFrame.contentDocument.getElementById('committed'))].join('|')"
+        )
+        .expect("pending srcdoc navigation should still commit"),
+        "about:srcdoc|true"
+    );
+}
+
 #[tokio::test]
 async fn top_history_back_routes_to_child_joint_history_entry() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -10176,7 +12168,11 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
             r#"
 (() => {
   const frame = document.querySelector('iframe');
-  frame.contentWindow.history.pushState({ child: true }, '', '#child');
+  frame.contentWindow.history.pushState(
+    { child: true },
+    '',
+    'about:srcdoc#child'
+  );
   return [
     location.href,
     history.length,
@@ -10190,7 +12186,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://joint-child-back.test/page.html|3|3|https://joint-child-back.test/page.html#child"
+        "https://joint-child-back.test/page.html|2|2|about:srcdoc#child"
     );
     let _ = vm
         .run_one_oldest_ready_page_task_executor_turn(&loader)
@@ -10256,7 +12252,11 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
             r#"
 (() => {
   const frame = document.querySelector('iframe');
-  frame.contentWindow.history.pushState({ child: true }, '', '#child');
+  frame.contentWindow.history.pushState(
+    { child: true },
+    '',
+    'about:srcdoc#child'
+  );
   return [
     location.href,
     navigation.entries().length,
@@ -10272,7 +12272,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://removed-child-joint-back.test/page.html|1|0|3|3|https://removed-child-joint-back.test/page.html#child"
+        "https://removed-child-joint-back.test/page.html|1|0|2|2|about:srcdoc#child"
     );
 
     vm.eval("document.querySelector('iframe').remove(); history.back(); 'queued'")
@@ -10294,7 +12294,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         result,
-        "https://removed-child-joint-back.test/page.html|1|0|3|true"
+        "https://removed-child-joint-back.test/page.html|1|0|2|true"
     );
 }
 
@@ -10342,7 +12342,7 @@ async fn child_cross_document_pending_navigation_exposes_back_availability() {
 
     assert_eq!(
         state,
-        "about:srcdoc|2|0:about:srcdoc|0:about:srcdoc|true|false"
+        "about:srcdoc|1|0:about:srcdoc|0:about:srcdoc|true|false"
     );
 }
 #[tokio::test]
@@ -10380,7 +12380,7 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
 (() => {
   globalThis.__lmDetachedChildNavigateErrorLog = [];
   const child = document.querySelector('iframe').contentWindow;
-  child.history.pushState({ child: true }, "", "#one");
+  child.history.pushState({ child: true }, "", "about:srcdoc#one");
   return [
     child.navigation.entries().length,
     child.navigation.currentEntry.index,
@@ -10390,10 +12390,7 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
 "##,
         )
         .expect("child initial same-document navigation should evaluate");
-    assert_eq!(
-        initial,
-        "2|1|https://child-detach-navigation-error.test/page.html#one"
-    );
+    assert_eq!(initial, "2|1|about:srcdoc#one");
 
     let setup = vm
         .eval(
@@ -10638,13 +12635,21 @@ async fn child_sandbox_blocks_meta_refresh_when_it_is_created() {
 
 #[tokio::test]
 async fn child_meta_refresh_remains_scheduled_when_sandbox_is_added_later() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    let server = StaticHttpServer::spawn(1).await;
+    let parent_url = server.url_for_host("child-meta-refresh.test", "/");
+    let loader = static_http_loader([server.resolve_entry("child-meta-refresh.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
 
     vm.eval(
         r#"
 (() => {
   const frame = document.createElement('iframe');
+  globalThis.__childMetaRefreshLoads = 0;
+  frame.onload = () => {
+    if (++__childMetaRefreshLoads === 1) {
+      frame.setAttribute('sandbox', 'allow-same-origin');
+    }
+  };
   frame.srcdoc = '<meta http-equiv="refresh" content="0;url=#allowed"><p>source</p>';
   (document.body || document.documentElement || document).appendChild(frame);
   return 'ready';
@@ -10652,21 +12657,22 @@ async fn child_meta_refresh_remains_scheduled_when_sandbox_is_added_later() {
 "#,
     )
     .expect("unsandboxed child refresh setup should evaluate");
-    vm.drain_pending_child_frame_work_for_test();
-    vm.eval(
-        "document.querySelector('iframe').setAttribute('sandbox', 'allow-same-origin'); 'added'",
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshLoads)",
+        "2",
+        "the scheduled refresh should load after the sandbox is added",
     )
-    .expect("sandbox addition should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .expect("scheduled child refresh should run");
+    .await;
 
     assert_eq!(
         vm.eval("document.querySelector('iframe').contentWindow.location.href")
             .expect("child URL should remain observable"),
-        "https://child-meta-refresh.test/#allowed",
+        format!("{parent_url}#allowed"),
         "the sandbox policy is checked when the refresh is created, not again when it becomes due"
     );
+    assert_eq!(server.finish_targets().await, ["/"]);
 }
 
 #[tokio::test]
@@ -10835,7 +12841,7 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
             "old Window load listener must retain a current callback relevant realm"
         );
     }
-    for context in ["old interactive", "old DOMContentLoaded", "old complete"] {
+    for context in ["old DOMContentLoaded", "old complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -10887,11 +12893,7 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
         "replacement child load handlers should install",
     )
     .await;
-    for context in [
-        "replacement interactive",
-        "replacement DOMContentLoaded",
-        "replacement complete",
-    ] {
+    for context in ["replacement DOMContentLoaded", "replacement complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -11046,7 +13048,7 @@ async fn child_pageshow_replacement_stops_old_frame_finish_and_protocol_output()
             "old Window lifecycle listeners must retain current callback relevant realms"
         );
     }
-    for context in ["old interactive", "old DOMContentLoaded", "old complete"] {
+    for context in ["old DOMContentLoaded", "old complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -11097,11 +13099,7 @@ async fn child_pageshow_replacement_stops_old_frame_finish_and_protocol_output()
         "replacement pageshow handlers should install",
     )
     .await;
-    for context in [
-        "replacement interactive",
-        "replacement DOMContentLoaded",
-        "replacement complete",
-    ] {
+    for context in ["replacement DOMContentLoaded", "replacement complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -11279,13 +13277,12 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
         "child media parser script should run before lifecycle",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child media document should enter interactive and accept its media token",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -11403,13 +13400,12 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
         "child media parser script should install listeners",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child failed media document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     let request = request_rx.await.expect("child media request should arrive");
     assert!(
         request
@@ -11530,13 +13526,12 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
         "child image parser script should install listeners",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child image document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     let request = request_rx.await.expect("child image request should arrive");
     assert!(
         request
@@ -11593,7 +13588,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     assert!(
         vm._context_host
             .borrow()
-            .pending_image_load_event_is_current(child_image, detached_pending),
+            .pending_image_load_event_is_current(child_image, &detached_pending),
         "same-document detach must preserve current image ownership"
     );
     assert!(
@@ -11709,13 +13704,12 @@ async fn child_dynamic_media_accepted_during_dcl_delays_later_load_turns() {
         "dynamic media parser script should install its DCL producer",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "dynamic media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -11808,13 +13802,12 @@ async fn child_static_text_track_starts_at_interactive_without_own_load_token() 
         "child track parser script should install its listener",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "interactive should start the static child track",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
             PageDomManipulationTestFamily::TextTrackDefaultMode,
@@ -11937,12 +13930,12 @@ async fn child_document_replacement_retires_media_sequence_and_delay() {
         "first media document parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "first media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -11987,7 +13980,6 @@ async fn child_document_replacement_retires_media_sequence_and_delay() {
     )
     .await;
     for (source, transition) in [
-        (ChildFrameSemanticTurnKind::DocumentLifecycle, "interactive"),
         (
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             "DOMContentLoaded",
@@ -12059,13 +14051,12 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         "moving media parser script should run",
     )
     .await;
-    expect_page_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "moving media document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         &loader,
@@ -12205,12 +14196,12 @@ async fn child_image_event_delay_blocks_complete_and_host_load_until_terminal() 
         "child image parser script should run before lifecycle",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -12308,12 +14299,12 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
         "first image document parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "first image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -12357,8 +14348,19 @@ async fn child_document_replacement_cancels_stale_image_event_and_delay() {
         "replacement parser script should run",
     )
     .await;
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("stale image DOM task"),
+        "the earlier image task must retire at the shared DOM FIFO head"
+    );
+    assert_eq!(
+        vm.eval("__childImageReplacementEvents.join('|')")
+            .expect("retired image trace"),
+        "first-dcl",
+        "the stale image task must not dispatch into the replacement"
+    );
+
     for (source, transition) in [
-        (ChildFrameSemanticTurnKind::DocumentLifecycle, "interactive"),
         (
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             "DOMContentLoaded",
@@ -12424,12 +14426,12 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
         "moving image parser script should run",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "moving image document should enter interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -12457,12 +14459,42 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
 "#,
     )
     .expect("pending child image should move to the parent document");
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("old image DOM task"),
+        "the old image task must retire before the later complete task at the shared FIFO head"
+    );
+    assert_eq!(
+        vm.eval("__movedChildImageEvents.join('|')")
+            .expect("old image trace"),
+        "child-dcl",
+        "retiring the old image task must leave the rebound request pending"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "moving the image should release complete on a later lifecycle turn",
     )
     .await;
+    assert!(
+        !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the rebound image event must keep its earlier position in the shared DOM FIFO"
+    );
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("rebound image DOM task"),
+        "the new image request must deliver before the later HostLoad task"
+    );
+    assert_eq!(
+        vm.eval("__movedChildImageEvents.join('|')")
+            .expect("rebound image trace"),
+        "child-dcl|moved-image-load",
+        "the rebound image request must deliver once without running the later child load"
+    );
+    assert!(
+        vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the child load must now be at the DOM FIFO head"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::HostLoad,
@@ -12470,20 +14502,14 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
     )
     .await;
     assert_eq!(
-        vm.eval("globalThis.__movedChildImageEvents.join('|')")
-            .expect("moved image child lifecycle should evaluate"),
-        "child-dcl|frame-load",
-        "moving the image must release the old child delay through a later lifecycle turn"
-    );
-
-    assert!(
-        drain_image_load_event_bodies_for_test(&mut vm) > 0,
-        "old and rebound image tasks should drain"
+        drain_image_load_event_bodies_for_test(&mut vm),
+        0,
+        "the old and rebound image tasks must both have been consumed exactly once"
     );
     assert_eq!(
         vm.eval("globalThis.__movedChildImageEvents.join('|')")
             .expect("moved image event result should evaluate"),
-        "child-dcl|frame-load|moved-image-load",
+        "child-dcl|moved-image-load|frame-load",
         "the stale child task must not consume or duplicate the rebound image request"
     );
 }
@@ -12500,7 +14526,14 @@ fn window_pageshow_uses_original_page_transition_event() {
     throw new Error("page replacement should not be invoked");
   };
   addEventListener("pageshow", event => {
-    __pageshowShape = `${event.type}:${event.persisted === false}:${'persisted' in event}`;
+    __pageshowShape = [
+      event.type,
+      event.persisted === false,
+      'persisted' in event,
+      event.bubbles,
+      event.cancelable,
+      event.isTrusted
+    ].join(':');
   });
   return "ready";
 })()
@@ -12513,7 +14546,7 @@ fn window_pageshow_uses_original_page_transition_event() {
     let shape = vm
         .eval("globalThis.__pageshowShape")
         .expect("pageshow shape should evaluate");
-    assert_eq!(shape, "pageshow:true:true");
+    assert_eq!(shape, "pageshow:true:true:true:true:true");
 }
 
 #[test]
@@ -12528,12 +14561,12 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
   globalThis.__windowLifecycleEvents = [];
   addEventListener('load', event => {
     __windowLifecycleEvents.push(
-      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}`
+      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   addEventListener('pageshow', event => {
     __windowLifecycleEvents.push(
-      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}`
+      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   delete globalThis.Event;
@@ -12549,7 +14582,7 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
     assert_eq!(
         vm.eval("__windowLifecycleEvents.join('|')")
             .expect("window lifecycle results should evaluate"),
-        "load:true:true:true|pageshow:true:false"
+        "load:true:true:true:true:false:false|pageshow:true:false:true:true:true"
     );
 }
 
@@ -13025,12 +15058,12 @@ async fn child_document_close_without_defer_queues_replacement_domcontentloaded(
         "child parser script should install the original DCL handler",
     )
     .await;
-    expect_child_frame_task_source_after_realm_prerequisite(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "original child document should become interactive",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -13142,8 +15175,14 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
     );
     expect_one_child_frame_task_source(
         &mut vm,
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+        "blob replacement must materialize its exact realm",
+    )
+    .await;
+    expect_one_child_frame_task_source(
+        &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "the queued srcdoc lifecycle task must stale-discard before blob lifecycle work",
+        "the older srcdoc DCL must stale-discard at the shared DOM head",
     )
     .await;
     for transition in ["interactive", "DOMContentLoaded", "complete"] {
@@ -13196,6 +15235,110 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
         )
         .expect("child navigation result should evaluate"),
         "unset|unset|unset|unset|true|PASS|PASS|false"
+    );
+}
+
+#[test]
+fn main_window_indexed_child_deletion_is_live_and_not_cached() {
+    let mut vm = new_storage_test_vm("https://window-indexed-delete.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '';
+  let absentDeletesSucceeded = true;
+  for (let i = 0; i < 1e5; i++) {
+    absentDeletesSucceeded &&= delete window[0];
+  }
+  (document.body || document.documentElement || document).appendChild(frame);
+  const presentAfterAbsent = delete window[0];
+  let presentDeletesFailed = true;
+  for (let i = 0; i < 1e5; i++) {
+    presentDeletesFailed &&= !delete window[0];
+  }
+  frame.remove();
+  return JSON.stringify({
+    absentDeletesSucceeded,
+    presentAfterAbsent,
+    presentDeletesFailed,
+    absentAfterPresent: delete window[0]
+  });
+})()
+"#,
+        )
+        .expect("live Window indexed deletion probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"absentDeletesSucceeded":true,"presentAfterAbsent":false,"presentDeletesFailed":true,"absentAfterPresent":true}"#
+    );
+}
+
+#[test]
+fn main_window_indexed_set_and_define_reject_every_array_index() {
+    let mut vm = new_storage_test_vm("https://window-indexed-write.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const strictSetThrows = index => {
+    'use strict';
+    try {
+      window[index] = 'strict';
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const defineThrows = (index, descriptor) => {
+    try {
+      Object.defineProperty(window, index, descriptor);
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+
+  window[0] = 'sloppy';
+  window[1] = 'sloppy';
+  window[4294967294] = 'sloppy';
+  const result = {
+    existingChildPreserved: window[0] === child,
+    existingStrictSetThrows: strictSetThrows(0),
+    existingReflectSet: Reflect.set(window, 0, 'reflect'),
+    existingReflectDefine: Reflect.defineProperty(window, 0, { value: 'reflect' }),
+    existingDefineThrows: defineThrows(0, { get: () => 'getter' }),
+    missingRemainsAbsent: window[1] === undefined,
+    missingStrictSetThrows: strictSetThrows(1),
+    missingReflectSet: Reflect.set(window, 1, 'reflect'),
+    missingReflectDefine: Reflect.defineProperty(window, 1, { value: 'reflect' }),
+    missingDefineThrows: defineThrows(1, { value: 'defined' }),
+    maxIndexRemainsAbsent: window[4294967294] === undefined,
+    maxIndexStrictSetThrows: strictSetThrows(4294967294),
+    maxIndexReflectSet: Reflect.set(window, 4294967294, 'reflect'),
+    maxIndexReflectDefine: Reflect.defineProperty(window, 4294967294, { value: 'reflect' })
+  };
+  window[4294967295] = 1;
+  result.nonIndexSet = window[4294967295];
+  result.nonIndexReflectSet = Reflect.set(window, 4294967295, 2);
+  result.nonIndexAfterReflectSet = window[4294967295];
+  result.nonIndexReflectDefine = Reflect.defineProperty(window, 4294967295, { value: 3 });
+  result.nonIndexAfterDefine = window[4294967295];
+  return JSON.stringify(result);
+})()
+"#,
+        )
+        .expect("Window indexed write and define probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"existingChildPreserved":true,"existingStrictSetThrows":true,"existingReflectSet":false,"existingReflectDefine":false,"existingDefineThrows":true,"missingRemainsAbsent":true,"missingStrictSetThrows":true,"missingReflectSet":false,"missingReflectDefine":false,"missingDefineThrows":true,"maxIndexRemainsAbsent":true,"maxIndexStrictSetThrows":true,"maxIndexReflectSet":false,"maxIndexReflectDefine":false,"nonIndexSet":1,"nonIndexReflectSet":true,"nonIndexAfterReflectSet":2,"nonIndexReflectDefine":true,"nonIndexAfterDefine":3}"#
     );
 }
 
@@ -13260,6 +15403,244 @@ async fn main_window_indexed_child_descriptor_matches_window_semantics() {
     assert_eq!(
         result,
         r#"{"valueIsChild":true,"writable":false,"enumerable":true,"configurable":true,"listed":true,"strictAssignmentThrew":true,"assignmentPreservedChild":true}"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cross_origin_window_indexed_child_exposes_live_same_origin_grandchild() {
+    const TOP_HOST: &str = "top.window-indexed.test";
+    const MIDDLE_HOST: &str = "middle.window-indexed.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(TOP_HOST, "/page.html");
+    let middle_url = server.url_for_host(MIDDLE_HOST, "/middle.html");
+    let grandchild_url = server.url_for_host(TOP_HOST, "/grandchild.html");
+    let loader = static_http_loader([
+        server.resolve_entry(TOP_HOST),
+        server.resolve_entry(MIDDLE_HOST),
+    ]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+globalThis.__middleWindowUrl = {};
+globalThis.__grandchildWindowUrl = {};
+globalThis.__middleWindowLoaded = false;
+globalThis.__nestedWindowLoaded = false;
+addEventListener("message", event => {{
+  if (event.data === "nested-window-loaded") {{
+    globalThis.__nestedWindowLoaded = true;
+  }}
+}});
+"#,
+        serde_json::to_string(middle_url.as_str()).expect("serialize middle frame URL"),
+        serde_json::to_string(grandchild_url.as_str()).expect("serialize grandchild frame URL")
+    ))
+    .expect("nested cross-origin Window URLs should install");
+    vm.eval(
+        r#"
+(() => {
+  const middle = document.createElement("iframe");
+  middle.src = globalThis.__middleWindowUrl;
+  middle.onload = () => { globalThis.__middleWindowLoaded = true; };
+  (document.body || document.documentElement || document).appendChild(middle);
+})()
+"#,
+    )
+    .expect("cross-origin middle frame should queue");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__middleWindowLoaded)",
+        "true",
+        "cross-origin middle frame should load",
+    )
+    .await;
+
+    let middle_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("cross-origin middle frame realm should materialize");
+    vm.eval_in_child_default_context(
+        middle_context_id,
+        &format!(
+            r#"
+(() => {{
+  const nested = document.createElement("iframe");
+  nested.name = "liveNested";
+  nested.src = {};
+  nested.onload = () => top.postMessage("nested-window-loaded", "*");
+  document.body.appendChild(nested);
+}})()
+"#,
+            serde_json::to_string(grandchild_url.as_str()).expect("serialize grandchild frame URL")
+        ),
+    )
+    .expect("same-origin-with-top grandchild should queue");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__nestedWindowLoaded)",
+        "true",
+        "same-origin-with-top grandchild should load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const middle = frames[0];
+  const grandchild = middle[0];
+  const adopted = grandchild.document.adoptNode(document.createElement("button"));
+  return JSON.stringify({
+    middleLength: middle.length,
+    grandchildIsWindow: grandchild.window === grandchild,
+    grandchildTopIsTop: grandchild.top === window,
+    adoptedIntoGrandchild: adopted.ownerDocument === grandchild.document,
+    namedVisible: "liveNested" in middle,
+    namedOwn: Object.prototype.hasOwnProperty.call(middle, "liveNested"),
+    namedMatchesIndexed: middle.liveNested === grandchild,
+    namedDescriptorMatches:
+      Object.getOwnPropertyDescriptor(middle, "liveNested").value === grandchild
+  });
+})()
+"#,
+        )
+        .expect("top should traverse the cross-origin middle Window index");
+    assert_eq!(
+        result,
+        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":true,"namedOwn":true,"namedMatchesIndexed":true,"namedDescriptorMatches":true}"#
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/middle.html", "/grandchild.html"]
+    );
+}
+
+#[test]
+fn location_ancestor_origins_is_a_stable_document_list_with_a_detached_empty_list() {
+    let mut vm = new_storage_test_vm("https://ancestor-origins.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const location = frame.contentWindow.location;
+  const ChildDOMStringList = frame.contentWindow.DOMStringList;
+  const active = location.ancestorOrigins;
+  const activeAgain = location.ancestorOrigins;
+  const activeSnapshot = {
+    values: Array.from(active),
+    sameObject: active === activeAgain,
+    brand: active instanceof ChildDOMStringList,
+    topRealmBrand: active instanceof DOMStringList,
+    isArray: Array.isArray(active),
+    length: active.length,
+    item0: active.item(0),
+    item1IsNull: active.item(1) === null,
+    containsParent: active.contains(window.origin)
+  };
+  frame.remove();
+  const detached = location.ancestorOrigins;
+
+  const unreadFrame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(unreadFrame);
+  const unreadLocation = unreadFrame.contentWindow.location;
+  unreadFrame.remove();
+  const unreadDetached = unreadLocation.ancestorOrigins;
+  return JSON.stringify({
+    active: activeSnapshot,
+    detachedValues: Array.from(detached),
+    detachedIsDifferent: detached !== active,
+    detachedIsStable: detached === location.ancestorOrigins,
+    detachedBrand: detached instanceof ChildDOMStringList,
+    unreadDetachedValues: Array.from(unreadDetached),
+    unreadDetachedIsArray: Array.isArray(unreadDetached),
+    unreadDetachedConstructor: unreadDetached.constructor.name
+  });
+})()
+"#,
+        )
+        .expect("Location ancestor origins lifetime probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"active":{"values":["https://ancestor-origins.test"],"sameObject":true,"brand":true,"topRealmBrand":false,"isArray":false,"length":1,"item0":"https://ancestor-origins.test","item1IsNull":true,"containsParent":true},"detachedValues":[],"detachedIsDifferent":true,"detachedIsStable":true,"detachedBrand":true,"unreadDetachedValues":[],"unreadDetachedIsArray":false,"unreadDetachedConstructor":"DOMStringList"}"#
+    );
+}
+
+#[test]
+fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
+    let mut vm = new_storage_test_vm("https://ancestor-policy.test/page.html");
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  const mount = document.body || document.documentElement || document;
+
+  const snapshotted = document.createElement("iframe");
+  snapshotted.srcdoc = "<!doctype html><p>snapshotted</p>";
+  snapshotted.referrerPolicy = "no-referrer";
+  mount.appendChild(snapshotted);
+  const snapshottedLocation = snapshotted.contentWindow.location;
+  const snapshottedInitialList = snapshottedLocation.ancestorOrigins;
+  snapshotted.referrerPolicy = "";
+
+  const futureNavigation = document.createElement("iframe");
+  futureNavigation.referrerPolicy = "no-referrer";
+  mount.appendChild(futureNavigation);
+  const futureLocation = futureNavigation.contentWindow.location;
+  const futureInitialList = futureLocation.ancestorOrigins;
+  futureNavigation.referrerPolicy = "";
+  futureNavigation.srcdoc = "<!doctype html><p>future navigation</p>";
+
+  Object.assign(globalThis, {
+    __ancestorPolicySnapshottedLocation: snapshottedLocation,
+    __ancestorPolicySnapshottedInitialList: snapshottedInitialList,
+    __ancestorPolicyFutureLocation: futureLocation,
+    __ancestorPolicyFutureInitialList: futureInitialList
+  });
+  return JSON.stringify({
+    snapshotted: Array.from(snapshottedInitialList),
+    future: Array.from(futureInitialList)
+  });
+})()
+"#,
+        )
+        .expect("initial Location ancestor policy probe should evaluate");
+    assert_eq!(initial, r#"{"snapshotted":["null"],"future":["null"]}"#);
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let committed = vm
+        .eval(
+            r#"
+(() => {
+  const snapshotted = __ancestorPolicySnapshottedLocation.ancestorOrigins;
+  const future = __ancestorPolicyFutureLocation.ancestorOrigins;
+  return JSON.stringify({
+    snapshotted: Array.from(snapshotted),
+    snapshottedNewDocumentList:
+      snapshotted !== __ancestorPolicySnapshottedInitialList,
+    snapshottedStable:
+      snapshotted === __ancestorPolicySnapshottedLocation.ancestorOrigins,
+    future: Array.from(future),
+    futureNewDocumentList: future !== __ancestorPolicyFutureInitialList,
+    futureStable: future === __ancestorPolicyFutureLocation.ancestorOrigins
+  });
+})()
+"#,
+        )
+        .expect("committed Location ancestor policy probe should evaluate");
+    assert_eq!(
+        committed,
+        r#"{"snapshotted":["null"],"snapshottedNewDocumentList":true,"snapshottedStable":true,"future":["https://ancestor-policy.test"],"futureNewDocumentList":true,"futureStable":true}"#
     );
 }
 
@@ -13595,7 +15976,7 @@ __domainAccessFrame.src = globalThis.__replacementDomainChildUrl;
 async fn one_sided_document_domain_disables_original_tuple_origin_fast_path() {
     const HOST: &str = "www.example.test";
 
-    let server = StaticHttpServer::spawn(1).await;
+    let server = StaticHttpServer::spawn(2).await;
     let parent_url = server.url_for_host(HOST, "/page.html");
     let child_url = server.url_for_host(HOST, "/child.html");
     let loader = static_http_loader([server.resolve_entry(HOST)]);
@@ -13675,7 +16056,52 @@ globalThis.__probeOneSidedDomainFrame = () => {
             .expect("restored exact-domain access probe should evaluate"),
         "www.example.test"
     );
-    assert_eq!(server.finish_targets().await, vec!["/child.html"]);
+
+    vm.exec(
+        r#"
+const retiredFrame = document.createElement("iframe");
+globalThis.__retiredOneSidedDomainChildLoaded = false;
+retiredFrame.onload = () => { globalThis.__retiredOneSidedDomainChildLoaded = true; };
+retiredFrame.src = globalThis.__oneSidedDomainChildUrl;
+(document.body || document.documentElement || document).appendChild(retiredFrame);
+globalThis.__retiredOneSidedDomainWindow = retiredFrame.contentWindow;
+"#,
+        None,
+    )
+    .expect("one-sided document.domain retired Window setup should run");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__retiredOneSidedDomainChildLoaded)",
+        "true",
+        "fresh child without document.domain should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const probe = () => {
+    try {
+      return __retiredOneSidedDomainWindow.document.domain;
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const beforeRemoval = probe();
+  document.querySelectorAll("iframe")[1].remove();
+  return [beforeRemoval, probe()].join("|");
+})()
+"#,
+        )
+        .expect("retired one-sided document.domain Window probe should evaluate"),
+        "SecurityError|SecurityError"
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/child.html", "/child.html"]
+    );
 }
 
 #[test]

@@ -390,7 +390,7 @@ pub(crate) type PageChildClassicScriptSourceLoadTurnOutcome =
     PageOwnerTurnOutcome<PageChildClassicScriptSourceLoadTurnAction>;
 
 impl RendererPageChildFrameTask {
-    fn new(owner: RendererPageChildFrameTaskOwner) -> Self {
+    pub(super) fn new(owner: RendererPageChildFrameTaskOwner) -> Self {
         debug_assert!(!matches!(
             owner.target(),
             RendererPageChildFrameTaskTarget::ParserModuleRootStart(_)
@@ -566,18 +566,15 @@ impl RendererPageChildFrameTaskSender {
         ))
     }
 
-    pub(crate) fn send_document_lifecycle(
+    pub(crate) fn send_interactive_lifecycle(
         &self,
         target: RendererPageChildDocumentLifecycleTarget,
     ) -> Result<(), RendererPageChildFrameTaskRouteClosed> {
+        debug_assert!(matches!(
+            target.action(),
+            crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)
+        ));
         self.send(RendererPageChildFrameTaskTarget::DocumentLifecycle(target))
-    }
-
-    pub(crate) fn send_host_load(
-        &self,
-        target: RendererPageChildHostLoadTarget,
-    ) -> Result<(), RendererPageChildFrameTaskRouteClosed> {
-        self.send(RendererPageChildFrameTaskTarget::HostLoad(target))
     }
 
     pub(crate) fn send_parser_module_root_start(

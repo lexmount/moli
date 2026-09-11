@@ -68,8 +68,8 @@ use crate::page_task_queue::{
 };
 use crate::planning::PreparedScript;
 use crate::types::{
-    ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind, SubresourceRequestInitiatorType,
-    SubresourceResourceType,
+    ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind, ScriptErrorValue,
+    SubresourceRequestInitiatorType, SubresourceResourceType,
 };
 #[cfg(test)]
 use crate::types::{
@@ -84,7 +84,10 @@ mod child_dynamic_import;
 mod child_parser_module;
 mod child_ready_document_script;
 mod dynamic_import_selected_task_body;
+mod load_error;
 mod main_selected_task;
+pub(super) use load_error::retained_module_exception;
+use load_error::{module_load_error_value, retain_module_exception};
 pub(crate) use main_selected_task::{
     MainDynamicImportGraphFetchBodySettlement, MainNativeModuleSelectedTaskApplication,
     MainNativeModuleSelectedTaskBodyActivity,
@@ -980,7 +983,29 @@ impl ScriptVm {
         let source = self
             .inline_script_element_source_for_execution(script.node_id, source, request)
             .unwrap_or_default();
-        ModuleSource::text(source)
+        self.inline_module_script_source_with_origin(script, source)
+    }
+
+    pub(crate) fn inline_module_script_source_with_origin(
+        &self,
+        script: &PreparedScript,
+        source: String,
+    ) -> ModuleSource {
+        let position = self
+            .document_runtime
+            .parser_script_start_position(script.node_id);
+        ModuleSource::text_with_origin(
+            source,
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: script.url.clone(),
+                line_offset: position.map_or(0, |position| {
+                    position.line.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+                column_offset: position.map_or(0, |position| {
+                    position.column.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+            },
+        )
     }
 
     pub(crate) fn seal_main_parser_deferred_scripts(
@@ -2634,7 +2659,7 @@ impl ScriptVm {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<DocumentModuleReactionUpdate> {
         let parser_update = self
             .document_runtime
@@ -2642,7 +2667,7 @@ impl ScriptVm {
             .mark_parser_module_evaluation_rejected(
                 reaction_id,
                 reason.clone(),
-                error_constructor,
+                error_value,
                 parser_module_evaluation_continuation_into_ready_action,
             )
             .map(DocumentModuleReactionUpdate::ParserOwned);
@@ -2650,7 +2675,7 @@ impl ScriptVm {
             self.mark_runtime_owned_module_script_evaluation_rejected(
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
             )
             .map(DocumentModuleReactionUpdate::RuntimeOwned)
         })
@@ -3282,6 +3307,7 @@ impl ScriptVm {
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         match key.kind() {
             ModuleKind::JavaScript => {
+                let origin = source.origin();
                 let Some(source) = source.text_source() else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
@@ -3294,6 +3320,7 @@ impl ScriptVm {
                     source,
                     source_url,
                     fetch_metadata,
+                    origin,
                 )
             }
             ModuleKind::Json | ModuleKind::Css => {
@@ -3333,7 +3360,9 @@ impl ScriptVm {
         source: &str,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+        source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
+        let mut exception_id = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3349,11 +3378,18 @@ impl ScriptVm {
                     &mut scope,
                     source_url.as_str(),
                     fetch_metadata,
+                    source_origin,
                 );
                 let mut compiler_source =
                     v8::script_compiler::Source::new(source_string, Some(&origin));
                 let module = v8::script_compiler::compile_module(&scope, &mut compiler_source)
                     .ok_or_else(|| {
+                        if let Some(exception) = scope.exception() {
+                            match retain_module_exception(&mut scope, exception) {
+                                Ok(id) => exception_id = Some(id),
+                                Err(error) => return error,
+                            }
+                        }
                         let exception = scope
                             .exception()
                             .and_then(|exception| exception.to_detail_string(&scope))
@@ -3386,7 +3422,10 @@ impl ScriptVm {
             })
             .map_err(|error| {
                 let message = error.to_string();
-                let load_error = ModuleLoadError::new(ModuleLoadStage::Compile, message.clone());
+                let mut load_error = ModuleLoadError::new(ModuleLoadStage::Compile, message.clone());
+                if let Some(exception_id) = exception_id {
+                    load_error = load_error.with_exception_id(exception_id);
+                }
                 if message.starts_with("v8 failed to compile WebAssembly module `") {
                     load_error
                         .with_error_constructor(ScriptErrorConstructorKind::WebAssemblyCompileError)
@@ -3394,22 +3433,6 @@ impl ScriptVm {
                     load_error.with_error_constructor(ScriptErrorConstructorKind::SyntaxError)
                 }
             })
-    }
-
-    fn compile_synthetic_module_record_in_context(
-        &mut self,
-        context_ptr: *const v8::Global<v8::Context>,
-        key: ModuleMapKey,
-        _source: &str,
-        source_url: &Url,
-    ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
-        self.compile_synthetic_module_record_with_exports_in_context(
-            context_ptr,
-            key,
-            source_url,
-            &["default"],
-            None,
-        )
     }
 
     fn compile_wasm_module_record_in_context(
@@ -3462,7 +3485,7 @@ impl ScriptVm {
                     &scope,
                     module_name,
                     &export_names,
-                    synthetic_module_evaluation_steps,
+                    wasm_synthetic_module_evaluation_steps,
                 );
                 let identity = module_identity_hash_from_v8_module(module);
                 let compiled_module = v8::Global::new(scope.as_ref(), module);
@@ -3482,13 +3505,12 @@ impl ScriptVm {
             })
     }
 
-    fn compile_synthetic_module_record_with_exports_in_context(
+    fn compile_synthetic_module_record_in_context(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
         key: ModuleMapKey,
+        source: &str,
         source_url: &Url,
-        export_names: &[&str],
-        wasm_record: Option<(Vec<ModuleRequestRecord>, WasmModuleRecord)>,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -3497,36 +3519,29 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let module_name = v8_string(&scope, source_url.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("failed to allocate v8 synthetic module name")
                 })?;
-                let export_names = export_names
-                    .iter()
-                    .map(|name| {
-                        v8_string(&scope, name).ok_or_else(|| {
-                            anyhow::anyhow!("failed to allocate synthetic export name")
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let default_export = v8_string(&scope, "default")
+                    .ok_or_else(|| anyhow::anyhow!("failed to allocate synthetic export name"))?;
                 let module = v8::Module::create_synthetic_module(
                     &scope,
                     module_name,
-                    &export_names,
-                    synthetic_module_evaluation_steps,
+                    &[default_export],
+                    synthetic_text_module_evaluation_steps,
                 );
                 let identity = module_identity_hash_from_v8_module(module);
+                let evaluation_source = crate::module_runtime::SyntheticTextModuleSource::register(
+                    &mut scope,
+                    module,
+                    key.clone(),
+                    source,
+                );
                 let compiled_module = v8::Global::new(scope.as_ref(), module);
-                let entry = match wasm_record {
-                    Some((requests, wasm_module)) => ModuleRecordEntry::new_with_wasm_module(
-                        key,
-                        compiled_module,
-                        requests,
-                        wasm_module,
-                    ),
-                    None => ModuleRecordEntry::new(key, compiled_module, Vec::new()),
-                };
+                let entry = ModuleRecordEntry::new(key, compiled_module, Vec::new())
+                    .with_synthetic_text_module_source(evaluation_source);
                 Ok((entry, identity))
             })
             .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Compile, error.to_string()))
@@ -3566,6 +3581,7 @@ impl ScriptVm {
                     format!("native root module entry {root_entry:?} is not compiled"),
                 )
             })?;
+        let mut caught_error_constructor = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3573,7 +3589,7 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator);
@@ -3585,11 +3601,17 @@ impl ScriptVm {
                     Some(true) => Ok(()),
                     Some(false) => Err(anyhow::anyhow!("v8 reported module instantiate failure")),
                     None => {
-                        let exception = scope
-                            .exception()
-                            .and_then(|exception| exception.to_string(&scope))
-                            .map(|message| message.to_rust_string_lossy(&scope))
-                            .unwrap_or_else(|| "unknown instantiate exception".to_owned());
+                        let exception = match scope.exception() {
+                            Some(exception) => {
+                                caught_error_constructor =
+                                    script_error_constructor_kind_from_value(&mut scope, exception);
+                                exception
+                                    .to_string(&scope)
+                                    .map(|message| message.to_rust_string_lossy(&scope))
+                                    .unwrap_or_else(|| "unknown instantiate exception".to_owned())
+                            }
+                            None => "unknown instantiate exception".to_owned(),
+                        };
                         Err(anyhow::anyhow!(
                             "{}",
                             canonical_native_module_instantiate_error(&exception, &graph_urls)
@@ -3598,19 +3620,11 @@ impl ScriptVm {
                 }
             })
             .map_err(|error| {
-                let message = error.to_string();
-                let load_error =
-                    ModuleLoadError::new(ModuleLoadStage::Instantiate, message.clone());
-                if message.contains("does not provide an export named")
-                    || message.contains("does not export")
-                {
-                    load_error.with_error_constructor(ScriptErrorConstructorKind::SyntaxError)
-                } else if has_wasm_entry {
-                    load_error
-                        .with_error_constructor(ScriptErrorConstructorKind::WebAssemblyLinkError)
-                } else {
-                    load_error
-                }
+                native_module_instantiate_load_error(
+                    error.to_string(),
+                    caught_error_constructor,
+                    has_wasm_entry,
+                )
             })?;
         self.document_runtime
             .mark_native_module_instantiated(root_entry);
@@ -3720,6 +3734,14 @@ impl ScriptVm {
             })?;
         self.document_runtime
             .mark_native_module_evaluating(root_entry);
+        // currentScript is null for modules. The execute-script-element guard
+        // belongs to its Document and lasts through the cleanup checkpoint,
+        // not the lifetime of the module's evaluation promise.
+        let _ignore_destructive_writes =
+            (owner == NativeModuleEvaluationOwner::Script).then(|| {
+                self.document_runtime
+                    .enter_ignore_destructive_writes(self.document_runtime.document_handle())
+            });
         let promise = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -3764,6 +3786,13 @@ impl ScriptVm {
                             return Ok(Ok(Some(promise)));
                         }
                     }
+                }
+                // Script-element evaluation consumes rejection itself, either
+                // below or through its retained TLA continuation. Claim that
+                // responsibility before cleanup can notify rejected promises.
+                // Dynamic import returned above and owns its own reaction.
+                if let Some(promise) = promise {
+                    promise.mark_as_handled();
                 }
                 if let Err(error) = Self::perform_microtask_checkpoints(&mut scope, None) {
                     return Ok(Err(ModuleLoadError::new(
@@ -4103,7 +4132,10 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         message: &str,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(request, message, None)
+        self.reject_native_dynamic_module_import_and_checkpoint(
+            request,
+            &ModuleLoadError::new(ModuleLoadStage::Fetch, message),
+        )
     }
 
     #[cfg(test)]
@@ -4112,18 +4144,13 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(
-            request,
-            error.message(),
-            error.error_constructor(),
-        )
+        self.reject_native_dynamic_module_import_and_checkpoint(request, error)
     }
 
-    fn reject_native_dynamic_module_import_with_constructor(
+    fn reject_native_dynamic_module_import_and_checkpoint(
         &mut self,
         request: PendingDynamicModuleImport,
-        message: &str,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -4132,14 +4159,7 @@ impl ScriptVm {
                 let context = v8::Local::new(scope, request.context());
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let resolver = v8::Local::new(scope, request.resolver());
-                let message = v8_string(scope, message);
-                let exception = message
-                    .and_then(|message| {
-                        error_constructor
-                            .and_then(|kind| script_error_value(scope, kind, message))
-                            .or_else(|| Some(v8::Exception::type_error(scope, message)))
-                    })
-                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let exception = module_load_error_value(scope, error)?;
                 let _ = resolver.reject(scope, exception);
                 Self::perform_microtask_checkpoints(scope, None)?;
                 Ok(())
@@ -4184,14 +4204,10 @@ impl ScriptVm {
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationRejected {
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
                 ..
             } => self
-                .apply_native_module_script_evaluation_rejected(
-                    reaction_id,
-                    reason,
-                    error_constructor,
-                )
+                .apply_native_module_script_evaluation_rejected(reaction_id, reason, error_value)
                 .map(PageModuleReactionApplication::module_state_updated),
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationFulfilled {
                 reaction_id,
@@ -4204,12 +4220,12 @@ impl ScriptVm {
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationRejected {
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
                 ..
             } => (self.apply_child_parser_module_evaluation_rejected(
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
             ) > 0)
                 .then_some(PageModuleReactionApplication::module_state_updated(
                     PageModuleReactionFollowup::None,
@@ -4350,12 +4366,12 @@ impl ScriptVm {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<PageModuleReactionFollowup> {
         let update = self.mark_module_evaluation_reaction_rejected_for_owner(
             reaction_id,
             reason,
-            error_constructor,
+            error_value,
         )?;
         Some(match update {
             DocumentModuleReactionUpdate::ParserOwned(update) => {
@@ -4497,17 +4513,12 @@ fn native_module_script_reaction_rejected_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let reason = args.get(0);
-    let error_constructor = script_error_constructor_kind_from_value(scope, reason);
-    let reason = reason
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown promise rejection".to_owned());
+    let error = native_module_evaluation_exception_error(scope, args.get(0), "");
     unsafe { &mut *host_ptr }.queue_document_module_script_evaluation_rejected(
         document_owner,
         reaction_id,
-        reason,
-        error_constructor,
+        error.message().to_owned(),
+        error.error_value(),
     );
 }
 
@@ -4544,18 +4555,13 @@ fn child_parser_module_reaction_rejected_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let reason = args.get(0);
-    let error_constructor = script_error_constructor_kind_from_value(scope, reason);
-    let reason = reason
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown promise rejection".to_owned());
+    let error = native_module_evaluation_exception_error(scope, args.get(0), "");
     unsafe { &mut *host_ptr }.queue_child_parser_module_script_evaluation_rejected(
         document_owner,
         realm_id,
         reaction_id,
-        reason,
-        error_constructor,
+        error.message().to_owned(),
+        error.error_value(),
     );
 }
 
@@ -4618,7 +4624,27 @@ fn get_i64_reaction_data_slot<'s>(
     lossless.then_some(value)
 }
 
-fn synthetic_module_evaluation_steps<'s>(
+fn synthetic_text_module_evaluation_steps<'s>(
+    context: v8::Local<'s, v8::Context>,
+    module: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    v8::callback_scope!(unsafe scope, context);
+    let Some(record) =
+        crate::module_runtime::SyntheticTextModuleSource::for_module(context, module)
+    else {
+        return throw_synthetic_module_error(scope, "synthetic module source is not available");
+    };
+    let source = record.source();
+    match record.key().kind() {
+        ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
+        ModuleKind::Css => {
+            evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
+        }
+        _ => throw_synthetic_module_error(scope, "unexpected synthetic text module kind"),
+    }
+}
+
+fn wasm_synthetic_module_evaluation_steps<'s>(
     context: v8::Local<'s, v8::Context>,
     module: v8::Local<'s, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -4626,39 +4652,15 @@ fn synthetic_module_evaluation_steps<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return throw_synthetic_module_error(scope, "synthetic module host is not available");
     };
-    let Some((key, source)) = (unsafe { &*host_ptr }).native_module_source_for(module) else {
-        return throw_synthetic_module_error(scope, "synthetic module source is not available");
-    };
-    match key.kind() {
-        ModuleKind::Json => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "JSON module source is not text");
-            };
-            evaluate_json_synthetic_module(scope, module, source)
-        }
-        ModuleKind::Css => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "CSS module source is not text");
-            };
-            evaluate_css_synthetic_module(scope, module, key.url().as_str(), source)
-        }
-        ModuleKind::WebAssembly => {
-            let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module)
-            else {
-                return throw_synthetic_module_error(
-                    scope,
-                    "WebAssembly synthetic module record is not available",
-                );
-            };
-            evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
-                wasm_import_value(scope, module, import)
-            })
-        }
-        ModuleKind::JavaScript | ModuleKind::ModulePreloadText => throw_synthetic_module_error(
+    let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module) else {
+        return throw_synthetic_module_error(
             scope,
-            "non-synthetic module reached synthetic module evaluation",
-        ),
-    }
+            "WebAssembly synthetic module record is not available",
+        );
+    };
+    evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
+        wasm_import_value(scope, module, import)
+    })
 }
 
 fn evaluate_json_synthetic_module<'s>(
@@ -4812,6 +4814,20 @@ fn canonical_native_module_instantiate_error(exception: &str, graph_urls: &[Url]
     format!("v8 failed to instantiate native module graph: {exception}")
 }
 
+fn native_module_instantiate_load_error(
+    message: String,
+    caught_error_constructor: Option<ScriptErrorConstructorKind>,
+    has_wasm_entry: bool,
+) -> ModuleLoadError {
+    let fallback_constructor = if has_wasm_entry {
+        ScriptErrorConstructorKind::WebAssemblyLinkError
+    } else {
+        ScriptErrorConstructorKind::SyntaxError
+    };
+    ModuleLoadError::new(ModuleLoadStage::Instantiate, message)
+        .with_error_constructor(caught_error_constructor.unwrap_or(fallback_constructor))
+}
+
 fn canonical_missing_export_link_error(exception: &str, graph_urls: &[Url]) -> Option<String> {
     let module = quoted_value_after(exception, "The requested module ")?;
     let export = quoted_value_after(exception, "does not provide an export named ")?;
@@ -4851,11 +4867,26 @@ fn native_module_evaluation_exception_error(
     exception: v8::Local<'_, v8::Value>,
     prefix: &str,
 ) -> ModuleLoadError {
-    let message = exception
-        .to_string(scope)
-        .map(|message| message.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown module evaluation exception".to_owned());
-    let error = ModuleLoadError::new(ModuleLoadStage::Evaluate, format!("{prefix}: {message}"));
+    let id = match retain_module_exception(scope, exception) {
+        Ok(id) => id,
+        Err(error) => {
+            return ModuleLoadError::new(
+                ModuleLoadStage::Evaluate,
+                format!("failed to retain module evaluation exception: {error}"),
+            );
+        }
+    };
+    // V8's internal diagnostic does not invoke author-defined toString or
+    // location getters. The diagnostic text never substitutes for the value.
+    let message = v8::Exception::create_message(scope, exception)
+        .get(scope)
+        .to_rust_string_lossy(scope);
+    let message = if prefix.is_empty() {
+        message
+    } else {
+        format!("{prefix}: {message}")
+    };
+    let error = ModuleLoadError::new(ModuleLoadStage::Evaluate, message).with_exception_id(id);
     match script_error_constructor_kind_from_value(scope, exception) {
         Some(error_constructor) => error.with_error_constructor(error_constructor),
         None => error,
@@ -4896,6 +4927,7 @@ fn script_error_value<'s>(
         ScriptErrorConstructorKind::SyntaxError => {
             Some(v8::Exception::syntax_error(scope, message))
         }
+        ScriptErrorConstructorKind::TypeError => Some(v8::Exception::type_error(scope, message)),
         ScriptErrorConstructorKind::WebAssemblyCompileError => {
             captured_webassembly_error_constructor(
                 scope,
@@ -4923,6 +4955,7 @@ fn script_error_prototype<'s>(
     let error = match constructor_kind {
         ScriptErrorConstructorKind::Error => v8::Exception::error(scope, empty),
         ScriptErrorConstructorKind::SyntaxError => v8::Exception::syntax_error(scope, empty),
+        ScriptErrorConstructorKind::TypeError => v8::Exception::type_error(scope, empty),
         ScriptErrorConstructorKind::WebAssemblyCompileError => {
             let constructor = captured_webassembly_error_constructor(
                 scope,
@@ -4967,8 +5000,15 @@ fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
     fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+    source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
 ) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, resource_name).expect("v8 string allocation");
+    let name = v8::String::new(
+        scope,
+        source_origin.map_or(resource_name, |origin| origin.url.as_str()),
+    )
+    .expect("v8 string allocation");
+    // Inline diagnostics identify the source document, while imports continue
+    // to resolve against the module's preparation-time base URL.
     let base_url = Url::parse(resource_name).ok();
     let host_defined_options = base_url.as_ref().and_then(|base_url| {
         crate::util::script_host_defined_options_with_fetch_metadata(
@@ -4976,13 +5016,15 @@ fn create_module_script_origin<'s>(
             base_url,
             fetch_metadata.nonce(),
             fetch_metadata.parser_inserted,
+            false,
+            None,
         )
     });
     v8::ScriptOrigin::new(
         scope,
         name.into(),
-        0,
-        0,
+        source_origin.map_or(0, |origin| origin.line_offset.min(i32::MAX as u32) as i32),
+        source_origin.map_or(0, |origin| origin.column_offset.min(i32::MAX as u32) as i32),
         false,
         -1,
         None,
@@ -5052,6 +5094,7 @@ fn module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {
 
 #[cfg(test)]
 mod tests {
+    mod parse_errors;
     use std::pin::pin;
 
     use super::{
@@ -5082,6 +5125,7 @@ mod tests {
     use crate::script_vm::{ScriptVm, ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness};
     use crate::types::{
         ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
+        ScriptErrorConstructorKind,
     };
     use crate::util::v8str;
     use moli_fetch::FetchConfig;
@@ -5273,7 +5317,7 @@ mod tests {
         vm: &mut ScriptVm,
         label: &str,
     ) {
-        for transition in ["interactive", "DOMContentLoaded", "complete"] {
+        for transition in ["DOMContentLoaded", "complete"] {
             assert!(
                 vm.run_child_frame_task_source_once_for_test(
                     ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -5311,7 +5355,6 @@ mod tests {
         label: &str,
     ) {
         for expected in [
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             ChildFrameSemanticTurnKind::HostLoad,
@@ -5390,6 +5433,41 @@ mod tests {
             native_child_module_script_reaction_data(scope, child_data.into()),
             Some((document_owner, FrameRealmId(realm_id), reaction_id)),
             "callback data must preserve the exact child Document and realm without Number coercion"
+        );
+    }
+
+    #[test]
+    fn native_module_instantiate_errors_use_stage_appropriate_constructors() {
+        let javascript_error = super::native_module_instantiate_load_error(
+            "javascript link failed".to_owned(),
+            None,
+            false,
+        );
+        assert_eq!(javascript_error.stage(), ModuleLoadStage::Instantiate);
+        assert_eq!(
+            javascript_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::SyntaxError)
+        );
+
+        let wasm_error = super::native_module_instantiate_load_error(
+            "WebAssembly link failed".to_owned(),
+            None,
+            true,
+        );
+        assert_eq!(
+            wasm_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::WebAssemblyLinkError)
+        );
+
+        let caught_syntax_error = super::native_module_instantiate_load_error(
+            "mixed graph failed".to_owned(),
+            Some(ScriptErrorConstructorKind::SyntaxError),
+            true,
+        );
+        assert_eq!(
+            caught_syntax_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::SyntaxError),
+            "an exact V8 exception constructor must win over the module-kind fallback"
         );
     }
 

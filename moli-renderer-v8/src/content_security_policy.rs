@@ -41,8 +41,9 @@ pub(crate) enum ContentSecurityPolicyResourceKind {
     DocumentMedia,
     DocumentScriptElement,
     DocumentStyleElement,
-    SharedWorkerScript,
+    WorkerConstructor,
     WorkerConnect,
+    WorkerDynamicModuleImport,
     WorkerScript,
     WorkerStaticModuleImport,
 }
@@ -219,8 +220,8 @@ impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
             disposition: violation.disposition,
             source_file: violation.source_file.as_str(),
             sample: violation.sample.as_str(),
-            line_number: 0,
-            column_number: 0,
+            line_number: violation.line_number,
+            column_number: violation.column_number,
             status_code: 0,
         }
     }
@@ -315,15 +316,6 @@ pub(crate) fn content_security_policy_allows_trusted_types_eval(policies: &[Stri
         && policies
             .iter()
             .any(|policy| policy_allows_trusted_types_eval(policy))
-}
-
-pub(crate) fn content_security_policy_allows_trusted_type_policy_name(
-    policies: &[String],
-    policy_name: &str,
-) -> bool {
-    policies
-        .iter()
-        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name))
 }
 
 pub(crate) fn content_security_policy_sandboxes_document_domain(policies: &[String]) -> bool {
@@ -486,7 +478,7 @@ pub(crate) fn content_security_policy_report_to_endpoints(
 pub(crate) fn content_security_policy_violation_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {
-    json!({
+    let mut report = json!({
         "csp-report": {
             "document-uri": fields.document_uri,
             "referrer": fields.referrer,
@@ -499,8 +491,14 @@ pub(crate) fn content_security_policy_violation_report_body(
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
-    })
-    .to_string()
+    });
+    if fields.line_number != 0 {
+        report["csp-report"]["line-number"] = json!(fields.line_number);
+    }
+    if fields.column_number != 0 {
+        report["csp-report"]["column-number"] = json!(fields.column_number);
+    }
+    report.to_string()
 }
 
 pub(crate) fn content_security_policy_reporting_api_report_body(
@@ -938,56 +936,92 @@ pub(crate) fn content_security_policy_source_file_for_report(source_file: &str) 
     source_url.to_string()
 }
 
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    // Imported worker scripts retain the originally requested URL separately
+    // from their final resource name and their (possibly muted) import base.
+    // Reporting the final URL could disclose a cross-origin redirect target.
+    let source_file = scope
+        .get_current_host_defined_options()
+        .and_then(|options| {
+            crate::util::script_request_url_from_host_defined_options(scope, options)
+        })
+        .map(|url| url.to_string())
+        .or_else(|| {
+            frame
+                .get_script_name_or_source_url(scope)
+                .map(|source| source.to_rust_string_lossy(scope))
+        })
+        .map(|source| content_security_policy_source_file_for_report(&source))
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
+}
+
 pub(crate) fn content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-    policies: &[String],
+    policy: &str,
     protected_url: &Url,
     sink: &str,
     sample: &str,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    policies.iter().find_map(|policy| {
-        if !policy_requires_trusted_types_for_script(policy) {
-            return None;
-        }
-        let document_uri = protected_url.to_string();
-        Some(ContentSecurityPolicyUrlViolation {
-            effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
-            blocked_uri: "trusted-types-sink".to_owned(),
-            source_file: document_uri.clone(),
-            document_uri,
-            original_policy: policy.clone(),
-            disposition,
-            report_uri_endpoints: content_security_policy_report_uri_endpoints(
-                policy,
-                protected_url,
-            ),
-            report_to_endpoints: content_security_policy_report_to_endpoints(
-                policy,
-                reporting_endpoints,
-            ),
-            sample: trusted_types_sink_violation_sample(sink, sample),
-            line_number: 0,
-            column_number: 0,
-        })
+    if !policy_requires_trusted_types_for_script(policy) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
+        blocked_uri: "trusted-types-sink".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.to_owned(),
+        disposition,
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_sink_violation_sample(sink, sample),
+        line_number: 0,
+        column_number: 0,
     })
 }
 
-pub(crate) fn content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+pub(crate) fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
     policy: &str,
     protected_url: &Url,
-    kind: ContentSecurityPolicyNonUrlKind,
+    policy_name: &str,
+    is_duplicate: bool,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_non_url_violation_with_source(
-        policy,
-        protected_url,
-        kind,
-        None,
+    if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: TRUSTED_TYPES,
+        blocked_uri: "trusted-types-policy".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.to_owned(),
         disposition,
-        reporting_endpoints,
-    )
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_violation_sample(policy_name),
+        line_number: 0,
+        column_number: 0,
+    })
 }
 
 pub(crate) fn content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
@@ -1088,7 +1122,7 @@ pub(crate) fn content_security_policy_inline_style_element_violation_with_dispos
     })
 }
 
-fn content_security_policy_non_url_violation_with_source(
+pub(crate) fn content_security_policy_non_url_violation_with_source(
     policy: &str,
     protected_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
@@ -1147,21 +1181,33 @@ fn policy_allows_trusted_types_eval(policy: &str) -> bool {
         })
 }
 
-fn policy_allows_trusted_type_policy_name(policy: &str, policy_name: &str) -> bool {
+fn policy_allows_trusted_type_policy_name(
+    policy: &str,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
     let directives = parsed_directives(policy);
     let Some(sources) = directive_source_list(&directives, TRUSTED_TYPES) else {
         return true;
     };
-    sources.iter().any(|source| {
+    let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
             || (!source.is_empty()
                 && source == policy_name
+                // Only tt-policy-name tokens can whitelist a literal name.
+                // The policy API itself accepts arbitrary strings, including
+                // under a wildcard, so do not validate policy_name globally.
                 && source.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
                 }))
-    })
+    });
+    let duplicate_is_allowed = !is_duplicate
+        || sources
+            .iter()
+            .any(|source| csp_keyword_eq(source, "allow-duplicates"));
+    name_is_allowed && duplicate_is_allowed
 }
 
 fn policy_sandboxes_document_domain(policy: &str) -> bool {
@@ -1215,8 +1261,12 @@ fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
 }
 
 fn trusted_types_sink_violation_sample(sink: &str, sample: &str) -> String {
-    let clipped = sample.chars().take(40).collect::<String>();
+    let clipped = trusted_types_violation_sample(sample);
     format!("{sink}|{clipped}")
+}
+
+fn trusted_types_violation_sample(sample: &str) -> String {
+    sample.chars().take(40).collect()
 }
 
 fn effective_source_list_with_directive(
@@ -1880,9 +1930,9 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
-            Self::DocumentScriptElement => SCRIPT_SRC_ELEM,
+            Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
-            Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
+            Self::WorkerConstructor | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
             Self::WorkerScript => SCRIPT_SRC,
         }
@@ -1897,8 +1947,9 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
-            Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
+            Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
+            Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerStaticModuleImport => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
         }
@@ -2158,43 +2209,43 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_none_blocks_shared_worker_script() {
+    fn worker_src_none_blocks_worker_constructor() {
         assert!(!allowed(
             "worker-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
+    fn worker_constructor_uses_script_src_and_default_src_fallbacks() {
         assert!(!allowed(
             "script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "default-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_child_src_before_script_src_fallback() {
+    fn worker_constructor_uses_child_src_before_script_src_fallback() {
         assert!(!allowed(
             "child-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "child-src https://workers.test; script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://workers.test/worker.js"
         ));
     }
@@ -2219,15 +2270,15 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_takes_precedence_for_shared_worker_scripts() {
+    fn worker_src_takes_precedence_for_worker_constructors() {
         assert!(allowed(
             "default-src 'none'; script-src 'none'; worker-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src *; script-src *; worker-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
@@ -2341,6 +2392,44 @@ mod tests {
             ContentSecurityPolicyResourceKind::WorkerScript,
             "https://cdn.test/worker-import.js"
         ));
+    }
+
+    #[test]
+    fn worker_module_imports_use_their_request_specific_directive_fallbacks() {
+        let cross_origin = "https://cdn.test/worker-import.js";
+
+        assert!(!allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src *; script-src 'self'",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(!allowed(
+            "script-src-elem 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+            &["script-src 'self'".to_owned()],
+            &protected_url(),
+            &request_url(cross_origin),
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        )
+        .expect("script-src fallback should block the cross-origin dynamic import");
+        assert_eq!(violation.effective_directive, "script-src-elem");
     }
 
     #[test]
@@ -2893,6 +2982,35 @@ mod tests {
     }
 
     #[test]
+    fn violation_report_formats_preserve_captured_script_locations() {
+        let mut violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'".to_owned()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        violation.source_file = "https://app.test/imported/script.js".into();
+        violation.line_number = 12;
+        violation.column_number = 34;
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        assert_eq!(fields.source_file, violation.source_file);
+        assert_eq!((fields.line_number, fields.column_number), (12, 34));
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
+        assert_eq!(legacy["csp-report"]["line-number"], 12);
+        assert_eq!(legacy["csp-report"]["column-number"], 34);
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
+        assert_eq!(reporting[0]["body"]["lineNumber"], 12);
+        assert_eq!(reporting[0]["body"]["columnNumber"], 34);
+    }
+
+    #[test]
     fn violation_report_request_uses_csp_fetch_security_modes() {
         let violation = content_security_policy_url_violation_with_redirect_status(
             &["connect-src 'none'; report-uri /csp-report".to_owned()],
@@ -2948,25 +3066,26 @@ mod tests {
     fn non_url_inline_script_uses_script_src_elem_fallbacks() {
         let reporting_endpoints = ContentSecurityPolicyReportingEndpoints::default();
         assert!(
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+            content_security_policy_non_url_violation_with_source(
                 "script-src-elem 'unsafe-inline'; script-src 'none'",
                 &protected_url(),
                 ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+                None,
                 ContentSecurityPolicyDisposition::Enforce,
                 &reporting_endpoints,
             )
             .is_none()
         );
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "script-src 'self'; default-src 'unsafe-inline'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
-                ContentSecurityPolicyDisposition::Report,
-                &reporting_endpoints,
-            )
-            .expect("script-src should block inline script without unsafe-inline");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "script-src 'self'; default-src 'unsafe-inline'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
+            ContentSecurityPolicyDisposition::Report,
+            &reporting_endpoints,
+        )
+        .expect("script-src should block inline script without unsafe-inline");
         assert_eq!(violation.effective_directive, "script-src-elem");
         assert_eq!(violation.blocked_uri, "inline");
         assert_eq!(
@@ -3278,10 +3397,11 @@ mod tests {
             "default-src 'unsafe-eval'",
         ] {
             assert!(
-                content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+                content_security_policy_non_url_violation_with_source(
                     policy,
                     &protected_url(),
                     ContentSecurityPolicyNonUrlKind::WasmEval,
+                    None,
                     ContentSecurityPolicyDisposition::Enforce,
                     &reporting_endpoints,
                 )
@@ -3290,42 +3410,53 @@ mod tests {
             );
         }
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "default-src 'self'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::WasmEval,
-                ContentSecurityPolicyDisposition::Enforce,
-                &reporting_endpoints,
-            )
-            .expect("default-src should block wasm eval without unsafe eval source");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "default-src 'self'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
+            ContentSecurityPolicyDisposition::Enforce,
+            &reporting_endpoints,
+        )
+        .expect("default-src should block wasm eval without unsafe eval source");
         assert_eq!(violation.effective_directive, "script-src");
         assert_eq!(violation.blocked_uri, "wasm-eval");
     }
 
     #[test]
     fn trusted_types_directive_filters_policy_names() {
-        let allowed = |policies: &[&str], name: &str| {
-            content_security_policy_allows_trusted_type_policy_name(
-                &policies
-                    .iter()
-                    .map(|policy| policy.to_string())
-                    .collect::<Vec<_>>(),
-                name,
-            )
+        let allowed = |policies: &[&str], name: &str, is_duplicate: bool| {
+            policies
+                .iter()
+                .all(|policy| policy_allows_trusted_type_policy_name(policy, name, is_duplicate))
         };
 
-        assert!(allowed(&[], "SomeName"));
-        assert!(allowed(&["default-src 'none'"], "SomeName"));
-        assert!(allowed(&["trusted-types SomeName OtherName"], "SomeName"));
-        assert!(allowed(&["trusted-types * 'aLLow-dUPLIcates'"], "SomeName"));
-        assert!(allowed(&["trusted-types 'none' SomeName"], "SomeName"));
-        assert!(!allowed(&["trusted-types"], "SomeName"));
-        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName"));
-        assert!(!allowed(&["trusted-types SomeName"], "default"));
+        assert!(allowed(&[], "SomeName", false));
+        assert!(allowed(&[], "SomeName", true));
+        assert!(allowed(&["default-src 'none'"], "SomeName", false));
+        assert!(allowed(
+            &["trusted-types SomeName OtherName"],
+            "SomeName",
+            false
+        ));
+        assert!(allowed(
+            &["trusted-types * 'aLLow-dUPLIcates'"],
+            "SomeName",
+            true
+        ));
+        assert!(allowed(
+            &["trusted-types 'none' SomeName"],
+            "SomeName",
+            false
+        ));
+        assert!(!allowed(&["trusted-types"], "SomeName", false));
+        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName", false));
+        assert!(!allowed(&["trusted-types SomeName"], "SomeName", true));
+        assert!(!allowed(&["trusted-types SomeName"], "default", false));
         assert!(!allowed(
             &["trusted-types SomeName", "trusted-types OtherName"],
-            "SomeName"
+            "SomeName",
+            false
         ));
     }
 
@@ -3336,7 +3467,7 @@ mod tests {
             let policy = format!("trusted-types {name}");
             let expected = byte.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&byte);
             assert_eq!(
-                policy_allows_trusted_type_policy_name(&policy, &name),
+                policy_allows_trusted_type_policy_name(&policy, &name, false),
                 expected,
                 "invalid tt-policy-name byte {byte:#04x} must not match literally",
             );
@@ -3344,23 +3475,32 @@ mod tests {
         for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
             assert!(policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {name}"),
-                name
+                name,
+                false,
             ));
         }
         assert!(policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "valid"
+            "valid",
+            false,
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "policy*name"
+            "policy*name",
+            false,
         ));
         for wildcard in ["\u{000b}*", "*\u{000b}", "policy*"] {
             assert!(!policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {wildcard}"),
-                "valid"
+                "valid",
+                false,
             ));
         }
+        assert!(!policy_allows_trusted_type_policy_name(
+            "trusted-types valid \u{000b}'allow-duplicates'",
+            "valid",
+            true,
+        ));
     }
 
     #[test]
@@ -3374,8 +3514,18 @@ mod tests {
             "\0",
         ] {
             for policy in ["", "trusted-types *"] {
-                assert!(policy_allows_trusted_type_policy_name(policy, name));
+                assert!(policy_allows_trusted_type_policy_name(policy, name, false));
             }
+            assert!(!policy_allows_trusted_type_policy_name(
+                "trusted-types *",
+                name,
+                true,
+            ));
+            assert!(policy_allows_trusted_type_policy_name(
+                "trusted-types * 'allow-duplicates'",
+                name,
+                true,
+            ));
         }
     }
 

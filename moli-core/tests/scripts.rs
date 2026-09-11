@@ -1,6 +1,3 @@
-#[path = "scripts/child_script_text.rs"]
-mod child_script_text;
-
 use moli_test_support as support;
 
 use anyhow::Result;
@@ -10,6 +7,42 @@ use moli_core::{
 };
 use support::FixtureServer;
 use tokio::time::Duration;
+
+#[path = "scripts/child_synthetic_modules.rs"]
+mod child_synthetic_modules;
+
+#[path = "scripts/preparation_errors.rs"]
+mod preparation_errors;
+
+#[path = "scripts/child_error_insertion.rs"]
+mod child_error_insertion;
+
+#[path = "scripts/child_readiness.rs"]
+mod child_readiness;
+
+#[path = "scripts/child_markup_insertion.rs"]
+mod child_markup_insertion;
+
+#[path = "scripts/child_script_text.rs"]
+mod child_script_text;
+
+#[path = "scripts/module_document_write.rs"]
+mod module_document_write;
+
+#[path = "scripts/document_close.rs"]
+mod document_close;
+
+#[path = "scripts/parser_cleanup.rs"]
+mod parser_cleanup;
+
+#[path = "scripts/parser_preparation.rs"]
+mod parser_preparation;
+
+#[path = "scripts/lifecycle_task_order.rs"]
+mod lifecycle_task_order;
+
+#[path = "scripts/post_parse_async.rs"]
+mod post_parse_async;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
@@ -828,6 +861,10 @@ async fn runtime_inserted_stylesheet_load_can_trigger_location_replace() -> Resu
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_blocking_progress()
 -> Result<()> {
+    // The stale stylesheet response is gated until the following parser script
+    // requests its probe. The probe reports whether it arrived before the
+    // stale-response fallback fired, so this checks parser progress without a
+    // wall-clock threshold in page script.
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
@@ -842,6 +879,12 @@ async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_b
     assert_eq!(
         diagnostic_global(&page, "runtimeInsertedHrefMutationSawLate"),
         Some(&JsValueSnapshot::Bool(false))
+    );
+    assert!(
+        page.subresource_network_records().iter().any(|record| {
+            record.url().path() == "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css"
+        }),
+        "the retargeted stylesheet must start the fresh fetch"
     );
 
     server.shutdown().await;
@@ -3140,6 +3183,10 @@ async fn dynamic_module_tla_exotic_rejection_reports_window_error_payload_withou
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
+        diagnostic_global(&page, "dynamicModuleTlaPayloadErrorIdentityMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
         diagnostic_global(&page, "dynamicModuleTlaPayloadFilenameMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
@@ -3333,12 +3380,12 @@ async fn importmap_registered_after_module_load_adds_unresolved_mapping() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dynamic_async_module_does_not_close_multiple_import_map_registration() -> Result<()> {
+async fn dynamic_async_module_allows_late_importmap() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/dynamic-async-module-closes-importmap-acquisition"))
+        .fetch(&server.url("/compat/dynamic-async-module-allows-late-importmap"))
         .await?;
     assert_eq!(diagnostic_global(&page, "dynamicAsyncImportMapLoads"), None);
     assert_eq!(
@@ -3347,7 +3394,7 @@ async fn dynamic_async_module_does_not_close_multiple_import_map_registration() 
     );
     assert_eq!(
         diagnostic_global(&page, "dynamicAsyncImportMapErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "dynamicAsyncModuleReady"),
@@ -3360,14 +3407,12 @@ async fn dynamic_async_module_does_not_close_multiple_import_map_registration() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping() -> Result<()> {
+async fn parser_owned_module_allows_late_dynamic_importmap() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(
-            &server.url("/compat/importmap-closed-by-parser-owned-module-before-late-dynamic-map"),
-        )
+        .fetch(&server.url("/compat/parser-owned-module-allows-late-dynamic-importmap"))
         .await?;
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionFirstGreeting"),
@@ -3379,7 +3424,7 @@ async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping()
     );
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionLateErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionMutationDone"),
@@ -3391,13 +3436,12 @@ async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_owned_importmap_after_dynamic_module_prepare_adds_unresolved_mapping() -> Result<()>
-{
+async fn parser_owned_importmap_applies_after_dynamic_module_prepare() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/parser-owned-importmap-blocked-after-dynamic-module-prepare"))
+        .fetch(&server.url("/compat/parser-owned-importmap-applies-after-dynamic-module-prepare"))
         .await?;
     assert_eq!(
         diagnostic_global(&page, "dynamicModulePrepareBarrierInstalled"),
@@ -3413,7 +3457,7 @@ async fn parser_owned_importmap_after_dynamic_module_prepare_adds_unresolved_map
     );
     assert_eq!(
         diagnostic_global(&page, "parserImportMapAfterDynamicModuleErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "parserImportMapAfterDynamicModuleDone"),
@@ -3828,6 +3872,10 @@ async fn parser_owned_module_tla_exotic_rejection_reports_window_error_payload_w
     );
     assert_eq!(
         diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorMessageMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorIdentityMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -5252,7 +5300,9 @@ async fn module_wasm_csp_blocks_cross_origin_script_element_fetch() -> Result<()
         .await?;
     assert_eq!(
         diagnostic_global(&page, "moduleWasmCspViolationCount"),
-        Some(&JsValueSnapshot::Number(1.0))
+        Some(&JsValueSnapshot::Number(1.0)),
+        "script report: {:#?}",
+        page.script_execution()
     );
     assert_eq!(
         diagnostic_global(&page, "moduleWasmCspViolationText"),
@@ -5263,6 +5313,12 @@ async fn module_wasm_csp_blocks_cross_origin_script_element_fetch() -> Result<()
     assert_eq!(
         diagnostic_global(&page, "moduleWasmCspExecuted"),
         Some(&JsValueSnapshot::String(String::new()))
+    );
+    assert!(
+        page.subresource_network_records()
+            .iter()
+            .all(|record| record.url().path() != "/assets/execute-start.wasm"),
+        "CSP must block the dynamic module before source transport starts"
     );
 
     server.shutdown().await;
@@ -5368,7 +5424,7 @@ async fn module_wasm_js_cycle_reports_guard_without_crashing() -> Result<()> {
         .await?;
     assert_eq!(
         diagnostic_global(&page, "moduleWasmJsCycleConstructor"),
-        Some(&JsValueSnapshot::String("Error".to_owned())),
+        Some(&JsValueSnapshot::String("TypeError".to_owned())),
         "message: {:?}",
         diagnostic_global(&page, "moduleWasmJsCycleMessage")
     );

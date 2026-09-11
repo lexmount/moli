@@ -10,7 +10,7 @@ use crate::{
         },
     },
 };
-use moli_script::ScriptPreparationDisposition;
+use moli_script::{ScriptPreparationDisposition, script_element_nonce_is_nonceable};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -27,10 +27,7 @@ impl RuntimeScriptPreparationContext {
         node: NativeNodeId,
     ) -> RuntimeScriptPreparationContext {
         let script_element = dom_host.node(node).and_then(Node::as_element);
-        let nonce = script_element
-            .and_then(|element| element.cryptographic_nonce())
-            .map(str::to_owned)
-            .or_else(|| dom_host.get_attribute(node, "nonce"));
+        let nonce = script_element_nonce_for_csp(dom_host, node).map(str::to_owned);
         let parser_inserted =
             script_element.is_some_and(|element| element.script_parser_inserted_for_prepare());
         let owner_document = dom_host.owner_document_handle(node);
@@ -54,6 +51,23 @@ impl RuntimeScriptPreparationContext {
             .with_parser_inserted(parser_inserted),
         }
     }
+}
+
+pub(crate) fn script_element_nonce_for_csp(dom_host: &DomHost, node: NativeNodeId) -> Option<&str> {
+    let element = dom_host.node(node).and_then(Node::as_element)?;
+    let nonce = element
+        .cryptographic_nonce()
+        .or_else(|| element.attribute("nonce"));
+    script_element_nonce_is_nonceable(
+        nonce,
+        false,
+        element
+            .attributes()
+            .iter()
+            .map(|attribute| (attribute.local_name(), attribute.value())),
+    )
+    .then_some(nonce)
+    .flatten()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,10 +107,9 @@ pub(crate) struct ScriptElementLoaderOptions {
     /// Valid scripts still commit their already-started state, but they must not
     /// fetch, register an import map, or execute.
     pub(crate) scripting_disabled: bool,
-    /// The caller will apply Trusted Types script-text preparation to the
-    /// returned inline source, so a changed empty source may still become
-    /// executable before the HTML empty-source check takes effect.
-    pub(crate) prepare_changed_empty_inline_source: bool,
+    /// Trusted Types script-text preparation has already updated the script's
+    /// internal slot. Read that slot before the empty-source and type checks.
+    pub(crate) use_prepared_script_text: bool,
 }
 
 impl ScriptElementLoaderOptions {
@@ -106,7 +119,7 @@ impl ScriptElementLoaderOptions {
             suppress_force_async: false,
             document_write_connected: false,
             scripting_disabled: !scripting_enabled,
-            prepare_changed_empty_inline_source: false,
+            use_prepared_script_text: false,
         }
     }
 }
@@ -347,14 +360,16 @@ pub(crate) fn decide_runtime_script_start(
     let source = match script_src {
         Some(source) => source,
         None => {
-            let source = dom_host.dom().direct_text_content(node).unwrap_or_default();
-            let changed_since_trusted_source = dom_host
-                .node(node)
-                .and_then(Node::as_element)
-                .is_some_and(|element| element.script_text_internal_slot() != source);
-            if source.is_empty()
-                && !(options.prepare_changed_empty_inline_source && changed_since_trusted_source)
-            {
+            let source = if options.use_prepared_script_text {
+                dom_host
+                    .node(node)
+                    .and_then(Node::as_element)
+                    .map(|element| element.script_text_internal_slot().to_owned())
+                    .unwrap_or_default()
+            } else {
+                dom_host.dom().direct_text_content(node).unwrap_or_default()
+            };
+            if source.is_empty() {
                 return RuntimeScriptStartDecision::Skip {
                     commit_start: false,
                     reason: Some(ScriptSkipReason::EmptyInlineScript),

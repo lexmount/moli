@@ -6,6 +6,9 @@ use support::FixtureServer;
 use tokio::time::Duration;
 use url::Url;
 
+#[path = "history_child/location_before_load.rs"]
+mod location_before_load;
+
 async fn wait_for_body_attribute(
     browser: &Browser,
     page: &mut moli_core::page::Page,
@@ -306,7 +309,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-history-unchanged=\"false\""),
+            .contains("data-top-history-unchanged=\"true\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -314,13 +317,13 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-advanced=\"true\"")
+            .contains("data-child-history-advanced=\"false\"")
     );
     assert!(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-current-entry-index=\"1\""),
+            .contains("data-child-current-entry-index=\"0\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -334,7 +337,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains(&format!("data-child-current-entry-url=\"{}\"", final_url)),
+            .contains(&format!("data-child-current-entry-url=\"{}\"", initial_url)),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -342,7 +345,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains(&format!("data-child-location-href=\"{}\"", final_url)),
+            .contains(&format!("data-child-location-href=\"{}\"", initial_url)),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -352,7 +355,7 @@ async fn assert_child_location_navigation_stays_window_local(
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-immediate=\"{}\"",
-                final_url
+                initial_url
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -438,7 +441,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-location-target-pending-microtask=\"true\"")
+            .contains("data-child-location-target-pending-microtask=\"false\"")
     );
     assert!(
         page.serialize_html_async()
@@ -446,7 +449,7 @@ async fn assert_child_location_navigation_stays_window_local(
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-pending-microtask=\"{}\"",
-                final_url
+                initial_url
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -525,6 +528,15 @@ async fn assert_child_location_navigation_stays_window_local(
             .await
             .unwrap()
             .contains("data-child-document-text-after-load=\"delayed\"")
+    );
+    assert_eq!(
+        evaluated_string(
+            page.evaluate_runtime_expression_async(
+                "document.getElementById('child').contentWindow.navigation.currentEntry.url",
+            )
+            .await?
+        ),
+        Some(final_url)
     );
 
     Ok(())
@@ -700,14 +712,14 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
         "data-document-default-view-same-immediate=\"true\"",
         "data-default-view-document-same-immediate=\"true\"",
         "data-child-document-still-committed-immediate=\"true\"",
-        "data-child-location-target-immediate=\"true\"",
+        "data-child-location-target-immediate=\"false\"",
         "data-window-same-pending-microtask=\"true\"",
         "data-document-same-pending-microtask=\"true\"",
         "data-window-document-same-pending-microtask=\"true\"",
         "data-document-default-view-same-pending-microtask=\"true\"",
         "data-default-view-document-same-pending-microtask=\"true\"",
         "data-child-document-still-committed-pending-microtask=\"true\"",
-        "data-child-location-target-pending-microtask=\"true\"",
+        "data-child-location-target-pending-microtask=\"false\"",
         "data-document-replaced-after-load=\"true\"",
     ] {
         assert!(html.contains(attr), "{attr}\n{html}");
@@ -738,8 +750,11 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
         assert_html_contains_attr(&html, "data-child-document-text-after-load", final_text);
     }
     for attr in [
-        ("data-child-location-immediate", final_url),
-        ("data-child-location-pending-microtask", final_url),
+        ("data-child-location-immediate", initial_url.as_str()),
+        (
+            "data-child-location-pending-microtask",
+            initial_url.as_str(),
+        ),
         ("data-child-location-after-load", final_url),
         ("data-child-document-url-immediate", &initial_url),
         ("data-child-document-url-pending-microtask", &initial_url),
@@ -749,19 +764,19 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
     if !final_is_cross_origin {
         assert_html_contains_attr(&html, "data-child-document-url-after-load", final_url);
     }
-    for attr in [
-        "data-child-pathname-immediate",
-        "data-child-pathname-pending-microtask",
-        "data-child-pathname-after-load",
+    let initial_pathname = Url::parse(&initial_url)?.path().to_owned();
+    for (attr, value) in [
+        ("data-child-pathname-immediate", initial_pathname.as_str()),
+        (
+            "data-child-pathname-pending-microtask",
+            initial_pathname.as_str(),
+        ),
+        ("data-child-pathname-after-load", final_pathname),
+        ("data-child-search-immediate", ""),
+        ("data-child-search-pending-microtask", ""),
+        ("data-child-search-after-load", final_search),
     ] {
-        assert_html_contains_attr(&html, attr, final_pathname);
-    }
-    for attr in [
-        "data-child-search-immediate",
-        "data-child-search-pending-microtask",
-        "data-child-search-after-load",
-    ] {
-        assert_html_contains_attr(&html, attr, final_search);
+        assert_html_contains_attr(&html, attr, value);
     }
 
     Ok(())
@@ -913,7 +928,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"4\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -923,7 +938,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-location-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -934,7 +949,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -945,7 +960,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
             .unwrap()
             .contains(&format!(
                 "data-child-current-entry-after-back=\"{}\"",
-                server.url("/compat/window-child-browsing-context-target-name-b")
+                server.url("/compat/window-child-browsing-context-target-name-a")
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -983,7 +998,7 @@ async fn child_browsing_context_history_relative_urls_stay_child_local() -> Resu
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"3\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -1089,7 +1104,7 @@ async fn child_browsing_context_history_relative_urls_stay_child_local() -> Resu
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-path-back-history-length=\"3\""),
+            .contains("data-child-path-back-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -1527,7 +1542,7 @@ async fn child_browsing_context_navigation_push_state_stays_window_local() -> Re
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-after-load=\"3\""),
+            .contains("data-child-history-length-after-load=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -2256,14 +2271,14 @@ async fn child_browsing_context_navigation_same_document_push_result_surface_mat
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-sync=\"hash=#dest|len=3|committed=false|finished=false|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest\""
+            "data-sync=\"hash=#dest|len=2|committed=false|finished=false|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-timeout=\"hash=#dest|len=3|committed=true|finished=true|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
+            "data-timeout=\"hash=#dest|len=2|committed=true|finished=true|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2305,14 +2320,14 @@ async fn child_browsing_context_navigation_same_document_replace_result_surface_
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-sync=\"hash=#dest|len=2|committed=false|finished=false|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest\""
+            "data-sync=\"hash=#dest|len=1|committed=false|finished=false|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-timeout=\"hash=#dest|len=2|committed=true|finished=true|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
+            "data-timeout=\"hash=#dest|len=1|committed=true|finished=true|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2366,14 +2381,14 @@ async fn child_browsing_context_navigation_result_surface_exists_in_child_script
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-sync=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-sync=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-timeout=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-timeout=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2760,14 +2775,14 @@ async fn child_browsing_context_navigation_push_result_surface_exists_in_child_s
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-sync=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-sync=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-timeout=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-timeout=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2803,7 +2818,7 @@ async fn child_browsing_context_navigation_push_result_surface_exists_in_child_s
             .await
             .unwrap()
             .contains(&format!(
-                "data-dest-current=\"{child_destination_url}|3|1\""
+                "data-dest-current=\"{child_destination_url}|2|1\""
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -3934,7 +3949,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-initial=\"2\""),
+            .contains("data-child-history-length-initial=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -3953,7 +3968,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-after-push=\"3\""),
+            .contains("data-child-history-length-after-push=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -3972,7 +3987,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"4\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4015,8 +4030,8 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
 }
 
 #[tokio::test]
-async fn child_browsing_context_initial_joint_history_length_updates_before_following_parent_script()
--> Result<()> {
+async fn child_browsing_context_initial_navigation_keeps_joint_history_length_stable() -> Result<()>
+{
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
@@ -4028,7 +4043,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-sync-history-length=\"2\""),
+            .contains("data-top-sync-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4036,7 +4051,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-load-history-length=\"2\""),
+            .contains("data-top-load-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4044,7 +4059,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-load-history-length=\"2\""),
+            .contains("data-child-load-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4175,11 +4190,13 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         "{}",
         page.serialize_html_async().await.unwrap()
     );
+    // The owner element's load callback runs before the child's pageshow
+    // completes, so this Location assignment replaces its history entry.
     assert!(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-sync-history-length=\"2\""),
+            .contains("data-child-sync-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4210,7 +4227,7 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-timeout-history-length=\"2\""),
+            .contains("data-child-timeout-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -5022,6 +5039,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   'cookieStore',\
                   'credentialless',\
                   'crossOriginIsolated',\
+                  'globalThis',\
                   'documentPictureInPicture',\
                   'fetch',\
                   'isSecureContext',\
@@ -5142,8 +5160,29 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                 const ownNames = Object.getOwnPropertyNames(win).sort();\
                 const ownKeys = Reflect.ownKeys(win).map(String).sort();\
                 const locationOwnNames = Object.getOwnPropertyNames(win.location).sort();\
-                const selfDescriptor = Object.getOwnPropertyDescriptor(win, 'self');\
-                const lengthDescriptor = Object.getOwnPropertyDescriptor(win, 'length');\
+                const accessorDescriptors = [\
+                  'window',\
+                  'self',\
+                  'location',\
+                  'closed',\
+                  'frames',\
+                  'length',\
+                  'top',\
+                  'opener',\
+                  'parent'\
+                ].map((name) => {\
+                  const descriptor = Object.getOwnPropertyDescriptor(win, name);\
+                  const cachedDescriptor = Object.getOwnPropertyDescriptor(win, name);\
+                  return [\
+                    name,\
+                    descriptor?.enumerable,\
+                    descriptor?.configurable,\
+                    [typeof descriptor?.get, descriptor?.get?.name ?? null, descriptor?.get?.length ?? null],\
+                    [typeof descriptor?.set, descriptor?.set?.name ?? null, descriptor?.set?.length ?? null],\
+                    descriptor?.get === cachedDescriptor?.get,\
+                    descriptor?.set === cachedDescriptor?.set\
+                  ];\
+                });\
                 const locationDescriptor = Object.getOwnPropertyDescriptor(win, 'location');\
                 const locationHrefDescriptor = Object.getOwnPropertyDescriptor(win.location, 'href');\
                 const locationHashDescriptor = Object.getOwnPropertyDescriptor(win.location, 'hash');\
@@ -5226,24 +5265,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   ownNamesLeakInternal: ownNames.some((name) => name.startsWith('__moli')),\
                   ownKeysLeakInternal: ownKeys.some((name) => name.startsWith('__moli')),\
                   locationOwnNamesLeakInternal: locationOwnNames.some((name) => name.startsWith('__moli')),\
-                  selfDescriptor: {\
-                    enumerable: selfDescriptor?.enumerable,\
-                    configurable: selfDescriptor?.configurable,\
-                    writable: selfDescriptor?.writable,\
-                    valueIsSelf: selfDescriptor?.value === win\
-                  },\
-                  lengthDescriptor: {\
-                    enumerable: lengthDescriptor?.enumerable,\
-                    configurable: lengthDescriptor?.configurable,\
-                    getterType: typeof lengthDescriptor?.get,\
-                    setterType: typeof lengthDescriptor?.set\
-                  },\
-                  locationDescriptor: {\
-                    enumerable: locationDescriptor?.enumerable,\
-                    configurable: locationDescriptor?.configurable,\
-                    getterType: typeof locationDescriptor?.get,\
-                    setterType: typeof locationDescriptor?.set\
-                  },\
+                  accessorDescriptors,\
                   locationHrefDescriptor: {\
                     enumerable: locationHrefDescriptor?.enumerable,\
                     configurable: locationHrefDescriptor?.configurable,\
@@ -5300,7 +5322,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
     assert_eq!(
         result,
         Some(
-            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:true:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:true:true","replace:true:true","__moliChildBrowsingContextHandle:false:false","unknownCrossOriginProbe:false:false"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"selfDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueIsSelf":true},"lengthDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationHrefDescriptor":{"enumerable":false,"configurable":false,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"postMessageDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:false:false:function:blur:0","focus:false:false:false:function:focus:0","close:false:false:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:SecurityError:true","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"SecurityError:true"}"#.to_owned(),
+            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:true:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:true:true","replace:true:true","__moliChildBrowsingContextHandle:false:false","unknownCrossOriginProbe:false:false"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"accessorDescriptors":[["window",false,true,["function","get window",0],["undefined",null,null],true,true],["self",false,true,["function","get self",0],["undefined",null,null],true,true],["location",false,true,["function","get location",0],["function","set location",1],true,true],["closed",false,true,["function","get closed",0],["undefined",null,null],true,true],["frames",false,true,["function","get frames",0],["undefined",null,null],true,true],["length",false,true,["function","get length",0],["undefined",null,null],true,true],["top",false,true,["function","get top",0],["undefined",null,null],true,true],["opener",false,true,["function","get opener",0],["undefined",null,null],true,true],["parent",false,true,["function","get parent",0],["undefined",null,null],true,true]],"locationHrefDescriptor":{"enumerable":false,"configurable":false,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"postMessageDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:false:false:function:blur:0","focus:false:false:false:function:focus:0","close:false:false:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:SecurityError:true","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","globalThis:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"SecurityError:true"}"#.to_owned(),
         ),
         "{}",
         page.serialize_html_async().await.unwrap()

@@ -16,12 +16,14 @@ use crate::page_task_queue::{
     PageTaskSender, PostParseLifecycleWork, RendererPageMainDocumentRuntimeProducer,
     WindowScriptFailureReportTask,
 };
+#[cfg(test)]
+use crate::planning::ScriptSource;
 use crate::{
     dom::{NodeId, native::NativeNodeId},
     {
         module_runtime::ModuleOwnerState,
-        planning::{PreparedScript, ScriptSource},
-        types::{ScriptErrorConstructorKind, ScriptKind, ScriptMode, ScriptSourceKind},
+        planning::PreparedScript,
+        types::{ScriptErrorValue, ScriptKind, ScriptMode, ScriptSourceKind},
     },
 };
 use std::collections::HashMap;
@@ -41,6 +43,7 @@ pub(crate) use loader::*;
 pub(crate) use runtime::*;
 
 #[derive(Debug)]
+#[cfg_attr(not(test), derive(Default))]
 pub(crate) struct HostScriptScheduler {
     #[cfg(test)]
     pending_dynamic_in_order_scripts: VecDeque<PreparedScript>,
@@ -59,6 +62,7 @@ pub(crate) struct HostScriptScheduler {
     native_module_owner_event_turn_queued: bool,
     module_owner: ModuleOwnerState,
     script_handles: HashMap<String, ScriptHandleState>,
+    #[cfg(test)]
     next_virtual_script_node_index: usize,
     next_dynamic_script_position: usize,
 }
@@ -285,6 +289,7 @@ pub(crate) enum QueuedScriptFailureKind {
     ModuleTopLevelLoad,
 }
 
+#[cfg(test)]
 impl Default for HostScriptScheduler {
     fn default() -> Self {
         Self {
@@ -305,6 +310,7 @@ impl Default for HostScriptScheduler {
             native_module_owner_event_turn_queued: false,
             module_owner: ModuleOwnerState::default(),
             script_handles: HashMap::new(),
+            #[cfg(test)]
             next_virtual_script_node_index: 1_000_000,
             next_dynamic_script_position: 0,
         }
@@ -601,13 +607,6 @@ impl HostScriptScheduler {
         self.module_owner.native_module_source(entry_id)
     }
 
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        self.module_owner.native_module_source_for(module)
-    }
-
     pub(crate) fn native_module_wasm_record_for(
         &self,
         module: v8::Local<'_, v8::Module>,
@@ -685,13 +684,6 @@ impl HostScriptScheduler {
         entry_id: ModuleEntryId,
     ) -> Option<v8::Global<v8::Module>> {
         self.module_owner.native_compiled_module(entry_id)
-    }
-
-    pub(crate) fn native_module_url_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<url::Url> {
-        self.module_owner.native_module_url_for(module)
     }
 
     pub(crate) fn mark_native_module_instantiated(&mut self, entry_id: ModuleEntryId) {
@@ -1084,13 +1076,13 @@ impl HostScriptScheduler {
         &self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> PostParseLifecycleWork {
         PostParseLifecycleWork::ReportWindowScriptFailure(
-            WindowScriptFailureReportTask::new_with_error_constructor(
+            WindowScriptFailureReportTask::new_with_error_value(
                 message,
                 filename.map(std::borrow::ToOwned::to_owned),
-                error_constructor,
+                error_value,
             ),
         )
     }
@@ -1103,7 +1095,7 @@ impl HostScriptScheduler {
         message: &str,
         filename: Option<&str>,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PostParseLifecycleWork> {
         let mut tasks = Vec::new();
         let message = normalize_module_link_failure_message(message, filename);
@@ -1137,7 +1129,7 @@ impl HostScriptScheduler {
             tasks.push(self.plan_window_script_failure_report_lifecycle_work(
                 &message,
                 filename,
-                error_constructor,
+                error_value,
             ));
         }
 
@@ -1173,7 +1165,7 @@ impl HostScriptScheduler {
         message: &str,
         filename: Option<&str>,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PageTask> {
         self.plan_script_failure_lifecycle_work(
             kind,
@@ -1182,7 +1174,7 @@ impl HostScriptScheduler {
             message,
             filename,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
         .into_iter()
         .map(PostParseLifecycleWork::into_page_task)
@@ -1338,6 +1330,7 @@ impl HostScriptScheduler {
         self.main_document_completion_recheck_turn_queued = false;
     }
 
+    #[cfg(test)]
     fn enqueue_script_event_lifecycle_work(&mut self, kind: ScriptEventKind, handle: &str) {
         if let Some(work) = self.plan_script_event_lifecycle_work(kind, handle) {
             self.enqueue_post_parse_lifecycle_work(work);
@@ -1456,15 +1449,11 @@ impl HostScriptScheduler {
         )
     }
 
-    fn register_dynamic_import_map(
-        &mut self,
-        preparation: &RuntimeScriptPreparationContext,
-        source: &str,
-    ) {
-        if let Err(message) = self.register_import_map(source, &preparation.base_url) {
+    pub(crate) fn register_dynamic_import_map(&mut self, base_url: &Url, source: &str) {
+        if let Err(message) = self.register_import_map(source, base_url) {
             let work = self.plan_window_script_failure_report_lifecycle_work(
                 &message,
-                Some(preparation.base_url.as_str()),
+                Some(base_url.as_str()),
                 None,
             );
             self.enqueue_post_parse_lifecycle_work(work);
@@ -1518,7 +1507,7 @@ impl HostScriptScheduler {
         mode: ScriptMode,
     ) -> std::result::Result<PreparedScript, String> {
         let position = self.next_dynamic_position();
-        let script = build_runtime_prepared_script(
+        let mut script = build_runtime_prepared_script(
             preparation,
             NativeNodeId::new(node_id.index()),
             position,
@@ -1528,6 +1517,12 @@ impl HostScriptScheduler {
             kind,
             mode,
         )?;
+        if script.kind == ScriptKind::Module
+            && script.source_kind == ScriptSourceKind::External
+            && script.fetch_metadata.integrity.is_none()
+        {
+            script.fetch_metadata.integrity = self.resolve_module_integrity(&script.url);
+        }
         if let Some(state) = self.script_handles.get_mut(host_script_handle) {
             state.followup_lane = Self::followup_lane_for_script(state.source, script.mode);
             if Self::queued_script_waits_until_dom_content_loaded(
@@ -1567,6 +1562,7 @@ impl HostScriptScheduler {
         Ok(())
     }
 
+    #[cfg(test)]
     fn prepare_failed_dynamic_script(
         &mut self,
         preparation: &RuntimeScriptPreparationContext,
@@ -1623,6 +1619,7 @@ impl HostScriptScheduler {
         })
     }
 
+    #[cfg(test)]
     fn queued_script_failure_kind(
         kind: ScriptKind,
         source_kind: ScriptSourceKind,
@@ -1651,6 +1648,7 @@ impl HostScriptScheduler {
         }
     }
 
+    #[cfg(test)]
     fn next_virtual_node_id(&mut self) -> NodeId {
         let node_id = NodeId::new(self.next_virtual_script_node_index);
         self.next_virtual_script_node_index += 1;

@@ -1659,8 +1659,22 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let Some((source_pixels, source_width, source_height)) =
-        html_image_pixels_copy(scope, source).or_else(|| canvas_like_pixels_copy(scope, source))
+    let bitmap_pixels = if super::image_bitmap::image_bitmap_receiver_branded(scope, source) {
+        let Some(pixels) = super::image_bitmap::image_bitmap_pixels_copy(scope, source) else {
+            crate::context_bootstrap::throw_dom_exception_value(
+                scope,
+                "The ImageBitmap is detached.",
+                "InvalidStateError",
+            );
+            return;
+        };
+        Some(pixels)
+    } else {
+        None
+    };
+    let Some((source_pixels, source_width, source_height)) = bitmap_pixels
+        .or_else(|| html_image_pixels_copy(scope, source))
+        .or_else(|| canvas_like_pixels_copy(scope, source))
     else {
         return;
     };
@@ -1897,10 +1911,13 @@ pub(crate) fn canvas_context_create_image_data_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
-    if let Some(image_data) = build_image_data_object(scope, width, height) {
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    if let Some(image_data) = build_image_data_object(target_scope, width, height) {
         rv.set(image_data.into());
     } else {
-        rv.set(v8::undefined(scope).into());
+        rv.set(v8::undefined(target_scope).into());
     }
 }
 
@@ -2010,10 +2027,13 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
     } else {
         blank_image_data(width, height)
     };
-    let Some(image_data) = build_image_data_object_with_bytes(scope, width, height, bytes)
-        .or_else(|| build_image_data_object(scope, width, height))
-    else {
-        rv.set(v8::undefined(scope).into());
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let image_data = build_image_data_object_with_bytes(target_scope, width, height, bytes)
+        .or_else(|| build_image_data_object(target_scope, width, height));
+    let Some(image_data) = image_data else {
+        rv.set(v8::undefined(target_scope).into());
         return;
     };
     rv.set(image_data.into());

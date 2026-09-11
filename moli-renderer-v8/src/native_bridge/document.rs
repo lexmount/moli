@@ -3,22 +3,25 @@ use crate::{
     custom_elements,
     dom::native::{DocumentTitleSetterTarget, Node},
     native_bridge::abort::dom_exception_value,
+    webidl,
 };
 
 use super::super::{
     document_runtime::DomHandle,
     util::{
-        call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_value,
-        global_bridge_object, set_private_value, throw_type_error, v8_string, v8str,
+        call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_object,
+        get_private_value, global_bridge_object, set_private_value, throw_type_error, v8_string,
+        v8str,
     },
 };
+use super::element::{canonical_dir_value, element_attribute, set_reflected_attribute};
 use super::node::{
     node_is_document, node_runtime_and_handle_from_object,
     node_runtime_and_handle_from_object_or_detached,
 };
 use super::{
     JsContextHost, callback_arg_namespace, callback_arg_string, collections,
-    identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind},
+    identity::{CollectionKind, LiveCollectionQueryKind},
     runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
     validate_qualified_name_and_namespace,
@@ -49,6 +52,7 @@ pub(crate) const DETACHED_NATIVE_HANDLE_SLOT: &str = "__moliDetachedNativeHandle
 pub(crate) const DETACHED_NATIVE_NODE_LIST_HANDLES_SLOT: &str =
     "__moliDetachedNativeNodeListHandles";
 const DOCUMENT_ASSOCIATED_WINDOW_SLOT: &str = "__moliDocumentAssociatedWindow";
+const DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT: &str = "__moliDetachedDocumentOriginSource";
 
 pub(crate) fn node_document_design_mode_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -135,7 +139,8 @@ pub(in crate::native_bridge) use css_state::{
 };
 pub(crate) use css_state::{
     apply_stylesheet_owner_css_projections, apply_stylesheet_source_css_projection,
-    clear_adopted_stylesheet_font_face_wrappers, sync_document_fonts_for_handle,
+    clear_adopted_stylesheet_font_face_wrappers, load_font_faces_used_by_subtrees,
+    sync_document_fonts_for_handle,
 };
 use css_state::{detached_document_fonts_getter, document_fonts_getter_function};
 pub(crate) use css_state::{
@@ -154,9 +159,6 @@ pub(in crate::native_bridge) use detached_install::{
     set_detached_text_replacement_value,
 };
 use detached_install::{
-    detached_document_anchors_value, detached_document_applets_value,
-    detached_document_embeds_value, detached_document_forms_value, detached_document_images_value,
-    detached_document_links_value, detached_document_scripts_value,
     install_detached_character_data_instance_properties,
     install_detached_document_instance_properties,
     install_detached_document_type_instance_properties,
@@ -300,6 +302,184 @@ pub(in crate::native_bridge::document) use structure::set_document_body_for_nati
 
 pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
+pub(crate) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
+
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum DocumentForwardedReflection {
+    Dir,
+    FgColor,
+    LinkColor,
+    VlinkColor,
+    AlinkColor,
+    BgColor,
+    Count,
+}
+
+#[derive(Clone, Copy)]
+enum DocumentForwardedTarget {
+    DocumentElement,
+    Body,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DocumentForwardedValueKind {
+    Dir,
+    LegacyNullToEmptyDomString,
+}
+
+struct DocumentForwardedReflectionDescriptor {
+    target: DocumentForwardedTarget,
+    attribute: &'static str,
+    member: &'static str,
+    value_kind: DocumentForwardedValueKind,
+}
+
+const DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS: &[(
+    DocumentForwardedReflection,
+    DocumentForwardedReflectionDescriptor,
+)] = &[
+    (
+        DocumentForwardedReflection::Dir,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::DocumentElement,
+            attribute: "dir",
+            member: "dir",
+            value_kind: DocumentForwardedValueKind::Dir,
+        },
+    ),
+    (
+        DocumentForwardedReflection::FgColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "text",
+            member: "fgColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::LinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "link",
+            member: "linkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::VlinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "vlink",
+            member: "vlinkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::AlinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "alink",
+            member: "alinkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::BgColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "bgcolor",
+            member: "bgColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+];
+
+const _: () = {
+    assert!(
+        DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS.len()
+            == DocumentForwardedReflection::Count as usize
+    );
+    let mut index = 0;
+    while index < DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS.len() {
+        assert!(DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS[index].0 as usize == index);
+        index += 1;
+    }
+};
+
+impl DocumentForwardedReflection {
+    fn descriptor_from_callback_data(
+        scope: &mut v8::PinScope<'_, '_>,
+        data: v8::Local<'_, v8::Value>,
+    ) -> Option<&'static DocumentForwardedReflectionDescriptor> {
+        DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS
+            .get(data.uint32_value(scope)? as usize)
+            .map(|(_, descriptor)| descriptor)
+    }
+}
+
+impl<'s> moli_webapi_declare::WebApiValue<'s> for DocumentForwardedReflection {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        Some(v8::Integer::new_from_unsigned(scope, *self as u32).into())
+    }
+}
+
+impl<'s> moli_webapi_declare::WebApiTemplateValue<'s> for DocumentForwardedReflection {
+    fn to_v8_template_value(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        Some(v8::Integer::new_from_unsigned(scope, *self as u32).into())
+    }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "Document", enumerable)]
+struct DocumentForwardedReflectionPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::Dir
+    )]
+    dir: (),
+    #[webapi(
+        accessor_property = "fgColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::FgColor
+    )]
+    fg_color: (),
+    #[webapi(
+        accessor_property = "linkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::LinkColor
+    )]
+    link_color: (),
+    #[webapi(
+        accessor_property = "vlinkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::VlinkColor
+    )]
+    vlink_color: (),
+    #[webapi(
+        accessor_property = "alinkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::AlinkColor
+    )]
+    alink_color: (),
+    #[webapi(
+        accessor_property = "bgColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::BgColor
+    )]
+    bg_color: (),
+}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Document, enumerable)]
@@ -399,6 +579,11 @@ struct DocumentStatePrototypeDeclaration {
     visibility_state: (),
     #[webapi(accessor_property, getter = document_prerendering_getter_function)]
     prerendering: (),
+    #[webapi(
+        accessor_property = "wasDiscarded",
+        getter = document_was_discarded_getter_function
+    )]
+    was_discarded: (),
     #[webapi(
         accessor_property,
         getter = document_domain_getter_function,
@@ -517,6 +702,163 @@ fn document_receiver_runtime_and_handle<'s>(
         return None;
     }
     Some((runtime_ptr, handle))
+}
+
+fn document_origin_source_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let mut source = document;
+    for _ in 0..16 {
+        let Some(next) = get_private_object(scope, source, DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT)
+        else {
+            break;
+        };
+        source = next;
+    }
+    source
+}
+
+pub(crate) fn inherit_detached_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    source_document: v8::Local<'s, v8::Object>,
+) {
+    let source_document = document_origin_source_object(scope, source_document);
+    set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT,
+        source_document.into(),
+    );
+}
+
+pub(crate) fn document_domain_value_for_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let origin_source = document_origin_source_object(scope, document);
+    let (runtime_ptr, handle) = document_receiver_runtime_and_handle(scope, origin_source)?;
+    Some(unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle))
+}
+
+fn document_forwarded_target_handle(
+    runtime: &JsContextHost,
+    document_handle: DomHandle,
+    target: DocumentForwardedTarget,
+    for_setter: bool,
+) -> Option<DomHandle> {
+    let dom = runtime.dom_host().dom();
+    let document = dom.node(document_handle).and_then(Node::as_document)?;
+    let handle = match target {
+        DocumentForwardedTarget::DocumentElement => {
+            document.document_element_handle(dom, document_handle)?
+        }
+        DocumentForwardedTarget::Body => match document.body_handle(dom, document_handle) {
+            Some(body) => body,
+            None if !for_setter => {
+                let document_element = document.document_element_handle(dom, document_handle)?;
+                dom.find_child(document_element, |handle| {
+                    dom.node(handle)
+                        .is_some_and(|node| node.is_html_element_named("frameset"))
+                })?
+            }
+            None => return None,
+        },
+    };
+    let node = runtime.dom_host().node(handle)?;
+    let matches = match target {
+        DocumentForwardedTarget::DocumentElement => node.is_html_element_named("html"),
+        DocumentForwardedTarget::Body => {
+            node.is_html_element_named("body")
+                || (!for_setter && node.is_html_element_named("frameset"))
+        }
+    };
+    matches.then_some(handle)
+}
+
+fn document_forwarded_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        DocumentForwardedReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    let Some((runtime_ptr, document_handle)) =
+        document_receiver_runtime_and_handle(scope, args.this())
+    else {
+        throw_type_error(
+            scope,
+            "Failed to get a reflected property on 'Document': Illegal invocation.",
+        );
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(target_handle) =
+        document_forwarded_target_handle(runtime, document_handle, descriptor.target, false)
+    else {
+        rv.set_empty_string();
+        return;
+    };
+    let raw = element_attribute(runtime, target_handle, descriptor.attribute).unwrap_or_default();
+    let value = match descriptor.value_kind {
+        DocumentForwardedValueKind::Dir => canonical_dir_value(&raw),
+        DocumentForwardedValueKind::LegacyNullToEmptyDomString => raw.as_str(),
+    };
+    set_document_string_return_value(scope, &mut rv, value);
+}
+
+fn document_forwarded_reflection_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        DocumentForwardedReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    let Some((runtime_ptr, document_handle)) =
+        document_receiver_runtime_and_handle(scope, args.this())
+    else {
+        throw_type_error(
+            scope,
+            "Failed to set a reflected property on 'Document': Illegal invocation.",
+        );
+        return;
+    };
+    let options = webidl::StringOptions {
+        treat_null_as_empty_string: descriptor.value_kind
+            == DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+    };
+    let value = match webidl::convert_with_options::<webidl::DomString>(
+        scope,
+        args.get(0),
+        webidl::Context::member("Document", descriptor.member),
+        &options,
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if let Some(target_handle) =
+        document_forwarded_target_handle(runtime, document_handle, descriptor.target, true)
+    {
+        set_reflected_attribute(
+            scope,
+            runtime_ptr,
+            target_handle,
+            descriptor.attribute,
+            &value,
+        );
+    }
+    rv.set_undefined();
 }
 
 fn document_obsolete_noop_callback<'s>(
@@ -657,7 +999,7 @@ fn document_title_setter_function<'s>(
 ) {
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let Some(value) = args.get(0).to_string(scope) else {
@@ -726,7 +1068,7 @@ fn document_head_getter_function<'s>(
 ) {
     let receiver = args.this();
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_null();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
@@ -1001,12 +1343,10 @@ fn document_domain_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
-    else {
+    let Some(value) = document_domain_value_for_object(scope, args.this()) else {
         rv.set_undefined();
         return;
     };
-    let value = unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle);
     set_document_string_return_value(scope, &mut rv, &value);
 }
 
@@ -1104,6 +1444,27 @@ fn current_script_belongs_to_document(
         .is_some_and(|owner_document| owner_document == document_handle)
 }
 
+fn document_has_browsing_context(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    // Detached iframe compatibility windows can become a document's defaultView
+    // without registering a browsing context. They must not make it visible.
+    runtime.dom_host().document_handle() == handle
+        || runtime
+            .child_browsing_context_host_for_document_handle(handle)
+            .is_some()
+        || runtime
+            .lightweight_popup_id_for_document_handle(handle)
+            .is_some()
+}
+
+fn document_is_hidden(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_document)
+        .is_none_or(|document| document.visibility_hidden())
+        || !document_has_browsing_context(runtime, handle)
+}
+
 fn document_hidden_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1114,9 +1475,7 @@ fn document_hidden_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(
-        document_associated_window_for_object(scope, runtime_ptr, handle, args.this()).is_none(),
-    );
+    rv.set_bool(document_is_hidden(unsafe { &*runtime_ptr }, handle));
 }
 
 fn document_visibility_state_getter_function<'s>(
@@ -1129,12 +1488,10 @@ fn document_visibility_state_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let state = if document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some()
-    {
-        "visible"
-    } else {
+    let state = if document_is_hidden(unsafe { &*runtime_ptr }, handle) {
         "hidden"
+    } else {
+        "visible"
     };
     set_document_string_return_value(scope, &mut rv, state);
 }
@@ -1146,6 +1503,21 @@ fn document_prerendering_getter_function<'s>(
 ) {
     if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
         rv.set_undefined();
+        return;
+    }
+    rv.set_bool(false);
+}
+
+fn document_was_discarded_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
+        throw_type_error(
+            scope,
+            "Document.wasDiscarded getter called on incompatible receiver.",
+        );
         return;
     }
     rv.set_bool(false);
@@ -1175,7 +1547,7 @@ fn document_forms_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Forms);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Forms);
 }
 
 fn document_images_getter_function<'s>(
@@ -1183,7 +1555,7 @@ fn document_images_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Images);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Images);
 }
 
 fn document_scripts_getter_function<'s>(
@@ -1191,7 +1563,7 @@ fn document_scripts_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Scripts);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Scripts);
 }
 
 fn document_links_getter_function<'s>(
@@ -1199,7 +1571,7 @@ fn document_links_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Links);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Links);
 }
 
 fn document_anchors_getter_function<'s>(
@@ -1207,7 +1579,7 @@ fn document_anchors_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Anchors);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Anchors);
 }
 
 fn document_embeds_getter_function<'s>(
@@ -1215,7 +1587,7 @@ fn document_embeds_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Embeds);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Embeds);
 }
 
 fn document_plugins_getter_function<'s>(
@@ -1223,7 +1595,7 @@ fn document_plugins_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Plugins);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Embeds);
 }
 
 fn document_applets_getter_function<'s>(
@@ -1231,90 +1603,40 @@ fn document_applets_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Applets);
-}
-
-#[derive(Clone, Copy)]
-enum DocumentCollectionAccessorKind {
-    Forms,
-    Images,
-    Scripts,
-    Links,
-    Anchors,
-    Embeds,
-    Plugins,
-    Applets,
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Applets);
 }
 
 fn document_html_collection_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    kind: DocumentCollectionAccessorKind,
+    kind: LiveCollectionQueryKind,
 ) {
     let receiver = args.this();
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_undefined();
+        throw_type_error(
+            scope,
+            "Document collection getter called on incompatible receiver.",
+        );
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !is_html_document(runtime, handle) {
-        rv.set_undefined();
-        return;
-    }
-    if detached_native_handle_for_runtime(scope, runtime_ptr, receiver).is_some() {
-        match detached_document_collection_for_kind(scope, receiver, kind) {
-            Some(collection) => rv.set(collection.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    let (query_kind, query, tag_name_html_document) = match kind {
-        DocumentCollectionAccessorKind::Forms => (LiveCollectionQueryKind::Forms, None, None),
-        DocumentCollectionAccessorKind::Images => (LiveCollectionQueryKind::Images, None, None),
-        DocumentCollectionAccessorKind::Scripts => (LiveCollectionQueryKind::Scripts, None, None),
-        DocumentCollectionAccessorKind::Links => (LiveCollectionQueryKind::Links, None, None),
-        DocumentCollectionAccessorKind::Anchors => (LiveCollectionQueryKind::Anchors, None, None),
-        DocumentCollectionAccessorKind::Embeds | DocumentCollectionAccessorKind::Plugins => (
-            LiveCollectionQueryKind::TagName,
-            Some("embed".to_owned()),
-            Some(true),
-        ),
-        DocumentCollectionAccessorKind::Applets => (
-            LiveCollectionQueryKind::TagName,
-            Some("__moli-never-match__".to_owned()),
-            Some(true),
-        ),
-    };
-    let descriptor = LiveCollectionDescriptor {
-        collection_kind: CollectionKind::HtmlCollection,
-        query_kind,
-        root: handle,
-        query,
-        include_root: true,
-        tag_name_html_document,
-        resolution_cache: Default::default(),
-    };
-    let collection = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
+    // A child Document wrapper can precede its Window realm. Follow the
+    // associated Window once available, including through a borrowed getter.
+    let context = document_associated_window_for_object(scope, runtime_ptr, handle, receiver)
+        .and_then(|window| window.get_creation_context(scope))
+        .or_else(|| receiver.get_creation_context(scope))
+        .expect("Document must have a creation context");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let collection = collections::build_live_collection_for_node(
+        scope,
+        runtime_ptr,
+        handle,
+        CollectionKind::HtmlCollection,
+        kind,
+        None,
+        false,
+    );
     rv.set(collection.into());
-}
-
-fn detached_document_collection_for_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    kind: DocumentCollectionAccessorKind,
-) -> Option<v8::Local<'s, v8::Object>> {
-    match kind {
-        DocumentCollectionAccessorKind::Forms => detached_document_forms_value(scope, document),
-        DocumentCollectionAccessorKind::Images => detached_document_images_value(scope, document),
-        DocumentCollectionAccessorKind::Scripts => detached_document_scripts_value(scope, document),
-        DocumentCollectionAccessorKind::Links => detached_document_links_value(scope, document),
-        DocumentCollectionAccessorKind::Anchors => detached_document_anchors_value(scope, document),
-        DocumentCollectionAccessorKind::Embeds | DocumentCollectionAccessorKind::Plugins => {
-            detached_document_embeds_value(scope, document)
-        }
-        DocumentCollectionAccessorKind::Applets => detached_document_applets_value(scope, document),
-    }
 }
 
 fn document_default_view_getter_function<'s>(
@@ -1357,6 +1679,17 @@ fn document_associated_window_for_object<'s>(
         .map(|context| context.global(scope))
 }
 
+pub(crate) fn document_associated_window_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let document = unsafe { &mut *runtime_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, runtime_ptr, handle)?;
+    document_associated_window_for_object(scope, runtime_ptr, handle, document)
+}
+
 pub(in crate::native_bridge) fn set_document_associated_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -1379,6 +1712,9 @@ pub(crate) fn install_document_template_bindings<'s>(
     if interface_name == "Document" {
         DocumentMetadataPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentStructurePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+        DocumentForwardedReflectionPrototypeDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
         DocumentFocusPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentViewPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentStatePrototypeDeclaration::initialize_prototype_template(scope, prototype);

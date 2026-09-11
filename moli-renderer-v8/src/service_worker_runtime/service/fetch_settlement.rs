@@ -100,6 +100,9 @@ fn configure_service_worker_network_fallback_request(
             job.network_context.resource_type,
         ))
         .with_subframe_context(job.network_context.frame_id.is_some());
+    if let Some(request_origin) = job.metadata.request_origin.clone() {
+        request = request.with_request_origin(request_origin);
+    }
     if service_worker_fetch_is_navigation_request(job) {
         request = if job.network_context.frame_id.is_some() {
             request.with_subframe_navigation_cookie_context()
@@ -120,6 +123,7 @@ fn service_worker_fetch_stream_response_head(
     response_head: &MaterializedServiceWorkerFetchResponseHead,
 ) -> moli_fetch::ResponseHead {
     moli_fetch::ResponseHead {
+        status_text: Some(response_head.status_text.clone()),
         final_url: response_head
             .final_url
             .clone()
@@ -360,6 +364,7 @@ impl ServiceWorkerRuntimeService {
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
                         response: Box::new(navigation_response),
                         response_filter: None,
+                        from_network_fallback: true,
                     })
                 }
                 Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
@@ -626,6 +631,7 @@ impl ServiceWorkerRuntimeService {
         let response_filter = service_worker_fetch_response_filter(&response);
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
             moli_fetch::ResponseHead {
+                status_text: Some(response.status_text.clone()),
                 final_url,
                 status: response.status,
                 headers: response.headers,
@@ -644,6 +650,7 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerDirectFetchResponse {
                     response: Box::new(navigation_response),
                     response_filter,
+                    from_network_fallback: false,
                 },
             ));
             return;
@@ -1323,6 +1330,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
             },
         });
@@ -1407,6 +1415,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
             },
         });
@@ -2926,6 +2935,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "image/png".to_owned())],
             },
         });
@@ -2993,6 +3003,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "image/png".to_owned())],
             },
         });
@@ -3057,6 +3068,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "image/png".to_owned())],
             },
         });

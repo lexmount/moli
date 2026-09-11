@@ -17,6 +17,20 @@ pub(crate) struct PreparedEventCallback {
     relevant_identity: Option<WindowExecutionContextIdentity>,
 }
 
+pub(crate) struct WindowErrorReportingScope {
+    host_ptr: *mut JsContextHost,
+    owner: WindowExecutionContextOwner,
+}
+
+impl Drop for WindowErrorReportingScope {
+    fn drop(&mut self) {
+        let removed = unsafe { &mut *self.host_ptr }
+            .active_window_error_report_owners
+            .remove(&self.owner);
+        debug_assert!(removed, "Window error reporting scope must be active");
+    }
+}
+
 impl PreparedEventCallback {
     pub(crate) fn callback<'s>(
         &self,
@@ -80,6 +94,18 @@ impl EventCallbackRegistry {
 }
 
 impl JsContextHost {
+    pub(crate) fn enter_window_error_reporting_scope(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+    ) -> Option<WindowErrorReportingScope> {
+        self.active_window_error_report_owners
+            .insert(owner)
+            .then(|| WindowErrorReportingScope {
+                host_ptr: self,
+                owner,
+            })
+    }
+
     pub(crate) fn register_target_event_listener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -220,14 +246,14 @@ impl JsContextHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
-        self.set_registered_event_handler_property_with_contexts(
-            scope,
-            target,
-            event_type,
-            handler,
-            target_context,
-            target_context,
-        );
+        let callback_id = handler.map(|handler| {
+            self.register_event_callback(scope, handler.into(), target_context, target_context)
+        });
+        if let Some(previous) =
+            self.set_compiled_event_handler_property(target, event_type, callback_id)
+        {
+            self.release_event_callback(previous);
+        }
     }
 
     fn set_registered_event_handler_property_with_contexts<'s>(

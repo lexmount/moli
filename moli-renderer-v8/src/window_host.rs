@@ -9,6 +9,7 @@ use super::{
     context_bootstrap::increment_performance_event_count,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
+    context_bootstrap::set_event_trusted,
     context_bootstrap::simple_event_target_add_event_listener_callback,
     context_bootstrap::simple_event_target_dispatch_event_callback,
     context_bootstrap::simple_event_target_remove_event_listener_callback,
@@ -265,6 +266,10 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_add_event_listener_callback(scope, args, rv);
         return;
@@ -296,6 +301,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let passive = call
@@ -378,6 +384,10 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_remove_event_listener_callback(scope, args, rv);
         return;
@@ -400,6 +410,10 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+            return;
+        }
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     host.remove_registered_event_listener(scope, target, &call.event_type, call.callback, capture);
@@ -410,6 +424,10 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;
@@ -426,7 +444,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         None
     };
     if child_window_target.is_none() && target.is_none() {
-        rv.set_bool(false);
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let event_value = args.get(0);
@@ -476,6 +494,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     }
 
+    set_event_trusted(scope, event, false);
     let event_type = event_type_string(scope, event);
     if let Some(handle) = child_window_target {
         let event_type = event_type.as_deref().unwrap_or_default();
@@ -662,7 +681,7 @@ fn prepare_window_timer_handler<'s>(
     let host = unsafe { &mut *host_ptr };
     let allow_trusted_types_eval =
         requirements.is_enforced() && host.allows_trusted_types_eval(scope);
-    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval)
+    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(source.as_str()))
         .then_some(WindowTimerHandler::Source(source))
 }
 
@@ -723,6 +742,10 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
     cancel_window_timer_for_receiver(scope, args.this(), id);

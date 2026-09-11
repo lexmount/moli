@@ -5,11 +5,23 @@ use crate::page_task_queue::{
 use super::PageVm;
 
 impl PageVm {
-    pub(in crate::runtime) fn apply_selected_page_dom_manipulation_turn(
+    pub(in crate::runtime) async fn apply_selected_page_dom_manipulation_turn(
         &mut self,
         task: RendererPageDomManipulationTask,
     ) -> anyhow::Result<PageDomManipulationTurnOutcome> {
         match task {
+            RendererPageDomManipulationTask::ChildHostLoad(task) => Ok(self
+                .apply_selected_page_child_host_load_turn(task)
+                .map_action(PageDomManipulationTurnAction::ChildHostLoad)),
+            RendererPageDomManipulationTask::ChildDocumentLifecycle(task) => Ok(self
+                .apply_selected_page_child_document_lifecycle_turn(task)
+                .map_action(PageDomManipulationTurnAction::ChildDocumentLifecycle)),
+            RendererPageDomManipulationTask::MainDocumentLifecycle(task) => self
+                .apply_selected_page_main_document_lifecycle_turn(task)
+                .await
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::MainDocumentLifecycle)
+                }),
             RendererPageDomManipulationTask::BroadcastChannel(task) => self
                 .apply_selected_page_broadcast_channel_delivery_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::BroadcastChannel)),
@@ -27,12 +39,23 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::FileEntryFileCallback)
                 }),
+            RendererPageDomManipulationTask::ScriptPreparationError(task) => self
+                .apply_selected_page_script_preparation_error_turn(task)
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::ScriptPreparationError)
+                }),
+            RendererPageDomManipulationTask::PromiseRejection(task) => self
+                .apply_selected_page_promise_rejection_turn(task)
+                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PromiseRejection)),
             RendererPageDomManipulationTask::ImageLoadEvent(task) => self
                 .apply_selected_page_image_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::ImageLoadEvent)),
             RendererPageDomManipulationTask::PopupLoadEvent(task) => self
                 .apply_selected_page_popup_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupLoadEvent)),
+            RendererPageDomManipulationTask::PopupClose(task) => self
+                .apply_selected_page_popup_close_turn(task)
+                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupClose)),
             RendererPageDomManipulationTask::ConnectedStyleEvent(task) => self
                 .apply_selected_page_connected_style_event_turn(task)
                 .map(|outcome| {

@@ -122,7 +122,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        9,
+        // Cancellation now uses a native Promise reaction instead of calling
+        // the page-visible `then` method through this browser-algorithm shim.
+        8,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -142,7 +144,12 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "network_host/body_source.rs",
-        3,
+        1,
+        DirectCallOwner::BrowserAlgorithm,
+    ),
+    allowed(
+        "network_host/body_source/stream_consumer.rs",
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -152,7 +159,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "network_host/fetch_surface.rs",
-        2,
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed("worker/abort.rs", 2, DirectCallOwner::BrowserAlgorithm),
@@ -184,6 +191,11 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/runtime_state.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
+    allowed(
+        "context_bootstrap/trusted_types.rs",
         2,
         DirectCallOwner::NativeForwardingOrScript,
     ),

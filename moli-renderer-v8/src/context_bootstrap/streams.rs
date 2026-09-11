@@ -1,15 +1,17 @@
 use super::specs::{ConstructorKind, ConstructorSpec};
 use super::stream_adapter::{
-    StreamQueuingStrategy, cancel_readable_stream, close_stream, enqueue_chunk,
-    initialize_transform_stream_object, initialize_webidl_readable_stream_object,
-    initialize_webidl_transform_stream_object, initialize_webidl_writable_stream_object,
-    parse_readable_stream_source_object, parse_stream_strategy_arg,
-    parse_transform_stream_transformer_object, parse_writable_stream_sink_object,
-    readable_stream_byob_request_respond_callback,
+    EnqueueChunkError, StreamQueuingStrategy, call_function_result, cancel_readable_stream,
+    close_stream, enqueue_chunk, initialize_transform_stream_object,
+    initialize_webidl_readable_stream_object, initialize_webidl_transform_stream_object,
+    initialize_webidl_writable_stream_object, new_readable_stream_object,
+    new_transform_stream_shell_object, parse_readable_stream_source_object,
+    parse_stream_strategy_arg, parse_transform_stream_transformer_object,
+    parse_writable_stream_sink_object, readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
     readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
-    writable_stream_close_internal, writable_stream_locked, writable_stream_snapshot,
+    suppress_promise_unhandled_rejection, writable_stream_close_internal, writable_stream_locked,
+    writable_stream_snapshot,
 };
 use super::stream_objects::{
     new_readable_stream_byob_reader_object, new_readable_stream_reader_object,
@@ -27,9 +29,30 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 
 mod compression;
 mod constructors;
+mod from;
 mod readable;
 mod transferable;
 mod writable;
+
+pub(crate) fn tee_fetch_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    super::stream_adapter::tee_readable_stream_with_cloned_branch(scope, stream).ok()
+}
+
+pub(crate) fn proxy_fetch_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let transform = new_transform_stream_shell_object(scope);
+    initialize_transform_stream_object(scope, transform, None, None, 1.0, None, 0.0, None);
+    let readable = stream_slot_object(scope, transform, TRANSFORM_STREAM_READABLE_SLOT)?;
+    let writable = stream_slot_object(scope, transform, TRANSFORM_STREAM_WRITABLE_SLOT)?;
+    let pipe = readable::start_internal_readable_stream_pipe_to(scope, stream, writable)?;
+    suppress_promise_unhandled_rejection(scope, pipe);
+    Some(readable)
+}
 
 #[derive(Clone, Copy)]
 enum StreamPrototypeInstaller {
@@ -177,6 +200,17 @@ const STREAM_INTERFACE_SPECS: &[StreamInterfaceSpec] = &[
         prototype_installer: StreamPrototypeInstaller::Controller,
     },
 ];
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "ReadableStream", enumerable)]
+struct ReadableStreamConstructorDeclaration {
+    #[webapi(
+        static_method = "from",
+        length = 1,
+        callback = from::readable_stream_from_callback
+    )]
+    from: (),
+}
 
 pub(in crate::context_bootstrap) fn stream_constructor_specs()
 -> impl Iterator<Item = ConstructorSpec> {
@@ -347,6 +381,7 @@ pub(super) fn install_stream_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match spec.prototype_installer {
         StreamPrototypeInstaller::ReadableStream => {
+            ReadableStreamConstructorDeclaration::initialize_template(scope, template);
             ReadableStreamPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         StreamPrototypeInstaller::WritableStream => {

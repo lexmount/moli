@@ -357,7 +357,7 @@ fn load_imported_script_resource_for_update_check(
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;
     ensure_imported_script_resource_mime(kind, &response)?;
-    let (head, _body, body_bytes) = response.into_parts();
+    let (head, body_bytes) = response.into_byte_parts();
     let mut resource = ServiceWorkerScriptResource::from_response_parts(
         request_url_without_fragment,
         &head,
@@ -424,6 +424,7 @@ mod tests {
     fn script_resource_records_response_metadata_and_body_hash() {
         let request_url = Url::parse("https://example.test/app/sw.js").unwrap();
         let head = ResponseHead {
+            status_text: None,
             final_url: Url::parse("https://example.test/app/sw.js?final").unwrap(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
@@ -812,6 +813,7 @@ mod tests {
         kind: WorkerScriptResourceKind,
     ) -> ServiceWorkerScriptResource {
         let head = ResponseHead {
+            status_text: None,
             final_url: script_url.clone(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), mime_type.to_owned())],

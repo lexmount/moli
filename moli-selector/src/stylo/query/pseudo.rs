@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{CssDirection, first_strong_text_direction};
 use dom::{ElementState, HEADING_LEVEL_OFFSET};
 
@@ -102,19 +104,7 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn heading_state(self) -> ElementState {
-        const HEADING_NAMES: [(&str, u64); 6] = [
-            ("h1", 1),
-            ("h2", 2),
-            ("h3", 3),
-            ("h4", 4),
-            ("h5", 5),
-            ("h6", 6),
-        ];
-        HEADING_NAMES
-            .iter()
-            .find_map(|(name, level)| self.element().is_html_element(name).then_some(*level))
-            .map(|level| ElementState::from_bits_retain(level << HEADING_LEVEL_OFFSET))
-            .unwrap_or_else(ElementState::empty)
+        heading_state_for_element(self.host, self.handle)
     }
 
     pub(in crate::stylo) fn resolved_direction(self) -> CssDirection {
@@ -140,6 +130,7 @@ impl<'a> QueryElement<'a> {
                     shared_lock: self.shared_lock,
                     style_data: self.style_data,
                     atom_cache: self.atom_cache,
+                    validity_states: self.validity_states,
                 })
                 .is_locally_invalid()
             {
@@ -150,6 +141,12 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn is_invalid(self) -> bool {
+        if let Some(invalid) = self
+            .validity_states
+            .and_then(|states| states.get(&self.handle))
+        {
+            return *invalid;
+        }
         if self.is_locally_invalid() {
             return true;
         }
@@ -249,25 +246,15 @@ impl<'a> QueryElement<'a> {
         if self.element().has_attribute("disabled") {
             return true;
         }
-        if self.element().local_name() == "option"
-            && self.parent_element().is_some_and(|(_, parent)| {
-                parent.local_name() == "optgroup" && parent.has_attribute("disabled")
-            })
-        {
+        if self.element().local_name() == "option" && self.host.option_is_disabled(self.handle) {
             return true;
         }
         if matches!(self.element().local_name(), "option" | "optgroup")
-            && self.disabled_select_ancestor().is_some()
+            && self.disabled_associated_select().is_some()
         {
             return true;
         }
         self.disabled_fieldset_ancestor().is_some()
-    }
-
-    pub(super) fn parent_element(self) -> Option<(NodeId, &'a Element)> {
-        let parent = self.node().parent_node()?;
-        let element = self.host.node(parent)?.as_element()?;
-        Some((parent, element))
     }
 
     pub(super) fn disabled_fieldset_ancestor(self) -> Option<NodeId> {
@@ -285,22 +272,17 @@ impl<'a> QueryElement<'a> {
         None
     }
 
-    pub(super) fn disabled_select_ancestor(self) -> Option<NodeId> {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            let Some(element) = self.host.node(parent).and_then(Node::as_element) else {
-                current = self.host.node(parent).and_then(Node::parent_node);
-                continue;
-            };
-            match element.local_name() {
-                "select" if element.has_attribute("disabled") => return Some(parent),
-                "select" | "option" => return None,
-                "optgroup" if self.element().local_name() == "optgroup" => return None,
-                _ => {}
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        None
+    pub(super) fn disabled_associated_select(self) -> Option<NodeId> {
+        let select = match self.element().local_name() {
+            "option" => self.host.option_nearest_ancestor_select(self.handle),
+            "optgroup" => self.host.optgroup_nearest_ancestor_select(self.handle),
+            _ => None,
+        }?;
+        self.host
+            .node(select)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.has_attribute("disabled"))
+            .then_some(select)
     }
 
     pub(super) fn is_inside_first_legend_child(self, fieldset: NodeId) -> bool {
@@ -369,13 +351,19 @@ impl<'a> QueryElement<'a> {
     pub(super) fn is_editable(self) -> bool {
         let mut current = Some(self.handle);
         while let Some(handle) = current {
-            if let Some(element) = self.host.node(handle).and_then(Node::as_element)
+            let Some(node) = self.host.node(handle) else {
+                return false;
+            };
+            if let Some(document) = node.as_document() {
+                return document.design_mode_enabled();
+            }
+            if let Some(element) = node.as_element()
                 && let Some(value) = element.attribute("contenteditable")
                 && let Some(is_editable) = contenteditable_value_is_editable(value)
             {
                 return is_editable;
             }
-            current = self.host.node(handle).and_then(Node::parent_node);
+            current = node.parent_node();
         }
         false
     }
@@ -441,7 +429,7 @@ impl<'a> QueryElement<'a> {
             self.element()
                 .is_html_input()
                 .then(|| self.element().input_type()),
-            self.element().attribute("type"),
+            self.host.button_is_submit_button(self.handle),
         )
     }
 
@@ -453,7 +441,9 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn matches_validity_pseudo(self) -> bool {
-        matches!(self.element().local_name(), "form" | "fieldset")
+        self.validity_states
+            .is_some_and(|states| states.contains_key(&self.handle))
+            || matches!(self.element().local_name(), "form" | "fieldset")
             || self.is_constraint_validation_candidate()
     }
 
@@ -591,6 +581,107 @@ impl<'a> QueryElement<'a> {
     }
 }
 
+pub(crate) fn heading_state_for_element(host: &DomHost, handle: NodeId) -> ElementState {
+    let Some(base_level) = host
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(heading_base_level)
+    else {
+        return ElementState::empty();
+    };
+
+    let mut offset = 0_u32;
+    let mut current = Some(handle);
+    let mut visited = HashSet::new();
+    while let Some(candidate) = current {
+        if !visited.insert(candidate) {
+            break;
+        }
+        if let Some(element) = host.node(candidate).and_then(Node::as_element)
+            && element.namespace() == "http://www.w3.org/1999/xhtml"
+        {
+            offset = offset.saturating_add(element.heading_offset());
+            if element.heading_reset() {
+                break;
+            }
+        }
+        current = flat_tree_parent(host, candidate);
+    }
+
+    let level = base_level.saturating_add(offset).min(9) as u64;
+    ElementState::from_bits_retain(level << HEADING_LEVEL_OFFSET)
+}
+
+pub(crate) fn flat_tree_heading_descendants(host: &DomHost, root: NodeId) -> Vec<NodeId> {
+    let mut stack = flat_tree_children(host, root);
+    stack.reverse();
+    let mut seen = HashSet::new();
+    let mut headings = Vec::new();
+    while let Some(candidate) = stack.pop() {
+        if !seen.insert(candidate) {
+            continue;
+        }
+        if host
+            .node(candidate)
+            .and_then(Node::as_element)
+            .and_then(heading_base_level)
+            .is_some()
+        {
+            headings.push(candidate);
+        }
+        let mut children = flat_tree_children(host, candidate);
+        children.reverse();
+        stack.extend(children);
+    }
+    headings
+}
+
+fn heading_base_level(element: &Element) -> Option<u32> {
+    ["h1", "h2", "h3", "h4", "h5", "h6"]
+        .iter()
+        .position(|name| element.is_html_element(name))
+        .map(|index| index as u32 + 1)
+}
+
+fn flat_tree_parent(host: &DomHost, handle: NodeId) -> Option<NodeId> {
+    if let Some(slot) = host.assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+
+    let parent = host.node(handle).and_then(Node::parent_node)?;
+    if host.is_shadow_root(parent) {
+        return host.shadow_root_host(parent);
+    }
+    if host.is_html_element_named(parent, "slot")
+        && !host
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
+    {
+        return None;
+    }
+    if host.shadow_root_handle(parent).is_some()
+        && host
+            .node(handle)
+            .is_some_and(|node| node.is_element() || node.is_text())
+    {
+        return None;
+    }
+    Some(parent)
+}
+
+fn flat_tree_children(host: &DomHost, handle: NodeId) -> Vec<NodeId> {
+    if host.is_html_element_named(handle, "slot") {
+        let assigned = host.assigned_nodes_for_slot_with_options(handle, false);
+        if !assigned.is_empty() {
+            return assigned;
+        }
+    }
+    if let Some(shadow_root) = host.shadow_root_handle(handle) {
+        return host.child_handles(shadow_root).collect();
+    }
+    host.child_handles(handle).collect()
+}
+
 pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirection {
     let mut current = Some(handle);
     while let Some(handle) = current {
@@ -617,13 +708,89 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
     CssDirection::Ltr
 }
 
+/// Return the nearest auto-directionality element whose resolved direction may
+/// depend on a mutation below `start`.
+///
+/// Contained-text auto directionality stops at the same HTML boundaries, so a
+/// mutation below an explicit `dir`, `bdi`, `script`, `style`, or `textarea`
+/// element must not invalidate an outer `dir=auto` element.
+pub(crate) fn html_auto_directionality_invalidation_root(
+    host: &DomHost,
+    start: NodeId,
+) -> Option<NodeId> {
+    let mut current = Some(start);
+    while let Some(handle) = current {
+        let node = host.node(handle)?;
+        if let Some(element) = node.as_element()
+            && element.namespace() == "http://www.w3.org/1999/xhtml"
+        {
+            let dir = element.attribute("dir");
+            let has_auto_direction = dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+                || (element.is_html_element("bdi")
+                    && !dir.is_some_and(|value| {
+                        normalized_direction(value).is_some() || value.eq_ignore_ascii_case("auto")
+                    }));
+            if has_auto_direction {
+                return Some(handle);
+            }
+            if element.is_html_element("bdi")
+                || dir.and_then(normalized_direction).is_some()
+                || matches!(element.local_name(), "script" | "style" | "textarea")
+            {
+                return None;
+            }
+        }
+        current = node.parent_node();
+    }
+    None
+}
+
 fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirection> {
-    if let Some(element) = host.node(root).and_then(Node::as_element)
-        && element.is_html_input()
-    {
-        return input_auto_direction(element);
+    if let Some(element) = host.node(root).and_then(Node::as_element) {
+        if element.is_html_textarea() {
+            let value = if element.input_value_dirty() {
+                element.input_value()
+            } else {
+                host.direct_text_content(root).unwrap_or_default()
+            };
+            return first_strong_text_direction(&value);
+        }
+        if element.is_html_input() {
+            return input_auto_direction(element);
+        }
     }
 
+    if host.is_html_element_named(root, "slot") {
+        let assigned = host.assigned_nodes_for_slot_with_options(root, false);
+        if !assigned.is_empty() {
+            for handle in assigned {
+                let Some(node) = host.node(handle) else {
+                    continue;
+                };
+                if let Some(text) = node.as_text() {
+                    if let Some(direction) = first_strong_text_direction(text.data()) {
+                        return Some(direction);
+                    }
+                    continue;
+                }
+                let Some(element) = node.as_element() else {
+                    continue;
+                };
+                if descendant_is_directionally_isolated_for_auto(element) {
+                    continue;
+                }
+                if let Some(direction) = contained_text_auto_directionality(host, handle) {
+                    return Some(direction);
+                }
+            }
+            return None;
+        }
+    }
+
+    contained_text_auto_directionality(host, root)
+}
+
+fn contained_text_auto_directionality(host: &DomHost, root: NodeId) -> Option<CssDirection> {
     let mut stack = host.child_handles(root).collect::<Vec<_>>();
     stack.reverse();
     while let Some(handle) = stack.pop() {
@@ -642,6 +809,13 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
         if descendant_is_directionally_isolated_for_auto(element) {
             continue;
         }
+        if element.is_html_element("slot")
+            && let Some(shadow_host) = host
+                .containing_shadow_root(handle)
+                .and_then(|root| host.shadow_root_host(root))
+        {
+            return Some(html_directionality(host, shadow_host));
+        }
         let mut children = host.child_handles(handle).collect::<Vec<_>>();
         children.reverse();
         stack.extend(children);
@@ -650,7 +824,11 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
 }
 
 fn descendant_is_directionally_isolated_for_auto(element: &Element) -> bool {
-    if element.is_html_element("bdi") {
+    if matches!(
+        element.local_name(),
+        "bdi" | "script" | "style" | "textarea"
+    ) && element.namespace() == "http://www.w3.org/1999/xhtml"
+    {
         return true;
     }
     element.attribute("dir").is_some_and(|value| {

@@ -2,11 +2,13 @@ use super::*;
 use crate::custom_elements;
 use crate::dom::native::Attribute;
 use crate::native_bridge::element::{
-    remove_live_element_attribute_appending_to_current_reaction_queue,
+    TrustedAttributeSetter, remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    trusted_attribute_string_value,
 };
+use crate::native_bridge::node::node_runtime_and_handle_from_object_or_detached;
 use crate::native_bridge::node_runtime_and_handle_from_object;
 use crate::webidl;
 
@@ -129,17 +131,6 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
         return Some(v8::null(scope).into());
     };
-    let owner = object_property_as_object(scope, state, "ownerElement");
-    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
-        throw_dom_exception(
-            scope,
-            "InUseAttributeError",
-            10,
-            "The attribute is already in use by another element.",
-        );
-        return Some(v8::undefined(scope).into());
-    }
-
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) else {
         return Some(v8::null(scope).into());
     };
@@ -155,6 +146,30 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
         metadata.local_name = metadata.name.clone();
         metadata.prefix = None;
     }
+    // DOM's "set an attribute" steps perform Trusted Types conversion before
+    // checking InUseAttributeError. The policy callback can mutate ownership,
+    // so the owner check below must observe its result.
+    let verified_value = trusted_attribute_string_value(
+        scope,
+        Some((runtime_ptr, handle)),
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+        &metadata.value,
+        TrustedAttributeSetter::SetAttributeNode,
+    )?;
+    metadata.value = verified_value;
+
+    let owner = object_property_as_object(scope, state, "ownerElement");
+    if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
+        throw_dom_exception(
+            scope,
+            "InUseAttributeError",
+            10,
+            "The attribute is already in use by another element.",
+        );
+        return Some(v8::undefined(scope).into());
+    }
+
     let old_metadata =
         live_native_attribute_metadata_for_target(unsafe { &*runtime_ptr }, handle, &metadata);
     let old = old_metadata.as_ref().and_then(|old_metadata| {
@@ -184,20 +199,14 @@ pub(in crate::native_bridge) fn detached_set_attribute_node_method_callback<'a>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        let mut handled = false;
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0))
             {
                 rv.set(value);
-                handled = true;
             }
         });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0)) {
-        rv.set(value);
+        // A native receiver was handled even when conversion threw. Retrying
+        // would invoke the default policy twice and can swallow its exception.
         return;
     }
     match detached_method_forward(scope, args, "__setAttributeNodeForLiveElement") {
@@ -353,6 +362,24 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
         return Some(v8::null(scope).into());
     };
+    let runtime_and_handle = detached_native_element_runtime_and_handle(scope, element);
+    if metadata.namespace_uri.is_none() {
+        metadata.name = detached_attribute_name(scope, element, &metadata.name);
+        metadata.local_name = metadata.name.clone();
+        metadata.prefix = None;
+    }
+    // Keep this in the same order as the live path and the DOM algorithm:
+    // Trusted Types conversion precedes the InUseAttributeError owner check.
+    let verified_value = trusted_attribute_string_value(
+        scope,
+        runtime_and_handle,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+        &metadata.value,
+        TrustedAttributeSetter::SetAttributeNode,
+    )?;
+    metadata.value = verified_value;
+
     let owner = object_property_as_object(scope, state, "ownerElement");
     if owner.is_some_and(|owner| !owner.strict_equals(element.into())) {
         throw_dom_exception(
@@ -372,8 +399,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
             &metadata.local_name,
         )
     } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        native_attr_object_by_name(scope, element, &name)
+        native_attr_object_by_name(scope, element, &metadata.name)
     };
     if old.is_some_and(|old| old.strict_equals(attr.into())) {
         return Some(attr.into());
@@ -397,15 +423,13 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
         );
         cache_attached_attr_node(scope, element, attr, &metadata);
     } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        clear_live_attr_cache_entry(scope, element, &name);
+        clear_live_attr_cache_entry(scope, element, &metadata.name);
         let _ = write_detached_native_attribute_appending_to_current_reaction_queue(
             scope,
             element,
-            &name,
+            &metadata.name,
             &metadata.value,
         );
-        metadata.name = name;
         cache_attached_attr_node(scope, element, attr, &metadata);
     }
 
@@ -608,24 +632,18 @@ fn live_native_attr_object_from_metadata<'s>(
     let cache = live_attr_cache_object(scope, element)?;
     let namespace_key =
         namespace_attr_cache_key(metadata.namespace_uri.as_deref(), &metadata.local_name);
-    let attr = object_property_as_object(scope, cache, &namespace_key)
-        .or_else(|| {
-            live_attr_metadata_can_alias_qualified_name(metadata)
-                .then(|| object_property_as_object(scope, cache, &metadata.name))
-                .flatten()
-        })
-        .or_else(|| {
-            new_attr_object(
-                scope,
-                &metadata.name,
-                &metadata.value,
-                Some(element),
-                None,
-                metadata.namespace_uri.as_deref(),
-                metadata.prefix.as_deref(),
-                &metadata.local_name,
-            )
-        })?;
+    let attr = object_property_as_object(scope, cache, &namespace_key).or_else(|| {
+        new_attr_object(
+            scope,
+            &metadata.name,
+            &metadata.value,
+            Some(element),
+            None,
+            metadata.namespace_uri.as_deref(),
+            metadata.prefix.as_deref(),
+            &metadata.local_name,
+        )
+    })?;
     if let Some(state) = attr_state_object(scope, attr) {
         attach_attr_node(scope, state, element, &metadata.value);
     }
@@ -748,30 +766,32 @@ fn nullable_state_string<'s>(
         .filter(|value| !value.is_empty())
 }
 
-fn native_attr_object_by_name<'s>(
+pub(in crate::native_bridge::document) fn native_attr_object_by_name<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    read_detached_native_attribute_snapshot(scope, element)?
-        .into_iter()
-        .find(|attribute| attribute.name == name)
-        .and_then(|attribute| native_attr_object_from_snapshot(scope, element, &attribute))
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, element).ok()?;
+    let metadata = live_native_attribute_metadata_for_name(unsafe { &*runtime_ptr }, handle, name)?;
+    live_native_attr_object_from_metadata(scope, element, &metadata)
 }
 
-fn native_attr_object_by_namespace<'s>(
+pub(in crate::native_bridge::document) fn native_attr_object_by_namespace<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
     namespace_uri: Option<&str>,
     local_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    read_detached_native_attribute_snapshot(scope, element)?
-        .into_iter()
-        .find(|attribute| {
-            attribute.namespace_uri.as_deref() == namespace_uri
-                && attribute.local_name == local_name
-        })
-        .and_then(|attribute| native_attr_object_from_snapshot(scope, element, &attribute))
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, element).ok()?;
+    let metadata = live_native_attribute_metadata_for_namespace(
+        unsafe { &*runtime_ptr },
+        handle,
+        namespace_uri,
+        local_name,
+    )?;
+    live_native_attr_object_from_metadata(scope, element, &metadata)
 }
 
 pub(in crate::native_bridge::document) fn native_attr_object_from_snapshot<'s>(
@@ -782,24 +802,18 @@ pub(in crate::native_bridge::document) fn native_attr_object_from_snapshot<'s>(
     let cache = live_attr_cache_object(scope, element)?;
     let namespace_key =
         namespace_attr_cache_key(attribute.namespace_uri.as_deref(), &attribute.local_name);
-    let attr = object_property_as_object(scope, cache, &namespace_key)
-        .or_else(|| {
-            native_attr_can_alias_qualified_name(attribute)
-                .then(|| object_property_as_object(scope, cache, &attribute.name))
-                .flatten()
-        })
-        .or_else(|| {
-            new_attr_object(
-                scope,
-                &attribute.name,
-                &attribute.value,
-                Some(element),
-                None,
-                attribute.namespace_uri.as_deref(),
-                attribute.prefix.as_deref(),
-                &attribute.local_name,
-            )
-        })?;
+    let attr = object_property_as_object(scope, cache, &namespace_key).or_else(|| {
+        new_attr_object(
+            scope,
+            &attribute.name,
+            &attribute.value,
+            Some(element),
+            None,
+            attribute.namespace_uri.as_deref(),
+            attribute.prefix.as_deref(),
+            &attribute.local_name,
+        )
+    })?;
     if let Some(state) = attr_state_object(scope, attr) {
         attach_attr_node(scope, state, element, &attribute.value);
     }
@@ -830,12 +844,7 @@ fn cache_attached_attr_node<'s>(
     let namespace_key =
         namespace_attr_cache_key(metadata.namespace_uri.as_deref(), &metadata.local_name);
     set_attr_cache_entry(scope, cache, &namespace_key, attr);
-    if metadata.namespace_uri.is_none()
-        || metadata
-            .prefix
-            .as_deref()
-            .is_some_and(|prefix| !prefix.is_empty())
-    {
+    if live_attr_metadata_can_alias_qualified_name(metadata) {
         set_attr_cache_entry(scope, cache, &metadata.name, attr);
     }
 }

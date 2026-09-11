@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn location_assign_before_complete_load_respects_user_activation() {
+    for activated in [false, true] {
+        let mut vm = new_storage_test_vm("https://location-before-load.test/source");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .begin_protocol_user_gesture_activation();
+        }
+        let navigation_type = vm
+            .eval(
+                r#"
+          window.observedNavigationType = null;
+          navigation.addEventListener('navigate', e => observedNavigationType = e.navigationType);
+          location.assign('/destination');
+          observedNavigationType
+        "#,
+            )
+            .expect("Location navigation must expose its resolved history behavior");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .end_protocol_user_gesture_activation();
+        }
+        assert_eq!(navigation_type, if activated { "push" } else { "replace" });
+        let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+        let seed = pending.entry_seed.unwrap();
+        let from = seed.activation.as_ref().unwrap().from.as_ref().unwrap();
+        assert_eq!(
+            seed.current_index,
+            from.history_index + u32::from(activated)
+        );
+        assert_eq!(
+            seed.entries
+                .iter()
+                .any(|entry| entry.url == "https://location-before-load.test/source"),
+            activated
+        );
+        assert_eq!(
+            seed.entries.last().unwrap().url,
+            "https://location-before-load.test/destination"
+        );
+    }
+}
+
+#[test]
 fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
     for (rel, expected_exposes_opener) in [
         ("", false),
@@ -451,6 +496,68 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
 }
 
 #[test]
+fn performance_entry_ids_follow_the_current_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-entry-identity.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const mark = performance.mark("identity-mark", { startTime: 1 });
+              const measure = performance.measure("identity-measure", {
+                start: 1,
+                duration: 2
+              });
+              const detached = new PerformanceMark("detached", { startTime: 3 });
+              const markJson = mark.toJSON();
+              const descriptors = ["id", "navigationId"].map(name => {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  PerformanceEntry.prototype,
+                  name
+                );
+                return [
+                  name,
+                  typeof descriptor?.get,
+                  descriptor?.get?.name,
+                  descriptor?.get?.length,
+                  typeof descriptor?.set,
+                  descriptor?.enumerable,
+                  descriptor?.configurable
+                ].join(":");
+              });
+              return JSON.stringify({
+                descriptors,
+                navigation:
+                  Number.isSafeInteger(navigation.id)
+                  && navigation.id > 0
+                  && navigation.navigationId === navigation.id,
+                queued:
+                  Number.isSafeInteger(mark.id)
+                  && Number.isSafeInteger(measure.id)
+                  && navigation.id < mark.id
+                  && mark.id < measure.id
+                  && mark.navigationId === navigation.id
+                  && measure.navigationId === navigation.id,
+                detached: detached.id === 0 && detached.navigationId === 0,
+                json:
+                  Object.keys(markJson).join(",") ===
+                    "id,name,entryType,startTime,duration,navigationId"
+                  && markJson.id === mark.id
+                  && markJson.navigationId === navigation.id
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry identity probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":["id:function:get id:0:undefined:true:true","navigationId:function:get navigationId:0:undefined:true:true"],"navigation":true,"queued":true,"detached":true,"json":true}"#
+    );
+}
+
+#[test]
 fn performance_user_timing_enforces_mark_and_measure_boundaries() {
     let mut vm = new_storage_test_vm("https://performance-user-timing-boundaries.test/");
 
@@ -625,6 +732,17 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
               } catch (error) {
                 fakeError = error.name;
               }
+              const markJson = mark.toJSON();
+              const measureJson = measure.toJSON();
+              const identities =
+                markJson.id === mark.id
+                && markJson.navigationId === mark.navigationId
+                && measureJson.id === measure.id
+                && measureJson.navigationId === measure.navigationId;
+              delete markJson.id;
+              delete markJson.navigationId;
+              delete measureJson.id;
+              delete measureJson.navigationId;
               return JSON.stringify({
                 descriptor: [
                   descriptor.value.name,
@@ -637,8 +755,9 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
                   && PerformanceMeasure.prototype.toJSON === descriptor.value
                   && !Object.prototype.hasOwnProperty.call(PerformanceMark.prototype, "toJSON")
                   && !Object.prototype.hasOwnProperty.call(PerformanceMeasure.prototype, "toJSON"),
-                mark: mark.toJSON(),
-                measure: measure.toJSON(),
+                mark: markJson,
+                measure: measureJson,
+                identities,
                 fakeError
               });
             })()
@@ -648,7 +767,7 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
 
     assert_eq!(
         result,
-        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"fakeError":"TypeError"}"#
+        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"identities":true,"fakeError":"TypeError"}"#
     );
 }
 
@@ -659,6 +778,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
     let mut vm = new_storage_test_vm(document_url.as_str());
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: script_url.clone(),
             status: 200,
             headers: vec![(
@@ -697,10 +817,12 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 fakeToJSONError = error.name;
               }
               const expectedJsonKeys = [
+                "id",
                 "name",
                 "entryType",
                 "startTime",
                 "duration",
+                "navigationId",
                 "initiatorType",
                 "nextHopProtocol",
                 "workerStart",
@@ -736,6 +858,11 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 transferSizePositive: entry.transferSize > entry.encodedBodySize,
                 encodedBodySize: entry.encodedBodySize,
                 decodedBodySize: entry.decodedBodySize,
+                identity:
+                  Number.isSafeInteger(entry.id)
+                  && entry.id > 0
+                  && entry.navigationId ===
+                    performance.getEntriesByType("navigation")[0].id,
                 jsonOwnKeys: expectedJsonKeys.every(key =>
                   Object.prototype.hasOwnProperty.call(json, key)),
                 jsonMatchesEntry: expectedJsonKeys.every(key => json[key] === entry[key]),
@@ -755,7 +882,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
 
     assert_eq!(
         result,
-        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
+        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"identity":true,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
     );
 }
 
@@ -780,6 +907,13 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                   && descriptor.enumerable === enumerable
                   && descriptor.configurable === true
                   && !Object.prototype.hasOwnProperty.call(receiver, name);
+              };
+              const capture = callback => {
+                try {
+                  return String(callback());
+                } catch (error) {
+                  return error.name;
+                }
               };
               const timing = performance.timing;
               const navigation = performance.navigation;
@@ -844,8 +978,8 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                 eventCountsFirstEntry: `${firstEntry[0]}:${firstEntry[1]}`,
                 jsonTimeOriginStable: json.timeOrigin === timeOrigin,
                 jsonNavigationType: json.navigation.type,
-                fakeTimeOrigin: String(timeOriginGetter.call(fakePerformance)),
-                fakeTiming: String(timingGetter.call(fakePerformance)),
+                fakeTimeOrigin: capture(() => timeOriginGetter.call(fakePerformance)),
+                fakeTiming: capture(() => timingGetter.call(fakePerformance)),
                 fakeNavigationType: String(navigationTypeGetter.call(fakeNavigation)),
                 fakeEventCountsGet: String(eventCountsPrototype.get.call(fakeEventCounts, "click")),
                 fakeEventCountsValue: String(eventCountsPrototype.values.call(fakeEventCounts).next().value)
@@ -857,7 +991,7 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"undefined","fakeTiming":"undefined","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
+        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"TypeError","fakeTiming":"TypeError","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
     );
 }
 
@@ -1210,6 +1344,61 @@ fn performance_navigation_timing_updates_at_load_event_end() {
 }
 
 #[test]
+fn performance_navigation_lifecycle_timestamps_are_write_once_per_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-navigation-write-once.test/");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("first DOMContentLoaded should update navigation timing");
+    vm.dispatch_window_load_event()
+        .expect("first load should update navigation timing");
+    vm.eval(
+        r#"
+        globalThis.__initialNavigationLifecycleTiming = (() => {
+          const navigation = performance.getEntriesByType("navigation")[0];
+          return [
+            navigation.domInteractive,
+            navigation.domContentLoadedEventStart,
+            navigation.domContentLoadedEventEnd,
+            navigation.domComplete,
+            navigation.loadEventStart,
+            navigation.loadEventEnd
+          ];
+        })();
+        "#,
+    )
+    .expect("initial navigation lifecycle timing should be captured");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("repeated DOMContentLoaded should remain dispatchable");
+    vm.dispatch_window_load_event()
+        .expect("repeated load should remain dispatchable");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const current = [
+                navigation.domInteractive,
+                navigation.domContentLoadedEventStart,
+                navigation.domContentLoadedEventEnd,
+                navigation.domComplete,
+                navigation.loadEventStart,
+                navigation.loadEventEnd
+              ];
+              return current.every(
+                (value, index) =>
+                  value === globalThis.__initialNavigationLifecycleTiming[index]
+              );
+            })()
+            "#,
+        )
+        .expect("repeated navigation lifecycle timing should be compared"),
+        "true"
+    );
+}
+
+#[test]
 fn materialized_legacy_performance_timing_uses_integer_milliseconds() {
     const TIME_ORIGIN: f64 = 1_700_000_000_000.75;
 
@@ -1447,6 +1636,91 @@ fn history_navigation_arguments_use_webidl_conversion() {
         result,
         "TypeError|TypeError|RangeError|TypeError|RangeError|undefined|#three|3|TypeError|TypeError|RangeError|TypeError|TypeError|RangeError"
     );
+}
+
+#[test]
+fn history_mutation_empty_url_preserves_current_document_url() {
+    let mut vm = new_storage_test_vm("https://example.com/path/page.html?query=value#initial");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const head = document.head ||
+                root.insertBefore(document.createElement("head"), root.firstChild);
+              const base = document.createElement("base");
+              base.href = "https://example.com/different/base/";
+              head.appendChild(base);
+
+              const before = location.href;
+              history.pushState({ kind: "push" }, "", "");
+              const afterPush = location.href;
+              history.replaceState({ kind: "replace" }, "", "");
+
+              return JSON.stringify({
+                before,
+                afterPush,
+                afterReplace: location.href,
+                baseURI: document.baseURI,
+                length: history.length,
+                state: history.state.kind,
+                entryUrl: navigation.currentEntry.url
+              });
+            })()
+            "#,
+        )
+        .expect("empty history URL should preserve the current document URL");
+
+    assert_eq!(
+        result,
+        r#"{"before":"https://example.com/path/page.html?query=value#initial","afterPush":"https://example.com/path/page.html?query=value#initial","afterReplace":"https://example.com/path/page.html?query=value#initial","baseURI":"https://example.com/different/base/","length":2,"state":"replace","entryUrl":"https://example.com/path/page.html?query=value#initial"}"#
+    );
+}
+
+#[test]
+fn history_operations_reject_a_removed_child_document() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childHistory = frame.contentWindow.history;
+              const ChildDOMException = frame.contentWindow.DOMException;
+              frame.remove();
+
+              const probe = callback => {
+                try {
+                  callback();
+                  return "no throw";
+                } catch (error) {
+                  return `${error.name}:${error instanceof ChildDOMException}`;
+                }
+              };
+              return [
+                probe(() => childHistory.length),
+                probe(() => childHistory.scrollRestoration),
+                probe(() => childHistory.state),
+                probe(() => { childHistory.scrollRestoration = "manual"; }),
+                probe(() => childHistory.go(0)),
+                probe(() => childHistory.back()),
+                probe(() => childHistory.forward()),
+                probe(() => childHistory.pushState(1, "", "?x=1")),
+                probe(() => childHistory.replaceState(2, "", "?x=2"))
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("removed child History operations should be rejected");
+
+    assert_eq!(result, ["SecurityError:true"; 9].join("|"));
 }
 
 #[test]
@@ -1818,9 +2092,16 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
             r##"
             (() => {
               const log = [];
-              addEventListener("beforeunload", () => log.push("beforeunload"));
-              addEventListener("pagehide", event => log.push(`pagehide:${event.persisted}`));
-              addEventListener("unload", () => log.push("unload"));
+              addEventListener("beforeunload", event => log.push(`beforeunload:${event.isTrusted}`));
+              addEventListener("pagehide", event => log.push([
+                "pagehide",
+                event instanceof PageTransitionEvent,
+                event.persisted,
+                event.bubbles,
+                event.cancelable,
+                event.isTrusted
+              ].join(":")));
+              addEventListener("unload", event => log.push(`unload:${event.isTrusted}`));
               navigation.navigate("/next-document");
               return log.join("|");
             })()
@@ -1828,10 +2109,110 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
         )
         .expect("cross-document unload lifecycle should evaluate");
 
-    assert_eq!(lifecycle, "beforeunload|pagehide:false|unload");
+    assert_eq!(
+        lifecycle,
+        "beforeunload:true|pagehide:true:false:true:true:true|unload:true"
+    );
     assert!(
         !vm.has_ready_timeout(),
         "pagehide is part of the unload step and must not create an independent timer task"
+    );
+}
+
+#[test]
+fn main_document_stream_operations_are_suppressed_only_during_unload() {
+    for event in ["beforeunload", "pagehide", "unload"] {
+        for operation in ["open", "write", "writeln"] {
+            let mut vm = new_storage_test_vm("https://document-open-unload.test/source");
+            let result = vm
+                .eval(&format!(
+                    r#"(() => {{
+                      const doc = document;
+                      if (!doc.documentElement) doc.appendChild(doc.createElement('html'));
+                      const root = doc.documentElement;
+                      root.appendChild(doc.createElement('p'));
+                      let retained = false;
+                      let nestedRetained = false;
+                      let listenerCount = 0;
+                      let converted = 0;
+                      doc.addEventListener('retained-listener', () => listenerCount++);
+                      addEventListener('nested-open', () => {{
+                        doc.open();
+                        nestedRetained = doc.documentElement === root;
+                      }});
+                      addEventListener({event:?}, () => {{
+                        if ({operation:?} === 'open') doc.open();
+                        else doc[{operation:?}]({{toString() {{ converted++; return 'changed'; }}}});
+                        retained = doc.documentElement === root;
+                        dispatchEvent(new Event('nested-open'));
+                        doc.dispatchEvent(new Event('retained-listener'));
+                      }});
+                      navigation.navigate('/destination');
+                      doc.open();
+                      return [retained, nestedRetained, listenerCount, converted,
+                        doc.documentElement !== root].join('|');
+                    }})()"#
+                ))
+                .expect("main document unload stream operations should evaluate");
+            assert_eq!(
+                result,
+                format!("true|true|1|{}|true", usize::from(operation != "open")),
+                "{event}/{operation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn before_unload_handler_coerces_its_result_while_window_event_is_current() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              let customCurrent = false;
+              onbeforeunload = event => ({
+                toString() {
+                  customCurrent = window.event === event;
+                  return "custom";
+                }
+              });
+              const custom = new CustomEvent("beforeunload", { cancelable: true });
+              const customDispatchResult = dispatchEvent(custom);
+
+              let realEvent;
+              const realSteps = [];
+              onbeforeunload = event => {
+                realEvent = event;
+                realSteps.push([
+                  event instanceof BeforeUnloadEvent,
+                  event.cancelable,
+                  event.returnValue,
+                  window.event === event
+                ]);
+                return {
+                  toString() {
+                    realSteps.push(["coerce", window.event === event]);
+                    return "leave";
+                  }
+                };
+              };
+              navigation.navigate("/next-document");
+
+              return JSON.stringify({
+                custom: [customCurrent, custom.defaultPrevented, customDispatchResult],
+                realSteps,
+                real: [realEvent.defaultPrevented, realEvent.returnValue]
+              });
+            })()
+            "##,
+        )
+        .expect("beforeunload handler return processing should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"custom":[true,false,true],"realSteps":[[true,true,"",true],["coerce",true]],"real":[true,"leave"]}"#
     );
 }
 #[test]
@@ -2988,6 +3369,8 @@ async fn location_href_double_intercept_cancels_first_settlement() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://example.com/start", &loader);
 
+    // Both assignments occur before complete loading, so both intercepted
+    // navigations replace the entry while preserving their abort ordering.
     let setup = vm
         .eval(
             r##"
@@ -3041,7 +3424,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double setup should evaluate");
     assert_eq!(
         setup,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
     );
 
     vm.advance_timers_until_deadline_for_test(&loader)
@@ -3052,7 +3435,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double log should evaluate");
     assert_eq!(
         settled,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
 }
 #[test]
@@ -3176,6 +3559,275 @@ async fn same_document_navigation_precommit_added_handler_delays_finished() {
 
     assert_eq!(after_timeout, "handler|added|finished");
 }
+#[tokio::test]
+async fn window_stop_cancels_child_location_navigation_without_committing_history() {
+    for action in [
+        "child.location.search = '?blocked'",
+        "child.location.assign('/blocked')",
+        "child.location.replace('/blocked')",
+        "child.location.reload()",
+        "const result = child.navigation.navigate('/blocked'); result.committed.catch(() => {}); result.finished.catch(() => {})",
+    ] {
+        let server = StaticHttpServer::spawn(3).await;
+        let parent_url = server.url_for_host("window-stop.test", "/page.html");
+        let loader = static_http_loader([server.resolve_entry("window-stop.test")]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        vm.eval(
+            r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.src = '/child.html';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+        )
+        .expect("window.stop child setup should evaluate");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopLoads)",
+            "1",
+            "initial child should load before the canceled navigation",
+        )
+        .await;
+
+        let snapshot = vm
+            .eval(&format!(
+                r#"
+(() => {{
+  globalThis.__stopSibling = document.createElement('iframe');
+  globalThis.__stopSiblingLoaded = false;
+  __stopSibling.onload = () => {{ __stopSiblingLoaded = true; }};
+  __stopSibling.src = '/sibling.html';
+  (document.body || document.documentElement || document).appendChild(__stopSibling);
+  const child = __stopFrame.contentWindow;
+  child.history.replaceState({{ retained: true }}, '', '#original');
+  const documentBefore = child.document;
+  const entryBefore = child.navigation.currentEntry;
+  const lengthBefore = child.history.length;
+  const hrefBefore = child.location.href;
+  const changes = [];
+  child.navigation.oncurrententrychange = () => changes.push('change');
+  globalThis.__stopSnapshot = () => [
+    child.document === documentBefore,
+    child.location.href === hrefBefore,
+    child.document.URL === hrefBefore,
+    child.navigation.currentEntry === entryBefore,
+    child.history.length === lengthBefore,
+    child.history.state?.retained === true,
+    changes.length,
+    __stopLoads
+  ].join('|');
+  {action};
+  const beforeStop = __stopSnapshot();
+  child.stop();
+  child.stop();
+  return beforeStop + ';' + __stopSnapshot();
+}})()
+"#,
+            ))
+            .expect("stopping a child navigation should evaluate");
+        const UNCHANGED: &str = "true|true|true|true|true|true|0|1";
+        assert_eq!(snapshot, format!("{UNCHANGED};{UNCHANGED}"), "{action}");
+
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopSiblingLoaded)",
+            "true",
+            "a sibling should load while the stopped child remains unchanged",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("__stopSnapshot()")
+                .expect("stopped child snapshot should evaluate"),
+            UNCHANGED,
+            "{action} must not commit from a queued navigation task"
+        );
+
+        vm.eval("__stopFrame.contentWindow.location.assign('/after-stop.html')")
+            .expect("navigation after stop should schedule");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopLoads)",
+            "2",
+            "stopping a navigation must not disable later navigations",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("__stopFrame.contentWindow.location.pathname")
+                .expect("resumed child URL should evaluate"),
+            "/after-stop.html"
+        );
+        assert_eq!(
+            server.finish_targets().await,
+            ["/child.html", "/sibling.html", "/after-stop.html"],
+            "{action} must not start the canceled request"
+        );
+    }
+}
+
+#[test]
+fn window_stop_in_child_does_not_cancel_the_top_level_navigation() {
+    let mut vm = new_storage_test_vm("https://window-stop.test/page.html");
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+__stopFrame.srcdoc = '<body>child</body>';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(
+        r#"
+const child = __stopFrame.contentWindow;
+const childResult = child.navigation.navigate('/child-next.html');
+childResult.committed.catch(() => {});
+childResult.finished.catch(() => {});
+const topResult = navigation.navigate('/top-next.html');
+topResult.committed.catch(() => {});
+topResult.finished.catch(() => {});
+child.stop();
+"#,
+    )
+    .expect("stopping the child should leave the parent navigation alone");
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .expect("the top-level navigation must remain pending")
+            .url
+            .as_str(),
+        "https://window-stop.test/top-next.html"
+    );
+}
+
+#[tokio::test]
+async fn window_stop_discards_in_flight_child_navigation_completions() {
+    let (child_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(200).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &child_url.replace("/child.html", "/page.html"),
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.srcdoc = '<body>original</body>';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("in-flight navigation child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "1",
+        "srcdoc should finish before starting the blocked response",
+    )
+    .await;
+    vm.eval(&format!(
+        "globalThis.__stopDocument = __stopFrame.contentDocument; __stopFrame.contentWindow.location.assign({child_url:?});"
+    ))
+    .expect("child navigation should queue");
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "navigation commit task should start the child request",
+    )
+    .await;
+    request_rx.await.expect("the child request should arrive");
+    assert_eq!(
+        vm.eval("__stopFrame.contentWindow.location.href")
+            .expect("in-flight child URL should evaluate"),
+        "about:srcdoc"
+    );
+    vm.eval("__stopFrame.contentWindow.stop()")
+        .expect("in-flight child navigation should stop");
+    release_tx.send(()).expect("release the canceled response");
+    server.await.expect("the gated server should finish");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "late navigation completion should be discarded",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            "[__stopFrame.contentDocument === __stopDocument, __stopFrame.contentWindow.location.href, __stopLoads].join('|')"
+        )
+        .expect("late response must not replace the stopped child"),
+        "true|about:srcdoc|1"
+    );
+}
+
+#[tokio::test]
+async fn window_stop_preserves_child_cross_document_history_traversal() {
+    let server = StaticHttpServer::spawn(3).await;
+    let parent_url = server.url_for_host("window-stop-traversal.test", "/page.html");
+    let loader = static_http_loader([server.resolve_entry("window-stop-traversal.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.src = '/one.html';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("traversal child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "1",
+        "first child document should load",
+    )
+    .await;
+    vm.eval("__stopFrame.contentWindow.location.assign('/two.html')")
+        .expect("second child navigation should schedule");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "2",
+        "second child document should load",
+    )
+    .await;
+    vm.eval("__stopFrame.contentWindow.history.back()")
+        .expect("child history traversal should schedule");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("the history task should prepare the cross-document traversal")
+    );
+    vm.eval("__stopFrame.contentWindow.stop()")
+        .expect("stop during traversal should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "3",
+        "window.stop must not cancel a session history traversal",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__stopFrame.contentWindow.location.pathname")
+            .expect("traversed URL should evaluate"),
+        "/one.html"
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        ["/one.html", "/two.html", "/one.html"]
+    );
+}
+
 #[tokio::test]
 async fn window_stop_cancels_pending_precommit_before_commit() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -3796,7 +4448,7 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
         .clone();
     vm.eval_in_child_default_context(
         child_context_id,
-        r##"history.pushState({ realm: "child-default" }, "", "#child-default")"##,
+        r##"history.pushState({ realm: "child-default" }, "", "about:srcdoc#child-default")"##,
     )
     .expect("child default history setup should evaluate");
 
@@ -3813,7 +4465,7 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
     .expect("top isolated history setup should evaluate");
     vm.eval_in_isolated_context(
         child_isolated_context_id,
-        r##"history.pushState({ realm: "child-isolated" }, "", "#child-isolated")"##,
+        r##"history.pushState({ realm: "child-isolated" }, "", "about:srcdoc#child-isolated")"##,
     )
     .expect("child isolated history setup should evaluate");
 
@@ -3951,7 +4603,11 @@ async fn reset_navigation_history_preserves_child_entry_created_by_top_dispose_l
         child_context_id,
         r##"
 (() => {
-  history.pushState({ realm: "child-before-reset" }, "", "#child-before-reset");
+  history.pushState(
+    { realm: "child-before-reset" },
+    "",
+    "about:srcdoc#child-before-reset"
+  );
   globalThis.__lmChildCurrentBeforeReset = navigation.currentEntry;
   globalThis.__lmChildEntriesBeforeReset = navigation.entries();
   globalThis.__lmChildDisposed = [];
@@ -3968,7 +4624,7 @@ navigation.entries()[0].addEventListener("dispose", () => {
   document.querySelector("iframe").contentWindow.history.pushState(
     { realm: "child-during-top-dispose" },
     "",
-    "#child-during-top-dispose"
+    "about:srcdoc#child-during-top-dispose"
   );
 });
 "##,

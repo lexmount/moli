@@ -1,3 +1,4 @@
+pub(crate) use moli_module_script_tree::ModuleSourceOrigin;
 use url::Url;
 
 use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
@@ -5,6 +6,10 @@ use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModuleSource {
     Text(String),
+    TextWithOrigin {
+        source: String,
+        origin: Box<ModuleSourceOrigin>,
+    },
     Binary(Vec<u8>),
 }
 
@@ -86,20 +91,34 @@ impl ModuleSource {
         Self::Text(source)
     }
 
+    pub(crate) fn text_with_origin(source: String, origin: ModuleSourceOrigin) -> Self {
+        Self::TextWithOrigin {
+            source,
+            origin: Box::new(origin),
+        }
+    }
+
+    pub(crate) fn origin(&self) -> Option<&ModuleSourceOrigin> {
+        match self {
+            Self::TextWithOrigin { origin, .. } => Some(origin),
+            Self::Text(_) | Self::Binary(_) => None,
+        }
+    }
+
     pub(crate) fn binary(bytes: Vec<u8>) -> Self {
         Self::Binary(bytes)
     }
 
     pub(crate) fn text_source(&self) -> Option<&str> {
         match self {
-            Self::Text(source) => Some(source),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => Some(source),
             Self::Binary(_) => None,
         }
     }
 
     pub(crate) fn binary_source(&self) -> Option<&[u8]> {
         match self {
-            Self::Text(_) => None,
+            Self::Text(_) | Self::TextWithOrigin { .. } => None,
             Self::Binary(bytes) => Some(bytes),
         }
     }
@@ -107,7 +126,7 @@ impl ModuleSource {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         match self {
-            Self::Text(source) => source.len(),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => source.len(),
             Self::Binary(bytes) => bytes.len(),
         }
     }

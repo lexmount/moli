@@ -32,8 +32,24 @@ impl std::fmt::Display for DedicatedWorkerId {
 pub(crate) enum ScriptErrorConstructorKind {
     Error,
     SyntaxError,
+    TypeError,
     WebAssemblyCompileError,
     WebAssemblyLinkError,
+}
+
+/// The value carried by script-failure reporting tasks. Constructor metadata
+/// remains a fallback for failures originating in the host; a JavaScript
+/// exception must instead retain its original value in the reporting realm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptErrorValue {
+    Constructor(ScriptErrorConstructorKind),
+    Retained(moli_module_script_tree::ModuleExceptionId),
+}
+
+impl From<ScriptErrorConstructorKind> for ScriptErrorValue {
+    fn from(constructor: ScriptErrorConstructorKind) -> Self {
+        Self::Constructor(constructor)
+    }
 }
 
 pub use moli_script::{
@@ -216,6 +232,7 @@ pub(super) struct PendingWindowFetchContinuation {
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
+    request_origin: moli_url::WebOrigin,
 }
 
 enum PendingWindowFetchPromise {
@@ -229,12 +246,14 @@ impl PendingWindowFetchContinuation {
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        request_origin: moli_url::WebOrigin,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
             connect_policy,
             csp_report_context,
+            request_origin,
         }
     }
 
@@ -274,6 +293,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn csp_report_context(&self) -> &crate::network_host::WindowCspReportRequestContext {
         &self.csp_report_context
+    }
+
+    pub(super) fn request_origin(&self) -> &moli_url::WebOrigin {
+        &self.request_origin
     }
 }
 
@@ -515,9 +538,28 @@ pub(super) struct PendingSubresourceFetchState {
     // Window fetches that need CORS preflight emit the actual request-start
     // after the preflight record, not when the pending fetch is registered.
     pub(super) deferred_request_started: bool,
+    pub(super) blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.continuation
+            .window_fetch()
+            .map(|fetch| fetch.request_origin().clone())
+            .unwrap_or_else(|| moli_url::WebOrigin::from_url(&self.info.document_url))
+    }
+
+    pub(super) fn response_request_origin<'a>(
+        &self,
+        redirects: impl IntoIterator<Item = (&'a Url, &'a Url)>,
+    ) -> moli_url::WebOrigin {
+        let origin = self.request_origin();
+        if self.request_mode != moli_fetch::RequestMode::Cors {
+            return origin;
+        }
+        crate::network_host::cors_request_origin_after_redirects(&origin, redirects)
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
@@ -863,6 +905,17 @@ pub(super) struct StreamingSubresourceFetchState {
     pub(super) xhr_response: Option<XhrStreamingResponseState>,
 }
 
+impl StreamingSubresourceFetchState {
+    pub(super) fn needs_orb_body_validation(&self) -> bool {
+        crate::network_host::fetch_response_needs_orb_body_validation(
+            &self.pending.info.document_url,
+            &self.head.final_url,
+            &self.head.headers,
+            self.pending.request_mode,
+        )
+    }
+}
+
 pub(super) struct EventSourceStreamingChunkDelivery<'s> {
     pub(super) context: v8::Local<'s, v8::Context>,
     pub(super) event_source: v8::Local<'s, v8::Object>,
@@ -871,7 +924,7 @@ pub(super) struct EventSourceStreamingChunkDelivery<'s> {
 }
 
 pub(super) struct XhrStreamingResponseState {
-    pending_utf8_bytes: Vec<u8>,
+    decoder: Option<moli_encoding::XhrResponseDecoder>,
     loaded: usize,
     total: Option<usize>,
 }
@@ -883,44 +936,20 @@ impl XhrStreamingResponseState {
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
             .and_then(|(_, value)| value.trim().parse::<usize>().ok());
         Self {
-            pending_utf8_bytes: Vec::new(),
+            decoder: None,
             loaded: 0,
             total,
         }
     }
 
-    pub(super) fn append(&mut self, bytes: &[u8]) -> (String, usize, Option<usize>) {
+    pub(super) fn append(
+        &mut self,
+        bytes: &[u8],
+        make_decoder: impl FnOnce() -> moli_encoding::XhrResponseDecoder,
+    ) -> (String, usize, Option<usize>) {
         self.loaded = self.loaded.saturating_add(bytes.len());
-        self.pending_utf8_bytes.extend_from_slice(bytes);
-
-        let mut decoded = String::new();
-        let mut consumed = 0;
-        while consumed < self.pending_utf8_bytes.len() {
-            let remaining = &self.pending_utf8_bytes[consumed..];
-            match std::str::from_utf8(remaining) {
-                Ok(text) => {
-                    decoded.push_str(text);
-                    consumed = self.pending_utf8_bytes.len();
-                }
-                Err(error) => {
-                    let valid_end = consumed + error.valid_up_to();
-                    decoded.push_str(
-                        std::str::from_utf8(&self.pending_utf8_bytes[consumed..valid_end])
-                            .expect("Utf8Error::valid_up_to must identify a valid UTF-8 prefix"),
-                    );
-                    consumed = valid_end;
-                    let Some(invalid_len) = error.error_len() else {
-                        break;
-                    };
-                    decoded.push('\u{fffd}');
-                    consumed += invalid_len;
-                }
-            }
-        }
-        if consumed > 0 {
-            self.pending_utf8_bytes.drain(..consumed);
-        }
-        (decoded, self.loaded, self.total)
+        let decoder = self.decoder.get_or_insert_with(make_decoder);
+        (decoder.push(bytes), self.loaded, self.total)
     }
 }
 

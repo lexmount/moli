@@ -239,6 +239,62 @@ async fn service_worker_global_scope_does_not_expose_close() {
 }
 
 #[tokio::test]
+async fn service_worker_global_prototype_chain_is_complete_and_immutable() {
+    ensure_v8();
+    let (bootstrap_tx, mut bootstrap_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
+    let handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const chain = [];
+            for (let value = self; value !== null; value = Object.getPrototypeOf(value)) {
+                chain.push(value);
+            }
+            const expected = [
+                self,
+                ServiceWorkerGlobalScope.prototype,
+                WorkerGlobalScope.prototype,
+                EventTarget.prototype,
+                Object.prototype,
+            ];
+            if (chain.length !== expected.length ||
+                chain.some((value, index) => value !== expected[index])) {
+                throw new Error("service worker global prototype chain is incomplete");
+            }
+            for (const value of chain) {
+                const original = Object.getPrototypeOf(value);
+                if (Reflect.setPrototypeOf(value, {}) ||
+                    Object.getPrototypeOf(value) !== original ||
+                    !Reflect.setPrototypeOf(value, original)) {
+                    throw new Error("service worker global prototype chain is mutable");
+                }
+                if (!Object.isExtensible(value)) {
+                    throw new Error("immutable prototype object must remain extensible");
+                }
+            }
+            "#
+            .to_owned(),
+            "https://example.test/app/immutable-prototype-sw.js".to_owned(),
+        )
+        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+        })
+        .with_bootstrap_completion_sender(bootstrap_tx),
+    );
+
+    let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+        .await
+        .expect("timed out waiting for immutable service worker bootstrap")
+        .expect("service worker bootstrap channel closed");
+    bootstrap
+        .result
+        .expect("service worker global prototype chain should be complete and immutable");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap() {
     ensure_v8();
     let (bootstrap_tx, mut bootstrap_rx) =
@@ -701,6 +757,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -711,6 +768,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), "yes".to_owned())],
             },
         },
@@ -815,6 +873,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 run.clone(),
             ),
             request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -822,6 +881,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 302,
+                status_text: "Found".to_owned(),
                 headers: vec![("location".to_owned(), "/app/final.html".to_owned())],
             },
         },
@@ -985,6 +1045,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -995,6 +1056,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), "yes".to_owned())],
             },
         },
@@ -1098,6 +1160,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -1108,6 +1171,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
             },
         },
@@ -2624,6 +2688,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
             referrer_policy: "origin".to_owned(),
             integrity: "sha256-test".to_owned(),
             keepalive: true,
+            request_origin: None,
         },
     };
     let completion =
@@ -2638,6 +2703,127 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
         r#"{"destination":"script","mode":"no-cors","credentials":"include","redirect":"error","cache":"reload","referrer":"https://example.test/app/referrer.html","referrerPolicy":"origin","integrity":"sha256-test","keepalive":true,"isReload":true,"requestIsReloadNavigation":true,"clientId":"client-0000000000000007","resultingClientId":"","accept":"application/javascript"}"#
     );
     handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserves_checked_body() {
+    ensure_v8();
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fetch_url = format!("http://{}/body", listener.local_addr().unwrap());
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len(),
+            ).as_bytes()).await.unwrap();
+            stream.write_all(&bytes[..bytes.len() - 1]).await.unwrap();
+            if timeout(TIMEOUT, released)
+                .await
+                .is_ok_and(|result| result.is_ok())
+            {
+                stream.write_all(&bytes[bytes.len() - 1..]).await.unwrap();
+            }
+        });
+        let source = format!(
+            r#"
+            addEventListener('fetch', event => {{
+              event.respondWith((async () => {{
+                const response = await fetch({}, {{mode: 'no-cors'}});
+                const clone = response.clone();
+                const cacheName = event.request.url;
+                const cache = await caches.open(cacheName);
+                let settled = false;
+                const write = cache.put(event.request, clone).then(() => settled = true);
+                await new Promise(resolve => setTimeout(resolve, 30));
+                console.log(JSON.stringify({{type: response.type, bodyNull: response.body === null,
+                  cloneNull: clone.body === null, settled}}));
+                await write;
+                const cached = await cache.match(event.request);
+                await caches.delete(cacheName);
+                return cached;
+              }})());
+            }});
+        "#,
+            serde_json::to_string(&fetch_url).unwrap()
+        );
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, "https://example.test/app/sw.js".to_owned())
+                .with_request_client(loader)
+                .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                    registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                    version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                    scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+                }),
+        );
+        let mut request = service_worker_fetch_request_for_test();
+        request.request_mode = moli_fetch::RequestMode::NoCors;
+        request.destination = ServiceWorkerRequestDestination::Script;
+        handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+            event_id: ServiceWorkerEventId::from_u64_for_worker(31),
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                ServiceWorkerVersionId::from_u64_for_test(1),
+                crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            ),
+            request,
+            navigation_preload_sent: false,
+        });
+        let early = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::Console(message) => break message.message,
+                WorkerToParentMessage::SubresourceNetwork(_)
+                | WorkerToParentMessage::SubresourceContinue(_) => {}
+                other => panic!("expected opaque headers before EOF for {mime}: {other:?}"),
+            }
+        };
+        let early: serde_json::Value = serde_json::from_str(
+            early
+                .strip_prefix("log: ")
+                .unwrap_or_else(|| panic!("unexpected opaque response console message: {early}")),
+        )
+        .unwrap_or_else(|error| panic!("invalid opaque response diagnostic {early}: {error}"));
+        assert_eq!(early["type"], "opaque", "{mime}");
+        assert_eq!(early["bodyNull"], true, "{mime}");
+        assert_eq!(early["cloneNull"], true, "{mime}");
+        if !expected.is_empty() {
+            assert_eq!(
+                early["settled"], false,
+                "allowed body ended before its last byte"
+            );
+        }
+        release.send(()).unwrap();
+        let response = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => {
+                    match completion.result {
+                        ServiceWorkerFetchResult::Response(response) => break response,
+                        other => panic!("expected cached opaque response for {mime}: {other:?}"),
+                    }
+                }
+                WorkerToParentMessage::Error { message, .. } => panic!("{mime}: {message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(response.response_type, "opaque", "{mime}");
+        assert_eq!(response.body, expected, "{mime}");
+        server.await.unwrap();
+        handle.terminate_and_join();
+    }
 }
 
 #[tokio::test]
@@ -9303,6 +9489,110 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
     assert_eq!(
         expect_post_json(msg),
         r#"{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"http://example.test/missing-child.js"}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_global() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                error: null,
+                ping: false
+            };
+            function finish() {
+                if (result.violation && result.error) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            child.addEventListener("message", () => {
+                result.ping = true;
+                postMessage(result);
+                close();
+            });
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    type: event.type,
+                    effectiveDirective: event.effectiveDirective,
+                    violatedDirective: event.violatedDirective,
+                    blockedURI: event.blockedURI,
+                    documentURI: event.documentURI,
+                    originalPolicy: event.originalPolicy,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("error", event => {
+                event.preventDefault();
+                result.error = {
+                    messageIncludesCsp: event.message.includes("Content Security Policy"),
+                    filename: event.filename
+                };
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"type":"securitypolicyviolation","effectiveDirective":"worker-src","violatedDirective":"worker-src","blockedURI":"data","documentURI":"https://app.example/parent.js","originalPolicy":"worker-src 'none'","disposition":"enforce","instance":true},"error":{"messageIncludesCsp":true,"filename":"data:text/javascript,postMessage('ping')"},"ping":false}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_worker_constructor_report_only_csp_is_async_and_does_not_block() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                childMessage: null
+            };
+            function finish() {
+                if (result.violation && result.childMessage) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    effectiveDirective: event.effectiveDirective,
+                    blockedURI: event.blockedURI,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("message", event => {
+                result.childMessage = event.data;
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_report_only_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"effectiveDirective":"worker-src","blockedURI":"data","disposition":"report","instance":true},"childMessage":"ping"}"#
     );
 }
 

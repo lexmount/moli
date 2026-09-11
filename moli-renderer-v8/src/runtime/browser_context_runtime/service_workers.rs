@@ -249,29 +249,6 @@ impl RendererBrowserContextRuntime {
         }
     }
 
-    pub(crate) async fn fetch_service_worker_subresource_for_client(
-        &self,
-        client_id: ServiceWorkerClientId,
-        document_url: Url,
-        request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
-        destination: ServiceWorkerRequestDestination,
-        resource_type: SubresourceResourceType,
-    ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
-        self.fetch_service_worker_subresource_for_client_with_metadata(
-            client_id,
-            document_url,
-            request,
-            request_client,
-            resource_task_runner,
-            destination,
-            resource_type,
-        )
-        .await
-        .map(|response| response.map(|response| *response.response))
-    }
-
     pub(crate) async fn fetch_service_worker_subresource_for_client_with_metadata(
         &self,
         client_id: ServiceWorkerClientId,

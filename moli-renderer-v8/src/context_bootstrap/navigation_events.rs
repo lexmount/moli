@@ -1,4 +1,7 @@
-use super::events::{construct_original_event, run_navigate_event_precommit_handlers};
+use super::events::{
+    construct_original_before_unload_event, construct_original_event,
+    construct_original_page_transition_event, run_navigate_event_precommit_handlers,
+};
 use super::location_history_storage::{
     NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
 };
@@ -101,13 +104,6 @@ struct HashChangeEventStateDeclaration {
     old_url: String,
     #[webapi(data_property = "newURL")]
     new_url: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct PageTransitionEventStateDeclaration {
-    #[webapi(data_property)]
-    persisted: bool,
 }
 
 #[derive(WebApiObject)]
@@ -578,17 +574,20 @@ pub(super) fn dispatch_popstate_event<'s>(
     child_handle: Option<crate::document_runtime::DomHandle>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "PopStateEvent")
     else {
         return;
     };
-    let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "popstate").into()]) else {
+    let init = PopStateEventStateDeclaration::new(state)
+        .bind(scope)
+        .expect("PopStateEvent init declaration should bind");
+    let Some(event) =
+        event_ctor.new_instance(scope, &[v8str(scope, "popstate").into(), init.into()])
+    else {
         return;
     };
-    let _ = PopStateEventStateDeclaration::new(state).initialize(scope, event);
+    mark_event_trusted(scope, event);
     let runtime = unsafe { &mut *host_ptr };
     if let Some(child_handle) = child_handle {
         runtime.dispatch_child_window_event(scope, child_handle, "popstate", event);
@@ -608,13 +607,15 @@ pub(crate) fn construct_original_hash_change_event<'s>(
     old_url: &str,
     new_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let event_ctor = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let event = event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into()])?;
-    let _ = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
-        .initialize(scope, event);
+    let event_ctor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "HashChangeEvent")
+            .ok()?;
+    let init = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
+        .bind(scope)
+        .expect("HashChangeEvent init declaration should bind");
+    let event =
+        event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into(), init.into()])?;
+    mark_event_trusted(scope, event);
     Some(event)
 }
 
@@ -622,7 +623,7 @@ pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) = construct_original_event(scope, "beforeunload") else {
+    let Some(event) = construct_original_before_unload_event(scope) else {
         return;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "beforeunload", event);
@@ -642,10 +643,9 @@ pub(crate) fn dispatch_pagehide_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) = construct_original_event(scope, "pagehide") else {
+    let Some(event) = construct_original_page_transition_event(scope, "pagehide", false) else {
         return;
     };
-    let _ = PageTransitionEventStateDeclaration::new(false).initialize(scope, event);
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "pagehide", event);
 }
 
@@ -655,6 +655,11 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
+    let _document_unload = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        let host = unsafe { &*host_ptr };
+        super::window_accessors::window_document_handle(scope, owner, host)
+            .map(|document| host.enter_document_unload(document))
+    });
     set_navigation_unload_event_active(scope, owner, true);
     if runtime_window_is_global(scope, owner) {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -670,11 +675,12 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
     } else if let Some(child_handle) = child_browsing_context_handle_for_runtime_owner(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        unsafe { &mut *host_ptr }.dispatch_child_window_event(
+        unsafe { &mut *host_ptr }.dispatch_child_window_event_with_target_override(
             scope,
             child_handle,
             event_type,
             event,
+            matches!(event_type, "pagehide" | "unload"),
         );
     }
     set_navigation_unload_event_active(scope, owner, false);
@@ -720,14 +726,14 @@ pub(super) fn dispatch_navigation_currententrychange<'s>(
     from: Option<v8::Local<'s, v8::Object>>,
     navigation_type: Option<&str>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(
-            scope,
-            v8str(scope, "NavigationCurrentEntryChangeEvent").into(),
-        )
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Ok(event_ctor) = super::exposed_interfaces::ensure_intrinsic_interface_constructor(
+        scope,
+        "NavigationCurrentEntryChangeEvent",
+    ) else {
         return;
     };
     let init = NavigationCurrentEntryChangeEventInitDeclaration {
@@ -761,17 +767,13 @@ pub(super) fn dispatch_navigation_entry_dispose<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let context = entry
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(event) = construct_original_event(scope, "dispose") else {
         return;
     };
-    let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "dispose").into()]) else {
-        return;
-    };
-    mark_event_trusted(scope, event);
     let _ = dispatch_simple_event_target_event(
         scope,
         entry,
@@ -785,18 +787,13 @@ pub(super) fn dispatch_navigation_success<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(event) = construct_original_event(scope, "navigatesuccess") else {
         return;
     };
-    let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "navigatesuccess").into()])
-    else {
-        return;
-    };
-    mark_event_trusted(scope, event);
     let _ = dispatch_simple_event_target_event(
         scope,
         navigation,
@@ -812,7 +809,15 @@ pub(super) fn dispatch_navigation_error<'s>(
     error: v8::Local<'s, v8::Value>,
     filename: &str,
 ) {
-    let global = scope.get_current_context().global(scope);
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "ErrorEvent")
+    else {
+        return;
+    };
     let message = error
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
@@ -827,10 +832,7 @@ pub(super) fn dispatch_navigation_error<'s>(
     .bind(scope)
     .expect("NavigationErrorEvent init declaration should bind");
     let event_type = v8str(scope, "navigateerror");
-    let event = global
-        .get(scope, v8str(scope, "ErrorEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .and_then(|ctor| ctor.new_instance(scope, &[event_type.into(), init.into()]));
+    let event = event_ctor.new_instance(scope, &[event_type.into(), init.into()]);
     let Some(event) = event else {
         return;
     };
@@ -893,12 +895,14 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     form_data: Option<v8::Local<'s, v8::Value>>,
     source_element: Option<v8::Local<'s, v8::Object>>,
 ) -> NavigationDispatchOutcome<'s> {
-    let global = scope.get_current_context().global(scope);
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
         .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "NavigateEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
     else {
         return NavigationDispatchOutcome::proceed();
     };
@@ -932,6 +936,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     else {
         return NavigationDispatchOutcome::proceed();
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1118,21 +1123,17 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return true;
     };
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     if download_request.is_some() {
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_active_intercepted_same_document_navigation(scope, navigation);
     }
-    let event_ctor = owner
-        .get(scope, v8str(scope, "NavigateEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .or_else(|| {
-            scope
-                .get_current_context()
-                .global(scope)
-                .get(scope, v8str(scope, "NavigateEvent").into())
-                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        });
-    let Some(event_ctor) = event_ctor else {
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
+    else {
         return true;
     };
     let current_href = window_location_for_holder(scope, owner)
@@ -1178,6 +1179,7 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
     else {
         return true;
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1229,12 +1231,14 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     target_index: u32,
     info: Option<v8::Local<'s, v8::Value>>,
 ) -> NavigationDispatchOutcome<'s> {
-    let global = scope.get_current_context().global(scope);
+    let context = navigation
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
         .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "NavigateEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
     else {
         return NavigationDispatchOutcome::proceed();
     };
@@ -1283,6 +1287,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     else {
         return NavigationDispatchOutcome::proceed();
     };
+    mark_event_trusted(scope, event);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
     set_navigate_event_private_bool(
@@ -1554,10 +1559,8 @@ fn navigation_destination_entry_string_property<'s>(
 fn create_navigation_abort_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Value> {
-    let global = scope.get_current_context().global(scope);
-    let Some(controller_ctor) = global
-        .get(scope, v8str(scope, "AbortController").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(controller_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "AbortController")
     else {
         return v8::null(scope).into();
     };

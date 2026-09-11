@@ -11,15 +11,18 @@ use super::super::{
     css_fontface_runtime::{font_face_constructor_callback, font_face_set_constructor_callback},
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
+    dom_quad::dom_quad_constructor_callback,
     events::{EventSubclassKind, build_event_subclass_template, event_constructor_callback},
-    exposed_interfaces::install_interface_template_metadata,
+    exposed_interfaces::{TemplateBuildProfile, install_interface_template_metadata},
     file_api::{
         data_transfer_constructor_callback, file_constructor_callback,
-        file_list_constructor_callback, file_reader_constructor_callback,
-        file_reader_sync_constructor_callback,
+        file_reader_constructor_callback, file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
-    geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
+    geometry_runtime::{
+        dom_matrix_constructor_callback, dom_matrix_readonly_constructor_callback,
+        dom_point_constructor_callback, dom_point_readonly_constructor_callback,
+    },
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
     location_runtime::build_location_constructor_template,
@@ -59,7 +62,9 @@ use super::super::{
         offline_audio_context_constructor_callback,
     },
     webrtc::{
-        rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
+        rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
+        rtc_peer_connection_constructor_callback,
+        rtc_peer_connection_ice_event_constructor_callback,
         rtc_session_description_constructor_callback,
     },
     websocket::{
@@ -79,6 +84,14 @@ use anyhow::{Result, anyhow};
 pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    build_constructor_template_for_profile(scope, spec, TemplateBuildProfile::Window)
+}
+
+pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = match spec.kind {
         ConstructorKind::Illegal => v8::FunctionTemplate::builder(illegal_constructor_callback)
@@ -120,6 +133,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::ClipboardEvent => {
             build_event_subclass_template(scope, EventSubclassKind::ClipboardEvent)
+        }
+        ConstructorKind::ClipboardChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::ClipboardChangeEvent)
         }
         ConstructorKind::ClipboardItem => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
@@ -186,6 +202,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::PopStateEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PopStateEvent)
+        }
+        ConstructorKind::HashChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::HashChangeEvent)
         }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
@@ -448,14 +467,6 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(2)
             .build(scope)
         }
-        ConstructorKind::FileList => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::FileList,
-                file_list_constructor_callback
-            ))
-            .length(0)
-            .build(scope)
-        }
         ConstructorKind::FileReader => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::FileReader,
@@ -488,10 +499,34 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::DomPointReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMPointReadOnly,
+                dom_point_readonly_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DomPoint => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMPoint,
                 dom_point_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomQuad => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMQuad,
+                dom_quad_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomMatrixReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMMatrixReadOnly,
+                dom_matrix_readonly_constructor_callback
             ))
             .length(0)
             .build(scope)
@@ -595,6 +630,16 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             ))
             .length(1)
             .build(scope)
+        }
+        ConstructorKind::RtcPeerConnectionIceEvent => {
+            v8::FunctionTemplate::builder(rtc_peer_connection_ice_event_constructor_callback)
+                .length(1)
+                .build(scope)
+        }
+        ConstructorKind::RtcDataChannelEvent => {
+            v8::FunctionTemplate::builder(rtc_data_channel_event_constructor_callback)
+                .length(2)
+                .build(scope)
         }
         ConstructorKind::Navigator
         | ConstructorKind::WorkerNavigator
@@ -933,24 +978,27 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
     };
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 pub(in crate::context_bootstrap) fn build_constructor_template_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+    length: i32,
+    profile: TemplateBuildProfile,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = v8::FunctionTemplate::builder(callback)
-        .length(1)
+        .length(length)
         .build(scope);
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 fn finalize_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
     template: v8::Local<'s, v8::FunctionTemplate>,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let class_name = v8_string(scope, spec.interface.name()).ok_or_else(|| {
         anyhow!(
@@ -967,7 +1015,7 @@ fn finalize_constructor_template<'s>(
         template.read_only_prototype();
     }
 
-    install_constructor_template_bindings(scope, template, spec);
+    install_constructor_template_bindings(scope, template, spec, profile);
     install_interface_template_metadata(scope, template, spec.interface.name());
 
     Ok(template)

@@ -234,6 +234,7 @@ fetch({:?})
                         body_source_id,
                         network_request_headers: None,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: request_url,
                             status: 200,
                             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -446,6 +447,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
                 body_source_id,
                 network_request_headers: None,
                 head: moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: request_url,
                     status: 200,
                     headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

@@ -1,5 +1,7 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_document_handle,
+    window_has_discarded_child_browsing_context, window_hidden_value, window_host_ptr,
+    window_receiver,
 };
 use super::*;
 
@@ -16,11 +18,12 @@ pub(in crate::context_bootstrap) fn window_length_getter<'s>(
         return;
     };
     let runtime = unsafe { &mut *host_ptr };
-    let count = if let Some(handle) = window_child_context_handle(scope, receiver) {
-        runtime.child_browsing_context_child_frame_count(handle)
-    } else {
-        runtime.child_browsing_context_count()
-    };
+    let count = window_document_handle(scope, receiver, runtime)
+        .map(|document| {
+            runtime.sync_child_browsing_context_subtree(scope, document);
+            runtime.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     rv.set(v8::Number::new(scope, count as f64).into());
 }
 
@@ -32,6 +35,10 @@ pub(in crate::context_bootstrap) fn window_frame_element_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) = window_hidden_value(scope, receiver, WINDOW_FRAME_ELEMENT_SLOT) {
         rv.set(value);
         return;
@@ -105,6 +112,10 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
         return;
     };
     if let Some(handle) = window_child_context_handle(scope, receiver) {
+        if let Some(document) = window_hidden_value(scope, receiver, WINDOW_DOCUMENT_SLOT) {
+            rv.set(document);
+            return;
+        }
         match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, handle) {
             Some(document) => rv.set(document.into()),
             None => rv.set_null(),

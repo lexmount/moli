@@ -11,7 +11,10 @@ use std::{
 
 mod timers;
 
-pub use timers::{ReadyTimer, TimerId, TimerReadyAllowance, TimerScheduler};
+pub use timers::{
+    ReadyTimer, TimerId, TimerReadyAllowance, TimerScheduleRange, TimerScheduleSnapshot,
+    TimerScheduler,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DateLocaleFormatKind {

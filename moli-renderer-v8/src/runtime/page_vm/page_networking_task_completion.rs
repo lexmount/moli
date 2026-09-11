@@ -22,11 +22,8 @@ impl PageVm {
                 self.finish_selected_page_resource_completion_task(action)?;
             }
             PageNetworkingTurnAction::StyleElementEvent(action) => {
-                self.finish_selected_page_task_completion(
-                    action.into_page_task_completion(),
-                    loader,
-                )
-                .await?;
+                self.finish_selected_page_connected_style_event_task(action, loader)
+                    .await?;
             }
             PageNetworkingTurnAction::TextTrackLoad(action) => {
                 self.finish_selected_page_task_completion(

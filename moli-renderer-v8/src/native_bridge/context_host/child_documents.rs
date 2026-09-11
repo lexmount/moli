@@ -43,11 +43,13 @@ fn configure_child_document_navigation_request(
 pub(super) struct PendingChildDocumentNavigation {
     pub(super) target: ChildDocumentNavigationFetchTarget,
     pub(super) target_url: Url,
+    pub(super) referrer_source_url: Url,
     pub(super) resource_loader: crate::network::navigation::NavigationResourceLoader,
     pub(super) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     pub(super) document_credentialless: bool,
     pub(super) credentialless_storage_nonce: Option<OpaqueOriginNonce>,
+    pub(super) initiator: ChildDocumentNavigationInitiator,
     pub(super) frame_owner_resource_timing: Option<PendingFrameOwnerResourceTiming>,
 }
 

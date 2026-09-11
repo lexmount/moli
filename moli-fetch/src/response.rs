@@ -41,6 +41,10 @@ impl NegotiatedHttpVersion {
 pub struct ResponseHead {
     pub final_url: Url,
     pub status: u16,
+    /// The received HTTP status message. `Some("")` is an explicitly empty
+    /// message, including HTTP/2 and HTTP/3 responses. `None` permits synthetic
+    /// responses without a supplied message to use the canonical phrase.
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -48,6 +52,69 @@ pub struct ResponseHead {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
+}
+
+impl ResponseHead {
+    pub fn status_text(&self) -> &str {
+        self.status_text.as_deref().unwrap_or_else(|| {
+            if matches!(
+                self.negotiated_http_version,
+                Some(NegotiatedHttpVersion::Http2 | NegotiatedHttpVersion::Http3)
+            ) {
+                ""
+            } else {
+                http::StatusCode::from_u16(self.status)
+                    .ok()
+                    .and_then(|status| status.canonical_reason())
+                    .unwrap_or("")
+            }
+        })
+    }
+}
+
+pub(crate) struct HttpResponseStatusLine {
+    pub status: u16,
+    pub status_text: String,
+    pub version: Option<NegotiatedHttpVersion>,
+}
+
+pub(crate) fn parse_http_response_status_line(data: &[u8]) -> Option<HttpResponseStatusLine> {
+    if !data.starts_with(b"HTTP/") {
+        return None;
+    }
+    let line = data.strip_suffix(b"\n").unwrap_or(data);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let boundary = line.iter().position(u8::is_ascii_whitespace)?;
+    let version = std::str::from_utf8(&line[..boundary])
+        .ok()
+        .and_then(NegotiatedHttpVersion::from_status_line);
+    let rest = line[boundary..].trim_ascii_start();
+    let code_end = rest
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let status = std::str::from_utf8(&rest[..code_end]).ok()?.parse().ok()?;
+    let status_text = if matches!(
+        version,
+        Some(NegotiatedHttpVersion::Http2 | NegotiatedHttpVersion::Http3)
+    ) {
+        String::new()
+    } else {
+        // Status messages are ByteStrings. Preserve obs-text as Latin-1 and
+        // internal whitespace; Chromium only strips surrounding SP bytes.
+        rest[code_end..]
+            .iter()
+            .copied()
+            .map(char::from)
+            .collect::<String>()
+            .trim_matches(' ')
+            .to_owned()
+    };
+    Some(HttpResponseStatusLine {
+        status,
+        status_text,
+        version,
+    })
 }
 
 #[derive(Debug)]
@@ -249,6 +316,7 @@ impl ResponseBody {
 pub struct Response {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -265,6 +333,7 @@ impl Clone for Response {
         Self {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             body: self
                 .body
@@ -322,6 +391,7 @@ impl Response {
         ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
@@ -358,6 +428,7 @@ impl Response {
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
@@ -375,6 +446,7 @@ impl Response {
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
@@ -391,6 +463,7 @@ impl Response {
         let head = ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -413,10 +486,21 @@ impl Response {
         (head, body)
     }
 
+    /// Consumes a materialized response and transfers its exact byte payload
+    /// without retaining the text view or copying UTF-8 text storage.
+    pub fn into_byte_parts(self) -> (ResponseHead, Vec<u8>) {
+        let (head, body) = self.into_body();
+        let bytes = body
+            .try_into_materialized_bytes()
+            .expect("Response body should remain materialized");
+        (head, bytes)
+    }
+
     pub fn into_body(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -441,6 +525,7 @@ impl Response {
 pub struct RawResponse {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -457,6 +542,7 @@ impl Clone for RawResponse {
         Self {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             body: self
                 .body
@@ -508,6 +594,7 @@ impl RawResponse {
         ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
@@ -530,6 +617,7 @@ impl RawResponse {
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
             request_cookie_report: head.request_cookie_report,
@@ -547,6 +635,7 @@ impl RawResponse {
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
             request_cookie_report: head.request_cookie_report,
@@ -563,6 +652,7 @@ impl RawResponse {
         let head = ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,

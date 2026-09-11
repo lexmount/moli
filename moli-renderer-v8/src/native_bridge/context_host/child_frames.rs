@@ -2,10 +2,9 @@ use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
     JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
-    child_documents::CompletedFrameOwnerResourceTiming,
+    child_documents::CompletedFrameOwnerResourceTiming, window_security_tokens::WindowAccessOrigin,
 };
 use crate::{
-    context_bootstrap::set_top_level_history_length_at_least_for_runtime_owner,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     frame_owner_model::{
         ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
@@ -47,12 +46,15 @@ pub(super) struct ChildBrowsingContextEntry {
     attribute_bootstrap: ChildBrowsingContextBootstrap,
     pending_attribute_bootstrap_commit: bool,
     pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
+    pending_live_navigation_initiator_url: Option<Url>,
     pending_live_navigation_reflects_window_state: bool,
     live_bootstrap: ChildBrowsingContextBootstrap,
     navigation_entry_seed: NavigationHistoryEntrySeed,
     committed_navigation_entry_seed: NavigationHistoryEntrySeed,
     cached_snapshot: Option<ChildBrowsingContextSnapshot>,
     document_policy_container: ChildDocumentPolicyContainer,
+    document_internal_ancestor_origins: Vec<WindowAccessOrigin>,
+    ancestor_origins_referrer_policy_snapshot: ChildAncestorOriginsReferrerPolicy,
     completed_document_network: Option<CompletedChildDocumentNetwork>,
     completed_frame_owner_resource_timing: Option<CompletedFrameOwnerResourceTiming>,
     performance_time_origin: ChildPerformanceTimeOrigin,
@@ -73,6 +75,14 @@ struct CompletedChildDocumentNetwork {
 }
 
 pub(super) type ChildDocumentPolicyContainer = DocumentPolicyContainer;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::native_bridge::context_host) enum ChildAncestorOriginsReferrerPolicy {
+    #[default]
+    Default,
+    NoReferrer,
+    SameOrigin,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ChildPerformanceTimeOrigin(u64);
@@ -220,8 +230,40 @@ impl ChildBrowsingContextEntry {
         self.live_bootstrap.security_origin_inherited()
     }
 
+    pub(super) fn content_security_policy_inherited(&self) -> bool {
+        self.live_bootstrap.content_security_policy_inherited()
+    }
+
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
         self.document_policy_container.clone()
+    }
+
+    pub(super) fn document_internal_ancestor_origins(&self) -> Vec<WindowAccessOrigin> {
+        self.document_internal_ancestor_origins.clone()
+    }
+
+    pub(super) fn set_document_internal_ancestor_origins(
+        &mut self,
+        origins: Vec<WindowAccessOrigin>,
+    ) {
+        self.document_internal_ancestor_origins = origins;
+    }
+
+    pub(super) fn clear_document_internal_ancestor_origins(&mut self) {
+        self.document_internal_ancestor_origins.clear();
+    }
+
+    pub(super) fn ancestor_origins_referrer_policy_snapshot(
+        &self,
+    ) -> ChildAncestorOriginsReferrerPolicy {
+        self.ancestor_origins_referrer_policy_snapshot
+    }
+
+    pub(super) fn set_ancestor_origins_referrer_policy_snapshot(
+        &mut self,
+        policy: ChildAncestorOriginsReferrerPolicy,
+    ) {
+        self.ancestor_origins_referrer_policy_snapshot = policy;
     }
 
     pub(super) fn set_document_permissions_policy(
@@ -389,6 +431,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn commit_pending_child_document_load(
         &mut self,
         final_url: &Url,
+        document_referrer: &str,
         policy_container: &ChildDocumentPolicyContainer,
         sandbox: DocumentSandboxPolicy,
         credentialless: bool,
@@ -398,6 +441,7 @@ impl ChildBrowsingContextEntry {
         self.reset_performance_time_origin();
         self.clear_document_runtime_state();
         self.rewrite_current_navigation_url_after_load(final_url);
+        self.document_policy_container.document_referrer = document_referrer.to_owned();
         self.apply_loaded_referrer_policy_to_current_document(
             policy_container.referrer_policy.clone(),
         );
@@ -687,8 +731,9 @@ impl ChildBrowsingContextEntry {
         self.navigation_entry_seed = entry_seed.clone();
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
-            self.pending_attribute_bootstrap_commit = false;
-            self.pending_live_navigation_reflects_window_state = false;
+            if !self.pending_attribute_bootstrap_commit {
+                self.pending_live_navigation_reflects_window_state = false;
+            }
         }
         same_document_update
     }
@@ -731,11 +776,6 @@ impl ChildBrowsingContextEntry {
         }
     }
 
-    pub(super) fn apply_deferred_navigation_to_entry_seed(&mut self, url: &Url) {
-        self.apply_navigation_to_entry_seed(url);
-        self.clear_pending_top_level_history_length_increment();
-    }
-
     pub(super) fn clear_navigation_activation(&mut self) {
         self.navigation_entry_seed.activation = None;
     }
@@ -743,7 +783,8 @@ impl ChildBrowsingContextEntry {
     pub(super) fn navigation_seed_is_initial_about_blank_commit(&self) -> bool {
         self.navigation_entry_seed.current_index == 0
             && self.navigation_entry_seed.entries.len() == 1
-            && self.navigation_entry_seed.entries[0].url == "about:blank"
+            && Url::parse(&self.navigation_entry_seed.entries[0].url)
+                .is_ok_and(|url| moli_url::is_about_blank(&url))
     }
 
     pub(super) fn navigation_seed_is_initial_attribute_target(&self, url: &Url) -> bool {
@@ -904,6 +945,7 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
         self.pending_live_navigation = None;
+        self.pending_live_navigation_initiator_url = None;
         self.clear_pending_top_level_history_length_increment();
     }
 
@@ -969,6 +1011,19 @@ impl ChildBrowsingContextEntry {
             .flatten()
     }
 
+    pub(super) fn pending_live_navigation_initiator_url(&self) -> Option<Url> {
+        self.pending_live_navigation_initiator_url.clone()
+    }
+
+    pub(super) fn pending_live_navigation_initiator_url_for_refresh(
+        &self,
+        attribute_bootstrap_changed: bool,
+    ) -> Option<Url> {
+        (!attribute_bootstrap_changed)
+            .then_some(self.pending_live_navigation_initiator_url())
+            .flatten()
+    }
+
     pub(super) fn pending_live_navigation_reflects_window_state(&self) -> bool {
         self.pending_live_navigation_reflects_window_state
     }
@@ -989,16 +1044,19 @@ impl ChildBrowsingContextEntry {
     pub(super) fn set_pending_navigation(
         &mut self,
         bootstrap: ChildBrowsingContextBootstrap,
+        initiator_url: Option<Url>,
         reflects_window_state: bool,
     ) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = Some(bootstrap);
+        self.pending_live_navigation_initiator_url = initiator_url;
         self.pending_live_navigation_reflects_window_state = reflects_window_state;
     }
 
     pub(super) fn clear_pending_navigation(&mut self) {
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = None;
+        self.pending_live_navigation_initiator_url = None;
         self.pending_live_navigation_reflects_window_state = false;
     }
 

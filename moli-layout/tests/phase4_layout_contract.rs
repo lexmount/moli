@@ -328,6 +328,77 @@ fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry()
 }
 
 #[test]
+fn zero_row_span_reaches_the_end_of_its_row_group() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{BodyGroup, Cell, Row, Table as Root};
+
+    let cell = |label, row_span| {
+        Node::element(label, "td", Table(Cell), None, Vec::new()).with_metadata(
+            LayoutElementMetadata {
+                table: Some(LayoutTableData {
+                    row_span,
+                    ..LayoutTableData::default()
+                }),
+                ..LayoutElementMetadata::default()
+            },
+        )
+    };
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2, 8]),
+        Node::element("first-body", "tbody", Table(BodyGroup), None, vec![3, 6]),
+        Node::element("first-row", "tr", Table(Row), None, vec![4, 5]),
+        cell("zero-span", 0),
+        cell("first-reference", 1),
+        Node::element("second-row", "tr", Table(Row), None, vec![7]),
+        cell("second-reference", 1),
+        Node::element("second-body", "tbody", Table(BodyGroup), None, vec![9]),
+        Node::element("third-row", "tr", Table(Row), None, vec![10]),
+        cell("next-group", 1),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::Table, 100.0, 60.0, PaintColor::TRANSPARENT),
+    );
+    for id in [2, 8] {
+        styles.primary.insert(
+            id,
+            style(LayoutDisplay::TableRowGroup, PaintColor::TRANSPARENT),
+        );
+    }
+    for id in [3, 6, 9] {
+        styles
+            .primary
+            .insert(id, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    }
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::TableCell, 50.0, 20.0, RED));
+    styles
+        .primary
+        .insert(5, sized(LayoutDisplay::TableCell, 50.0, 20.0, GREEN));
+    styles
+        .primary
+        .insert(7, sized(LayoutDisplay::TableCell, 50.0, 20.0, BLUE));
+    styles
+        .primary
+        .insert(10, sized(LayoutDisplay::TableCell, 100.0, 20.0, YELLOW));
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let zero_span = rect(&snapshot, RED);
+    let first_reference = rect(&snapshot, GREEN);
+    let next_group = rect(&snapshot, YELLOW);
+    assert_close(zero_span.height, 40.0);
+    assert_close(first_reference.height, 20.0);
+    assert_close(next_group.y, 40.0);
+}
+
+#[test]
 fn separated_table_parts_ignore_authored_border_padding_and_margin() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Cell, Row, Table as Root};

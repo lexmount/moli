@@ -94,9 +94,25 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
 
     let us = vm
-        .eval("new Date(0).toLocaleString()")
+        .eval(
+            r#"
+(() => {
+  const date = new Date(0);
+  const expected = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
+  return JSON.stringify([date.toLocaleString(), expected]);
+})()
+"#,
+        )
         .expect("default Date locale formatting should evaluate");
-    assert_eq!(us, "1/1/1970, 12:00:00 AM");
+    let values: Vec<String> = serde_json::from_str(&us).expect("locale output pair should decode");
+    assert_eq!(values[0], values[1]);
 
     vm.set_locale_override_and_sync_surface(Some("fr-FR"))
         .expect("Date locale override should sync into private surface");
@@ -141,6 +157,87 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
 }
 
 #[test]
+fn date_locale_methods_forward_explicit_locales_and_options_without_emulation_overrides() {
+    let mut vm = new_storage_test_vm("https://date-locale-arguments.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date("2022-03-31T23:59:42Z");
+  const toLocaleString = Date.prototype.toLocaleString;
+  const localeMarker = {};
+  const optionsMarker = {};
+  const localeFailure = {
+    get length() {
+      throw localeMarker;
+    }
+  };
+  const optionsFailure = {
+    get dateStyle() {
+      throw optionsMarker;
+    }
+  };
+  const probe = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error;
+    }
+  };
+  const numericDate = { year: "numeric", month: "numeric", day: "numeric" };
+  const numericTime = { hour: "numeric", minute: "numeric", second: "numeric" };
+  const expected = {
+    caDefault: new Intl.DateTimeFormat("en-CA", {
+      ...numericDate, ...numericTime, timeZone: "UTC"
+    }).format(date),
+    caShort: new Intl.DateTimeFormat("en-CA", {
+      dateStyle: "short", timeZone: "UTC"
+    }).format(date),
+    svDate: new Intl.DateTimeFormat("sv-SE", {
+      ...numericDate, timeZone: "UTC"
+    }).format(date),
+    usTime: new Intl.DateTimeFormat("en-US", {
+      ...numericTime, hour12: false, timeZone: "UTC"
+    }).format(date),
+    localeError: true,
+    optionsError: true
+  };
+  expected.afterDateTamper = expected.caShort;
+
+  const values = {
+    caDefault: toLocaleString.call(date, "en-CA", { timeZone: "UTC" }),
+    caShort: toLocaleString.call(date, "en-CA", {
+      dateStyle: "short",
+      timeZone: "UTC"
+    }),
+    svDate: date.toLocaleDateString("sv-SE", { timeZone: "UTC" }),
+    usTime: date.toLocaleTimeString("en-US", {
+      hour12: false,
+      timeZone: "UTC"
+    }),
+    localeError: probe(() => toLocaleString.call(date, localeFailure)) === localeMarker,
+    optionsError: probe(() => toLocaleString.call(date, "en-US", optionsFailure)) === optionsMarker
+  };
+
+  globalThis.Date = function Date() {};
+  values.afterDateTamper = toLocaleString.call(date, "en-CA", {
+    dateStyle: "short",
+    timeZone: "UTC"
+  });
+  return JSON.stringify(Object.keys(expected)
+    .filter(key => values[key] !== expected[key])
+    .map(key => ({key, actual: values[key], expected: expected[key]})));
+})()
+"#,
+        )
+        .expect("Date locale methods should forward standard arguments to V8");
+
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
 
@@ -163,12 +260,20 @@ fn date_locale_methods_are_declared_on_date_prototype() {
     ].join(":");
   };
   const date = new Date(0);
+  const nativeDefault = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
   return [
     Object.keys(Date.prototype).includes("toLocaleString"),
     summarize("toLocaleString"),
     summarize("toLocaleDateString"),
     summarize("toLocaleTimeString"),
-    Date.prototype.toLocaleString.call(date)
+    Date.prototype.toLocaleString.call(date) === nativeDefault
   ].join("|");
 })()
 "#,
@@ -177,7 +282,7 @@ fn date_locale_methods_are_declared_on_date_prototype() {
 
     assert_eq!(
         result,
-        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|1/1/1970, 12:00:00 AM"
+        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|true"
     );
 }
 
@@ -309,7 +414,7 @@ fn wpt_webdriver_delete_all_cookies_is_declared_on_prototype() {
 }
 
 #[test]
-fn trusted_type_policy_declared_methods_preserve_surface() {
+fn trusted_type_policy_interface_shares_methods_and_rejects_missing_callbacks() {
     let mut vm = new_storage_test_vm("https://trusted-type-policy-declared-methods.test/");
 
     let result = vm
@@ -324,11 +429,9 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
     createScript: value => value,
     createScriptURL: value => value
   });
-  const describe = (object, name) => {
-    const descriptor = Object.getOwnPropertyDescriptor(object, name);
-    if (!descriptor) {
-      return `${name}:missing`;
-    }
+  const prototype = TrustedTypePolicy.prototype;
+  const describe = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     return [
       name,
       descriptor.enumerable,
@@ -342,36 +445,55 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
   const html = htmlOnly.createHTML("ok");
   const script = full.createScript("1 + 1");
   const scriptURL = full.createScriptURL("data:text/javascript,");
-  const missingCallbackErrors = ["createScript", "createScriptURL"].map(name => {
+  const errorName = callback => {
     try {
-      htmlOnly[name]("missing");
+      callback();
       return "none";
     } catch (error) {
-      return error && error.name;
+      return error.constructor.name;
     }
-  });
+  };
+  const nameDescriptor = Object.getOwnPropertyDescriptor(prototype, "name");
 
   return JSON.stringify({
     htmlOnlyKeys: Object.keys(htmlOnly).join(","),
     fullKeys: Object.keys(full).join(","),
-    htmlOnlyMethods: ["createHTML", "createScript", "createScriptURL"].map(name => describe(htmlOnly, name)),
-    fullMethods: ["createHTML", "createScript", "createScriptURL"].map(name => describe(full, name)),
+    ownMethods: ["createHTML", "createScript", "createScriptURL"].map(name => Object.hasOwn(htmlOnly, name)),
+    prototypeMethods: ["createHTML", "createScript", "createScriptURL"].map(describe),
+    name: [
+      htmlOnly.name,
+      full.name,
+      typeof nameDescriptor.get,
+      nameDescriptor.set === undefined,
+      nameDescriptor.enumerable,
+      nameDescriptor.configurable,
+      Object.hasOwn(htmlOnly, "name")
+    ],
+    brands: [
+      htmlOnly instanceof TrustedTypePolicy,
+      full instanceof TrustedTypePolicy,
+      Object.getPrototypeOf(htmlOnly) === prototype,
+      htmlOnly.createHTML === full.createHTML
+    ],
+    missingCallbackErrors: [
+      errorName(() => htmlOnly.createScript("1 + 1")),
+      errorName(() => htmlOnly.createScriptURL("data:text/javascript,"))
+    ],
     trusted: [
       trustedTypes.isHTML(html),
       trustedTypes.isScript(script),
       trustedTypes.isScriptURL(scriptURL)
     ],
-    values: [String(html), String(script), String(scriptURL)],
-    missingCallbackErrors
+    values: [String(html), String(script), String(scriptURL)]
   });
 })()
 "#,
         )
-        .expect("TrustedTypePolicy optional method descriptors should evaluate");
+        .expect("TrustedTypePolicy interface descriptors should evaluate");
 
     assert_eq!(
         result,
-        r#"{"htmlOnlyKeys":"","fullKeys":"","htmlOnlyMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"fullMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"],"missingCallbackErrors":["TypeError","TypeError"]}"#
+        r#"{"htmlOnlyKeys":"","fullKeys":"","ownMethods":[false,false,false],"prototypeMethods":["createHTML:true:true:true:function:createHTML:1","createScript:true:true:true:function:createScript:1","createScriptURL:true:true:true:function:createScriptURL:1"],"name":["html-only","full","function",true,true,true,false],"brands":[true,true,true,true],"missingCallbackErrors":["TypeError","TypeError"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"]}"#
     );
 }
 
@@ -504,24 +626,24 @@ fn trusted_type_prototype_declared_methods_preserve_descriptors() {
       script: internalNames(script),
       scriptURL: internalNames(scriptURL)
     },
-    htmlMethods: ["toString", "valueOf"].map(name => describe(TrustedHTML.prototype, name)),
-    scriptMethods: ["toString", "valueOf"].map(name => describe(TrustedScript.prototype, name)),
-    scriptURLMethods: ["toString", "valueOf"].map(name => describe(TrustedScriptURL.prototype, name)),
+    htmlMethods: ["toString", "toJSON"].map(name => describe(TrustedHTML.prototype, name)),
+    scriptMethods: ["toString", "toJSON"].map(name => describe(TrustedScript.prototype, name)),
+    scriptURLMethods: ["toString", "toJSON"].map(name => describe(TrustedScriptURL.prototype, name)),
     values: [
       String(html),
-      html.valueOf(),
+      html.toJSON(),
       String(script),
-      script.valueOf(),
+      script.toJSON(),
       String(scriptURL),
-      scriptURL.valueOf()
+      scriptURL.toJSON()
     ],
     fakeResults: [
       probe(() => TrustedHTML.prototype.toString.call(fakeHTML)),
-      probe(() => TrustedHTML.prototype.valueOf.call(fakeHTML)),
+      probe(() => TrustedHTML.prototype.toJSON.call(fakeHTML)),
       probe(() => TrustedScript.prototype.toString.call(fakeScript)),
-      probe(() => TrustedScript.prototype.valueOf.call(fakeScript)),
+      probe(() => TrustedScript.prototype.toJSON.call(fakeScript)),
       probe(() => TrustedScriptURL.prototype.toString.call(fakeScriptURL)),
-      probe(() => TrustedScriptURL.prototype.valueOf.call(fakeScriptURL))
+      probe(() => TrustedScriptURL.prototype.toJSON.call(fakeScriptURL))
     ].join("|"),
     trustedChecks: [
       trustedTypes.isHTML(fakeHTML),
@@ -539,7 +661,7 @@ fn trusted_type_prototype_declared_methods_preserve_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"prototypes":[true,true,true],"initialOwnSlots":{"html":[],"script":[],"scriptURL":[]},"spoofedOwnSlots":{"html":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"script":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"scriptURL":["__moliTrustedTypeKind","__moliTrustedTypeValue"]},"htmlMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"scriptMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"scriptURLMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"values":["<em>ok</em>","<em>ok</em>","1 + 1","1 + 1","data:text/javascript,","data:text/javascript,"],"fakeResults":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError","trustedChecks":[false,false,false,true,true,true]}"#
+        r#"{"prototypes":[true,true,true],"initialOwnSlots":{"html":[],"script":[],"scriptURL":[]},"spoofedOwnSlots":{"html":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"script":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"scriptURL":["__moliTrustedTypeKind","__moliTrustedTypeValue"]},"htmlMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"scriptMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"scriptURLMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"values":["<em>ok</em>","<em>ok</em>","1 + 1","1 + 1","data:text/javascript,","data:text/javascript,"],"fakeResults":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError","trustedChecks":[false,false,false,true,true,true]}"#
     );
 }
 
@@ -687,6 +809,67 @@ fn trusted_script_eval_is_unwrapped_without_trusted_types_enforcement() {
     assert_eq!(
         result,
         r#"{"direct":2,"indirect":2,"ordinaryPassesThrough":true}"#
+    );
+}
+
+#[test]
+fn trusted_script_code_like_brand_drives_function_constructors() {
+    let mut vm = new_storage_test_vm("https://trusted-script-function-brand.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const policy = trustedTypes.createPolicy("function-brand", { createScript: value => value });
+  const source = ["a", "b", "c = 5", "return (a + b) * c;"];
+  const constructors = [
+    Function,
+    (async function() {}).constructor,
+    (function*() {}).constructor,
+    (async function*() {}).constructor
+  ];
+  const mixedBlocked = constructors.map(Constructor => {
+    let blocked = 0;
+    for (let mask = 0; mask < 15; mask++) {
+      const args = source.map((value, index) =>
+        mask & (2 ** index) ? policy.createScript(value) : value);
+      try {
+        new Constructor(...args);
+      } catch (error) {
+        blocked += error instanceof EvalError;
+      }
+    }
+    return blocked;
+  });
+  const trusted = source.map(value => policy.createScript(value));
+  const functions = constructors.map(Constructor => new Constructor(...trusted));
+  let forgedBlocked = 0;
+  for (let index = 0; index < source.length; index++) {
+    const forged = trusted.slice();
+    forged[index] = Object.assign(policy.createScript(source[index]), {
+      toString: () => ` ${source[index]} `
+    });
+    try {
+      new Function(...forged);
+    } catch (error) {
+      forgedBlocked += error instanceof EvalError;
+    }
+  }
+  return JSON.stringify({
+    mixedBlocked,
+    trustedConstructorTypes: functions.map(value => typeof value),
+    functionValues: [functions[0](1, 2, 3), functions[0](1, 2)],
+    forgedBlocked
+  });
+})()
+"#,
+        )
+        .expect("TrustedScript function constructor brand probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"mixedBlocked":[15,15,15,15],"trustedConstructorTypes":["function","function","function","function"],"functionValues":[9,15],"forgedBlocked":4}"#
     );
 }
 
@@ -948,6 +1131,9 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     ].join(":");
   };
   const reader = new FileReader();
+  const eventHandlerNames = [
+    "onloadstart", "onprogress", "onload", "onabort", "onerror", "onloadend"
+  ];
   const leaked = () => Object.getOwnPropertyNames(reader)
     .filter(name => name.startsWith("__lmFileReader") ||
                     name.startsWith("__moliFileReader"))
@@ -960,6 +1146,19 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     __lmFileReaderResult: "spoofed",
     __lmFileReaderError: "spoofed"
   };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const handler = () => {};
+  reader.onload = handler;
+  const handlerRoundTrips = reader.onload === handler;
+  reader.onload = {};
+  const nonCallableHandlerBecomesNull = reader.onload === null;
   const before = leaked();
   reader.addEventListener("load", () => {});
   reader.readAsText(new Blob(["abc"]));
@@ -968,7 +1167,8 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     descriptors: [
       descriptorReport("readyState"),
       descriptorReport("result"),
-      descriptorReport("error")
+      descriptorReport("error"),
+      ...eventHandlerNames.map(descriptorReport)
     ],
     constructorConstants: ["EMPTY", "LOADING", "DONE"].map(name =>
       constantDescriptor(FileReader, name)
@@ -979,12 +1179,18 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     readerOwnConstants: ["EMPTY", "LOADING", "DONE"].filter(name =>
       Object.prototype.hasOwnProperty.call(reader, name)
     ),
+    readerOwnHandlers: eventHandlerNames.filter(name =>
+      Object.prototype.hasOwnProperty.call(reader, name)
+    ),
     before,
     during,
     resultIsNull: reader.result === null,
-    fakeReadyState: readyStateDescriptor.get.call(fake),
-    fakeResult: String(resultDescriptor.get.call(fake)),
-    fakeError: String(errorDescriptor.get.call(fake))
+    handlerRoundTrips,
+    nonCallableHandlerBecomesNull,
+    fakeReadyStateThrows: throwsTypeError(() => readyStateDescriptor.get.call(fake)),
+    fakeResultThrows: throwsTypeError(() => resultDescriptor.get.call(fake)),
+    fakeErrorThrows: throwsTypeError(() => errorDescriptor.get.call(fake)),
+    fakeAbortThrows: throwsTypeError(() => FileReader.prototype.abort.call(fake))
   });
 })()
 "#,
@@ -993,7 +1199,7 @@ fn file_reader_backing_state_is_not_own_property_surface() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"before":[],"during":[],"resultIsNull":true,"fakeReadyState":0,"fakeResult":"null","fakeError":"null"}"#
+        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true","onloadstart:function:get onloadstart:0:function:true:true","onprogress:function:get onprogress:0:function:true:true","onload:function:get onload:0:function:true:true","onabort:function:get onabort:0:function:true:true","onerror:function:get onerror:0:function:true:true","onloadend:function:get onloadend:0:function:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"readerOwnHandlers":[],"before":[],"during":[],"resultIsNull":true,"handlerRoundTrips":true,"nonCallableHandlerBecomesNull":true,"fakeReadyStateThrows":true,"fakeResultThrows":true,"fakeErrorThrows":true,"fakeAbortThrows":true}"#
     );
 }
 
@@ -1445,9 +1651,151 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|loaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
+        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|unloaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
     );
     assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://font-face-lazy-loaded-promise.test/");
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  globalThis.__fontFaceUnhandled = [];
+  window.addEventListener('unhandledrejection', event => {
+    __fontFaceUnhandled.push(event.reason && event.reason.name);
+    event.preventDefault();
+  });
+  globalThis.__invalidLazyFontFace = new FontFace(
+    'InvalidLazyFace',
+    'not a font source'
+  );
+  return JSON.stringify({
+    status: __invalidLazyFontFace.status,
+    unhandled: __fontFaceUnhandled
+  });
+})()
+"#,
+        )
+        .expect("invalid FontFace construction should not throw");
+    assert_eq!(initial, r#"{"status":"error","unhandled":[]}"#);
+
+    for _ in 0..4 {
+        vm.eval("JSON.stringify(__fontFaceUnhandled)")
+            .expect("unobserved FontFace rejection checkpoints should drain");
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(__fontFaceUnhandled)")
+            .expect("unobserved FontFace rejection result should evaluate"),
+        "[]",
+    );
+
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
+    let observed = vm
+        .eval(
+            r#"
+(() => {
+  const first = __invalidLazyFontFace.loaded;
+  const second = __invalidLazyFontFace.loaded;
+  globalThis.__invalidLazyFontFaceRejection = 'pending';
+  first.catch(error => {
+    __invalidLazyFontFaceRejection = error.name;
+  });
+  return JSON.stringify({
+    stable: first === second,
+    loadReturnsLoaded: __invalidLazyFontFace.load() === first
+  });
+})()
+"#,
+        )
+        .expect("observed invalid FontFace loaded promise should evaluate");
+    assert_eq!(observed, r#"{"stable":true,"loadReturnsLoaded":true}"#,);
+    assert_eq!(
+        vm.eval("__invalidLazyFontFaceRejection")
+            .expect("invalid FontFace loaded rejection should settle"),
+        "SyntaxError",
+    );
+}
+
+#[test]
+fn font_face_string_sources_follow_load_state_and_connected_style_use() {
+    let mut vm = new_storage_test_vm("https://font-face-string-source-state.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const remote = new FontFace('RemoteFace', 'url(remote.woff2)');
+  const remoteLoaded = remote.loaded;
+  const invalid = new FontFace('InvalidFace', 'not a font source');
+  const local = new FontFace(
+    'MissingLocalFace',
+    'local("definitely-missing-moli-font")'
+  );
+  document.fonts.add(local);
+
+  globalThis.__fontFaceStringSourceProbe = {
+    remote: {
+      before: remote.status,
+      stablePromise: remote.loaded === remoteLoaded,
+      loadReturnsLoaded: remote.load() === remoteLoaded,
+      after: remote.status,
+      settlement: 'pending'
+    },
+    invalid: {
+      status: invalid.status,
+      settlement: 'pending'
+    },
+    local: {
+      beforeStyle: local.status,
+      afterDetachedStyle: '',
+      afterConnection: '',
+      settlement: 'pending'
+    }
+  };
+  remoteLoaded.then(
+    value => {
+      globalThis.__fontFaceStringSourceProbe.remote.settlement =
+        value === remote ? 'resolved-self' : 'resolved-other';
+    },
+    error => {
+      globalThis.__fontFaceStringSourceProbe.remote.settlement = error.name;
+    }
+  );
+  invalid.loaded.then(
+    () => { globalThis.__fontFaceStringSourceProbe.invalid.settlement = 'resolved'; },
+    error => { globalThis.__fontFaceStringSourceProbe.invalid.settlement = error.name; }
+  );
+  local.loaded.then(
+    () => { globalThis.__fontFaceStringSourceProbe.local.settlement = 'resolved'; },
+    error => { globalThis.__fontFaceStringSourceProbe.local.settlement = error.name; }
+  );
+
+  const target = document.createElement('div');
+  target.style.fontFamily = 'MissingLocalFace';
+  globalThis.__fontFaceStringSourceProbe.local.afterDetachedStyle = local.status;
+  (document.body || document.documentElement || document).appendChild(target);
+  globalThis.__fontFaceStringSourceProbe.local.afterConnection = local.status;
+})()
+"#,
+    )
+    .expect("string-backed FontFace state probe should initialize");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceStringSourceProbe)")
+        .expect("string-backed FontFace promises should settle");
+    assert_eq!(
+        result,
+        r#"{"remote":{"before":"unloaded","stablePromise":true,"loadReturnsLoaded":true,"after":"loaded","settlement":"resolved-self"},"invalid":{"status":"error","settlement":"SyntaxError"},"local":{"beforeStyle":"unloaded","afterDetachedStyle":"unloaded","afterConnection":"error","settlement":"NetworkError"}}"#
+    );
 }
 
 #[test]
@@ -2762,6 +3110,66 @@ fn blob_internal_id_is_not_page_visible_or_forgeable() {
 }
 
 #[test]
+fn blob_members_enforce_webidl_receiver_contracts() {
+    let mut vm = new_storage_test_vm("https://blob-receiver-brand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const rejectionName = callback => {
+    try {
+      return Promise.resolve(callback()).then(
+        () => "resolved",
+        error => error && error.name,
+      );
+    } catch (error) {
+      return Promise.resolve("threw:" + (error && error.name));
+    }
+  };
+  const sizeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "size").get;
+  const typeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "type").get;
+  globalThis.__blobReceiverProbe = {
+    syncThrows: [
+      throwsTypeError(() => sizeGetter.call({})),
+      throwsTypeError(() => typeGetter.call({})),
+      throwsTypeError(() => Blob.prototype.slice.call(null)),
+      throwsTypeError(() => Blob.prototype.stream.call(null)),
+    ],
+  };
+  Promise.all([
+    rejectionName(() => Blob.prototype.text.call(null)),
+    rejectionName(() => Blob.prototype.arrayBuffer.call(null)),
+    rejectionName(() => Blob.prototype.bytes.call(null)),
+  ]).then(names => {
+    __blobReceiverProbe.promiseRejections = names;
+  });
+  return "scheduled";
+})()
+"#,
+        )
+        .expect("Blob receiver contract probe should evaluate");
+
+    assert_eq!(result, "scheduled");
+    vm.eval("0")
+        .expect("Blob receiver rejection microtasks should drain");
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__blobReceiverProbe)")
+            .expect("Blob receiver contract result should evaluate"),
+        r#"{"syncThrows":[true,true,true,true],"promiseRejections":["TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn blob_internal_builders_survive_global_blob_override() {
     let mut vm = new_storage_test_vm("https://blob-prototype-slot.test/");
 
@@ -2797,6 +3205,166 @@ fn blob_internal_builders_survive_global_blob_override() {
     assert_eq!(
         result,
         r#"{"type":"text/custom","ownNames":[],"protoIsOriginal":true,"text":"bcd"}"#
+    );
+}
+
+#[test]
+fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
+    let mut vm = new_parsed_test_vm(
+        "https://blob-slice-receiver-realm.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<!doctype html><html><body></body></html>";
+  document.body.appendChild(iframe);
+  globalThis.__blobSliceRealmFrame = iframe;
+})()
+"#,
+    )
+    .expect("detached-Realm Blob slice setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = __blobSliceRealmFrame;
+  const detachedSlice = iframe.contentWindow.Blob.prototype.slice;
+  iframe.remove();
+
+  const blobSlice = detachedSlice.call(new Blob(["abcdef"]), 1, 4, "Text/Custom");
+  const fileSlice = detachedSlice.call(new File(["uvwxyz"], "sample.txt"), 2, 5);
+  globalThis.__blobSliceRealmProbe = {
+    childDetached: iframe.contentWindow === null,
+    blobIsMainRealmBlob: blobSlice instanceof Blob,
+    blobPrototypeIsMainRealmBlob: Object.getPrototypeOf(blobSlice) === Blob.prototype,
+    fileSliceIsMainRealmBlob: fileSlice instanceof Blob,
+    fileSliceIsFile: fileSlice instanceof File,
+    fileSlicePrototypeIsMainRealmBlob: Object.getPrototypeOf(fileSlice) === Blob.prototype,
+    type: blobSlice.type
+  };
+  Promise.all([blobSlice.text(), fileSlice.text()]).then(
+    ([blobText, fileText]) => {
+      __blobSliceRealmProbe.blobText = blobText;
+      __blobSliceRealmProbe.fileText = fileText;
+    },
+    error => { __blobSliceRealmProbe.error = error && error.name; }
+  );
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("detached-Realm Blob slice probe should evaluate");
+
+    vm.eval("0")
+        .expect("detached-Realm Blob slice promise microtasks should drain");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__blobSliceRealmProbe)")
+        .expect("detached-Realm Blob slice result should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"childDetached":true,"blobIsMainRealmBlob":true,"blobPrototypeIsMainRealmBlob":true,"fileSliceIsMainRealmBlob":true,"fileSliceIsFile":false,"fileSlicePrototypeIsMainRealmBlob":true,"type":"text/custom","blobText":"bcd","fileText":"wxy"}"#
+    );
+}
+
+#[test]
+fn blob_url_revocation_respects_browser_partitions_and_allows_same_origin_realms() {
+    for document_url in ["https://blob-url-revocation.test/", "data:text/html,opaque"] {
+        let markup = "<!doctype html><html><body></body></html>";
+        let mut creator = new_parsed_test_vm(document_url, markup);
+        let mut other_partition = new_parsed_test_vm(document_url, markup);
+        let url = creator
+            .eval("URL.createObjectURL(new Blob(['payload']))")
+            .expect("create object URL");
+        let url_literal = serde_json::to_string(&url).unwrap();
+        other_partition
+            .eval(&format!("URL.revokeObjectURL({url_literal})"))
+            .expect("foreign partition revocation is a silent no-op");
+        assert_eq!(
+            crate::blob::object_url_body_and_type(&url).unwrap().0,
+            "payload"
+        );
+        // The initial about:blank child inherits even its opaque parent's key.
+        creator
+            .eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    const revoke = frame.contentWindow.URL.revokeObjectURL;
+                    revoke.call(null, {url_literal});
+                }})()"#
+            ))
+            .expect("same-origin child can revoke parent URL");
+        assert!(crate::blob::object_url_body_and_type(&url).is_none());
+    }
+}
+
+#[test]
+fn removing_child_frame_revokes_only_its_blob_object_urls() {
+    let mut vm = new_parsed_test_vm(
+        "https://blob-url-child-lifetime.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let setup = r#"
+(() => {
+  const parentUrl = URL.createObjectURL(new Blob(["parent"]));
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const childUrl = frame.contentWindow.URL.createObjectURL(
+    new frame.contentWindow.Blob(["child"])
+  );
+  globalThis.__blobUrlLifetimeFrame = frame;
+  return `${parentUrl}|${childUrl}`;
+})()
+"#;
+    let urls = vm
+        .eval(setup)
+        .expect("child Blob object URL setup should evaluate");
+    let (parent_url, child_url) = urls
+        .split_once('|')
+        .expect("setup should return both object URLs");
+
+    // A separate runtime starts its realm counter at the same value. Its
+    // object URLs must survive retirement of the first runtime's child.
+    let mut other_vm = new_parsed_test_vm(
+        "https://blob-url-child-lifetime.test/other",
+        "<!doctype html><html><body></body></html>",
+    );
+    let other_urls = other_vm.eval(setup).expect("other runtime's object URLs");
+    let (_, other_child_url) = other_urls.split_once('|').expect("other child URL");
+
+    assert_eq!(
+        crate::blob::object_url_body_and_type(parent_url),
+        Some(("parent".to_owned(), String::new()))
+    );
+    assert_eq!(
+        crate::blob::object_url_body_and_type(child_url),
+        Some(("child".to_owned(), String::new()))
+    );
+
+    vm.eval("globalThis.__blobUrlLifetimeFrame.remove()")
+        .expect("child frame removal should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    assert_eq!(
+        crate::blob::object_url_body_and_type(parent_url),
+        Some(("parent".to_owned(), String::new())),
+        "removing a child frame must preserve the parent realm's object URLs"
+    );
+    assert!(
+        crate::blob::object_url_body_and_type(child_url).is_none(),
+        "removing a child frame must revoke object URLs created by its realm"
+    );
+    assert_eq!(
+        crate::blob::object_url_body_and_type(other_child_url),
+        Some(("child".to_owned(), String::new())),
+        "realm token reuse in another runtime must not revoke that runtime's URLs"
     );
 }
 
@@ -2961,6 +3529,11 @@ fn host_dispatched_events_ignore_user_replaced_event_constructor() {
 }
 #[test]
 fn domcontentloaded_listener_watchdog_terminates_runaway_listener_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::LifecycleEvent,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_storage_test_vm("https://example.com/");
 
     vm.exec(
@@ -3269,7 +3842,7 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
   return JSON.stringify({
     animation: [animation.id, outcome(() => animationId.set.call({}))].join(","),
     document: [outcome(() => bodySetter.call({})), detached.fullscreenEnabled].join(","),
-    lenient: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
+    eventHandler: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
     replaceableShape,
     replacements: [window.scrollX, window.screenLeft, window.screenTop].join(","),
     failures: [selfFailure, screenFailure].join(",")
@@ -3281,8 +3854,57 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
 
     assert_eq!(
         result,
-        r#"{"animation":"undefined,TypeError","document":"TypeError,false","lenient":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
+        r#"{"animation":"undefined,TypeError","document":"TypeError,false","eventHandler":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
     );
+}
+
+#[test]
+fn legacy_lenient_this_event_handlers_ignore_incompatible_receivers() {
+    let mut vm = new_storage_test_vm("https://legacy-lenient-this.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const text = document.createTextNode("text");
+  const invalidReceivers = [undefined, null, 1, {}, text];
+  const lenientDescriptors = [
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseenter"),
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseleave"),
+    Object.getOwnPropertyDescriptor(Document.prototype, "onreadystatechange")
+  ];
+  const lenient = lenientDescriptors.every(descriptor =>
+    invalidReceivers.every(receiver =>
+      descriptor.get.call(receiver) === undefined &&
+      descriptor.set.call(receiver) === undefined &&
+      descriptor.set.call(receiver, undefined) === undefined &&
+      descriptor.set.call(receiver, "ignored") === undefined
+    )
+  );
+
+  const strict = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onclick");
+  const outcome = callback => {
+    try {
+      callback();
+      return "return";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  return [
+    lenient,
+    outcome(() => strict.get.call({})),
+    outcome(() => strict.set.call({})),
+    outcome(() => strict.get.call(text)),
+    outcome(() => strict.set.call(text))
+  ].join("|");
+})()
+"#,
+        )
+        .expect("LegacyLenientThis event handler probe should evaluate");
+
+    assert_eq!(result, "true|TypeError|TypeError|TypeError|TypeError");
 }
 
 #[test]
@@ -3452,6 +4074,265 @@ fn clipboard_event_constructor_applies_event_init_and_clipboard_data() {
         .expect("ClipboardEvent constructor probe should evaluate");
 
     assert_eq!(result, "true|true|true|false|paste|true|true|true|true");
+}
+
+#[test]
+fn clipboard_event_uses_a_branded_prototype_accessor_and_webidl_dictionary() {
+    let mut vm = new_storage_test_vm("https://clipboard-event-webidl.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const transfer = new DataTransfer();
+  const defaults = new ClipboardEvent("copy");
+  const descriptor = Object.getOwnPropertyDescriptor(
+    ClipboardEvent.prototype,
+    "clipboardData"
+  );
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  const order = [];
+  const init = {};
+  for (const [name, value] of [
+    ["bubbles", true],
+    ["cancelable", true],
+    ["clipboardData", transfer],
+    ["composed", true]
+  ]) {
+    Object.defineProperty(init, name, {
+      get() {
+        order.push(name);
+        return value;
+      }
+    });
+  }
+  const initialized = new ClipboardEvent("paste", init);
+
+  const sentinel = {};
+  let preservesGetterException = false;
+  try {
+    new ClipboardEvent("copy", {
+      get clipboardData() {
+        throw sentinel;
+      }
+    });
+  } catch (error) {
+    preservesGetterException = error === sentinel;
+  }
+
+  return JSON.stringify({
+    defaults: [
+      defaults.clipboardData === null,
+      Object.hasOwn(defaults, "clipboardData")
+    ],
+    initialized: [
+      initialized.clipboardData === transfer,
+      initialized.bubbles,
+      initialized.cancelable,
+      initialized.composed,
+      Object.hasOwn(initialized, "clipboardData")
+    ],
+    descriptor: [
+      typeof descriptor.get,
+      descriptor.get.name,
+      descriptor.get.length,
+      typeof descriptor.set,
+      descriptor.enumerable,
+      descriptor.configurable
+    ],
+    order,
+    errors: [
+      errorName(() => descriptor.get.call({})),
+      errorName(() => new ClipboardEvent("copy", {clipboardData: {}})),
+      errorName(() => new ClipboardEvent("copy", 1))
+    ],
+    preservesGetterException
+  });
+})()
+"#,
+        )
+        .expect("ClipboardEvent WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaults":[true,false],"initialized":[true,true,true,true,false],"descriptor":["function","get clipboardData",0,"undefined",true,true],"order":["bubbles","cancelable","composed","clipboardData"],"errors":["TypeError","TypeError","TypeError"],"preservesGetterException":true}"#
+    );
+}
+
+#[test]
+fn clipboard_change_event_exposes_frozen_types_and_bigint_change_id() {
+    let mut vm = new_storage_test_vm("http://clipboard-change-event.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const defaults = new ClipboardChangeEvent("clipboardchange");
+  const order = [];
+  const sourceTypes = [
+    {
+      toString() {
+        order.push("type item");
+        return "text/plain";
+      }
+    },
+    "text/html",
+    "\uD800"
+  ];
+  const expectedChangeId = -(1n << 100n) + 123n;
+  const init = {};
+  for (const [name, value] of [
+    ["bubbles", true],
+    ["cancelable", true],
+    ["changeId", expectedChangeId],
+    ["composed", true],
+    ["types", sourceTypes]
+  ]) {
+    Object.defineProperty(init, name, {
+      get() {
+        order.push(name);
+        return value;
+      }
+    });
+  }
+  const initialized = new ClipboardChangeEvent("clipboardchange", init);
+  sourceTypes[0] = "changed";
+  sourceTypes.push("image/png");
+
+  const typesDescriptor = Object.getOwnPropertyDescriptor(
+    ClipboardChangeEvent.prototype,
+    "types"
+  );
+  const changeIdDescriptor = Object.getOwnPropertyDescriptor(
+    ClipboardChangeEvent.prototype,
+    "changeId"
+  );
+  const accessor = descriptor => [
+    typeof descriptor.get,
+    descriptor.get.name,
+    descriptor.get.length,
+    typeof descriptor.set,
+    descriptor.enumerable,
+    descriptor.configurable
+  ];
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  return JSON.stringify({
+    constructor: [
+      typeof ClipboardChangeEvent,
+      ClipboardChangeEvent.name,
+      ClipboardChangeEvent.length,
+      ClipboardChangeEvent.prototype instanceof Event,
+      isSecureContext
+    ],
+    defaults: [
+      defaults instanceof ClipboardChangeEvent,
+      defaults instanceof Event,
+      defaults.types.length,
+      Object.isFrozen(defaults.types),
+      defaults.types === defaults.types,
+      defaults.changeId === 0n,
+      Object.hasOwn(defaults, "types"),
+      Object.hasOwn(defaults, "changeId"),
+      Object.prototype.toString.call(defaults)
+    ],
+    initialized: [
+      initialized.bubbles,
+      initialized.cancelable,
+      initialized.composed,
+      initialized.types.slice(0, 2).join(","),
+      initialized.types.length,
+      initialized.types[2].charCodeAt(0) === 0xD800,
+      initialized.types === initialized.types,
+      Object.isFrozen(initialized.types),
+      String(initialized.changeId),
+      initialized.changeId === expectedChangeId
+    ],
+    accessors: [accessor(typesDescriptor), accessor(changeIdDescriptor)],
+    keys: Object.keys(ClipboardChangeEvent.prototype),
+    order,
+    booleanBigInt: new ClipboardChangeEvent("x", {changeId: true}).changeId === 1n,
+    errors: [
+      errorName(() => ClipboardChangeEvent("x")),
+      errorName(() => new ClipboardChangeEvent()),
+      errorName(() => new ClipboardChangeEvent("x", 1)),
+      errorName(() => new ClipboardChangeEvent("x", {changeId: 1})),
+      errorName(() => new ClipboardChangeEvent("x", {types: null})),
+      errorName(() => typesDescriptor.get.call({})),
+      errorName(() => changeIdDescriptor.get.call({}))
+    ]
+  });
+})()
+"#,
+        )
+        .expect("ClipboardChangeEvent WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":["function","ClipboardChangeEvent",1,true,false],"defaults":[true,true,0,true,true,true,false,false,"[object ClipboardChangeEvent]"],"initialized":[true,true,true,"text/plain,text/html",3,true,true,true,"-1267650600228229401496703205253",true],"accessors":[["function","get types",0,"undefined",true,true],["function","get changeId",0,"undefined",true,true]],"keys":["types","changeId"],"order":["bubbles","cancelable","composed","changeId","types","type item"],"booleanBigInt":true,"errors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn clipboard_event_dictionaries_convert_event_init_before_derived_members() {
+    let mut vm = new_storage_test_vm("https://clipboard-event-dictionary-order.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const checks = [];
+        for (const [Ctor, derivedMember] of [
+          [ClipboardEvent, 'clipboardData'], [ClipboardChangeEvent, 'changeId']
+        ]) {
+          for (const baseMember of ['bubbles', 'cancelable', 'composed']) {
+            const baseError = new RangeError('base getter');
+            const derivedError = new TypeError('derived getter');
+            const reads = [];
+            const init = {};
+            Object.defineProperty(init, baseMember, {get() {
+              reads.push(baseMember);
+              throw baseError;
+            }});
+            Object.defineProperty(init, derivedMember, {get() {
+              reads.push(derivedMember);
+              throw derivedError;
+            }});
+            try { new Ctor('change', init); checks.push(false); }
+            catch (error) { checks.push(error === baseError); }
+            checks.push(reads.length === 1, reads[0] === baseMember);
+          }
+        }
+        const transfer = new DataTransfer();
+        const clipboardInit = {
+          clipboardData: {},
+          get composed() { this.clipboardData = transfer; return true; }
+        };
+        const clipboard = new ClipboardEvent('copy', clipboardInit);
+        checks.push(clipboard.composed, clipboard.clipboardData === transfer);
+        const changeInit = {
+          changeId: 1,
+          get composed() { this.changeId = 42n; return true; },
+          types: ['text/plain']
+        };
+        const change = new ClipboardChangeEvent('clipboardchange', changeInit);
+        checks.push(change.composed, change.changeId === 42n, change.types[0] === 'text/plain');
+        return checks.every(Boolean) || JSON.stringify(checks);
+      })()
+    "#).expect("Clipboard dictionary conversion should stop on base errors and observe base getter mutations first");
+    assert_eq!(result, "true");
 }
 
 #[test]
@@ -4188,7 +5069,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
                 "CompressionStream","DecompressionStream",
                 "ReadableStreamBYOBReader","ReadableStreamBYOBRequest","ReadableByteStreamController",
                 "Geolocation","GeolocationPosition","GeolocationCoordinates","GeolocationPositionError",
-                "MediaCapabilities","Clipboard","ClipboardItem",
+                "MediaCapabilities","Clipboard","ClipboardItem","ClipboardChangeEvent",
               ];
               const out = [];
               for (const name of names) {
@@ -4200,6 +5081,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
               out.push(`DOMRect<DOMRectReadOnly:${DOMRect.prototype instanceof DOMRectReadOnly}`);
               out.push(`DOMPoint<DOMPointReadOnly:${DOMPoint.prototype instanceof DOMPointReadOnly}`);
               out.push(`Clipboard<EventTarget:${Clipboard.prototype instanceof EventTarget}`);
+              out.push(`ClipboardChangeEvent<Event:${ClipboardChangeEvent.prototype instanceof Event}`);
               return out.join("|");
             })()
             "#,
@@ -4237,11 +5119,13 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
         "MediaCapabilities:function:true",
         "Clipboard:function:true",
         "ClipboardItem:function:true",
+        "ClipboardChangeEvent:function:true",
         "ToggleEvent<Event:true",
         "HashChangeEvent<Event:true",
         "DOMRect<DOMRectReadOnly:true",
         "DOMPoint<DOMPointReadOnly:true",
         "Clipboard<EventTarget:true",
+        "ClipboardChangeEvent<Event:true",
     ];
     assert_eq!(result, expected_parts.join("|"));
 }
@@ -4919,6 +5803,425 @@ fn dom_point_accessors_use_private_slots_and_reject_forged_receivers() {
 }
 
 #[test]
+fn dom_point_readonly_constructor_uses_readonly_instances_and_shared_methods() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const point = new DOMPointReadOnly(1, 2, 3, 4);
+  point.x = 9;
+  return [
+    point instanceof DOMPointReadOnly,
+    point instanceof DOMPoint,
+    [point.x, point.y, point.z, point.w].join(","),
+    JSON.stringify(point.toJSON()),
+    Object.hasOwn(DOMPointReadOnly.prototype, "x"),
+    Object.getOwnPropertyDescriptor(DOMPointReadOnly.prototype, "x").set === undefined,
+    Object.hasOwn(DOMPointReadOnly.prototype, "toJSON"),
+    Object.hasOwn(DOMPoint.prototype, "toJSON"),
+    new DOMPoint() instanceof DOMPointReadOnly
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly constructor should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|1,2,3,4|{\"x\":1,\"y\":2,\"z\":3,\"w\":4}|true|true|true|false|true"
+    );
+}
+
+#[test]
+fn dom_point_readonly_from_point_uses_dictionary_conversion_and_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-from-point.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-from-point-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPointReadOnly factory child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPointReadOnly factory child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-from-point-realm").contentWindow;
+  const point = other.DOMPointReadOnly.fromPoint({x: "1", z: 3, w: 4});
+  const empty = other.DOMPointReadOnly.fromPoint(null);
+  return [
+    other.DOMPointReadOnly.fromPoint.length,
+    point instanceof other.DOMPointReadOnly,
+    point instanceof other.DOMPoint,
+    point instanceof DOMPointReadOnly,
+    [point.x, point.y, point.z, point.w].join(","),
+    [empty.x, empty.y, empty.z, empty.w].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly.fromPoint should evaluate");
+
+    assert_eq!(result, "0|true|false|false|1,0,3,4|0,0,0,1");
+}
+
+#[test]
+fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-matrix-transform.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-matrix-transform-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPoint matrixTransform child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPoint matrixTransform child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-matrix-transform-realm").contentWindow;
+  const source = new DOMPointReadOnly(5, 4, 3, 2);
+  const transformed = other.DOMPointReadOnly.prototype.matrixTransform.call(source, {
+    a: 2, m11: 2, d: 3, e: 10, f: 20, m33: 4, m44: 5
+  });
+  const outcome = init => {
+    try {
+      source.matrixTransform(init);
+      return "no throw";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  return [
+    other.DOMPointReadOnly.prototype.matrixTransform.length,
+    transformed instanceof other.DOMPoint,
+    transformed instanceof DOMPoint,
+    [transformed.x, transformed.y, transformed.z, transformed.w].join(","),
+    outcome({a: 1, m11: 2}),
+    outcome({is2D: true, m33: 1.0000001}),
+    outcome({a: NaN, m11: NaN}),
+    outcome({a: 0, m11: -0})
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPoint matrixTransform should evaluate");
+
+    assert_eq!(
+        result,
+        "0|true|false|30,52,12,10|TypeError|TypeError|no throw|no throw"
+    );
+}
+
+#[test]
+fn dom_quad_uses_live_same_object_points_and_geometry_dictionary_factories() {
+    let mut vm = new_storage_test_vm("https://domquad-geometry.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return String(callback());
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const q = new DOMQuad(
+    {x: 1, y: 2, z: 3, w: 4},
+    {x: 11, y: 2},
+    {x: 11, y: 22},
+    {x: 1, y: 22}
+  );
+  const initial = [q.p1.x, q.p1.y, q.p1.z, q.p1.w,
+    q.getBounds().x, q.getBounds().y, q.getBounds().width,
+    q.getBounds().height].join(",");
+  const copy = DOMQuad.fromQuad(q);
+  const copyInitial = [copy.p1.x, copy.p1.y, copy.p1.z, copy.p1.w,
+    copy.p4.x, copy.p4.y].join(",");
+  const originalP1 = q.p1;
+  q.p1.x = -5;
+  q.p4.y = 30;
+  q.p1 = new DOMPoint(999, 999);
+  const live = [q.p1 === originalP1, q.p1.x, q.p4.y,
+    q.getBounds().x, q.getBounds().y, q.getBounds().width,
+    q.getBounds().height].join(",");
+  const copyAfterMutation = [copy.p1.x, copy.p4.y, copy.p1 !== q.p1].join(",");
+  const negative = DOMQuad.fromRect({x: 10, y: 20, width: -100, height: -200});
+  const negativeValues = [negative.p1.x, negative.p1.y, negative.p2.x,
+    negative.p3.y, negative.getBounds().x, negative.getBounds().y,
+    negative.getBounds().width, negative.getBounds().height].join(",");
+  const nanBounds = new DOMQuad({x: 0, y: 0}, {x: 0, y: 0},
+    {x: NaN, y: 0}, {x: 0, y: 0}).getBounds();
+  const nanValues = [nanBounds.x, nanBounds.y, nanBounds.width,
+    nanBounds.height].join(",");
+  const json = q.toJSON();
+  const pointDescriptor = Object.getOwnPropertyDescriptor(DOMQuad.prototype, "p1");
+  const fake = Object.assign(Object.create(DOMQuad.prototype), {
+    __moliDomQuadBrand: true,
+    __moliDomQuadP1: new DOMPoint()
+  });
+  return JSON.stringify({
+    interfaceShape: [DOMQuad.length, DOMQuad.fromRect.length,
+      DOMQuad.fromQuad.length, q.getBounds.length, q.toJSON.length,
+      Object.prototype.toString.call(q), "bounds" in q].join("|"),
+    prototypeKeys: Object.keys(DOMQuad.prototype).join(","),
+    pointDescriptor: [typeof pointDescriptor.get, pointDescriptor.get.name,
+      pointDescriptor.get.length, pointDescriptor.set === undefined,
+      pointDescriptor.enumerable, pointDescriptor.configurable].join("|"),
+    sameObject: q.p1 === q.p1,
+    initial,
+    live,
+    copyInitial,
+    copyAfterMutation,
+    negativeValues,
+    nanValues,
+    jsonShape: [Object.getPrototypeOf(json) === Object.prototype,
+      Object.keys(json).join(","), json.p1 === q.p1,
+      JSON.stringify(json)].join("|"),
+    forged: [probe(() => pointDescriptor.get.call(fake)),
+      probe(() => DOMQuad.prototype.getBounds.call(fake)),
+      probe(() => DOMQuad.prototype.toJSON.call(fake))].join(","),
+    visibleSlots: Object.getOwnPropertyNames(q)
+      .filter(name => name.startsWith("__moliDomQuad")).join(",")
+  });
+})()
+"#,
+        )
+        .expect("DOMQuad geometry probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"interfaceShape":"0|0|0|0|0|[object DOMQuad]|false","prototypeKeys":"p1,p2,p3,p4,getBounds,toJSON","pointDescriptor":"function|get p1|0|true|true|true","sameObject":true,"initial":"1,2,3,4,1,2,10,20","live":"true,-5,30,-5,2,16,28","copyInitial":"1,2,3,4,1,22","copyAfterMutation":"1,22,true","negativeValues":"10,20,-90,-180,-90,-180,100,200","nanValues":"NaN,0,NaN,0","jsonShape":"true|p1,p2,p3,p4|true|"#,
+            r#"{\"p1\":{\"x\":-5,\"y\":2,\"z\":3,\"w\":4},\"p2\":{\"x\":11,\"y\":2,\"z\":0,\"w\":1},\"p3\":{\"x\":11,\"y\":22,\"z\":0,\"w\":1},\"p4\":{\"x\":1,\"y\":30,\"z\":0,\"w\":1}}","forged":"TypeError,TypeError,TypeError","visibleSlots":""}"#
+        )
+    );
+}
+
+#[test]
+fn dom_quad_factories_and_default_to_json_use_the_function_realm() {
+    let mut vm = new_storage_test_vm("https://domquad-function-realm.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "domquad-function-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMQuad factory child frame should be created");
+    materialize_single_child_default_realm_for_test(&mut vm, "DOMQuad factory child Realm");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("domquad-function-realm").contentWindow;
+  const quad = other.DOMQuad.fromRect({x: 1, y: 2, width: 3, height: 4});
+  const source = new DOMQuad({x: 7, y: 8});
+  const json = other.DOMQuad.prototype.toJSON.call(source);
+  return [
+    quad instanceof other.DOMQuad,
+    quad instanceof DOMQuad,
+    quad.p1 instanceof other.DOMPoint,
+    quad.p1 instanceof DOMPoint,
+    quad.getBounds() instanceof other.DOMRect,
+    quad.getBounds() instanceof DOMRect,
+    Object.getPrototypeOf(json) === other.Object.prototype,
+    json.p1 === source.p1,
+    json.p1 instanceof DOMPoint,
+    json.p1 instanceof other.DOMPoint
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMQuad function realm probe should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|true|false|true|false|true|true|true|false"
+    );
+}
+
+#[test]
+fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
+    let mut vm = new_storage_test_vm("https://geometry-legacy-window-aliases.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const interfaces = ["SVGPoint", "SVGRect", "SVGMatrix", "WebKitCSSMatrix"];
+  const descriptorShape = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    return [
+      descriptor.value === globalThis[name],
+      descriptor.writable,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(",");
+  };
+  const point = new SVGPoint(1, 2);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const rect = svg.createSVGRect();
+  rect.x = 3;
+  rect.y = 4;
+  rect.width = 5;
+  rect.height = 6;
+  const matrix = svg.createSVGMatrix();
+  const multiplied = matrix.multiply({a: 3, d: 2});
+  matrix.a = 2;
+  return JSON.stringify({
+    identities: [
+      SVGPoint === DOMPoint,
+      SVGRect === DOMRect,
+      SVGMatrix === DOMMatrix,
+      WebKitCSSMatrix === DOMMatrix
+    ].join(","),
+    point: [point instanceof DOMPoint, point.x, point.y, String(point)].join(","),
+    rect: [rect instanceof SVGRect, rect instanceof DOMRect, rect.x, rect.height, String(rect)].join(","),
+    matrix: [
+      matrix instanceof DOMMatrix,
+      matrix instanceof SVGMatrix,
+      Object.getPrototypeOf(matrix) === DOMMatrix.prototype,
+      !Object.hasOwn(matrix, "multiply"),
+      matrix.a,
+      multiplied.a,
+      multiplied.d,
+      Object.prototype.toString.call(matrix)
+    ].join(","),
+    descriptors: interfaces.map(descriptorShape).join("|")
+  });
+})()
+"#,
+        )
+        .expect("Geometry legacy Window aliases should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,true,2,3,2,[object DOMMatrix]","descriptors":""#,
+            "true,true,false,true|true,true,false,true|",
+            "true,true,false,true|true,true,false,true\"}"
+        )
+    );
+}
+
+#[test]
+fn svg_transform_factories_convert_optional_dom_matrix_2d_init() {
+    let mut vm = new_storage_test_vm("https://svg-transform-dom-matrix-init.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(SVG_NS, "svg");
+  const group = document.createElementNS(SVG_NS, "g");
+  const fromElement = svg.createSVGTransformFromMatrix({a: 2, e: 5});
+  const defaultElement = svg.createSVGTransformFromMatrix();
+  const fromFactory = svg.createSVGTransformFromMatrix(svg.createSVGMatrix().translate(9, 10));
+  const transform = svg.createSVGTransform();
+  transform.setMatrix({b: 4, f: 6});
+  const fromList = group.transform.baseVal.createSVGTransformFromMatrix({c: 7, d: 8});
+  let mismatch;
+  try {
+    transform.setMatrix({a: 1, m11: 2});
+    mismatch = "none";
+  } catch (error) {
+    mismatch = error.name;
+  }
+  return JSON.stringify({
+    fromElement: [fromElement.matrix.a, fromElement.matrix.e].join(","),
+    defaultElement: [defaultElement.matrix.a, defaultElement.matrix.d].join(","),
+    fromFactory: [fromFactory.matrix.e, fromFactory.matrix.f].join(","),
+    setMatrix: [transform.matrix.b, transform.matrix.f].join(","),
+    fromList: [fromList.matrix.c, fromList.matrix.d].join(","),
+    mismatch,
+    lengths: [
+      SVGSVGElement.prototype.createSVGTransformFromMatrix.length,
+      SVGTransform.prototype.setMatrix.length,
+      SVGTransformList.prototype.createSVGTransformFromMatrix.length
+    ].join(",")
+  });
+})()
+"#,
+        )
+        .expect("SVG transform DOMMatrix2DInit conversion should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"fromElement":"2,5","defaultElement":"1,1","fromFactory":"9,10","setMatrix":"4,6","fromList":"7,8","mismatch":"TypeError","lengths":"0,0,0"}"#
+    );
+}
+
+#[test]
+fn dom_matrix_window_operations_use_webidl_descriptors() {
+    let mut vm = new_storage_test_vm("https://dommatrix-operation-descriptors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const descriptorShape = (owner, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    return [
+      typeof descriptor.value,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.writable,
+      descriptor.configurable
+    ].join(",");
+  };
+  return [
+    descriptorShape(DOMMatrixReadOnly.prototype, "toString"),
+    descriptorShape(DOMMatrix.prototype, "setMatrixValue")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix Window operation descriptors should evaluate");
+
+    assert_eq!(
+        result,
+        "function,0,true,true,true|function,1,true,true,true"
+    );
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
@@ -5056,6 +6359,83 @@ fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     assert_eq!(
         result,
         r#"{"matrixInstance":"true,true,[object DOMMatrix]","matrixValues":"1,2,3,4,5,6","readonlyInstance":"true,false,[object DOMMatrixReadOnly]","readonlyValues":"1,2,3,4,5,6","initialMatrixSlots":"","initialReadonlySlots":"","matrixSpoofSlots":"__moliDomMatrixM11,__moliDomMatrixM12,__moliDomMatrixM21,__moliDomMatrixM22,__moliDomMatrixM41,__moliDomMatrixM42,__moliDomMatrixMutableBrand,__moliDomMatrixReadOnlyBrand","readonlySpoofSlots":"__moliDomMatrixM11,__moliDomMatrixM12,__moliDomMatrixM21,__moliDomMatrixM22,__moliDomMatrixM41,__moliDomMatrixM42,__moliDomMatrixReadOnlyBrand","fakeResults":"TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError","fakeSlots":"__moliDomMatrixM11,__moliDomMatrixM12,__moliDomMatrixM21,__moliDomMatrixM22,__moliDomMatrixM41,__moliDomMatrixM42,__moliDomMatrixMutableBrand,__moliDomMatrixReadOnlyBrand","readonlyFakeSlots":"__moliDomMatrixM11,__moliDomMatrixM12,__moliDomMatrixM21,__moliDomMatrixM22,__moliDomMatrixM41,__moliDomMatrixM42,__moliDomMatrixReadOnlyBrand","readonlyKeys":"a,b,c,d,e,f,m11,m12,m13,m14,m21,m22,m23,m24,m31,m32,m33,m34,m41,m42,m43,m44,is2D,isIdentity","mutableKeys":"a,b,c,d,e,f,m11,m12,m13,m14,m21,m22,m23,m24,m31,m32,m33,m34,m41,m42,m43,m44","readonlyDescriptors":"a:function:get a:0:undefined:undefined:undefined:true:true:false;m44:function:get m44:0:undefined:undefined:undefined:true:true:false;is2D:function:get is2D:0:undefined:undefined:undefined:true:true:false;isIdentity:function:get isIdentity:0:undefined:undefined:undefined:true:true:false","mutableDescriptors":"a:function:get a:0:function:set a:1:true:true:false;m44:function:get m44:0:function:set m44:1:true:true:false"}"#
+    );
+}
+
+#[test]
+fn dom_matrix_tracks_explicit_dimension_and_validates_init() {
+    let mut vm = new_storage_test_vm("https://dommatrix-dimension.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const identity3d = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1
+  ];
+  const outcome = callback => {
+    try {
+      callback();
+      return "no throw";
+    } catch (error) {
+      return error.name;
+    }
+  };
+
+  const sequence = new DOMMatrix(identity3d);
+  const typed = DOMMatrixReadOnly.fromFloat64Array(new Float64Array(identity3d));
+  const explicit = DOMMatrix.fromMatrix({is2D: false});
+  const copied = new DOMMatrix(explicit);
+  const multiplied = new DOMMatrix().multiply({is2D: false});
+  const preMultiplied = new DOMMatrix().preMultiplySelf({is2D: false});
+
+  const sticky = new DOMMatrix();
+  sticky.m13 = 2;
+  sticky.m13 = 0;
+
+  const reset = new DOMMatrix(identity3d);
+  reset.setMatrixValue("");
+
+  const origin3d = new DOMMatrix().scaleSelf(1, 1, 1, 0, 0, 2);
+  const axis3d = new DOMMatrix().rotateAxisAngleSelf(1, 0, 0, 0);
+  const negativeZero2d = new DOMMatrix().translateSelf(0, 0, -0);
+  const parsed3d = new DOMMatrix(
+    "matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)"
+  );
+
+  return [
+    sequence.is2D,
+    typed.is2D,
+    explicit.is2D,
+    copied.is2D,
+    multiplied.is2D,
+    preMultiplied.is2D,
+    sticky.is2D,
+    reset.is2D,
+    origin3d.is2D,
+    axis3d.is2D,
+    negativeZero2d.is2D,
+    parsed3d.is2D,
+    String(explicit),
+    outcome(() => DOMMatrix.fromMatrix({a: 1, m11: 2})),
+    outcome(() => DOMMatrix.fromMatrix({is2D: true, m13: 1})),
+    outcome(() => new DOMMatrix(" "))
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix dimension probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "false|false|false|false|false|false|false|true|false|false|true|false|",
+            "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)|",
+            "TypeError|TypeError|SyntaxError"
+        )
     );
 }
 
@@ -5750,7 +7130,7 @@ fn showing_popover_throws_when_force_close_removes_opening_popover() {
     assert_eq!(result, "InvalidStateError:true|false|false");
 }
 #[test]
-fn show_and_hide_popover_throw_on_redundant_state_changes() {
+fn show_and_hide_popover_are_no_ops_for_redundant_state_changes() {
     let mut vm = new_storage_test_vm("https://popover-redundant-state.test/");
 
     let result = vm
@@ -5780,10 +7160,7 @@ fn show_and_hide_popover_throw_on_redundant_state_changes() {
         )
         .expect("redundant popover state probe should evaluate");
 
-    assert_eq!(
-        result,
-        "InvalidStateError:true|InvalidStateError:true|false"
-    );
+    assert_eq!(result, "ok|ok|false");
 }
 
 #[test]
@@ -5865,6 +7242,58 @@ fn opening_auto_popovers_preserves_flat_tree_ancestors() {
         result,
         r#"{"nested":[true,true,true],"unrelatedClosesStack":[false,false,false,true],"shadowSource":[true,true],"unassignedLightChild":[false,true]}"#
     );
+}
+
+#[test]
+fn input_button_popover_invokers_run_across_form_ownership() {
+    let mut vm = new_storage_test_vm("https://input-button-popover.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.appendChild(document.createElement("html"));
+              const body = html.appendChild(document.createElement("body"));
+              const form = document.createElement("form");
+              form.id = "owner";
+              const popover = document.createElement("div");
+              popover.id = "target";
+              popover.popover = "auto";
+              const makeInvoker = () => {
+                const input = document.createElement("input");
+                input.type = "button";
+                input.setAttribute("popovertarget", "target");
+                return input;
+              };
+              const ownedByAncestor = makeInvoker();
+              const ownedByAttribute = makeInvoker();
+              ownedByAttribute.setAttribute("form", "owner");
+              const outsideForm = makeInvoker();
+              const canceled = makeInvoker();
+              const text = makeInvoker();
+              text.type = "text";
+              canceled.addEventListener("click", event => event.preventDefault());
+              form.append(ownedByAncestor);
+              body.append(form, ownedByAttribute, outsideForm, canceled, text, popover);
+              const invoke = input => {
+                input.click();
+                const opened = popover.matches(":popover-open");
+                popover.hidePopover();
+                return opened;
+              };
+              return [
+                invoke(ownedByAncestor),
+                invoke(ownedByAttribute),
+                invoke(outsideForm),
+                invoke(canceled),
+                invoke(text)
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("input button popover invoker probe should evaluate");
+
+    assert_eq!(result, "true|true|true|false|false");
 }
 
 #[test]
@@ -6135,6 +7564,156 @@ async fn popover_toggle_events_coalesce_within_one_task() {
         .expect("popover coalesced event probe should evaluate");
 
     assert_eq!(after, "closed->open");
+}
+
+#[tokio::test]
+async fn removing_popover_attribute_cancels_pending_toggle_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popover-attribute-removal-toggle.test/",
+        &loader,
+    );
+
+    let before = vm
+        .eval(
+            r#"
+            (() => {
+              const popover = document.createElement("div");
+              popover.popover = "auto";
+              const html = document.appendChild(document.createElement("html"));
+              html.appendChild(document.createElement("body")).appendChild(popover);
+              globalThis.__lmPopoverAttributeRemovalEvents = [];
+              for (const type of ["beforetoggle", "toggle"]) {
+                popover.addEventListener(type, event => {
+                  globalThis.__lmPopoverAttributeRemovalEvents.push(
+                    `${event.type}:${event.oldState}->${event.newState}`
+                  );
+                });
+              }
+              popover.showPopover();
+              popover.hidePopover();
+              popover.removeAttribute("popover");
+              return JSON.stringify({
+                events: globalThis.__lmPopoverAttributeRemovalEvents,
+                open: popover.matches(":popover-open"),
+                hasAttribute: popover.hasAttribute("popover")
+              });
+            })()
+            "#,
+        )
+        .expect("popover attribute removal setup should evaluate");
+
+    assert_eq!(
+        before,
+        r#"{"events":["beforetoggle:closed->open","beforetoggle:open->closed"],"open":false,"hasAttribute":false}"#
+    );
+
+    assert!(
+        !vm.has_ready_timeout(),
+        "popover toggle events must not create synthetic Page timers"
+    );
+    assert!(
+        !vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("canceled popover toggle tasks should drain")
+    );
+
+    let after = vm
+        .eval("JSON.stringify(__lmPopoverAttributeRemovalEvents)")
+        .expect("popover attribute removal event log should evaluate");
+    assert_eq!(
+        after,
+        r#"["beforetoggle:closed->open","beforetoggle:open->closed"]"#
+    );
+}
+
+#[test]
+fn popover_show_rejects_owner_document_changes_during_toggle_steps() {
+    let mut vm = new_storage_test_vm("https://popover-owner-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement || document.appendChild(
+                document.createElement("html")
+              );
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childDocument = frame.contentDocument;
+              const childRoot = childDocument.documentElement || childDocument.appendChild(
+                childDocument.createElement("html")
+              );
+              const childBody = childDocument.body || childRoot.appendChild(
+                childDocument.createElement("body")
+              );
+              const invalidState = callback => {
+                try {
+                  callback();
+                  return false;
+                } catch (error) {
+                  return error.name === "InvalidStateError";
+                }
+              };
+
+              const movedWhileShowing = document.createElement("div");
+              movedWhileShowing.popover = "auto";
+              body.appendChild(movedWhileShowing);
+              movedWhileShowing.addEventListener("beforetoggle", () => {
+                childBody.appendChild(movedWhileShowing);
+              }, { once: true });
+              const showRejected = invalidState(() => movedWhileShowing.showPopover());
+
+              const movedWhileHiding = document.createElement("div");
+              movedWhileHiding.popover = "auto";
+              body.appendChild(movedWhileHiding);
+              movedWhileHiding.showPopover();
+              movedWhileHiding.addEventListener("beforetoggle", event => {
+                if (event.newState === "closed") childBody.appendChild(movedWhileHiding);
+              }, { once: true });
+              let hideThrew = false;
+              try {
+                movedWhileHiding.hidePopover();
+              } catch (_) {
+                hideThrew = true;
+              }
+
+              const parent = document.createElement("div");
+              const openChild = document.createElement("div");
+              const movedByDismiss = document.createElement("div");
+              for (const popover of [parent, openChild, movedByDismiss]) {
+                popover.popover = "auto";
+              }
+              parent.append(openChild, movedByDismiss);
+              body.appendChild(parent);
+              parent.showPopover();
+              openChild.showPopover();
+              openChild.addEventListener("beforetoggle", event => {
+                if (event.newState === "closed") childBody.appendChild(movedByDismiss);
+              });
+              const dismissRejected = invalidState(() => movedByDismiss.showPopover());
+
+              return JSON.stringify({
+                showRejected,
+                showStayedClosed: !movedWhileShowing.matches(":popover-open"),
+                hideThrew,
+                hideClosed: !movedWhileHiding.matches(":popover-open"),
+                dismissRejected,
+                dismissStayedClosed: !movedByDismiss.matches(":popover-open")
+              });
+            })()
+            "#,
+        )
+        .expect("popover owner-document reentrancy should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"showRejected":true,"showStayedClosed":true,"hideThrew":false,"hideClosed":true,"dismissRejected":true,"dismissStayedClosed":true}"#
+    );
 }
 
 #[test]
@@ -13863,6 +15442,98 @@ async fn navigator_service_worker_register_applies_script_path_restriction() {
 }
 
 #[tokio::test]
+async fn navigator_service_worker_register_validates_urls_and_refreshes_cached_workers() {
+    let worker_body = "self.addEventListener('install', () => {});";
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__serviceWorkerRegistrationUrlProbe = "pending";
+              (async () => {
+                const sw = navigator.serviceWorker;
+                const rejection = async (script, options) => {
+                  try {
+                    await sw.register(script, options);
+                    return "resolved";
+                  } catch (error) {
+                    return [
+                      error && error.name,
+                      error instanceof TypeError,
+                      error instanceof DOMException
+                    ].join("|");
+                  }
+                };
+                const encodedSlash = await rejection("worker%2f.js", { scope: "./scope/" });
+                const dataScript = await rejection("data:text/javascript,", { scope: "./scope/" });
+                const dataScope = await rejection("worker.js", { scope: "data:text/html," });
+
+                const newest = registration =>
+                  registration.installing || registration.waiting || registration.active;
+                const first = await sw.register("././worker.js", { scope: "./scope/" });
+                const firstScriptURL = newest(first) && newest(first).scriptURL;
+                const unregistered = await first.unregister();
+                const cleared =
+                  first.installing === null && first.waiting === null && first.active === null;
+                const second = await sw.register("../app/worker.js", { scope: "./scope/" });
+                const secondScriptURL = newest(second) && newest(second).scriptURL;
+
+                globalThis.__serviceWorkerRegistrationUrlProbe = JSON.stringify({
+                  encodedSlash,
+                  dataScript,
+                  dataScope,
+                  firstScriptURL,
+                  unregistered,
+                  cleared,
+                  secondScriptURL
+                });
+              })().catch((error) => {
+                globalThis.__serviceWorkerRegistrationUrlProbe =
+                  "error:" + String(error && error.message);
+              });
+            })()
+            "#,
+    )
+    .expect("service worker registration URL probe should evaluate");
+
+    let expected = format!(
+        r#"{{"encodedSlash":"TypeError|true|false","dataScript":"TypeError|true|false","dataScope":"TypeError|true|false","firstScriptURL":"{base_url}/app/worker.js","unregistered":true,"cleared":true,"secondScriptURL":"{base_url}/app/worker.js"}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerRegistrationUrlProbe)",
+        &expected,
+    )
+    .await;
+
+    server
+        .await
+        .expect("service worker registration URL server should finish");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_register_identical_main_script_keeps_existing_version() {
     let worker_body = r#"
         self.addEventListener("install", event => {
@@ -16577,7 +18248,7 @@ async fn navigator_service_worker_respond_with_no_cors_fetch_projects_opaque_res
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerOpaqueRespondWithFetchProbe)",
-        "opaque|0|false|||false|true|0|false|true||opaque|0|true|",
+        "opaque|0|false|||false|true|0|false|false||opaque|0|true|",
     )
     .await;
 
@@ -16847,7 +18518,7 @@ async fn navigator_service_worker_update_via_cache_option_reflects_registration(
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerUpdateViaCacheProbe)",
-        "all|all|Error",
+        "all|all|TypeError",
     )
     .await;
     server
@@ -21932,6 +23603,101 @@ async fn navigator_service_worker_registry_queries_are_scope_based() {
         .expect("service worker registry script server should finish");
 }
 
+#[tokio::test]
+async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules() {
+    let (base_url, server) =
+        spawn_service_worker_script_server(vec!["/worker.js", "/resources/worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              const sw = navigator.serviceWorker;
+              const rejectionName = promise => promise.then(
+                () => "resolved",
+                error => error && error.name
+              );
+              const synchronousErrorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              globalThis.__serviceWorkerUrlArgumentProbe = { state: "pending" };
+              (async () => {
+                const registration = await sw.register("/worker.js", { scope: "null" });
+                const nullClientMatches = await sw.getRegistration(null) === registration;
+                const crossOrigin = await rejectionName(
+                  sw.getRegistration("http://example.com/")
+                );
+                const invalidClientUrl = await rejectionName(
+                  sw.getRegistration("https://[")
+                );
+                const nullScope = await rejectionName(
+                  sw.register("/resources/worker.js", { scope: null })
+                );
+                const nullType = synchronousErrorName(
+                  () => sw.register("/worker.js", { type: null })
+                );
+                const nullUpdateViaCache = synchronousErrorName(
+                  () => sw.register("/worker.js", { updateViaCache: null })
+                );
+                const primitiveOptions = synchronousErrorName(
+                  () => sw.register("/worker.js", 1)
+                );
+                const symbolClient = synchronousErrorName(
+                  () => sw.getRegistration(Symbol("client"))
+                );
+                const unregistered = await registration.unregister();
+                globalThis.__serviceWorkerUrlArgumentProbe = {
+                  state: "done",
+                  nullClientMatches,
+                  crossOrigin,
+                  invalidClientUrl,
+                  nullScope,
+                  nullType,
+                  nullUpdateViaCache,
+                  primitiveOptions,
+                  symbolClient,
+                  unregistered
+                };
+              })().catch(error => {
+                globalThis.__serviceWorkerUrlArgumentProbe = {
+                  state: "error",
+                  error: String(error)
+                };
+              });
+            })()
+            "#,
+    )
+    .expect("service worker URL argument probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerUrlArgumentProbe.state !== 'pending')",
+        "true",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__serviceWorkerUrlArgumentProbe)")
+            .expect("service worker URL argument result should evaluate"),
+        r#"{"state":"done","nullClientMatches":true,"crossOrigin":"SecurityError","invalidClientUrl":"TypeError","nullScope":"SecurityError","nullType":"TypeError","nullUpdateViaCache":"TypeError","primitiveOptions":"TypeError","symbolClient":"TypeError","unregistered":true}"#
+    );
+    server
+        .await
+        .expect("service worker URL argument script server should finish");
+}
+
 #[test]
 fn window_event_source_constructor_exposes_connecting_instance() {
     let mut vm = new_storage_test_vm("https://example.com/");
@@ -23485,6 +25251,103 @@ fn location_navigation_throws_syntax_error_for_unparseable_urls() {
 }
 
 #[test]
+fn location_protocol_setter_rejects_invalid_schemes_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/path?x=1#frag");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const originalHref = location.href;
+  const invalid = [
+    "", "\u0000", "\u0001", "\u000c", " ", "!", "\u007f",
+    "\u0080", "\u00ff", ":", "\u2020", "x!", "1http"
+  ];
+  const errors = invalid.map(value => {
+    try {
+      location.protocol = value;
+      return "returned";
+    } catch (error) {
+      return `${error.name}:${error.code}:${error instanceof DOMException}`;
+    }
+  });
+  return JSON.stringify({
+    allSyntaxErrors: errors.every(value => value === "SyntaxError:12:true"),
+    hrefUnchanged: location.href === originalHref
+  });
+})()
+"#,
+        )
+        .expect("invalid Location protocol probe should evaluate");
+
+    assert_eq!(result, r#"{"allSyntaxErrors":true,"hrefUnchanged":true}"#);
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "invalid Location protocols must not queue navigation"
+    );
+}
+
+#[test]
+fn location_protocol_setter_uses_scheme_state_override_navigation_rules() {
+    let original = "http://example.com/path?x=1#frag";
+    let mut ignored_vm = new_storage_test_vm(original);
+    let ignored = ignored_vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const scheme of ["x", "data", "file", "ftp", "http+x"]) {
+    try {
+      location.protocol = scheme;
+      results.push(location.href);
+    } catch (error) {
+      results.push(error.name);
+    }
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect("non-HTTP Location protocol probe should evaluate");
+    assert_eq!(
+        ignored,
+        r#"["http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag"]"#
+    );
+    assert!(
+        ignored_vm
+            .take_pending_location_navigation_with_seed()
+            .is_none(),
+        "non-HTTP(S) protocol results must not queue navigation"
+    );
+
+    let mut same_vm = new_storage_test_vm(original);
+    same_vm
+        .eval(r#"location.protocol = "ht\ntp:gunk"; "queued""#)
+        .expect("same Location protocol probe should evaluate");
+    assert_eq!(
+        same_vm
+            .take_pending_location_navigation_with_seed()
+            .expect("same protocol assignment should still navigate")
+            .url
+            .as_str(),
+        original
+    );
+
+    let mut changed_vm = new_storage_test_vm(original);
+    changed_vm
+        .eval(r#"location.protocol = "https::::"; "queued""#)
+        .expect("changed Location protocol probe should evaluate");
+    assert_eq!(
+        changed_vm
+            .take_pending_location_navigation_with_seed()
+            .expect("HTTP(S) protocol assignment should navigate")
+            .url
+            .as_str(),
+        "https://example.com/path?x=1#frag"
+    );
+}
+
+#[test]
 fn location_accessors_throw_on_invalid_receivers_without_navigation() {
     let mut vm = new_storage_test_vm("https://example.com/path?x=1");
 
@@ -23823,6 +25686,140 @@ fn window_open_rejects_invalid_urls_before_selecting_a_target() {
 }
 
 #[test]
+fn window_open_resolves_relative_urls_against_the_entry_function_realm() {
+    let mut vm = new_storage_test_vm("https://entry-realm.test/top/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const parent = document.body || document.documentElement || document;
+              const makeFrame = base => {
+                const frame = document.createElement("iframe");
+                parent.appendChild(frame);
+                frame.contentDocument.open();
+                frame.contentDocument.write(
+                  `<!doctype html><base href="https://entry-realm.test/${base}/">`
+                );
+                frame.contentDocument.close();
+                return frame.contentWindow;
+              };
+              const current = makeFrame("current");
+              const relevant = makeFrame("relevant");
+              const entry = makeFrame("function");
+              entry.openArgs = { open: current.open, relevant };
+
+              const makeEntryFunction = target => entry.Function(
+                `window.openArgs.open.call(
+                   window.openArgs.relevant,
+                   "resources/window-to-open.html",
+                   "${target}"
+                 );`
+              );
+              Promise.resolve().then(makeEntryFunction("promise-entry"));
+
+              const startFunction = makeEntryFunction("wasm-entry");
+              const startModule = new WebAssembly.Module(new Uint8Array([
+                0, 97, 115, 109, 1, 0, 0, 0,
+                1, 4, 1, 96, 0, 0,
+                2, 19, 1, 6, 109, 111, 100, 117, 108, 101,
+                8, 105, 109, 112, 111, 114, 116, 101, 100, 0, 0,
+                8, 1, 0
+              ]));
+              new WebAssembly.Instance(startModule, {
+                module: { imported: startFunction }
+              });
+              return "queued";
+            })()
+            "#,
+        )
+        .expect("cross-realm entry window.open calls should evaluate");
+    assert_eq!(result, "queued");
+
+    let mut activations = vm.take_pending_popup_activations();
+    activations.sort_by(|left, right| left.target_name().cmp(right.target_name()));
+    assert_eq!(activations.len(), 2);
+    assert_eq!(activations[0].target_name(), "promise-entry");
+    assert_eq!(activations[1].target_name(), "wasm-entry");
+    assert!(activations.iter().all(|activation| {
+        activation.url() == "https://entry-realm.test/function/resources/window-to-open.html"
+    }));
+}
+
+#[test]
+fn window_open_existing_named_child_sets_and_can_disown_its_opener() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.name = "named-child";
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__namedOpenerFrame = frame;
+  return "created";
+})()
+"#,
+    )
+    .expect("named child opener setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = __namedOpenerFrame.contentWindow;
+  const before = child.opener;
+  const opened = open("about:blank#opened", "named-child");
+  const descriptor = Object.getOwnPropertyDescriptor(child, "opener");
+  const openerGet = descriptor.get;
+  const openerSet = descriptor.set;
+  const selected = {
+    initiallyNull: before === null,
+    returnedExisting: opened === child,
+    openerIsTop: child.opener === window,
+    directGetterIsTop: openerGet() === window,
+    descriptorShape: [
+      typeof openerGet,
+      typeof openerSet,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(":")
+  };
+
+  child.opener = null;
+  const disowned = {
+    openerIsNull: child.opener === null,
+    directGetterIsNull: openerGet() === null,
+    descriptorPreserved:
+      Object.getOwnPropertyDescriptor(child, "opener").get === openerGet
+  };
+
+  child.opener = "immaterial";
+  const replacement = Object.getOwnPropertyDescriptor(child, "opener");
+  return JSON.stringify({
+    selected,
+    disowned,
+    replaced: {
+      value: child.opener,
+      directGetterIsNull: openerGet() === null,
+      writable: replacement.writable,
+      enumerable: replacement.enumerable,
+      configurable: replacement.configurable
+    }
+  });
+})()
+"#,
+        )
+        .expect("named child opener semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"selected":{"initiallyNull":true,"returnedExisting":true,"openerIsTop":true,"directGetterIsTop":true,"descriptorShape":"function:function:true:true"},"disowned":{"openerIsNull":true,"directGetterIsNull":true,"descriptorPreserved":true},"replaced":{"value":"immaterial","directGetterIsNull":true,"writable":true,"enumerable":true,"configurable":true}}"#
+    );
+}
+
+#[test]
 fn window_open_about_blank_returns_lightweight_popup_window() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -23867,6 +25864,133 @@ fn window_open_about_blank_returns_lightweight_popup_window() {
     assert_eq!(
         result,
         "[object Window]|true|about:blank#1|true|function:close:0:false:true:true:true|undefined;about:blank#2;false"
+    );
+}
+
+#[tokio::test]
+async fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const topOpenerGet = Object.getOwnPropertyDescriptor(window, "opener").get;
+  const replaced = open();
+  const replacedDescriptor = Object.getOwnPropertyDescriptor(replaced, "opener");
+  const replacedGet = replacedDescriptor.get;
+  replaced.opener = "replacement";
+  const replacementDescriptor = Object.getOwnPropertyDescriptor(replaced, "opener");
+
+  const disowned = open();
+  const disownedDescriptor = Object.getOwnPropertyDescriptor(disowned, "opener");
+  const disownedGet = disownedDescriptor.get;
+  disowned.opener = null;
+  const descriptorAfterNull = Object.getOwnPropertyDescriptor(disowned, "opener");
+
+  const closed = open();
+  const closedGet = Object.getOwnPropertyDescriptor(closed, "opener").get;
+  closed.close();
+  closed.opener = "closed replacement";
+  globalThis.__closedPopupOpenerGet = closedGet;
+  globalThis.__closedPopupForOpenerTest = closed;
+
+  return JSON.stringify({
+    replaced: {
+      accessorShape: [
+        typeof replacedGet,
+        typeof replacedDescriptor.set,
+        replacedDescriptor.writable,
+        replacedDescriptor.enumerable,
+        replacedDescriptor.configurable
+      ].join(":"),
+      value: replaced.opener,
+      boundGetterKeepsRelation: replacedGet() === window,
+      borrowedGetterKeepsRelation: topOpenerGet.call(replaced) === window,
+      dataShape: [
+        replacementDescriptor.writable,
+        replacementDescriptor.enumerable,
+        replacementDescriptor.configurable
+      ].join(":")
+    },
+    disowned: {
+      valueIsNull: disowned.opener === null,
+      boundGetterIsNull: disownedGet() === null,
+      accessorPreserved: descriptorAfterNull.get === disownedGet
+    },
+    closing: {
+      closedFlag: closed.closed,
+      boundGetterKeepsRelation: closedGet() === window,
+      value: closed.opener
+    }
+  });
+})()
+"#,
+        )
+        .expect("lightweight popup opener accessor semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"replaced":{"accessorShape":"function:function::true:true","value":"replacement","boundGetterKeepsRelation":true,"borrowedGetterKeepsRelation":true,"dataShape":"true:true:true"},"disowned":{"valueIsNull":true,"boundGetterIsNull":true,"accessorPreserved":true},"closing":{"closedFlag":true,"boundGetterKeepsRelation":true,"value":"closed replacement"}}"#
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__closedPopupOpenerGet() === null)",
+        "true",
+        "queued popup definite close clears the opener relation",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__closedPopupForOpenerTest.opener)")
+            .expect("closed popup replacement opener should evaluate"),
+        "closed replacement"
+    );
+}
+
+#[test]
+fn window_open_blank_targets_expose_mutable_empty_browsing_context_names() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const implicit = open("about:blank#implicit");
+              const empty = open("about:blank#empty", "");
+              const blank = open("about:blank#blank", "_blank");
+              const mixedBlank = open("about:blank#mixed", "_BlAnK");
+              const initialNames = [implicit, empty, blank, mixedBlank]
+                .map(popup => popup.name);
+              const initialTypes = [implicit, empty, blank, mixedBlank]
+                .map(popup => typeof popup.name);
+              let conversions = 0;
+              empty.name = {
+                toString() {
+                  conversions++;
+                  return "renamed-popup";
+                }
+              };
+              blank.name = 42;
+              const reused = open("about:blank#reused", "renamed-popup");
+              return JSON.stringify({
+                initialNames,
+                initialTypes,
+                conversions,
+                emptyName: empty.name,
+                blankName: blank.name,
+                reused: reused === empty,
+                reusedName: reused.name
+              });
+            })()
+            "##,
+        )
+        .expect("blank-target popup Window.name probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initialNames":["","","",""],"initialTypes":["string","string","string","string"],"conversions":1,"emptyName":"renamed-popup","blankName":"42","reused":true,"reusedName":"renamed-popup"}"#
     );
 }
 
@@ -24316,6 +26440,39 @@ JSON.stringify({
     assert_eq!(
         result,
         r#"{"hrefIsFirst":true,"events":["first","second","first"]}"#
+    );
+}
+
+#[test]
+fn window_open_named_reuse_before_first_commit_pushes_history() {
+    let mut vm = new_storage_test_vm("https://example.com/base/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const firstUrl = URL.createObjectURL(
+    new Blob(['<!doctype html><p>first</p>'], { type: 'text/html' })
+  );
+  const secondUrl = URL.createObjectURL(
+    new Blob(['<!doctype html><p>second</p>'], { type: 'text/html' })
+  );
+  const popup = open(firstUrl, 'pendingNamedPopup');
+  const reopened = open(secondUrl, 'pendingNamedPopup');
+  const result = [
+    popup === reopened,
+    reopened.location.href === secondUrl,
+    reopened.history.length,
+  ].join('|');
+  popup.close();
+  URL.revokeObjectURL(firstUrl);
+  URL.revokeObjectURL(secondUrl);
+  return result;
+})()
+"#,
+        )
+        .expect("pending named popup reuse should evaluate"),
+        "true|true|2"
     );
 }
 
@@ -25028,6 +27185,229 @@ async fn lightweight_popup_load_waits_for_external_child_frame_and_focus_handler
 }
 
 #[tokio::test]
+async fn lightweight_popup_window_child_queries_stay_in_the_popup_document() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  globalThis.__popupFrameScopeProbe = "pending";
+  const topFrame = document.createElement("iframe");
+  topFrame.name = "top-child";
+  document.body.appendChild(topFrame);
+  topFrame.contentDocument.body.innerHTML = '<p id="top-only"></p>';
+
+  const popupMarkup = `
+    <!doctype html>
+    <iframe name="popup-child" srcdoc="<p id='popup-only'></p>"></iframe>
+    <script>
+      addEventListener("load", () => {
+        const childDocument = frames[0].document;
+        opener.__popupFrameScopeProbe = JSON.stringify({
+          length: window.length,
+          name: frames[0].name,
+          popupNode: childDocument.getElementById("popup-only") !== null,
+          topNode: childDocument.getElementById("top-only") !== null
+        });
+      });
+    <\/script>
+  `;
+  open(URL.createObjectURL(new Blob([popupMarkup], { type: "text/html" })));
+  return __popupFrameScopeProbe;
+})()
+"#,
+        )
+        .expect("popup child-query scope setup should evaluate");
+
+    assert_eq!(result, "pending");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupFrameScopeProbe",
+        r#"{"length":1,"name":"popup-child","popupNode":true,"topNode":false}"#,
+        "popup child-query document scope",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn noopener_hyperlink_reuses_an_existing_named_popup_and_preserves_its_opener() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popupName = "moli-noopener-named-target";
+  const popup = open("about:blank", popupName);
+  const targetMarkup = '<!doctype html><p id="named-target"></p>';
+  const targetUrl = URL.createObjectURL(new Blob([targetMarkup], { type: "text/html" }));
+  const link = document.createElement("a");
+  link.rel = "noopener";
+  link.target = popupName;
+  link.href = targetUrl;
+  document.body.appendChild(link);
+  globalThis.__namedNoopenerPopup = popup;
+  globalThis.__namedNoopenerTargetUrl = targetUrl;
+  link.click();
+  return String(popup.location.href === targetUrl && popup.opener === window);
+})()
+"#,
+        )
+        .expect("named noopener popup setup should evaluate");
+
+    assert_eq!(result, "true");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__namedNoopenerPopup.document.getElementById('named-target') !== null)",
+        "true",
+        "named noopener target navigation",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify({
+  openerPreserved: __namedNoopenerPopup.opener === window,
+  namePreserved: __namedNoopenerPopup.name === "moli-noopener-named-target",
+  targetCommitted: __namedNoopenerPopup.location.href === __namedNoopenerTargetUrl
+})"#,
+        )
+        .expect("named noopener popup result should evaluate"),
+        r#"{"openerPreserved":true,"namePreserved":true,"targetCommitted":true}"#
+    );
+}
+
+#[tokio::test]
+async fn top_realm_popup_load_handler_can_queue_a_timer_after_window_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  globalThis.__popupCloseHandlerState = "pending";
+  globalThis.__popupCloseHandlerEvents = [];
+  const targetUrl = URL.createObjectURL(new Blob([
+    "<!doctype html><title>close target</title>"
+  ], { type: "text/html" }));
+  const popup = open(targetUrl);
+  popup.onload = () => {
+    popup.close();
+    const timerId = setTimeout(() => {
+      __popupCloseHandlerEvents.push([
+        popup.closed,
+        popup.opener === null
+      ].join(":"));
+    }, 0);
+    __popupCloseHandlerState = [
+      popup.closed,
+      popup.opener === window,
+      timerId !== 0
+    ].join(":");
+  };
+  globalThis.__popupCloseHandlerPopup = popup;
+  return __popupCloseHandlerState;
+})()
+"#,
+        )
+        .expect("popup close handler setup should evaluate"),
+        "pending"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupCloseHandlerState",
+        "true:true:true",
+        "popup close handler synchronous state",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__popupCloseHandlerEvents.length")
+            .expect("popup close handler timer count should evaluate"),
+        "0",
+        "the close task must remain ahead of the later timer"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupCloseHandlerEvents.join('|')",
+        "true:true",
+        "top-realm timer queued after popup close",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn named_popup_broadcast_precedes_its_queued_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const popupName = "moli-noopener-close-order";
+  globalThis.__namedPopupCloseOrder = "pending";
+  const channel = new BroadcastChannel(popupName);
+  const popup = open("about:blank", popupName);
+  channel.onmessage = event => {
+    __namedPopupCloseOrder = JSON.stringify({
+      payload: event.data,
+      openerPreserved: popup.opener === window,
+      alreadyClosing: popup.closed
+    });
+  };
+  const targetMarkup = `<!doctype html><script>
+    const channel = new BroadcastChannel(window.name);
+    channel.postMessage("sent-before-close");
+    window.close();
+  <\/script>`;
+  const link = document.createElement("a");
+  link.rel = "noopener";
+  link.target = popupName;
+  link.href = URL.createObjectURL(new Blob([targetMarkup], { type: "text/html" }));
+  document.body.appendChild(link);
+  globalThis.__namedPopupCloseOrderPopup = popup;
+  link.click();
+  return __namedPopupCloseOrder;
+})()
+"#,
+        )
+        .expect("named popup close ordering setup should evaluate"),
+        "pending"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__namedPopupCloseOrder",
+        r#"{"payload":"sent-before-close","openerPreserved":true,"alreadyClosing":true}"#,
+        "BroadcastChannel delivery before named popup close",
+    )
+    .await;
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__namedPopupCloseOrderPopup.opener === null)",
+        "true",
+        "named popup definite close",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn lightweight_popup_post_message_interleaves_opener_promise_waiters() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
@@ -25394,6 +27774,32 @@ async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_hi
         )
         .expect("popup 204 loaded result should evaluate"),
         format!("{}|1|loaded", after_navigation_parts[0])
+    );
+}
+
+#[test]
+fn window_open_initial_empty_history_push_is_a_replacement() {
+    let mut vm = new_storage_test_vm("https://initial-popup-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const popup = open();
+  popup.history.pushState({ step: 1 }, '', 'about:blank#pushed');
+  popup.history.replaceState({ step: 2 }, '', 'about:blank#replaced');
+  const result = [
+    popup.location.href,
+    popup.history.state.step,
+    popup.history.length,
+  ].join('|');
+  popup.close();
+  return result;
+})()
+"#,
+        )
+        .expect("initial empty popup history mutation should evaluate"),
+        "about:blank#replaced|2|1"
     );
 }
 

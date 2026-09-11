@@ -59,10 +59,39 @@ fn integer_prefix_parsers_follow_html_attribute_rules() {
     assert_eq!(parse_non_negative_integer_prefix("999999999999"), 0);
 
     assert_eq!(parse_positive_integer_prefix("  12px"), Some(12));
+    assert_eq!(parse_positive_integer_prefix("  +12px"), Some(12));
+    assert_eq!(parse_positive_integer_prefix("\u{a0}12px"), None);
     assert_eq!(parse_positive_integer_prefix("0"), None);
     assert_eq!(parse_positive_integer_prefix("-1"), None);
     assert_eq!(parse_positive_integer_prefix("abc"), None);
     assert_eq!(parse_positive_integer_prefix("999999999999"), None);
+
+    assert_eq!(parse_non_negative_length_attribute("  +12px"), Some(12));
+    assert_eq!(parse_non_negative_length_attribute("-0tail"), Some(0));
+    assert_eq!(parse_non_negative_length_attribute("-1"), None);
+    assert_eq!(parse_non_negative_length_attribute("abc"), None);
+    assert_eq!(parse_non_negative_length_attribute("2147483648"), None);
+}
+
+#[test]
+fn textarea_wrapping_transformation_respects_hard_state_and_character_width() {
+    let wrap = |value: &str, wrap, cols| {
+        apply_textarea_wrapping_transformation(value.to_owned(), wrap, cols)
+    };
+
+    assert_eq!(wrap("hello world", Some("soft"), Some("7")), "hello world");
+    assert_eq!(wrap("hello world", Some("ſoft"), Some("7")), "hello world");
+    assert_eq!(wrap("1234567", Some("hard"), Some("7")), "1234567");
+    assert_eq!(
+        wrap("hello world", Some("HaRd"), Some("7")),
+        "hello w\norld"
+    );
+    assert_eq!(wrap("ab\ncdef", Some("hard"), Some("3")), "ab\ncde\nf");
+    assert_eq!(wrap("é🙂x", Some("hard"), Some("2")), "é🙂\nx");
+    assert_eq!(
+        wrap("123456789012345678901", Some("hard"), None),
+        "12345678901234567890\n1"
+    );
 }
 
 #[test]
@@ -82,27 +111,28 @@ fn input_type_tokens_and_support_matrices_are_shared() {
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Text),
-        None
+        false
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Hidden),
-        None
+        false
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Submit),
-        None
+        false
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Image),
-        None
+        false
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
-        "button",
-        None,
-        Some("reset")
+        "button", None, false
+    ));
+    assert!(form_control_type_supports_intrinsic_validation(
+        "button", None, true
     ));
 }
 

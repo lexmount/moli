@@ -1,7 +1,13 @@
 use super::storage::{form_data_entries, form_data_is_object, push_form_data_entry};
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
-use crate::dom::{forms::InputType, native::Node};
+use crate::dom::{
+    forms::{
+        InputType, OptionDisabledAncestorStep, apply_textarea_wrapping_transformation,
+        option_disabled_ancestor_step,
+    },
+    native::Node,
+};
 use crate::native_bridge::{
     element::{
         element_attribute_for_object, element_internals_form_value_for_target,
@@ -313,27 +319,19 @@ fn append_file_form_data_entries<'s>(
     control: v8::Local<'s, v8::Object>,
     name: &str,
 ) {
-    let Some(files) = object_property_as_object(scope, control, "files") else {
+    let Some(files) = crate::native_bridge::element::input_files_for_object(scope, control)
+        .and_then(|files| file_api::file_list_files_from_object(scope, files))
+    else {
         push_empty_file_form_data_entry(scope, entries, name);
         return;
     };
-    let length = object_number_property(scope, files, "length")
-        .unwrap_or(0.0)
-        .max(0.0) as u32;
-    if length == 0 {
+    if files.is_empty() {
         push_empty_file_form_data_entry(scope, entries, name);
         return;
     }
-    for index in 0..length {
-        let Some(file) = files.get_index(scope, index) else {
-            continue;
-        };
-        if v8::Local::<v8::Object>::try_from(file)
-            .ok()
-            .is_some_and(|file| blob::blob_bytes_from_object(scope, file).is_some())
-        {
-            push_form_data_entry(entries, name, v8::Global::new(scope, file));
-        }
+    for file in files {
+        let file: v8::Local<'_, v8::Value> = file.into();
+        push_form_data_entry(entries, name, v8::Global::new(scope, file));
     }
 }
 
@@ -404,8 +402,15 @@ fn native_form_control_value(
     let (runtime_ptr, handle) = node_runtime_and_handle_from_object(scope, control).ok()?;
     let runtime = unsafe { &*runtime_ptr };
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if element.is_html_input() || element.is_html_textarea() {
+    if element.is_html_input() {
         return Some(text_control_value(runtime, handle));
+    }
+    if element.is_html_textarea() {
+        return Some(apply_textarea_wrapping_transformation(
+            text_control_value(runtime, handle),
+            element.attribute_ns("", "wrap"),
+            element.attribute_ns("", "cols"),
+        ));
     }
     if element.is_html_option() {
         return Some(element.option_value(runtime.dom_host().dom(), handle));
@@ -504,18 +509,21 @@ fn control_has_datalist_ancestor<'s>(
 }
 
 fn option_is_disabled(scope: &mut v8::PinScope<'_, '_>, option: v8::Local<'_, v8::Object>) -> bool {
-    let mut current = Some(option);
+    if object_bool_property(scope, option, "disabled").unwrap_or(false) {
+        return true;
+    }
+
+    let mut current = object_property_as_object(scope, option, "parentElement");
     while let Some(element) = current {
-        let tag = object_string_property_defined(scope, element, "tagName")
-            .map(|tag| tag.to_ascii_lowercase())
-            .unwrap_or_default();
-        if matches!(tag.as_str(), "option" | "optgroup")
-            && object_bool_property(scope, element, "disabled").unwrap_or(false)
-        {
-            return true;
-        }
-        if tag == "select" {
-            return false;
+        let namespace =
+            object_string_property_defined(scope, element, "namespaceURI").unwrap_or_default();
+        let local_name =
+            object_string_property_defined(scope, element, "localName").unwrap_or_default();
+        let has_disabled_attribute =
+            object_bool_property(scope, element, "disabled").unwrap_or(false);
+        match option_disabled_ancestor_step(&namespace, &local_name, has_disabled_attribute) {
+            OptionDisabledAncestorStep::Continue => {}
+            OptionDisabledAncestorStep::Disabled(disabled) => return disabled,
         }
         current = object_property_as_object(scope, element, "parentElement");
     }

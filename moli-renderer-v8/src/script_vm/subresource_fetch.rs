@@ -1121,6 +1121,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -1183,6 +1184,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -1237,6 +1239,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -1300,6 +1303,7 @@ impl ScriptVm {
                     policy_context,
                     continuation: PendingSubresourceContinuation::CspReport { client_id },
                     deferred_request_started,
+                    blob_url_entry,
                 };
                 if !self._context_host.borrow().network_offline() {
                     let maybe_pending = self.continue_csp_report_via_service_worker(
@@ -1346,6 +1350,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let request_url = url.unwrap_or_else(|| pending.info.url.clone());
@@ -1400,6 +1405,7 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
+        let request_origin = pending.request_origin();
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
@@ -1407,6 +1413,7 @@ impl ScriptVm {
             request_headers.clone(),
         )?
         .with_initiator_url(&pending.info.document_url)
+        .with_request_origin(request_origin)
         .with_request_mode(pending.request_mode)
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
@@ -1668,6 +1675,7 @@ impl ScriptVm {
             ));
         }
         let loader = pending_fetch.load.request_client();
+        let request_origin = pending_fetch.request_origin();
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
@@ -1675,6 +1683,7 @@ impl ScriptVm {
             original_request_headers.clone(),
         )?
         .with_initiator_url(&pending_fetch.info.document_url)
+        .with_request_origin(request_origin)
         .with_request_mode(pending_fetch.request_mode)
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
@@ -1930,6 +1939,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -2081,6 +2091,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
@@ -2121,6 +2132,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -2433,6 +2445,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
@@ -2448,6 +2461,7 @@ impl ScriptVm {
             None,
             Ok(
                 response_body.into_navigation_response(moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: info.url,
                     status: response_code,
                     headers: response_headers,
@@ -2865,6 +2879,7 @@ impl ScriptVm {
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
                 headers: response_headers.clone(),
@@ -2928,6 +2943,7 @@ impl ScriptVm {
         if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
                 headers: response_headers.clone(),
@@ -3000,6 +3016,7 @@ impl ScriptVm {
             None,
             Ok(
                 response_body.into_navigation_response(moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: pending.response.final_url,
                     status: response_code,
                     headers: response_headers,
@@ -3134,8 +3151,9 @@ impl ScriptVm {
                     return Err(message);
                 }
                 if !skip_fetch_security_validation {
-                    crate::network_host::validate_fetch_response_security_policy_with_body(
+                    crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                         &pending.info.document_url,
+                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3307,8 +3325,9 @@ impl ScriptVm {
                         .or_else(|| {
                             (!skip_fetch_security_validation)
                                 .then(|| {
-                                    crate::network_host::validate_fetch_response_security_policy_with_body(
+                                    crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                                         &pending.info.document_url,
+                                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                                         &response.final_url,
                                         &response.headers,
                                         response.body_bytes(),
@@ -3591,8 +3610,9 @@ impl ScriptVm {
                         | SubresourceResourceType::Video
                         | SubresourceResourceType::Xhr
                 ) {
-                    let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
+                    let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified_for_origin(
                         &pending.info.document_url,
+                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3622,6 +3642,7 @@ impl ScriptVm {
             match result {
                 Ok(response) => {
                     let response_status = response.status;
+                    let response_request_method = request_method.clone();
                     let request_cookie_report = response
                         .request_cookie_report
                         .clone()
@@ -3689,8 +3710,8 @@ impl ScriptVm {
                         SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
                     ) {
                         observable_response.headers =
-                            crate::network_host::filter_cors_exposed_response_headers(
-                                &pending.info.document_url,
+                            crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                                &pending.response_request_origin(observable_response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                                 &observable_response.final_url,
                                 &observable_response.headers,
                                 pending.credentials_mode,
@@ -3717,7 +3738,10 @@ impl ScriptVm {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.info.document_url,
-                                    pending.request_mode,
+                                    crate::network_host::FetchResponseRequest {
+                                        method: &response_request_method,
+                                        mode: pending.request_mode,
+                                    },
                                     head,
                                     body,
                                     response_filter,
@@ -3733,6 +3757,15 @@ impl ScriptVm {
                             resolver.resolve(scope, response_obj.into());
                         }
                         PendingSubresourceContinuation::Xhr(xhr) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+                                    pending.info.url.as_str(),
+                                    "xmlhttprequest",
+                                    None,
+                                    &observable_response,
+                                ),
+                            );
                             let xhr = v8::Local::new(scope, &xhr);
                             let (head, body) = observable_response.into_body();
                             crate::network_host::apply_xhr_response_body_source_with_status_text(
@@ -3989,13 +4022,20 @@ impl ScriptVm {
         let request_headers = state.request_headers.clone();
         let request_body = state.request_body.clone();
         let completion_tx = self._context_host.borrow().resource_completion_sender();
+        let local_response = crate::network_host::local_url_response_with_blob_entry(
+            &request.url,
+            &request.method,
+            state.pending.blob_url_entry.as_ref(),
+        );
         {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
         }
         task_runner.spawn(async move {
-            let result =
+            let result = if let Some(result) = local_response {
+                result.map(crate::protocol_types::NavigationResponse::from)
+            } else {
                 crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
                     request_client,
                     request,
@@ -4008,7 +4048,8 @@ impl ScriptVm {
                         .with_network_request_headers(
                             request_observation.map(|observation| observation.into_headers()),
                         )
-                });
+                })
+            };
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id,
                 request_url,
@@ -4378,8 +4419,15 @@ impl ScriptVm {
                     None
                 }
                 .or_else(|| {
-                    crate::network_host::validate_fetch_response_security_policy(
+                    crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
+                        &pending.response_request_origin(
+                            started
+                                .head
+                                .redirect_chain
+                                .iter()
+                                .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+                        ),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4579,8 +4627,9 @@ impl ScriptVm {
                         | SubresourceResourceType::Xhr
                 )
                 .then(|| {
-                    crate::network_host::validate_fetch_response_security_policy(
+                    crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
+                        &pending.response_request_origin(started.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4771,8 +4820,8 @@ impl ScriptVm {
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
             ) {
-                observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
-                    &pending.info.document_url,
+                observable_head.headers = crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                    &pending.response_request_origin(observable_head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                     &observable_head.final_url,
                     &observable_head.headers,
                     pending.credentials_mode,
@@ -4863,7 +4912,10 @@ impl ScriptVm {
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                         scope,
                         &pending.info.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &started.request_method,
+                            mode: pending.request_mode,
+                        },
                         observable_head,
                         started.body_source_id,
                     );
@@ -5246,6 +5298,20 @@ impl ScriptVm {
             .pending
             .execution_context
             .window_document_network_only_identity();
+        let needs_orb_body_validation = streaming.needs_orb_body_validation();
+        let response_body = streaming.body_writer.finish();
+        let result = result.and_then(|()| {
+            if needs_orb_body_validation {
+                crate::network_host::validated_opaque_response_body(
+                    &streaming.head.headers,
+                    &response_body,
+                )
+                .map(|_| ())
+                .map_err(crate::network_host::FetchResponseSecurityViolation::into_message)
+            } else {
+                Ok(())
+            }
+        });
         match result {
             Ok(()) => {
                 let request_cookie_report = streaming
@@ -5253,7 +5319,6 @@ impl ScriptVm {
                     .request_cookie_report
                     .clone()
                     .or_else(|| streaming.pending.info.request_cookie_report.clone());
-                let response_body = streaming.body_writer.finish();
                 let mut network_record = crate::types::SubresourceNetworkRecord::success_with_body(
                     streaming.pending.info.frame_id.clone(),
                     streaming.pending.info.document_url.clone(),
@@ -5290,7 +5355,7 @@ impl ScriptVm {
             Err(_) => {
                 let network_error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
                 if let Some(handle) = streaming.pending.info.network_request_handle {
-                    let partial_body = streaming.body_writer.finish();
+                    let partial_body = response_body;
                     self._context_host
                         .borrow_mut()
                         .record_subresource_response_started(
@@ -5520,6 +5585,7 @@ impl ScriptVm {
                 }
                 match result {
                     Ok(()) => {
+                        let needs_orb_body_validation = streaming.needs_orb_body_validation();
                         let request_cookie_report = streaming
                             .head
                             .request_cookie_report
@@ -5528,6 +5594,39 @@ impl ScriptVm {
                         let finish_body_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         let response_body = streaming.body_writer.finish();
+                        if needs_orb_body_validation
+                            && let Err(error_text) =
+                                crate::network_host::release_pending_opaque_response_body(
+                                    scope,
+                                    body_source_id,
+                                    &streaming.head.headers,
+                                    &response_body,
+                                )
+                        {
+                            let mut record = crate::types::SubresourceNetworkRecord::failure(
+                                streaming.pending.info.frame_id.clone(),
+                                streaming.pending.info.document_url.clone(),
+                                streaming.request_url,
+                                streaming.request_method,
+                                streaming.request_headers,
+                                streaming.request_body,
+                                streaming.pending.info.resource_type,
+                                error_text,
+                            )
+                            .with_request_body_bytes(streaming.pending.info.request_body_bytes.clone());
+                            if let Some(handle) = streaming.pending.info.network_request_handle {
+                                record = record.with_request_handle(handle);
+                            }
+                            context_host.borrow_mut().record_subresource_network(record);
+                            context_host.borrow_mut().record_pending_subresource_continue_event(
+                                PendingSubresourceContinueEvent::Completed { internal_id },
+                            );
+                            defer_subresource_owner_async_scope(
+                                &context_host, scope, pending_owner, owner_async_scope,
+                            );
+                            return Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered);
+                        }
+                        let response_body_size = response_body.len();
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
                             trace_fields,
@@ -5677,17 +5776,30 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
+                        let request_origin = streaming
+                            .pending
+                            .response_request_origin(streaming.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url)));
                         if let PendingSubresourceContinuation::Xhr(xhr) =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
                         {
                             let xhr_started =
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_streaming_network_response(
+                                    streaming.pending.info.url.as_str(),
+                                    "xmlhttprequest",
+                                    None,
+                                    &streaming.head,
+                                    response_body_size,
+                                ),
+                            );
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
                             observable_head.headers =
-                                crate::network_host::filter_cors_exposed_response_headers(
-                                    &streaming.pending.info.document_url,
+                                crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                                    &request_origin,
                                     &observable_head.final_url,
                                     &observable_head.headers,
                                     streaming.pending.credentials_mode,
@@ -5873,7 +5985,7 @@ impl ScriptVm {
             }
         };
         self.apply_pending_child_document_owner_retirements();
-        let (application, body_activity) = application;
+        let (application, mut body_activity) = application;
         let Some(application) = application else {
             return Ok(CurrentChildDocumentLoadApplication::Applied { body_activity });
         };
@@ -5881,9 +5993,13 @@ impl ScriptVm {
         if let Some(transition) = owner_transition {
             self.apply_child_document_owner_transition(transition);
         }
-        if let Some(action) = parser_stop_action {
-            super::child_document_lifecycle::ChildDocumentLifecycleOwner::new(self)
-                .notify_parser_stop_action(action);
+        if let Some(action) = parser_stop_action
+            && super::child_document_lifecycle::ChildDocumentLifecycleOwner::new(self)
+                .notify_parser_stop_action(action)?
+                == crate::frame_owner_model::FrameDocumentLifecycleTaskEffect::EventDispatched
+        {
+            body_activity =
+                crate::native_bridge::ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
         }
         if let Some(work) = work {
             super::child_document_script_scheduler::ChildDocumentScriptSchedulerOwner::new(self)

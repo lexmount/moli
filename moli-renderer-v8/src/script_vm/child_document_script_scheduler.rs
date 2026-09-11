@@ -8,7 +8,7 @@ use crate::{
         FrameDocumentModuleScriptGraphNotification, FrameDocumentModuleScriptTerminalFollowup,
     },
     module_runtime::ModuleEntryId,
-    types::ScriptErrorConstructorKind,
+    types::ScriptErrorValue,
 };
 
 pub(super) struct ChildDocumentScriptSchedulerOwner<'vm> {
@@ -231,7 +231,7 @@ impl<'vm> ChildDocumentScriptSchedulerOwner<'vm> {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> usize {
         let mut host = self.vm._context_host.borrow_mut();
         let queued_ready_action_count = host
@@ -239,7 +239,7 @@ impl<'vm> ChildDocumentScriptSchedulerOwner<'vm> {
             .mark_parser_module_evaluation_rejected(
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
                 |evaluation| evaluation,
             )
             .map(|update| update.queued_ready_action_count())

@@ -2603,19 +2603,23 @@ async fn worker_filelist_interface_object_is_available() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const file = new File(["hello"], "note.txt", { type: "text/plain" });
-        const list = new FileList([file]);
+        let constructError = null;
+        try {
+            new FileList();
+        } catch (error) {
+            constructError = error && error.name;
+        }
         postMessage({
             ctorOwn: Object.prototype.hasOwnProperty.call(self, "FileList"),
             ctorType: typeof FileList,
-            ctorName: list.constructor && list.constructor.name,
-            tag: Object.prototype.toString.call(list),
-            instanceofFileList: list instanceof FileList,
-            length: list.length,
-            firstName: list.item(0) && list.item(0).name,
-            indexName: list[0] && list[0].name,
-            iterType: typeof list[Symbol.iterator],
-            iterName: Array.from(list).map(file => file.name).join(","),
+            ctorName: FileList.name,
+            constructError,
+            itemType: typeof FileList.prototype.item,
+            lengthGetterType: typeof Object.getOwnPropertyDescriptor(
+                FileList.prototype,
+                "length",
+            ).get,
+            iterType: typeof FileList.prototype[Symbol.iterator],
         });
         close();
         "#
@@ -2629,7 +2633,7 @@ async fn worker_filelist_interface_object_is_available() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","tag":"[object FileList]","instanceofFileList":true,"length":1,"firstName":"note.txt","indexName":"note.txt","iterType":"function","iterName":"note.txt"}"#
+        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","constructError":"TypeError","itemType":"function","lengthGetterType":"function","iterType":"function"}"#
     );
 }
 
@@ -5106,7 +5110,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
         .expect("worker fetch manual-redirect server should finish");
     assert_eq!(
         post,
-        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
@@ -5186,7 +5190,7 @@ async fn worker_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
     assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
     assert_eq!(
         post,
-        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
@@ -5240,7 +5244,6 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                     hasOrbMessage: String(error && error.message).includes("OpaqueResponseBlocking"),
                 }});
             }}
-            close();
         }})();
         "#
         ),
@@ -5284,6 +5287,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
         SubresourceNetworkOutcome::Failure { error_text }
             if error_text == crate::network_host::ABORTED_ERROR_TEXT
     ));
+    handle.terminate_and_join();
 }
 
 #[tokio::test]
@@ -5928,6 +5932,8 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition
                 });
+                postMessage({ outcome, events });
+                close();
             });
             let outcome;
             try {
@@ -5936,8 +5942,7 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
             } catch (error) {
                 outcome = `throw:${error.name}`;
             }
-            postMessage({ outcome, events });
-            close();
+            postMessage({ outcome, events: events.length });
             "#
             .to_owned(),
             "http://localhost:8000/worker/main.js".to_owned(),
@@ -5945,6 +5950,10 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
         .with_content_security_policies(vec!["connect-src 'none'".to_owned()]),
     );
 
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"outcome":"socket:0:ws://common/blank.html","events":0}"#
+    );
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"outcome":"socket:0:ws://common/blank.html","events":[{"blockedURI":"ws://common/blank.html","effectiveDirective":"connect-src","disposition":"enforce"}]}"#
@@ -6172,7 +6181,7 @@ async fn worker_classic_websocket_offline_reports_network_failure() {
 }
 
 #[tokio::test]
-async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
+async fn worker_importscripts_websocket_resolves_against_worker_settings_url() {
     ensure_v8();
     let imported_script = r#"
         const events = [];
@@ -6195,7 +6204,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
     )])
     .await;
     let websocket_base_url = base_url.replacen("http://", "ws://", 1);
-    let expected_url = format!("{websocket_base_url}/worker/imported/blocked/imported-ws");
+    let expected_url = format!("{websocket_base_url}/worker/blocked/imported-ws");
     let loader =
         ResourceRequestClient::new(&FetchConfig::default()).expect("worker importScripts loader");
     let mut handle = spawn_worker_with_request_client_and_blocked_url_patterns(
@@ -6205,7 +6214,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
         .into(),
         format!("{base_url}/worker/main.js"),
         loader,
-        vec![format!("{websocket_base_url}/worker/imported/blocked/*")],
+        vec![format!("{websocket_base_url}/worker/blocked/*")],
     );
 
     let network = timeout(TIMEOUT, handle.recv())

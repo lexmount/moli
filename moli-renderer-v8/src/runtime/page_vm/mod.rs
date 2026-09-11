@@ -36,7 +36,7 @@ use crate::script_vm::{
     PostParseLifecycleAdvance, PostParsePageOwnedTask, RendererDocumentIsolateHandle,
 };
 use crate::script_vm::{PreparedScriptExecutionOutcome, RendererDocumentIsolateBootstrap};
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 use crate::types::ScriptSkipReason;
 use moli_page_types::{
     ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, InspectorIssueSnapshot,
@@ -105,6 +105,7 @@ mod page_image_load_event;
 mod page_indexed_db_task;
 mod page_internal_loading;
 mod page_internal_loading_task_completion;
+mod page_main_document_lifecycle;
 mod page_main_document_post_parse;
 mod page_main_document_runtime;
 mod page_main_native_module_task;
@@ -131,12 +132,15 @@ mod page_owned_document_script_completion;
 mod page_owned_document_script_hooks;
 mod page_parser_async_module_admission;
 mod page_parser_owned_module_continuation;
+mod page_popup_close;
 mod page_popup_load_event;
+mod page_promise_rejection;
 mod page_rendering_update;
 #[cfg(test)]
 mod page_rendering_update_body_test_support;
 mod page_resource_completion;
 mod page_resource_completion_task_completion;
+mod page_script_preparation_error;
 #[cfg(test)]
 mod page_selected_task_test_harness;
 mod page_service_worker_client_message;
@@ -169,6 +173,7 @@ pub(crate) use page_selected_task_test_harness::{
     ClaimedPageSelectedTaskForTest, PageSelectedTaskTestSelector,
 };
 pub(crate) use page_task_completion::{IntoPageTaskCompletion, PageTaskCompletion};
+mod page_bitmap_task;
 mod page_text_track_default_mode;
 mod page_text_track_default_mode_task_completion;
 mod page_text_track_load;
@@ -194,6 +199,7 @@ mod parser_owned_module_completion;
 mod parser_task_completion;
 mod selected_page_task;
 
+pub(crate) use page_bitmap_task::AuthorizedCurrentPageBitmapTask;
 pub(crate) use page_broadcast_channel_delivery::AuthorizedCurrentBroadcastChannelDelivery;
 pub(crate) use page_child_frame_task::{
     AuthorizedCurrentPageChildClassicScriptSourceLoad, AuthorizedCurrentPageChildDocumentLifecycle,
@@ -221,7 +227,9 @@ pub(crate) use page_module_reaction::AuthorizedCurrentPageModuleReaction;
 pub(crate) use page_modulepreload_start::AuthorizedCurrentChildModulepreloadStartTask;
 pub(crate) use page_navigation_api_task::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use page_opfs_task::AuthorizedCurrentPageOpfsTask;
+pub(crate) use page_popup_close::AuthorizedCurrentPagePopupClose;
 pub(crate) use page_popup_load_event::AuthorizedCurrentPagePopupLoadEvent;
+pub(crate) use page_promise_rejection::AuthorizedCurrentPagePromiseRejection;
 pub(crate) use page_rendering_update::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use page_resource_completion::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
@@ -233,6 +241,7 @@ pub(crate) use page_resource_completion::{
     AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
     CurrentChildDocumentLoadApplication,
 };
+pub(crate) use page_script_preparation_error::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use page_service_worker_client_message::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use page_service_worker_internal::AuthorizedCurrentPageServiceWorkerInternalTask;
 pub(crate) use page_shared_worker_client_event::AuthorizedCurrentPageSharedWorkerClientEvent;
@@ -422,14 +431,8 @@ fn wrap_native_esm_module_load_error(
     prefix: &str,
     error: crate::module_runtime::ModuleLoadError,
 ) -> crate::module_runtime::ModuleLoadError {
-    let wrapped = crate::module_runtime::ModuleLoadError::new(
-        error.stage(),
-        format!("{prefix}: {}", error.message()),
-    );
-    match error.error_constructor() {
-        Some(error_constructor) => wrapped.with_error_constructor(error_constructor),
-        None => wrapped,
-    }
+    let message = format!("{prefix}: {}", error.message());
+    error.with_message(message)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -482,7 +485,7 @@ enum PageOwnedScriptFailureClassification {
     Typed {
         dynamic_kind: crate::dynamic_script_owner::DynamicScriptFailureKind,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
 }
 
@@ -499,7 +502,7 @@ impl PageOwnedScriptFailureClassification {
                         script, stage,
                     ),
                 module_failure_policy: error.module_failure_policy(),
-                error_constructor: error.error_constructor(),
+                error_value: error.error_value(),
             },
         )
     }
@@ -515,7 +518,7 @@ impl PageOwnedScriptFailureClassification {
                 error.stage(),
             ),
             module_failure_policy: Some(module_failure_policy),
-            error_constructor: error.error_constructor(),
+            error_value: error.error_value(),
         }
     }
 }
@@ -593,14 +596,14 @@ fn complete_prepared_script_execution_failure(
             PageOwnedScriptFailureClassification::Typed {
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             } => vm.finish_runtime_owned_script_failure_with_kind(
                 dynamic_script_owner_id,
                 &script,
                 &error,
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             ),
             PageOwnedScriptFailureClassification::LegacyMessageText => {
                 vm.finish_runtime_owned_script_failure(dynamic_script_owner_id, &script, &error);
@@ -612,34 +615,34 @@ fn complete_prepared_script_execution_failure(
             Some(script.url.as_str()),
         );
     } else if vm.parser_owned_module_reports_failure_immediately(&script) {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.dispatch_parser_owned_module_failure_and_finish_settlement_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     } else {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.enqueue_script_failure_lifecycle_work_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     }
     complete_prepared_script_execution_failure_report(script, error)
@@ -655,13 +658,12 @@ fn complete_page_owned_prepared_script_execution_failure_body(
     prepared_script_activity: crate::script_vm::PreparedScriptBodyActivity,
 ) -> PageOwnedScriptExecutionOutcome {
     let terminal_activity = if completion_owner.is_runtime_owned() {
-        let (dynamic_kind, module_failure_policy, error_constructor) = match failure_classification
-        {
+        let (dynamic_kind, module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
-            } => (dynamic_kind, module_failure_policy, error_constructor),
+                error_value,
+            } => (dynamic_kind, module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (
                 crate::dynamic_script_owner::DynamicScriptOwner::legacy_message_failure_kind(
                     &script, &error,
@@ -676,40 +678,40 @@ fn complete_page_owned_prepared_script_execution_failure_body(
             &error,
             dynamic_kind,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
     } else if vm.parser_owned_inline_importmap_reports_window_error_immediately(&script) {
         vm.report_window_error_body_best_effort(&error, Some(script.url.as_str()), None);
         crate::script_vm::ScriptTerminalBodyActivity::EventDispatchAttempted
     } else if vm.parser_owned_module_reports_failure_immediately(&script) {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.dispatch_current_prepared_script_error_body_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
     } else {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.enqueue_script_failure_lifecycle_work_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         crate::script_vm::ScriptTerminalBodyActivity::NoEventDispatch
     };
@@ -798,13 +800,13 @@ async fn execute_prepared_script_on_script_execution_lane(
             let failure_classification =
                 PageOwnedScriptFailureClassification::from_prepared_script_error(&script, &error);
             if let Some(claim) = runtime_script_claim.take() {
-                let (module_failure_policy, error_constructor) = match failure_classification {
+                let (module_failure_policy, error_value) = match failure_classification {
                     PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
                     PageOwnedScriptFailureClassification::Typed {
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                         ..
-                    } => (module_failure_policy, error_constructor),
+                    } => (module_failure_policy, error_value),
                 };
                 let message = error.into_message();
                 let terminal_activity = vm.finish_claimed_runtime_owned_script_failure_body(
@@ -812,7 +814,7 @@ async fn execute_prepared_script_on_script_execution_lane(
                     &script,
                     &message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
                 return complete_prepared_script_execution_failure_report_with_activity(
                     script,
@@ -2122,8 +2124,36 @@ impl PageVm {
     ) -> bool {
         use crate::{
             frame_owner_model::ChildFrameSemanticTurnKind,
-            page_task_queue::RendererPageChildFrameTaskTarget,
+            page_task_queue::{
+                RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+                RendererPageReadyDescriptor,
+            },
         };
+
+        if expected == ChildFrameSemanticTurnKind::HostLoad {
+            return self
+                .page_task_executor_sources_for_test()
+                .has_scheduler_task_for_executor_test(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::DomManipulation {
+                            owner: RendererPageDomManipulationOwner::ChildHostLoad(_),
+                            ..
+                        }
+                    )
+                });
+        }
+
+        if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
+            return self.page_task_executor_sources_for_test().has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(descriptor,
+                    RendererPageReadyDescriptor::DomManipulation { owner: RendererPageDomManipulationOwner::ChildDocumentLifecycle(_), .. }
+                ) || matches!(descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                        if matches!(owner.target(), RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+                )
+            });
+        }
 
         let Some(target) = self
             .page_task_executor_sources_for_test()
@@ -2419,27 +2449,6 @@ impl PageVm {
         .await
     }
 
-    pub(super) async fn perform_script_task_checkpoint_on_named_owner_local_task(
-        &mut self,
-        script_url: Option<Url>,
-    ) -> Result<()> {
-        let local_executor = self.local_executor.clone();
-        let mut page_vm_ref = AwaitedOwnerLocalPageVm::new(self);
-        run_named_owner_local_task(
-            local_executor,
-            "phase-one script-task checkpoint local task channel closed",
-            async move {
-                let page_vm = page_vm_ref.get_mut();
-                page_vm
-                    .vm_mut()
-                    .perform_script_task_checkpoint(script_url.as_ref())?;
-                page_vm.absorb_parser_no_execution_runs();
-                Ok(())
-            },
-        )
-        .await
-    }
-
     pub(super) async fn construct_parser_custom_element_handoff_on_named_owner_local_task(
         &mut self,
         handoff: crate::parser::ParserCustomElementConstructionHandoff,
@@ -2565,7 +2574,7 @@ impl PageVm {
                 PageOwnedScriptFailureClassification::Typed {
                     dynamic_kind,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 },
             ) if dynamic_kind.is_deferrable_module() => {
                 self.vm_mut()
@@ -2575,7 +2584,7 @@ impl PageVm {
                         message.clone(),
                         dynamic_kind,
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                     );
                 (
                     complete_prepared_script_execution_failure_report(
@@ -2985,7 +2994,11 @@ impl PageVm {
         {
             return Some(ChildFrameSemanticTurnKind::NavigationCommit);
         }
-        if self
+        if matches!(
+            self.page_task_executor_sources_for_test()
+                .next_child_semantic_task_target(),
+            Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+        ) && self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildDocumentLifecycle,
                 &loader,
@@ -3194,11 +3207,61 @@ impl PageVm {
         match advance {
             PostParseLifecycleAdvance::PageOwnedTask(mut task) => {
                 let request_client = self.request_client.clone();
-                self.execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
-                    &request_client,
-                    task.take_work_for_execution(),
-                )
-                .await?;
+                let work = task.take_work_for_execution();
+                if let PostParsePageOwnedWork::Lifecycle(lifecycle) = &work
+                    && matches!(
+                        **lifecycle,
+                        PostParseLifecycleWork::DispatchDomContentLoaded { .. }
+                            | PostParseLifecycleWork::DispatchWindowLoad { .. }
+                    )
+                {
+                    let body = crate::script_vm::MainDocumentLifecycleBody::from_post_parse_work(
+                        lifecycle,
+                    )
+                    .unwrap();
+                    let (sender, mut receiver) = tokio::sync::oneshot::channel();
+                    self.vm()
+                        .queue_main_document_lifecycle_dom_task(body, Some(sender))?;
+                    if matches!(
+                        body,
+                        crate::script_vm::MainDocumentLifecycleBody::DomContentLoaded { .. }
+                    ) {
+                        self.run_ready_classic_defer_timers_before_domcontentloaded(
+                            &request_client,
+                        )
+                        .await?;
+                    }
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::Executed) => break,
+                            Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::LoadBlocked { owner }) => {
+                                self.page_task_queue.enqueue_front_post_parse_work_preserving_order(vec![PostParsePageOwnedWork::main_document_window_load(owner)]);
+                                return Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)));
+                            }
+                            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                                anyhow::bail!(
+                                    "lifecycle DOM task disappeared before its fixture completion"
+                                );
+                            }
+                            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                                anyhow::ensure!(
+                                    self.run_exact_selected_page_task_for_test(
+                                        PageSelectedTaskTestSelector::AnyDomManipulation,
+                                        &request_client,
+                                    )
+                                    .await?,
+                                    "queued lifecycle task must remain runnable"
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    self.execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
+                        &request_client,
+                        work,
+                    )
+                    .await?;
+                }
                 if self.vm().has_pending_location_navigation() {
                     return Ok(PostParseLifecycleLoopAdvance::Complete(
                         PostParseLifecycleCompletionAction::TriggeredNavigation,

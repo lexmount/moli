@@ -11,9 +11,10 @@ pub(super) fn record_intercepted_fetch(
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) {
-    let request_cookie_report = observe_subresource_request_cookie_report(
+    let request_cookie_report = observe_subresource_request_cookie_report_for_origin(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
+        &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
         prepared.credentials_mode,
@@ -24,10 +25,12 @@ pub(super) fn record_intercepted_fetch(
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,
+        prepared.request_origin,
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.network_partition_key,
         prepared.policy_context,
+        prepared.blob_url_entry,
         PendingSubresourceFetchInfo {
             internal_id: 0,
             network_request_handle: None,
@@ -142,11 +145,19 @@ pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
 ) -> Result<Option<(url::Url, Response)>, String> {
-    let Some(response) = local_url_response(&prepared.resolved_url) else {
-        if prepared.resolved_url.scheme() != "blob" {
-            return Ok(None);
-        }
-        let message = FILE_NOT_FOUND_ERROR_TEXT.to_owned();
+    let Some(result) = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    ) else {
+        return Ok(None);
+    };
+    let response = result.map_err(|message| {
+        let message = if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
+            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+        } else {
+            message
+        };
         host.record_subresource_network(SubresourceNetworkRecord::failure(
             prepared.frame_id.clone(),
             prepared.document_url.clone(),
@@ -157,8 +168,8 @@ pub(super) fn resolve_local_fetch(
             SubresourceResourceType::Fetch,
             message.clone(),
         ));
-        return Err(message);
-    };
+        message
+    })?;
     let document_url = prepared.document_url.clone();
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
@@ -203,6 +214,7 @@ pub(super) fn spawn_network_fetch(
     )
     .map_err(|error| error.to_string())?
     .with_initiator_url(&prepared.document_url)
+    .with_request_origin(prepared.request_origin.clone())
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
@@ -219,9 +231,10 @@ pub(super) fn spawn_network_fetch(
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
         .with_subframe_context(prepared.frame_id.is_some());
 
-    let request_cookie_report = observe_subresource_request_cookie_report(
+    let request_cookie_report = observe_subresource_request_cookie_report_for_origin(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
+        &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
         prepared.credentials_mode,
@@ -234,8 +247,8 @@ pub(super) fn spawn_network_fetch(
     };
     let cancel_handle = FetchCancelHandle::new();
     let requires_preflight = prepared.request_mode != moli_fetch::RequestMode::NoCors
-        && crate::network_host::cors_preflight_request_headers(
-            &prepared.document_url,
+        && crate::network_host::cors_preflight_request_headers_for_origin(
+            &prepared.request_origin,
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
@@ -247,6 +260,7 @@ pub(super) fn spawn_network_fetch(
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,
+        prepared.request_origin.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,

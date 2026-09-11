@@ -290,17 +290,18 @@ pub(crate) fn initialize_event_object<'s>(
     bubbles: bool,
     cancelable: bool,
 ) {
-    initialize_event_declaration(scope, event, event_type, bubbles, cancelable);
+    let event_type = v8_string(scope, event_type).expect("event type value");
+    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
 }
 
-fn initialize_event_declaration<'s>(
+pub(crate) fn initialize_event_object_with_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    event_type: &str,
+    event_type: v8::Local<'s, v8::String>,
     bubbles: bool,
     cancelable: bool,
 ) {
-    initialized_event_header_declaration(scope, event_type)
+    InitializedEventHeaderDeclaration::new(event_type)
         .initialize(scope, event)
         .expect("initialized event header declaration should initialize");
     initialize_event_after_header(scope, event, bubbles, cancelable);
@@ -409,14 +410,6 @@ define_event_core_attribute_getter!(event_cancelable_getter_function, "cancelabl
 define_event_core_attribute_getter!(event_default_prevented_getter_function, "defaultPrevented");
 define_event_core_attribute_getter!(event_composed_getter_function, "composed");
 define_event_core_attribute_getter!(event_src_element_getter_function, "srcElement");
-
-fn initialized_event_header_declaration<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-) -> InitializedEventHeaderDeclaration<'s> {
-    let type_value = v8_string(scope, event_type).expect("event type value");
-    InitializedEventHeaderDeclaration::new(type_value)
-}
 
 fn initialized_event_tail_declaration(
     scope: &mut v8::PinScope<'_, '_>,

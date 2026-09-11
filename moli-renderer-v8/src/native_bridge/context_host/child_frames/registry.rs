@@ -17,16 +17,11 @@ impl JsContextHost {
     ) -> Option<crate::frame_owner_model::FrameDocumentOwnerTransition> {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.clear_current_document_loader_id();
+            entry.clear_document_internal_ancestor_origins();
         }
-        let retired_owner = self
-            .frame_owner_store
-            .current_child_document_task_owner(handle);
-        self.remove_child_browsing_context_current_document_storage(handle);
         let transition = self.frame_owner_store.detach_current_child_document(handle);
-        debug_assert_eq!(
-            transition.and_then(|item| item.retired_owner()),
-            retired_owner
-        );
+        let retired_owner = transition.and_then(|item| item.retired_owner());
+        self.remove_child_browsing_context_current_document_storage(handle, retired_owner);
         transition
     }
 
@@ -69,14 +64,12 @@ impl JsContextHost {
     fn remove_child_browsing_context_current_document_storage(
         &mut self,
         handle: DomHandle,
+        retired_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     ) -> Option<DomHandle> {
         let document_handle = self
             .child_browsing_context_document_handles
             .remove(&handle)?;
-        if let Some(owner) = self
-            .frame_owner_store
-            .current_child_document_task_owner(handle)
-        {
+        if let Some(owner) = retired_owner {
             self.retire_child_document_external_state(handle, owner, document_handle);
             return Some(document_handle);
         }
@@ -100,6 +93,7 @@ impl JsContextHost {
     ) -> Option<FrameDocumentClassicScriptSchedulerWork> {
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
+                self.object_fallback_bootstraps.remove(&handle);
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
                 let is_new = existing.is_none();
                 let attribute_bootstrap_changed = existing
@@ -208,6 +202,19 @@ impl JsContextHost {
                 let sandbox_policy_from_owner = super::document_sandbox_policy_from_attribute(
                     self.dom_host().get_attribute(handle, "sandbox").as_deref(),
                 );
+                let ancestor_origins_referrer_policy_snapshot =
+                    if is_new || attribute_bootstrap_changed {
+                        self.child_ancestor_origins_referrer_policy_from_owner_attribute(handle)
+                    } else {
+                        existing
+                            .as_ref()
+                            .map(|entry| entry.ancestor_origins_referrer_policy_snapshot())
+                            .unwrap_or_default()
+                    };
+                let document_internal_ancestor_origins = existing
+                    .as_ref()
+                    .map(|entry| entry.document_internal_ancestor_origins())
+                    .unwrap_or_default();
                 let document_credentialless = if is_new {
                     self.child_browsing_context_document_credentialless_for_owner(
                         handle,
@@ -289,14 +296,32 @@ impl JsContextHost {
                 } else {
                     existing_document_policy.as_ref()
                 };
+                // The internal initial empty Document starts with the creator
+                // URL. A later explicit about:blank navigation must run that
+                // URL through Referrer Policy even though it sends no request.
+                let document_referrer = if !is_new
+                    && attribute_bootstrap_changed
+                    && let ChildBrowsingContextBootstrap::Url(target) = &attribute_bootstrap
+                    && target.as_str() == "about:blank"
+                {
+                    let creator_policy =
+                        self.initial_child_about_blank_policy_container_from_parent(handle);
+                    moli_fetch::referrer_value(
+                        &creator_document_url,
+                        target,
+                        None,
+                        creator_policy.referrer_policy.as_deref(),
+                    )
+                    .unwrap_or_default()
+                } else if attribute_bootstrap_changed || is_new {
+                    creator_document_url.to_string()
+                } else {
+                    refresh_policy_source
+                        .map(|policy| policy.document_referrer.clone())
+                        .unwrap_or_else(|| creator_document_url.to_string())
+                };
                 let document_policy_container = ChildDocumentPolicyContainer {
-                    document_referrer: if attribute_bootstrap_changed || is_new {
-                        creator_document_url.to_string()
-                    } else {
-                        refresh_policy_source
-                            .map(|policy| policy.document_referrer.clone())
-                            .unwrap_or_else(|| creator_document_url.to_string())
-                    },
+                    document_referrer,
                     referrer_policy: refresh_policy_source
                         .and_then(|policy| policy.referrer_policy.clone()),
                     cross_origin_embedder_policy: refresh_policy_source
@@ -355,8 +380,13 @@ impl JsContextHost {
                 };
                 let initial_empty_document_init: Option<ChildInitialEmptyDocumentInit> = is_new
                     .then(|| {
+                        let document_url =
+                            Self::child_browsing_context_bootstrap_url(&live_bootstrap)
+                                .filter(moli_url::is_about_blank)
+                                .expect("an initial live child bootstrap must match about:blank");
                         self.capture_child_initial_empty_document_init(
                             handle,
+                            document_url,
                             document_policy_container.clone(),
                         )
                     });
@@ -374,6 +404,13 @@ impl JsContextHost {
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
                             entry.pending_live_navigation_for_refresh(attribute_bootstrap_changed)
                         }),
+                        pending_live_navigation_initiator_url: existing.as_ref().and_then(
+                            |entry| {
+                                entry.pending_live_navigation_initiator_url_for_refresh(
+                                    attribute_bootstrap_changed,
+                                )
+                            },
+                        ),
                         pending_live_navigation_reflects_window_state: existing
                             .as_ref()
                             .is_some_and(|entry| {
@@ -386,6 +423,8 @@ impl JsContextHost {
                         committed_navigation_entry_seed,
                         cached_snapshot,
                         document_policy_container,
+                        document_internal_ancestor_origins,
+                        ancestor_origins_referrer_policy_snapshot,
                         completed_document_network: existing.as_ref().and_then(|entry| {
                             entry
                                 .completed_document_network_for_refresh(attribute_bootstrap_changed)
@@ -595,16 +634,6 @@ impl JsContextHost {
         had_handles
     }
 
-    pub(crate) fn sync_child_browsing_context_subtree_and_initial_history_floor(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        root: DomHandle,
-    ) {
-        if self.sync_child_browsing_context_subtree(scope, root) {
-            self.sync_initial_child_browsing_context_history_floor(scope);
-        }
-    }
-
     pub(crate) fn drop_child_browsing_context_subtree(&mut self, root: DomHandle) {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_host_handles(root, &mut handles);
@@ -621,12 +650,37 @@ impl JsContextHost {
         self.drop_child_browsing_context_handles(handles, Some(scope));
     }
 
+    pub(in crate::native_bridge::context_host) fn enter_object_fallback_state(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) {
+        let Some(attribute_bootstrap) = self
+            .child_browsing_contexts
+            .get(&handle)
+            .map(|entry| entry.attribute_bootstrap().clone())
+        else {
+            return;
+        };
+        self.drop_child_browsing_context_subtree_with_window_realm(scope, handle);
+        if self.child_browsing_context_host_is_object_element(handle)
+            && self
+                .child_browsing_context_bootstrap_for_handle(handle)
+                .as_ref()
+                == Some(&attribute_bootstrap)
+        {
+            self.object_fallback_bootstraps
+                .insert(handle, attribute_bootstrap);
+        }
+    }
+
     fn drop_child_browsing_context_handles(
         &mut self,
         handles: Vec<DomHandle>,
         mut scope: Option<&mut v8::PinScope<'_, '_>>,
     ) {
         for handle in handles {
+            self.object_fallback_bootstraps.remove(&handle);
             let document_handle_before_drop = self.child_browsing_context_document_handle(handle);
             let frame_id = self
                 .child_browsing_contexts
@@ -790,6 +844,8 @@ impl JsContextHost {
             };
             self.queue_child_frame_detachment_event(entry.frame_id().to_owned());
         }
+        self.object_fallback_bootstraps
+            .retain(|handle, _| live_handles.contains(handle));
         self.retain_live_child_window_proxy_records(&live_handles);
         self.child_browsing_context_document_handles
             .retain(|handle, _| live_handles.contains(handle));
@@ -808,7 +864,7 @@ impl JsContextHost {
             .collect()
     }
 
-    pub(crate) fn refresh_child_browsing_context_and_initial_history_floor(
+    pub(crate) fn refresh_child_browsing_context_and_queue_ready_work(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
@@ -816,7 +872,6 @@ impl JsContextHost {
         if let Some(work) = self.refresh_child_browsing_context(scope, handle) {
             self.push_child_document_script_ready_input(work);
         }
-        self.sync_initial_child_browsing_context_history_floor(scope);
     }
 }
 
@@ -824,6 +879,10 @@ fn child_browsing_context_bootstrap_is_initial_about_blank(
     bootstrap: &ChildBrowsingContextBootstrap,
 ) -> bool {
     matches!(bootstrap, ChildBrowsingContextBootstrap::AboutBlank)
+        || matches!(
+            bootstrap,
+            ChildBrowsingContextBootstrap::Url(url) if moli_url::is_about_blank(url)
+        )
 }
 
 fn child_browsing_context_bootstrap_uses_initial_empty_load(

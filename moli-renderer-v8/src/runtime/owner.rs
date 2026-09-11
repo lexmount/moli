@@ -1073,6 +1073,7 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
         Some(RendererOwnerWakeSource::ServiceWorkerClientMessage) => {
             "service-worker-client-message-wake"
         }
+        Some(RendererOwnerWakeSource::BitmapTask) => "bitmap-task-wake",
         Some(RendererOwnerWakeSource::WebCryptoTask) => "webcrypto-task-wake",
         Some(RendererOwnerWakeSource::IndexedDbTask) => "indexed-db-task-wake",
         Some(RendererOwnerWakeSource::OpfsTask) => "opfs-task-wake",

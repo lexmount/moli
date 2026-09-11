@@ -128,7 +128,7 @@ impl ScriptVm {
                 let settlement = match self.report_window_error_body(
                     &task.message,
                     task.filename.as_deref(),
-                    task.error_constructor,
+                    task.error_value,
                 ) {
                     Ok(()) => MainDocumentPostParseCallbackSettlement::Completed,
                     Err(error) => {

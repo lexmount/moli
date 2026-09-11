@@ -352,6 +352,10 @@ pub(super) fn cancel_active_cross_document_navigation<'s>(
         v8::Boolean::new(scope, false).into(),
     );
     clear_active_cross_document_navigation(scope, navigation);
+    let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+    super::navigation_cancellation::clear_pending_cross_document_navigation_for_window(
+        scope, owner,
+    );
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
@@ -360,7 +364,6 @@ pub(super) fn cancel_active_cross_document_navigation<'s>(
         {
             host.abort_signal(scope, signal, error);
         }
-        host.clear_pending_location_navigation();
     }
     finish_navigation_error_events(scope, navigation, error, &href);
     let receiver = v8::undefined(scope).into();

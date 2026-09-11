@@ -1,6 +1,152 @@
 use super::*;
 
 #[test]
+fn child_list_under_dir_auto_invalidates_directionality_subtree() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let auto = host.create_element("div");
+    let descendant = host.create_element("span");
+    let unrelated = host.create_element("aside");
+
+    assert!(host.set_attribute(auto, "dir", "auto"));
+    assert!(host.append_child(document, auto));
+    assert!(host.append_child(auto, descendant));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    for handle in [auto, descendant, unrelated] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                handle,
+                "direction",
+                None,
+                &inputs,
+                None,
+            ),
+            Some("ltr".into())
+        );
+    }
+
+    let text = host.create_text_node("\u{0627}\u{062e}\u{062a}\u{0628}\u{0631}");
+    assert!(host.append_child(descendant, text));
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::ChildList {
+            parent: descendant,
+            added_nodes: vec![text],
+            removed_nodes: Vec::new(),
+            removed_element_snapshots: Vec::new(),
+            previous_sibling: None,
+            next_sibling: None,
+        }],
+        &media,
+    );
+
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, auto));
+    assert!(
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
+        "lazy subtree invalidation keeps descendants published until observation"
+    );
+    assert!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0,
+        "directionality invalidation must retain a lazy subtree root"
+    );
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            auto,
+            "direction",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rtl".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            descendant,
+            "direction",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rtl".into())
+    );
+}
+
+#[test]
+fn character_data_under_dir_auto_invalidates_dir_pseudo_sibling_dependency() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let auto = host.create_element("div");
+    let text = host.create_text_node("A");
+    let target = host.create_element("div");
+
+    assert!(host.set_attribute(auto, "id", "source"));
+    assert!(host.set_attribute(auto, "dir", "auto"));
+    assert!(host.set_attribute(target, "id", "target"));
+    assert!(host.append_child(document, auto));
+    assert!(host.append_child(auto, text));
+    assert!(host.append_child(document, target));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        "#source:dir(rtl) + #target { display: none; }".into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "display",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("block".into())
+    );
+
+    host.node_mut(text)
+        .and_then(|node| node.data_mut().as_text_mut())
+        .expect("text node")
+        .set_data("\u{0627}\u{062e}\u{062a}\u{0628}\u{0631}");
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::CharacterData { node: text }],
+        &media,
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "display",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("none".into())
+    );
+}
+
+#[test]
 fn character_data_without_structural_selector_preserves_cache_entries() {
     let mut host = test_host();
     let document = host.document_handle();

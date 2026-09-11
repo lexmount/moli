@@ -5,9 +5,20 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use crate::types::NetworkBodySourceId;
-use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
 use moli_webapi_declare::WebApiObject;
+
+#[derive(Clone, Copy)]
+pub(crate) struct FetchResponseRequest<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) mode: RequestMode,
+}
+
+impl FetchResponseRequest<'_> {
+    fn has_null_body(self, status: u16) -> bool {
+        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+    }
+}
 
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
@@ -71,15 +82,14 @@ fn response_filter(
 ) -> FetchResponseFilter {
     if is_redirect_status(head.status) {
         FetchResponseFilter::OpaqueRedirect
-    } else if request_mode == RequestMode::NoCors && no_cors_response_is_opaque(document_url, head)
-    {
+    } else if request_mode == RequestMode::NoCors && response_crosses_origin(document_url, head) {
         FetchResponseFilter::Opaque
     } else {
         FetchResponseFilter::None
     }
 }
 
-fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::ResponseHead) -> bool {
+fn response_crosses_origin(document_url: &url::Url, head: &moli_fetch::ResponseHead) -> bool {
     !moli_url::same_origin(document_url, &head.final_url)
         || head.redirect_chain.iter().any(|redirect| {
             !moli_url::same_origin(document_url, &redirect.from_url)
@@ -89,26 +99,15 @@ fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::Respon
 
 fn compute_fetch_response_type(
     document_url: &url::Url,
-    response_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &'static str {
-    // The fixtures that drove this helper were checking `Response.type`, not just status/body.
-    // Returning `"basic"` unconditionally looked harmless at first because our fetch stack does
-    // not yet model the full Fetch standard response filtering pipeline (`opaque`,
-    // `opaqueredirect`, etc.). In practice that shortcut breaks a useful compatibility signal:
-    // browser-facing code distinguishes same-origin subresource fetches from cross-origin ones
-    // through `Response.type`.
-    //
-    // We intentionally keep the rule narrow and deterministic here:
-    // - same origin => `basic`
-    // - different origin => `cors`
-    //
-    // This is not a complete Fetch implementation, but it preserves the observable behavior that
-    // our current runtime can support without pretending every response is same-origin.
+    // Crossing an origin taints the response even if a later redirect returns
+    // to the client's origin. The final URL alone cannot restore a basic response.
     match filter {
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if moli_url::same_origin(document_url, response_url) => "basic",
+        FetchResponseFilter::None if !response_crosses_origin(document_url, head) => "basic",
         FetchResponseFilter::None => "cors",
     }
 }
@@ -143,9 +142,9 @@ fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
 fn filtered_response_status_text(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
-) -> &'static str {
+) -> &str {
     if filter == FetchResponseFilter::None {
-        http_status_text(head.status)
+        head.status_text()
     } else {
         ""
     }
@@ -162,14 +161,14 @@ fn legacy_fetch_response_type(document_url: &url::Url, response_url: &url::Url) 
 pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     response: Response,
 ) -> v8::Local<'s, v8::Object> {
     let (head, body) = response.into_body();
     build_fetch_response_object_from_body_source_for_request_mode(
         scope,
         document_url,
-        request_mode,
+        request,
         head,
         body,
     )
@@ -178,14 +177,14 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_body_source_for_request_mode_with_filter(
         scope,
         document_url,
-        request_mode,
+        request,
         head,
         body,
         None,
@@ -195,16 +194,18 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
 pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(document_url, &head, request_mode));
+        .unwrap_or_else(|| response_filter(document_url, &head, request.mode));
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
     } else {
         set_filtered_response_internal_body_from_response_body(scope, obj, body);
@@ -216,13 +217,15 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
 pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request_mode);
+    let filter = response_filter(document_url, &head, request.mode);
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
-    let body_stream = if filtered_response_exposes_body(filter) {
+    let body_stream = if request.has_null_body(head.status) {
+        None
+    } else if filtered_response_exposes_body(filter) {
         Some(network_body_stream_from_subresource_body(scope, obj, body))
     } else {
         set_filtered_response_internal_body_from_subresource_body(scope, obj, body);
@@ -234,14 +237,14 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         document_url,
-        request_mode,
+        request,
         head,
         body_source_id,
         None,
@@ -251,14 +254,14 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
 pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         request_url,
-        request_mode,
+        request,
         head,
         body_source_id,
         Some(request_url.as_str()),
@@ -268,17 +271,23 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
 fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request_mode);
+    let filter = response_filter(document_url, &head, request.mode);
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
     let obj =
         build_fetch_response_object_head(scope, document_url, &head, filter, filtered_surface_url);
+    if request.has_null_body(head.status) {
+        // Fetch nulls the internal body, including for filtered responses. Do
+        // not register a body source: subsequent transport chunks and terminal
+        // events then have no stream to enqueue into or retain bytes for.
+        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
+    }
     if !filtered_response_exposes_body(filter) {
         set_filtered_response_internal_body_from_pending_stream(scope, obj, body_source_id);
         return finish_fetch_response_object_with_body_stream(scope, obj, &head, None);
@@ -295,10 +304,7 @@ fn build_fetch_response_object_head<'s>(
     filtered_surface_url: Option<&str>,
 ) -> v8::Local<'s, v8::Object> {
     let status = filtered_response_status(head, filter);
-    // `Response.type` must be derived from the final resolved URL, not the request URL string or
-    // the redirect start point. A redirect chain can cross origins, and the JS surface is meant
-    // to describe the response object the page actually observes after redirects settle.
-    let response_type = compute_fetch_response_type(document_url, &head.final_url, filter);
+    let response_type = compute_fetch_response_type(document_url, head, filter);
     let obj = FetchResponseHeadDeclaration::new(
         status as f64,
         (200..300).contains(&status),
@@ -324,7 +330,7 @@ fn build_fetch_response_object_head<'s>(
             scope,
             obj,
             RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-            http_status_text(head.status),
+            head.status_text(),
         );
         let internal_headers = filter_headers_for_guard(&head.headers, HeadersGuard::Response);
         let internal_headers_obj =
@@ -472,6 +478,9 @@ pub(crate) fn materialize_response_object<'s>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(stream) = body_stream_object(scope, response) {
+        crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream);
+    }
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     Ok(head.with_body(body))
 }
@@ -491,14 +500,14 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
+    if body_is_used(scope, response) {
+        return Err(format!(
+            "{context} rejected a Response whose body is already used."
+        ));
+    }
     if response_body_locked(scope, response) {
         return Err(format!(
             "{context} rejected a Response whose body is locked."
-        ));
-    }
-    if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
-        return Err(format!(
-            "{context} rejected a Response whose body is already used."
         ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)
@@ -665,19 +674,6 @@ fn response_body_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(body) = response_slot_value(scope, response, RESPONSE_BODY_SLOT) else {
-        return false;
-    };
-    if body.is_null_or_undefined() {
-        return false;
-    }
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
-        return false;
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return false;
-    }
-    stream
-        .get(scope, crate::util::v8str(scope, "locked").into())
-        .is_some_and(move |value| value.boolean_value(scope))
+    body_stream_object(scope, response)
+        .is_some_and(|stream| crate::context_bootstrap::readable_stream_locked(scope, stream))
 }

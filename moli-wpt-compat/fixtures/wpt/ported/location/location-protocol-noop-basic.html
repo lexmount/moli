@@ -9,24 +9,20 @@ test(function () {
   const initialProtocol = location.protocol;
   const initialLength = history.length;
 
-  location.protocol = initialProtocol;
-  assert_equals(location.href, initialHref, "assigning the current protocol should be a no-op");
-  assert_equals(location.protocol, initialProtocol, "current protocol assignment should preserve protocol");
-  assert_equals(history.length, initialLength, "current protocol assignment should not grow history");
+  for (const invalid of ["", "1invalid:", "!bad", "http bad"]) {
+    assert_throws_dom(
+      "SyntaxError",
+      () => { location.protocol = invalid; },
+      `invalid scheme ${JSON.stringify(invalid)} should throw`
+    );
+  }
 
-  location.protocol = initialProtocol.toUpperCase();
-  assert_equals(location.href, initialHref, "scheme setter should treat protocol case-insensitively");
-  assert_equals(location.protocol, initialProtocol, "case-insensitive protocol assignment should preserve protocol");
-  assert_equals(history.length, initialLength, "case-insensitive no-op should not grow history");
+  for (const ignored of ["data", "file", "ftp", "custom"]) {
+    location.protocol = ignored;
+    assert_equals(location.href, initialHref, `${ignored} must not navigate an HTTP document`);
+    assert_equals(location.protocol, initialProtocol, `${ignored} must preserve the HTTP protocol`);
+  }
 
-  location.protocol = initialProtocol.slice(0, -1);
-  assert_equals(location.href, initialHref, "protocol assignment without a trailing colon should normalize as the same scheme");
-  assert_equals(location.protocol, initialProtocol, "colonless current protocol assignment should preserve protocol");
-  assert_equals(history.length, initialLength, "colonless no-op should not grow history");
-
-  location.protocol = "1invalid:";
-  assert_equals(location.href, initialHref, "invalid protocol assignment should leave the URL unchanged");
-  assert_equals(location.protocol, initialProtocol, "invalid protocol assignment should preserve protocol");
-  assert_equals(history.length, initialLength, "invalid protocol assignment should not grow history");
-}, "location.protocol no-op and invalid assignments do not navigate");
+  assert_equals(history.length, initialLength, "rejected and ignored assignments should not grow history");
+}, "location.protocol rejects invalid schemes and ignores non-HTTP(S) results");
 </script>

@@ -4,12 +4,15 @@ use super::element_state::{
     set_dom_custom_element_state,
 };
 use super::html_constructor_prototype::{
-    receiver_prototype_chain_contains_constructor_prototype,
-    receiver_uses_new_target_realm_object_fallback, set_wrapper_html_constructor_prototype,
+    receiver_prototype_chain_contains_constructor_prototype, set_wrapper_html_constructor_prototype,
 };
 use crate::dom::{native::CustomElementState, native::html_element_interface_name};
 
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8_string};
+use super::super::{
+    document_runtime::DomHandle,
+    native_bridge::JsContextHost,
+    util::{receiver_uses_new_target_realm_object_fallback, v8_string},
+};
 
 pub(crate) fn create_element_from_registered_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -30,7 +33,7 @@ pub(crate) fn create_element_from_registered_constructor<'s>(
         return None;
     }
     let receiver_uses_object_fallback =
-        receiver_uses_new_target_realm_object_fallback(scope, receiver, constructor);
+        receiver_uses_new_target_realm_object_fallback(scope, receiver, constructor.into());
     let receiver_inherits_active_interface =
         receiver_prototype_chain_contains_constructor_prototype(
             scope,

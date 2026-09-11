@@ -2,6 +2,7 @@ use cssparser::{
     BasicParseErrorKind, ParseError, Parser, ParserInput, Token, parse_nth, serialize_identifier,
     serialize_string,
 };
+use std::ops::Range;
 
 use moli_css_parse::serialize_component_values_single_line;
 
@@ -145,6 +146,191 @@ pub(crate) fn serialize_cssom_selector_text(
         has_default_namespace,
         prefixes_matching_default_namespace,
     ))
+}
+
+pub(crate) fn serialize_cssom_selector_text_preserving_invalid_forgiving_items(
+    selector_text: &str,
+    has_default_namespace: bool,
+    prefixes_matching_default_namespace: &[String],
+    is_strictly_valid: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let (protected_selector, preserved_items) =
+        protect_invalid_forgiving_selector_items(selector_text, is_strictly_valid)?;
+    let mut serialized = serialize_cssom_selector_text(
+        &protected_selector,
+        has_default_namespace,
+        prefixes_matching_default_namespace,
+    )?;
+    for (marker, item) in preserved_items {
+        if serialized.matches(&marker).count() != 1 {
+            return None;
+        }
+        serialized = serialized.replacen(&marker, &item, 1);
+    }
+    Some(serialized)
+}
+
+fn protect_invalid_forgiving_selector_items(
+    selector_text: &str,
+    is_strictly_valid: impl Fn(&str) -> bool,
+) -> Option<(String, Vec<(String, String)>)> {
+    let argument_ranges = outermost_forgiving_selector_argument_ranges(selector_text)?;
+    if argument_ranges.is_empty() || is_strictly_valid(selector_text) {
+        return Some((selector_text.to_owned(), Vec::new()));
+    }
+
+    let baseline =
+        selector_with_forgiving_argument_replacements(selector_text, &argument_ranges, None);
+    let can_classify_items = is_strictly_valid(&baseline);
+    let mut invalid_item_ranges = Vec::new();
+    for (argument_index, argument_range) in argument_ranges.iter().enumerate() {
+        let argument = selector_text.get(argument_range.clone())?;
+        for item_range in top_level_comma_separated_selector_item_ranges(argument)? {
+            let item = argument.get(item_range.clone())?;
+            let item_is_valid = can_classify_items
+                && is_strictly_valid(&selector_with_forgiving_argument_replacements(
+                    selector_text,
+                    &argument_ranges,
+                    Some((argument_index, item)),
+                ));
+            if !item_is_valid {
+                invalid_item_ranges.push(
+                    argument_range.start + item_range.start..argument_range.start + item_range.end,
+                );
+            }
+        }
+    }
+
+    let collision_text = serialize_component_values_single_line(selector_text)?;
+    let mut protected_selector = selector_text.to_owned();
+    let mut preserved_items = Vec::with_capacity(invalid_item_ranges.len());
+    for (index, range) in invalid_item_ranges.into_iter().enumerate().rev() {
+        let item = selector_text.get(range.clone())?;
+        let marker = unused_forgiving_selector_marker(selector_text, &collision_text, index);
+        protected_selector.replace_range(range, &marker);
+        preserved_items.push((marker, trim_css_whitespace(item).to_owned()));
+    }
+    Some((protected_selector, preserved_items))
+}
+
+fn selector_with_forgiving_argument_replacements(
+    selector_text: &str,
+    argument_ranges: &[Range<usize>],
+    selected_item: Option<(usize, &str)>,
+) -> String {
+    let mut selector = selector_text.to_owned();
+    for (index, range) in argument_ranges.iter().enumerate().rev() {
+        let replacement = selected_item
+            .filter(|(selected_index, _)| *selected_index == index)
+            .map_or(":hover", |(_, item)| trim_css_whitespace(item));
+        selector.replace_range(range.clone(), replacement);
+    }
+    selector
+}
+
+fn unused_forgiving_selector_marker(
+    selector_text: &str,
+    collision_text: &str,
+    index: usize,
+) -> String {
+    let mut attempt = 0_u32;
+    loop {
+        let marker = format!(".__moli_cssom_invalid_forgiving_{index}_{attempt}");
+        if !selector_text.contains(&marker) && !collision_text.contains(&marker) {
+            return marker;
+        }
+        attempt = attempt
+            .checked_add(1)
+            .expect("forgiving selector marker search exhausted");
+    }
+}
+
+fn outermost_forgiving_selector_argument_ranges(selector_text: &str) -> Option<Vec<Range<usize>>> {
+    let mut input = ParserInput::new(selector_text);
+    let mut parser = Parser::new(&mut input);
+    let mut ranges = Vec::new();
+    collect_outermost_forgiving_selector_argument_ranges(&mut parser, &mut ranges)?;
+    Some(ranges)
+}
+
+fn collect_outermost_forgiving_selector_argument_ranges(
+    input: &mut Parser<'_, '_>,
+    ranges: &mut Vec<Range<usize>>,
+) -> Option<()> {
+    let mut previous_was_colon = false;
+    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
+        if token.is_parse_error() {
+            return None;
+        }
+        match token {
+            Token::Colon => previous_was_colon = true,
+            Token::Comment(_) if previous_was_colon => {}
+            Token::Function(name) => {
+                let is_forgiving_selector = previous_was_colon
+                    && (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where"));
+                let argument_start = input.position().byte_index();
+                let mut argument_end = None;
+                let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+                    if is_forgiving_selector {
+                        consume_component_values(input)?;
+                        argument_end = Some(input.position().byte_index());
+                        Ok(())
+                    } else {
+                        collect_outermost_forgiving_selector_argument_ranges(input, ranges)
+                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    }
+                });
+                nested.ok()?;
+                if let Some(argument_end) = argument_end {
+                    ranges.push(argument_start..argument_end);
+                }
+                previous_was_colon = false;
+            }
+            Token::ParenthesisBlock | Token::CurlyBracketBlock => {
+                let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+                    collect_outermost_forgiving_selector_argument_ranges(input, ranges)
+                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                });
+                nested.ok()?;
+                previous_was_colon = false;
+            }
+            Token::SquareBracketBlock => {
+                consume_nested_component_value(input, &token).ok()?;
+                previous_was_colon = false;
+            }
+            _ => previous_was_colon = false,
+        }
+    }
+    Some(())
+}
+
+fn top_level_comma_separated_selector_item_ranges(argument: &str) -> Option<Vec<Range<usize>>> {
+    let mut input = ParserInput::new(argument);
+    let mut parser = Parser::new(&mut input);
+    let mut ranges = Vec::new();
+    let mut item_start = 0;
+    while !parser.is_exhausted() {
+        let token_start = parser.position().byte_index();
+        let token = parser
+            .next_including_whitespace_and_comments()
+            .ok()?
+            .clone();
+        if token.is_parse_error() {
+            return None;
+        }
+        if matches!(token, Token::Comma) {
+            ranges.push(item_start..token_start);
+            item_start = parser.position().byte_index();
+        } else {
+            consume_nested_component_value(&mut parser, &token).ok()?;
+        }
+    }
+    ranges.push(item_start..argument.len());
+    Some(ranges)
+}
+
+fn trim_css_whitespace(value: &str) -> &str {
+    value.trim_matches(['\t', '\n', '\x0c', '\r', ' '])
 }
 
 fn serialize_cssom_selector_text_without_default_namespace(selector_text: &str) -> Option<String> {
@@ -668,6 +854,43 @@ pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text:
     false
 }
 
+pub(crate) fn webkit_compat_pseudo_element_validation_selector(
+    selector_text: &str,
+) -> Option<String> {
+    let mut input = ParserInput::new(selector_text);
+    let mut parser = Parser::new(&mut input);
+    let mut replacements = Vec::new();
+
+    while !parser.is_exhausted() {
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            return None;
+        };
+        if !matches!(token, Token::Colon) {
+            continue;
+        }
+        let Ok(Token::Colon) = parser.next_including_whitespace_and_comments().cloned() else {
+            continue;
+        };
+        let name_start = parser.position().byte_index();
+        let Ok(Token::Ident(name)) = parser.next_including_whitespace_and_comments().cloned()
+        else {
+            continue;
+        };
+        if is_unknown_webkit_pseudo_element_name(&name) {
+            replacements.push((name_start, parser.position().byte_index()));
+        }
+    }
+
+    if replacements.is_empty() {
+        return None;
+    }
+    let mut selector = selector_text.to_owned();
+    for (start, end) in replacements.into_iter().rev() {
+        selector.replace_range(start..end, "part(webkit-compat)");
+    }
+    Some(selector)
+}
+
 pub(crate) fn selector_list_has_invalid_terminal_pseudo_element_chain(selector_text: &str) -> bool {
     let mut input = ParserInput::new(selector_text);
     let mut parser = Parser::new(&mut input);
@@ -721,22 +944,23 @@ fn parse_known_pseudo_element_after_colon(
     parser: &mut Parser<'_, '_>,
 ) -> Option<KnownPseudoElementKind> {
     let state = parser.state();
-    if !matches!(
+    let has_double_colon = matches!(
         parser
             .next_including_whitespace_and_comments()
             .cloned()
             .ok()?,
         Token::Colon
-    ) {
+    );
+    if !has_double_colon {
         parser.reset(&state);
     }
     let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
         return None;
     };
     match token {
-        Token::Ident(name) => {
-            is_known_terminal_pseudo_element_name(&name).then_some(KnownPseudoElementKind::Terminal)
-        }
+        Token::Ident(name) => (is_known_terminal_pseudo_element_name(&name)
+            || (has_double_colon && is_unknown_webkit_pseudo_element_name(&name)))
+        .then_some(KnownPseudoElementKind::Terminal),
         Token::Function(name) => {
             let kind = match name.to_ascii_lowercase().as_str() {
                 "cue" | "highlight" => KnownPseudoElementKind::Terminal,
@@ -748,6 +972,12 @@ fn parse_known_pseudo_element_after_colon(
         }
         _ => None,
     }
+}
+
+fn is_unknown_webkit_pseudo_element_name(name: &str) -> bool {
+    const WEBKIT_PREFIX: &str = "-webkit-";
+    name.get(..WEBKIT_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(WEBKIT_PREFIX))
 }
 
 fn is_known_terminal_pseudo_element_name(name: &str) -> bool {
@@ -862,7 +1092,7 @@ fn parse_functional_pseudo_element_argument<'i, 't>(
     }
 }
 
-fn consume_nested_component_value<'i>(
+pub(crate) fn consume_nested_component_value<'i>(
     input: &mut Parser<'i, '_>,
     token: &Token<'i>,
 ) -> Result<(), cssparser::ParseError<'i, ()>> {
@@ -1030,6 +1260,46 @@ mod tests {
     }
 
     #[test]
+    fn preserves_only_invalid_forgiving_selector_items() {
+        let serialize = |selector| {
+            serialize_cssom_selector_text_preserving_invalid_forgiving_items(
+                selector,
+                false,
+                &[],
+                |candidate| crate::stylo::validate_supports_selector_list(candidate).is_ok(),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            serialize("::part(foo):is([attr='value'])"),
+            "::part(foo):is([attr='value'])"
+        );
+        assert_eq!(
+            serialize("::part(foo):where([attr='value'])"),
+            "::part(foo):where([attr='value'])"
+        );
+        assert_eq!(
+            serialize(":is([att=val], ::before:HOVER  )"),
+            r#":is([att="val"], ::before:HOVER)"#
+        );
+        assert_eq!(serialize(":is(,,, )"), ":is(, , , )");
+        assert_eq!(serialize(":host(:is(,,,))"), ":host(:is(, , , ))");
+        assert_eq!(
+            serialize(":host(:is(.a, .b+.c, .d))"),
+            ":host(:is(.a, .b+.c, .d))"
+        );
+        assert_eq!(
+            serialize(":has(:is(:has(.a+.b)))"),
+            ":has(:is(:has(.a+.b)))"
+        );
+        assert_eq!(
+            serialize(":is([att='valid'], .other)"),
+            r#":is([att="valid"], .other)"#
+        );
+    }
+
+    #[test]
     fn parses_get_computed_style_pseudo_element_argument() {
         assert_eq!(
             get_computed_style_pseudo_element("before"),
@@ -1157,6 +1427,12 @@ mod tests {
         assert!(dom_api_selector_list_has_only_known_pseudo_elements(
             "#target::highlight(foo)"
         ));
+        assert!(dom_api_selector_list_has_only_known_pseudo_elements(
+            "span::-WeBkIt-something-invalid"
+        ));
+        assert!(!dom_api_selector_list_has_only_known_pseudo_elements(
+            "input:-webkit-autofill"
+        ));
     }
 
     #[test]
@@ -1179,6 +1455,23 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_webkit_compat_pseudo_elements_only_for_stylo_validation() {
+        assert_eq!(
+            webkit_compat_pseudo_element_validation_selector(
+                "span::-WeBkIt-something-invalid:active"
+            )
+            .as_deref(),
+            Some("span::part(webkit-compat):active")
+        );
+        assert_eq!(
+            webkit_compat_pseudo_element_validation_selector(
+                r#"[data-value='::-webkit-something-invalid']"#
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn detects_invalid_terminal_pseudo_element_chains() {
         assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
             "::before::highlight(foo)"
@@ -1188,6 +1481,15 @@ mod tests {
         ));
         assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
             "::highlight(foo)::part(label)"
+        ));
+        assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
+            "span::-webkit-something-invalid::before"
+        ));
+        assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
+            "span::-webkit-something-invalid:active"
+        ));
+        assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
+            "input:-webkit-autofill::before"
         ));
         assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
             "::part(label)::highlight(foo)"

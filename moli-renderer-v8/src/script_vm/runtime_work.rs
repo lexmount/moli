@@ -192,20 +192,20 @@ pub(crate) struct PostParsePageOwnedTask {
     pub(super) completion: PostParseTaskCompletion,
 }
 
-/// The exact DOMContentLoaded action claimed as the direct successor of a
+/// The exact DOMContentLoaded action claimed for DOM task admission after a
 /// drained main-parser queue.
 ///
 /// This value is deliberately short-lived: the existing post-parse queue and
 /// lifecycle driver remain the only durable authority. The wrapper merely
 /// prevents an already-claimed DCL action from falling back to a generic
-/// page-owned task before the parser continuation commits it.
+/// page-owned task before the parser continuation admits it to the DOM source.
 pub(crate) struct ParserFinishDomContentLoadedTask {
     owner: FrameDocumentTaskOwner,
     task: PostParsePageOwnedTask,
 }
 
-/// The exact parse-time DOMContentLoaded work claimed as the direct successor
-/// of a drained main-parser queue.
+/// The exact parse-time DOMContentLoaded work claimed for DOM task admission
+/// after a drained main-parser queue.
 ///
 /// Unlike [`ParserFinishDomContentLoadedTask`], phase one has no installed
 /// post-parse driver task token to complete. The lifecycle authority still
@@ -243,7 +243,7 @@ impl ParserFinishDomContentLoadedTask {
         self.task.take_work_for_execution()
     }
 
-    pub(crate) fn into_completed_task(self) -> PostParsePageOwnedTask {
+    pub(crate) fn into_pending_task(self) -> PostParsePageOwnedTask {
         self.task
     }
 }

@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn image_map_area_focusability_supports_autofocus() {
+    let mut vm = new_storage_test_vm("https://area-autofocus.test/");
+
+    let setup = vm
+        .eval(
+            r##"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.innerHTML = `
+    <area id="outside" href="#" autofocus>
+    <map name="unused"><area id="unreferenced" href="#" autofocus></map>
+    <map name="active">
+      <area id="no-href" autofocus>
+      <area id="target" href="#" autofocus>
+    </map>
+    <img usemap="#active">`;
+
+  const rejected = ['outside', 'unreferenced', 'no-href'].map(id => {
+    const candidate = document.getElementById(id);
+    candidate.focus();
+    return document.activeElement !== candidate;
+  });
+  return rejected.every(Boolean) && document.activeElement === body;
+})()
+"##,
+        )
+        .expect("image-map focusability fixture should initialize");
+    assert_eq!(setup, "true");
+
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
+        assert!(
+            crate::native_bridge::element::post_parse_autofocus_is_pending(unsafe {
+                &*runtime_ptr
+            })
+        );
+        assert!(crate::native_bridge::element::process_post_parse_autofocus(
+            scope,
+            runtime_ptr
+        ));
+        Ok(())
+    })
+    .expect("image-map area autofocus should run");
+
+    assert_eq!(
+        vm.eval("document.activeElement === document.getElementById('target')")
+            .expect("image-map autofocus result should remain observable"),
+        "true"
+    );
+}
+
+#[test]
 fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
     let mut vm = new_storage_test_vm("https://focus-prevent-scroll.test/");
     vm.force_fresh_layout_reads_for_test();

@@ -85,11 +85,19 @@ pub(crate) fn request_constructor_callback<'s>(
         webidl::throw_error(scope, &error);
         return;
     }
-    if let Err(error) = validate_request_body_is_usable(&state) {
+    if let Err(error) = validate_request_body_is_usable(scope, &state) {
         webidl::throw_error(scope, &error);
         return;
     }
 
+    // Fresh URL entry lookup follows RequestInit conversion. Inherited URL
+    // entries, including unavailable entries, survive getters that revoke it.
+    let blob_url_entry = state.blob_url_entry.or_else(|| {
+        url::Url::parse(&state.url_resolved)
+            .ok()
+            .and_then(|url| CapturedBlobUrl::capture(&url))
+    });
+    set_blob_url_entry(scope, obj, blob_url_entry);
     append_default_body_content_type(&mut state.headers, state.body_content_type.as_deref());
     let body_buffer = state
         .body
@@ -104,12 +112,6 @@ pub(crate) fn request_constructor_callback<'s>(
     );
     install_headers_object_methods(scope, headers_obj);
 
-    let body_value = body_buffer
-        .and_then(|buffer| {
-            new_readable_stream_from_array_buffer(scope, buffer, buffer.byte_length())
-        })
-        .map(|stream| stream.into())
-        .unwrap_or_else(|| v8::null(scope).into());
     let signal_source = state
         .signal
         .as_ref()
@@ -118,6 +120,26 @@ pub(crate) fn request_constructor_callback<'s>(
         Some(signal) => signal,
         None if state.signal.is_some() => return,
         None => v8::undefined(scope).into(),
+    };
+    let body_value = if let Some(stream) = state.body_stream.as_ref() {
+        let stream = v8::Local::new(scope, stream);
+        let stream = if state.inherited_body_stream {
+            let Some(proxy) = crate::context_bootstrap::proxy_fetch_body_stream(scope, stream)
+            else {
+                return;
+            };
+            proxy
+        } else {
+            stream
+        };
+        stream.into()
+    } else {
+        body_buffer
+            .and_then(|buffer| {
+                new_readable_stream_from_array_buffer(scope, buffer, buffer.byte_length())
+            })
+            .map(|stream| stream.into())
+            .unwrap_or_else(|| v8::null(scope).into())
     };
     RequestInstanceDeclaration::new(
         state.method,

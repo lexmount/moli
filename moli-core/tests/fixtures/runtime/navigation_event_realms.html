@@ -1,0 +1,143 @@
+<!doctype html><body><script>
+window.finished = (async () => {
+  await new Promise(resolve => addEventListener('load', () => setTimeout(resolve, 0), {once: true}));
+  const frame = document.createElement('iframe');
+  const loaded = new Promise(resolve => frame.onload = () => setTimeout(resolve, 0));
+  frame.src = '/static?navigation-event-realm';
+  document.body.append(frame);
+  await loaded;
+  const child = frame.contentWindow;
+  const scenario = __SCENARIO__;
+  const target = __TARGET__ === 'top' ? window : child;
+  const caller = target === window ? child : window;
+  const errors = [];
+  const events = [];
+  let reads = 0;
+  const check = (condition, message) => { if (!condition) errors.push(message); };
+  const names = ['Event', 'ErrorEvent', 'NavigateEvent', 'NavigationCurrentEntryChangeEvent', 'AbortController'];
+  const observedNames = [...names, 'AbortSignal', 'NavigationHistoryEntry'];
+  const originals = new Map([window, child].map(win =>
+    [win, Object.fromEntries(observedNames.map(name => [name, win[name]]))]));
+  for (const win of [window, child]) win.addEventListener('error', event => errors.push('uncaught:' + event.message));
+  function tamper() {
+    if (__CONSTRUCTORS__ !== 'overwritten') return;
+    for (const win of [window, child]) for (const name of names) {
+      Object.defineProperty(win, name, {configurable: true, get() {
+        reads++;
+        throw new Error('Public constructor accessed: ' + name);
+      }});
+    }
+  }
+  function record(win, receiver, event, constructor) {
+    events.push(event);
+    const original = originals.get(win)[constructor];
+    check(event.constructor === original, event.type + ': constructor realm');
+    check(Object.getPrototypeOf(event) === original.prototype, event.type + ': prototype realm');
+    check(event.target === receiver && event.currentTarget === receiver, event.type + ': target');
+    check(event.isTrusted && !event.bubbles && !event.composed, event.type + ': native flags');
+    if (event.type === 'navigate') {
+      check(event.destination instanceof win.Object, 'navigate: destination realm');
+      check(Object.getPrototypeOf(event.signal) === originals.get(win).AbortSignal.prototype,
+        'navigate: signal realm');
+      if (scenario === 'joint-cancel' || scenario === 'reject')
+        event.signal.onabort = abort => record(win, event.signal, abort, 'Event');
+    }
+    if (event.type === 'currententrychange')
+      check(Object.getPrototypeOf(event.from) === originals.get(win).NavigationHistoryEntry.prototype,
+        'currententrychange: from realm');
+    if (event.type !== 'navigate' && event.type !== 'navigateerror')
+      check(!event.cancelable, event.type + ': cancelable');
+  }
+  function observe(win) {
+    const nav = win.navigation;
+    for (const [type, constructor] of [
+      ['navigate', 'NavigateEvent'], ['currententrychange', 'NavigationCurrentEntryChangeEvent'],
+      ['navigatesuccess', 'Event'], ['navigateerror', 'ErrorEvent']
+    ]) nav.addEventListener(type, event => record(win, nav, event, constructor));
+  }
+  if (scenario === 'joint-cancel') {
+    await child.navigation.navigate('#child').finished;
+    await navigation.navigate('#parent').finished;
+    const topEntry = navigation.currentEntry;
+    const childEntry = child.navigation.currentEntry;
+    observe(window);
+    let childEvents = 0;
+    child.navigation.onnavigate = child.navigation.onnavigateerror = () => childEvents++;
+    navigation.onnavigate = event => event.preventDefault();
+    tamper();
+    const result = child.navigation.traverseTo(child.navigation.entries()[0].key);
+    const rejected = await Promise.all([result.committed, result.finished].map(promise =>
+      promise.then(() => null, error => error)));
+    check(rejected.every(error => error && error.name === 'AbortError' &&
+      error.constructor === child.DOMException), 'joint cancellation: child promise error realm');
+    check(rejected[0] === rejected[1], 'joint cancellation: promise error identity');
+    const errorEvent = events.find(event => event.type === 'navigateerror');
+    check(errorEvent && errorEvent.error.name === 'AbortError', 'joint cancellation: event error');
+    check(errorEvent && errorEvent.filename === location.href, 'joint cancellation: filename');
+    check(childEvents === 0, 'joint cancellation: child received an event');
+    check(navigation.currentEntry === topEntry && child.navigation.currentEntry === childEntry,
+      'joint cancellation: current entry changed');
+  } else if (scenario === 'joint-prune') {
+    await child.navigation.navigate('#child').finished;
+    await navigation.navigate('#one').finished;
+    await navigation.navigate('#two').finished;
+    const disposed = navigation.entries().slice(1);
+    await child.navigation.back().finished;
+    const disposedEvents = Promise.all(disposed.map(entry => new Promise(resolve => {
+      entry.ondispose = event => { record(window, entry, event, 'Event'); resolve(); };
+    })));
+    tamper();
+    await child.navigation.navigate('#new').finished;
+    await disposedEvents;
+    check(navigation.entries().length === 1, 'joint pruning: parent forward entries retained');
+    check(child.navigation.entries().length === 2, 'joint pruning: child entries');
+  } else {
+    const nav = target.navigation;
+    const methods = caller.Navigation.prototype;
+    observe(target);
+    tamper();
+    if (scenario === 'cross-document') {
+      const committed = new Promise(resolve => frame.onload = () => setTimeout(resolve, 0));
+      child.location.href = '/static?navigation-event-destination';
+      await committed;
+      check(child.location.pathname === '/static' && child.location.search === '?navigation-event-destination',
+        'cross-document: destination URL');
+    } else if (scenario === 'reject') {
+      const reason = new caller.TypeError('cross-window rejection');
+      nav.onnavigate = event => event.intercept({handler: () => Promise.reject(reason)});
+      const result = methods.navigate.call(nav, '#rejected');
+      await result.committed;
+      const rejection = await result.finished.then(() => null, error => error);
+      const errorEvent = events.find(event => event.type === 'navigateerror');
+      check(rejection === reason, 'rejection: promise error identity');
+      check(errorEvent && errorEvent.error === reason, 'rejection: event error identity');
+      check(errorEvent && errorEvent.message.includes('cross-window rejection'), 'rejection: message');
+    } else {
+      const initial = nav.currentEntry;
+      await methods.navigate.call(nav, '#one').finished;
+      const replaced = nav.currentEntry;
+      check(Object.getPrototypeOf(replaced) === originals.get(target).NavigationHistoryEntry.prototype,
+        'navigate: entry realm');
+      replaced.ondispose = event => record(target, replaced, event, 'Event');
+      await methods.navigate.call(nav, '#two', {history: 'replace'}).finished;
+      methods.updateCurrentEntry.call(nav, {state: {saved: true}});
+      check(nav.currentEntry.getState().saved, 'updateCurrentEntry: state');
+      await methods.back.call(nav).finished;
+      check(nav.currentEntry === initial, 'traversal: original entry identity');
+      const changes = events.filter(event => event.type === 'currententrychange');
+      check(JSON.stringify(changes.map(event => event.navigationType)) ===
+        JSON.stringify(['push', 'replace', null, 'traverse']), 'currententrychange: navigationType');
+      check(changes[0] && changes[0].from === initial && changes[1] && changes[1].from === replaced,
+        'currententrychange: from identity');
+    }
+  }
+  return {errors, reads, events: events.map(event => event.type)};
+})().then(result => {
+  document.body.dataset.result = JSON.stringify(result);
+  return result;
+}, error => {
+  const result = {exception: String(error)};
+  document.body.dataset.result = JSON.stringify(result);
+  return result;
+});
+</script>

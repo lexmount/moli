@@ -35,16 +35,18 @@ pub(crate) unsafe extern "C" fn initialize_import_meta_object_callback(
     meta: v8::Local<'_, v8::Object>,
 ) {
     v8::callback_scope!(unsafe scope, context);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    // V8 calls this while the module's import.meta expression is running.
+    // Its host-defined options retain the preparation-time resolution base;
+    // the resource name instead identifies the source document for diagnostics.
+    let module_url = scope
+        .get_current_host_defined_options()
+        .and_then(|options| script_base_url_from_host_defined_options(scope, options))
+        .and_then(|url| v8_string(scope, url.as_str()))
+        .or_else(|| v8::Local::<v8::String>::try_from(module.get_resource_name(scope)).ok());
+    let Some(module_url) = module_url else {
         return;
     };
-    let Some(module_url) = (unsafe { &*host_ptr }).native_module_url_for(module) else {
-        return;
-    };
-    let Some(value) = v8_string(scope, module_url.as_str()) else {
-        return;
-    };
-    let _ = ImportMetaDeclaration::new(value).initialize(scope, meta);
+    let _ = ImportMetaDeclaration::new(module_url).initialize(scope, meta);
 }
 
 pub(crate) fn dynamic_import_callback<'s, 'i>(

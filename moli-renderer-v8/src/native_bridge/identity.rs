@@ -150,6 +150,9 @@ pub(super) enum DomTokenListKind {
     Class,
     Part,
     Rel,
+    HtmlFor,
+    Sandbox,
+    Sizes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,6 +176,7 @@ pub(super) enum LiveCollectionQueryKind {
     ClassName,
     Name,
     WindowNamedItems,
+    DocumentNamedItems,
     DocumentAllNamedItems,
     FormControlsByName,
     Forms,
@@ -180,6 +184,8 @@ pub(super) enum LiveCollectionQueryKind {
     Scripts,
     Links,
     Anchors,
+    Embeds,
+    Applets,
     Labels,
     TableRows,
     TableBodies,
@@ -200,6 +206,7 @@ impl LiveCollectionQueryKind {
             Self::ClassName => "className",
             Self::Name => "name",
             Self::WindowNamedItems => "windowNamedItems",
+            Self::DocumentNamedItems => "documentNamedItems",
             Self::DocumentAllNamedItems => "documentAllNamedItems",
             Self::FormControlsByName => "formControlsByName",
             Self::Forms => "forms",
@@ -207,6 +214,8 @@ impl LiveCollectionQueryKind {
             Self::Scripts => "scripts",
             Self::Links => "links",
             Self::Anchors => "anchors",
+            Self::Embeds => "embeds",
+            Self::Applets => "applets",
             Self::Labels => "labels",
             Self::TableRows => "tableRows",
             Self::TableBodies => "tableBodies",
@@ -312,6 +321,11 @@ impl LiveCollectionDescriptor {
             crate::native_bridge::named_access::window_named_item_handles(
                 host.dom_host(),
                 self.root,
+                self.query.as_deref().unwrap_or_default(),
+            )
+        } else if self.query_kind == LiveCollectionQueryKind::DocumentNamedItems {
+            crate::native_bridge::named_access::document_named_item_handles(
+                host.dom_host(),
                 self.query.as_deref().unwrap_or_default(),
             )
         } else if self.query_kind == LiveCollectionQueryKind::DocumentAllNamedItems {

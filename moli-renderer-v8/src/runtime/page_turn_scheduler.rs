@@ -81,6 +81,8 @@ pub(super) enum PageTurnClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DocumentLifecycleClassReadiness {
     Absent,
+    /// The DOM source owns the admitted event. Only its FIFO head may run.
+    QueuedDomTask,
     Available,
     RunnableContinuation,
     ReadyMainParserScriptContinuation,
@@ -110,7 +112,7 @@ impl DocumentLifecycleClassReadiness {
     }
 
     const fn is_available(self) -> bool {
-        !matches!(self, Self::Absent)
+        !matches!(self, Self::Absent | Self::QueuedDomTask)
     }
 }
 
@@ -482,6 +484,7 @@ mod tests {
         },
         page_resource_completion::RendererPageResourceCompletionOwner,
         page_task_queue::{
+            RendererPageBitmapTaskId, RendererPageBitmapTaskOwner,
             RendererPageBroadcastChannelDeliveryOwner, RendererPageChildFrameTaskOwner,
             RendererPageChildFrameTaskTarget, RendererPageChildModuleDependencyFetchStartOwner,
             RendererPageChildModuleScriptTerminalOwner,
@@ -759,6 +762,22 @@ mod tests {
                 ),
             ),
             task_id: RendererPageWindowMessageTaskId::from_raw(order),
+        }
+    }
+
+    fn bitmap_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::BitmapTask {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageBitmapTaskOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowExecutionContextIdentity::new(
+                    WindowExecutionContextOwner::Frame(LocalWindowId(7)),
+                    OwnerDispatchScope::Top,
+                    RuntimeObservableContextToken::from_raw(11),
+                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+                ),
+                RendererPageBitmapTaskId::new(order),
+            ),
         }
     }
 
@@ -1045,6 +1064,7 @@ mod tests {
             RendererPageTaskSourceKind::ServiceWorkerClientMessage => {
                 service_worker_client_message_descriptor(runnable_since, order)
             }
+            RendererPageTaskSourceKind::BitmapTask => bitmap_descriptor(runnable_since, order),
             RendererPageTaskSourceKind::WebCryptoTask => {
                 webcrypto_descriptor(runnable_since, order)
             }

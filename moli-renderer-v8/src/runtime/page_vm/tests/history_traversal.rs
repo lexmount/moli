@@ -6,7 +6,50 @@ use crate::{
 };
 
 #[tokio::test(flavor = "current_thread")]
-async fn history_traversal_body_leaves_reaction_for_selected_completion() {
+async fn user_agent_popstate_is_trusted_but_author_constructed_event_is_not() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/popstate-event-trust").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r##"
+history.pushState(null, "", "#one");
+globalThis.__popStateTrust = null;
+addEventListener("popstate", event => {
+  __popStateTrust = JSON.stringify([
+    event.isTrusted,
+    event instanceof PopStateEvent,
+    new PopStateEvent("popstate").isTrusted
+  ]);
+}, { once: true });
+history.back();
+"queued"
+"##,
+        )?;
+
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
+                .await?,
+            "one exact history traversal should dispatch popstate"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("__popStateTrust")?,
+            "[true,true,false]"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popstate trust test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn history_traversal_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -50,8 +93,8 @@ history.back();
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__historyBodyBoundary.join('|')",
                 )?,
-            "navigate",
-            "the traversal body must leave its Promise reaction for selected-task completion"
+            "navigate|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
@@ -63,7 +106,7 @@ history.back();
                 .vm_mut()
                 .eval("globalThis.__historyBodyBoundary.join('|')")?,
             "navigate|microtask|runtime-script",
-            "central callback completion must own the reaction and its runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -72,9 +115,10 @@ history.back();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn history_back_coalesces_into_one_typed_turn_and_never_enters_page_timer() {
+async fn history_back_keeps_separate_typed_turns_and_never_enters_page_timer() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/history-typed-turn").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
@@ -112,28 +156,46 @@ location.hash
             !page_vm.vm().has_ready_timeout(),
             "history traversal admission must not manufacture a PageTimer descriptor"
         );
-        assert_eq!(
-            page_vm.vm().ms_to_next_timeout(),
-            None
-        );
+        assert_eq!(page_vm.vm().ms_to_next_timeout(), None);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
                 .await?,
-            "the coalesced traversal should consume one production selected task"
+            "the first traversal should consume one production selected task"
+        );
+        assert_eq!(page_vm.vm_mut().eval("location.hash")?, "#one");
+        assert_eq!(
+            page_vm.vm_mut().eval("__historyTurnLog.join('|')")?,
+            "popstate:#one|microtask:#one",
+            "the first traversal must checkpoint its event microtasks before the next turn"
+        );
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
+                .await?,
+            "the second traversal must have its own production selected task"
         );
         assert_eq!(page_vm.vm_mut().eval("location.hash")?, "");
         assert_eq!(
             page_vm.vm_mut().eval("__historyTurnLog.join('|')")?,
-            "popstate:|microtask:",
+            "popstate:#one|microtask:#one|popstate:|microtask:",
             "the selected traversal must checkpoint its event microtasks before the next turn"
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
                 .await?,
-            "two pending history.back() calls for one LocalWindow must coalesce into one source position"
+            "both pending history.back() calls must be consumed without an extra task"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -270,10 +332,17 @@ async fn history_traversal_discards_a_retired_child_local_window() {
             r##"
 const frame = document.createElement("iframe");
 frame.id = "history-stale-child";
+frame.srcdoc = "<!doctype html><p>child</p>";
 document.body.appendChild(frame);
 "created"
 "##,
         )?;
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            &mut page_vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "history stale-child srcdoc commit",
+        )
+        .await;
         materialize_child_realm_through_page_turn_for_test(&mut page_vm, "history-stale-child")?;
         page_vm.vm_mut().eval(
             r##"
@@ -282,7 +351,7 @@ const child = document.getElementById("history-stale-child").contentWindow;
 child.addEventListener("popstate", () => {
   parent.__retiredChildHistoryEvents += 1;
 });
-child.history.pushState(null, "", "#queued");
+child.history.pushState(null, "", "about:srcdoc#queued");
 child.history.back();
 document.getElementById("history-stale-child").remove();
 "retired"

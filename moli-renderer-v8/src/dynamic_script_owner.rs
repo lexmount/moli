@@ -24,8 +24,7 @@ use super::{
         prepared_script_with_loaded_source,
     },
     types::{
-        ScriptErrorConstructorKind, ScriptKind, ScriptMode, ScriptSourceKind,
-        SharedNavigationResponseResult,
+        ScriptErrorValue, ScriptKind, ScriptMode, ScriptSourceKind, SharedNavigationResponseResult,
     },
 };
 use crate::frame_owner_model::MainDocumentScriptLoadDelayLease;
@@ -165,7 +164,7 @@ struct DynamicScriptFailure {
     kind: DynamicScriptFailureKind,
     module_failure_policy: Option<ModuleFailurePolicy>,
     source_network_result: Option<SharedNavigationResponseResult>,
-    error_constructor: Option<ScriptErrorConstructorKind>,
+    error_value: Option<ScriptErrorValue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +186,7 @@ impl DynamicScriptFailure {
             kind,
             module_failure_policy,
             source_network_result: None,
-            error_constructor: None,
+            error_value: None,
         }
     }
 
@@ -199,11 +198,8 @@ impl DynamicScriptFailure {
         self
     }
 
-    fn with_error_constructor(
-        mut self,
-        error_constructor: Option<ScriptErrorConstructorKind>,
-    ) -> Self {
-        self.error_constructor = error_constructor;
+    fn with_error_value(mut self, error_value: Option<ScriptErrorValue>) -> Self {
+        self.error_value = error_value;
         self
     }
 
@@ -335,7 +331,7 @@ pub(super) enum DynamicScriptRunnable {
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
         source_network_result: Option<SharedNavigationResponseResult>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
 }
 
@@ -354,7 +350,7 @@ pub(super) struct DynamicScriptFailureTerminal {
     pub(super) kind: DynamicScriptFailureKind,
     pub(super) module_failure_policy: Option<ModuleFailurePolicy>,
     pub(super) source_network_result: Option<SharedNavigationResponseResult>,
-    pub(super) error_constructor: Option<ScriptErrorConstructorKind>,
+    pub(super) error_value: Option<ScriptErrorValue>,
 }
 
 #[derive(Debug)]
@@ -580,7 +576,7 @@ impl DynamicScriptOwner {
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
         }) = self.followup_work.pop_front()
         else {
             unreachable!("owned error terminal changed after an immutable front check")
@@ -592,7 +588,7 @@ impl DynamicScriptOwner {
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
         })
     }
 
@@ -640,33 +636,33 @@ impl DynamicScriptOwner {
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
-        self.note_script_failed_with_kind_and_error_constructor(
+        self.note_script_failed_with_kind_and_error_value(
             id,
             script,
             message,
             kind,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     }
 
-    pub(super) fn note_script_failed_with_kind_and_error_constructor(
+    pub(super) fn note_script_failed_with_kind_and_error_value(
         &mut self,
         id: DynamicScriptOwnerId,
         script: &PreparedScript,
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
         assert!(
             script.host_script_handle.is_some(),
             "runtime dynamic script should carry host handle before failure dispatch planning"
         );
         let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
-            .with_error_constructor(error_constructor);
+            .with_error_value(error_value);
         if failure.is_deferrable_module() {
             self.note_script_failed_in_queue_or_enqueue(id, script.clone(), failure);
             self.refresh_followup_work();
@@ -1187,13 +1183,13 @@ impl DynamicScriptOwner {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<ModuleScriptEvaluationUpdate> {
         let update = self.mark_module_script_evaluation_reaction(
             reaction_id,
             ModuleScriptEvaluationReactionState::Rejected {
                 reason,
-                error_constructor,
+                error_value,
             },
         );
         if update.is_some() {
@@ -1277,21 +1273,21 @@ impl DynamicScriptOwner {
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
         source_network_result: Option<SharedNavigationResponseResult>,
     ) {
-        self.requeue_failed_script_front_with_error_constructor(
+        self.requeue_failed_script_front_with_error_value(
             id,
             script,
             message,
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
         );
     }
 
-    pub(super) fn requeue_failed_script_front_with_error_constructor(
+    pub(super) fn requeue_failed_script_front_with_error_value(
         &mut self,
         id: DynamicScriptOwnerId,
         script: PreparedScript,
@@ -1299,11 +1295,11 @@ impl DynamicScriptOwner {
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
         source_network_result: Option<SharedNavigationResponseResult>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
         let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
             .with_source_network_result(source_network_result)
-            .with_error_constructor(error_constructor);
+            .with_error_value(error_value);
         self.requeue_script_failure_front(id, script, failure);
     }
 
@@ -1947,11 +1943,11 @@ impl DynamicScriptOwner {
                 kind,
                 module_failure_policy,
                 source_network_result,
-                error_constructor,
+                error_value,
             } => {
                 let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
                     .with_source_network_result(source_network_result)
-                    .with_error_constructor(error_constructor);
+                    .with_error_value(error_value);
                 if failure.is_deferrable_module() {
                     self.enqueue_script_failure_with_id(id, script, failure);
                     return;
@@ -2107,6 +2103,7 @@ impl DynamicScriptOwner {
                     entry.script.clone(),
                     source,
                     completion.outcome.source_bytes.clone(),
+                    completion.outcome.muted_errors,
                 );
                 entry.ready_state = DynamicScriptReadyState::Ready {
                     order,
@@ -2160,7 +2157,7 @@ impl DynamicScriptOwner {
                     kind: failure.kind,
                     module_failure_policy: failure.module_failure_policy,
                     source_network_result: failure.source_network_result,
-                    error_constructor: failure.error_constructor,
+                    error_value: failure.error_value,
                 })
             }
             DynamicScriptReadyState::Loading
@@ -2285,6 +2282,7 @@ mod tests {
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -2296,6 +2294,7 @@ mod tests {
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -3473,7 +3472,7 @@ mod tests {
             "opaque typed module graph failure".to_owned(),
             DynamicScriptFailureKind::ModuleResolve,
             Some(ModuleFailurePolicy::GraphFailure),
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
         );
 
         let second = owner
@@ -3490,7 +3489,7 @@ mod tests {
         let DynamicScriptRunnable::DispatchError {
             id: failure_id,
             message,
-            error_constructor,
+            error_value,
             ..
         } = failure
         else {
@@ -3499,8 +3498,8 @@ mod tests {
         assert_eq!(failure_id, first_id);
         assert_eq!(message, "opaque typed module graph failure");
         assert_eq!(
-            error_constructor,
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            error_value,
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
             "deferred dynamic module failures must retain their original error constructor"
         );
     }
@@ -3806,7 +3805,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_terminal_failure_preserves_error_constructor() {
+    fn owner_terminal_failure_preserves_error_value() {
         let mut owner = DynamicScriptOwner::default();
         owner.enqueue_batch(DynamicScriptBatch {
             async_scripts: VecDeque::from([prepared_script(0, ScriptMode::Async)]),
@@ -3819,26 +3818,24 @@ mod tests {
             panic!("expected executable dynamic script");
         };
 
-        owner.note_script_failed_with_kind_and_error_constructor(
+        owner.note_script_failed_with_kind_and_error_value(
             id,
             &script,
             "typed failure".to_owned(),
             DynamicScriptFailureKind::Immediate,
             None,
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
         );
 
-        let DynamicScriptRunnable::DispatchError {
-            error_constructor, ..
-        } = owner
+        let DynamicScriptRunnable::DispatchError { error_value, .. } = owner
             .next_runnable_script()
             .expect("typed failure should become owner terminal work")
         else {
             panic!("expected dynamic script error dispatch");
         };
         assert_eq!(
-            error_constructor,
-            Some(ScriptErrorConstructorKind::SyntaxError)
+            error_value,
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into())
         );
     }
 

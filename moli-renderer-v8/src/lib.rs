@@ -90,6 +90,7 @@ mod resource_owner;
 mod resource_ready;
 mod runtime;
 mod runtime_binding_data;
+mod script_cleanup;
 mod script_execution_control;
 mod script_provenance;
 mod script_vm;

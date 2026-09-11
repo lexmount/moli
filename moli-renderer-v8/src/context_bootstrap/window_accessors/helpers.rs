@@ -94,12 +94,63 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
     }
 }
 
+pub(super) fn window_owner_dispatch_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<crate::native_bridge::OwnerDispatchScope> {
+    super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver).or_else(|| {
+        receiver
+            .strict_equals(scope.get_current_context().global(scope).into())
+            .then_some(crate::native_bridge::OwnerDispatchScope::Top)
+    })
+}
+
+pub(in crate::context_bootstrap) fn window_document_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Option<crate::document_runtime::DomHandle> {
+    match window_owner_dispatch_scope(scope, receiver)? {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_handle()),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_document_handle(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+    }
+}
+
 pub(super) fn window_host_ptr(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
 ) -> Option<*mut JsContextHost> {
     context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))
+}
+
+pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(handle) = window_child_context_handle(scope, receiver) else {
+        return false;
+    };
+    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
+        return true;
+    };
+    let host = unsafe { &*host_ptr };
+    if !host.child_browsing_context_is_live(handle) {
+        return true;
+    }
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return true;
+    };
+    host.window_execution_context_identity_for_access_check(context)
+        .is_none_or(|identity| {
+            identity.dispatch_scope() != crate::native_bridge::OwnerDispatchScope::Child(handle)
+                || !host.window_execution_context_identity_is_current(identity)
+        })
 }
 
 pub(super) fn window_receiver<'s>(

@@ -10,6 +10,31 @@ use moli_fetch::FetchConfig;
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "web_apis/abort_signal.rs"]
+mod abort_signal;
+#[path = "web_apis/body_state.rs"]
+mod body_state;
+#[path = "web_apis/callback_cleanup.rs"]
+mod callback_cleanup;
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
+#[path = "web_apis/fetch_body_native.rs"]
+mod fetch_body_native;
+#[path = "web_apis/fetch_body_realm.rs"]
+mod fetch_body_realm;
+#[path = "web_apis/fetch_opaque_stream.rs"]
+mod fetch_opaque_stream;
+#[path = "web_apis/fetch_preaborted_upload.rs"]
+mod fetch_preaborted_upload;
+#[path = "web_apis/pipe_disturbed.rs"]
+mod pipe_disturbed;
+#[path = "web_apis/request_init.rs"]
+mod request_init;
+#[path = "web_apis/request_stream.rs"]
+mod request_stream;
+#[path = "web_apis/response_clone.rs"]
+mod response_clone;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
@@ -350,7 +375,7 @@ async fn html_element_reflected_accessors_cover_simple_tag_specific_surface() ->
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-table-cell=\"1:1:1000:1000:0:0:65534:65534\"")
+            .contains("data-table-cell=\"1:1:1000:2000:0:0:65534:70000\"")
     );
     assert!(
         page.serialize_html_async()
@@ -2789,6 +2814,15 @@ async fn servo_match_media_feature_states_follow_default_browser_like_assumption
             .unwrap()
             .contains("data-display-mode-standalone=\"false\"")
     );
+    assert!(
+        page.serialize_html_async()
+            .await
+            .unwrap()
+            .contains("data-display-mode-picture-in-picture=\"false\"")
+    );
+    assert!(page.serialize_html_async().await.unwrap().contains(
+        "data-display-mode-picture-in-picture-media=\"(display-mode: picture-in-picture)\""
+    ));
     assert!(
         page.serialize_html_async()
             .await

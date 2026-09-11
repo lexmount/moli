@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
+    collections::HashMap,
     ops::{Deref, DerefMut},
     rc::Rc,
 };
@@ -13,12 +14,46 @@ use xml5ever::{
     tendril::{StrTendril as XmlStrTendril, TendrilSink as XmlTendrilSink},
     tree_builder::{NodeOrText as XmlNodeOrText, TreeSink as XmlTreeSinkBase, XmlTreeSink},
 };
+use xmlparser::{
+    ElementEnd as XmlElementEnd, Token as XmlTokenizerToken, Tokenizer as XmlTokenizer,
+};
 
-use super::{html_chunks, xml_tree_viewer::transform_document_to_xml_tree_view};
+use super::{
+    html_chunks, xml_preprocess::prepare_xml_for_xml5ever,
+    xml_tree_viewer::transform_document_to_xml_tree_view,
+};
 use moli_dom::native::{Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node};
 
 #[derive(Debug, Clone, Default)]
 pub struct XmlParser;
+
+struct XmlPrepassError {
+    detail: String,
+    discard_partial_tree: bool,
+}
+
+impl XmlPrepassError {
+    fn tree(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            discard_partial_tree: false,
+        }
+    }
+
+    fn before_document_element(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            discard_partial_tree: true,
+        }
+    }
+
+    fn namespace(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            discard_partial_tree: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct XmlParseHandle {
@@ -79,12 +114,27 @@ impl XmlParser {
         xml: String,
         present_unstyled_xml: bool,
     ) -> NativeDom {
+        let xml = prepare_xml_for_xml5ever(&xml);
+        let prepass_error = xml_element_stack_error(&xml);
         let sink = XmlDocumentSink::new(XmlLiveTreeSinkTarget::new_owned(final_url));
         let mut parser = parse_xml_document(sink, XmlParseOpts::default());
         for chunk in html_chunks(&xml) {
             parser.process(XmlStrTendril::from(chunk));
         }
         let mut document = parser.finish().finish_document();
+        // xml5ever recovers from some mismatched element stacks. DOMParser must
+        // expose an XML parsererror document instead of that recovered tree.
+        if let Some(error) = prepass_error {
+            document.push_parse_error(error.detail);
+            if error.discard_partial_tree {
+                let mut host = DomHost::from_dom(document);
+                let document_handle = host.document_handle();
+                for child in host.child_handles(document_handle).collect::<Vec<_>>() {
+                    let _ = host.remove_child(document_handle, child);
+                }
+                document = host.snapshot_document();
+            }
+        }
         if present_unstyled_xml {
             document = transform_document_to_xml_tree_view(document);
         }
@@ -106,11 +156,147 @@ impl XmlParser {
         let target = XmlLiveTreeSinkTarget::new_borrowed(dom_host, document_handle)?;
         let sink = XmlDocumentSink::new(target);
         let mut parser = parse_xml_document(sink, XmlParseOpts::default());
-        for chunk in html_chunks(xml) {
+        let xml = prepare_xml_for_xml5ever(xml);
+        for chunk in html_chunks(&xml) {
             parser.process(XmlStrTendril::from(chunk));
         }
         parser.finish().finish_live_tree();
         Some(())
+    }
+}
+
+fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
+    let mut pending_start_name = None;
+    let mut pending_used_prefixes = Vec::new();
+    let mut pending_declared_prefixes = Vec::new();
+    let mut open_elements = Vec::new();
+    let mut active_prefixes = HashMap::from([("xml".to_owned(), 1usize)]);
+    let mut saw_document_element = false;
+
+    for token in XmlTokenizer::from(xml) {
+        match token {
+            Ok(XmlTokenizerToken::ElementStart { prefix, local, .. }) => {
+                saw_document_element = true;
+                let prefix = prefix.as_str();
+                if !prefix.is_empty() {
+                    pending_used_prefixes.push(prefix.to_owned());
+                }
+                pending_start_name = Some(qualified_xml_name(prefix, local.as_str()));
+            }
+            Ok(XmlTokenizerToken::Attribute {
+                prefix,
+                local,
+                value,
+                ..
+            }) => {
+                let prefix = prefix.as_str();
+                if prefix == "xmlns" {
+                    if !value.as_str().is_empty() {
+                        pending_declared_prefixes.push(local.as_str().to_owned());
+                    }
+                } else if !prefix.is_empty() {
+                    pending_used_prefixes.push(prefix.to_owned());
+                }
+            }
+            Ok(XmlTokenizerToken::ElementEnd { end, .. }) => match end {
+                XmlElementEnd::Open => {
+                    let Some(name) = pending_start_name.take() else {
+                        return Some(XmlPrepassError::tree("XML start tag is missing a name"));
+                    };
+                    for prefix in &pending_declared_prefixes {
+                        *active_prefixes.entry(prefix.clone()).or_default() += 1;
+                    }
+                    if let Some(prefix) = pending_used_prefixes
+                        .iter()
+                        .find(|prefix| !active_prefixes.contains_key(*prefix))
+                    {
+                        return Some(XmlPrepassError::namespace(format!(
+                            "XML namespace prefix `{prefix}` is not declared"
+                        )));
+                    }
+                    pending_used_prefixes.clear();
+                    open_elements.push((name, std::mem::take(&mut pending_declared_prefixes)));
+                }
+                XmlElementEnd::Empty => {
+                    if pending_start_name.take().is_none() {
+                        return Some(XmlPrepassError::tree(
+                            "XML empty-element tag is missing a name",
+                        ));
+                    }
+                    for prefix in &pending_declared_prefixes {
+                        *active_prefixes.entry(prefix.clone()).or_default() += 1;
+                    }
+                    if let Some(prefix) = pending_used_prefixes
+                        .iter()
+                        .find(|prefix| !active_prefixes.contains_key(*prefix))
+                    {
+                        return Some(XmlPrepassError::namespace(format!(
+                            "XML namespace prefix `{prefix}` is not declared"
+                        )));
+                    }
+                    pending_used_prefixes.clear();
+                    for prefix in pending_declared_prefixes.drain(..) {
+                        decrement_xml_prefix_count(&mut active_prefixes, &prefix);
+                    }
+                }
+                XmlElementEnd::Close(prefix, local) => {
+                    let closing_name = qualified_xml_name(prefix.as_str(), local.as_str());
+                    let Some((open_name, declared_prefixes)) = open_elements.pop() else {
+                        return Some(XmlPrepassError::tree(format!(
+                            "XML end tag </{closing_name}> has no matching start tag"
+                        )));
+                    };
+                    if open_name != closing_name {
+                        return Some(XmlPrepassError::tree(format!(
+                            "XML end tag </{closing_name}> does not match <{open_name}>"
+                        )));
+                    }
+                    for prefix in declared_prefixes {
+                        decrement_xml_prefix_count(&mut active_prefixes, &prefix);
+                    }
+                }
+            },
+            Ok(_) => {}
+            Err(error) => {
+                let detail = error.to_string();
+                return Some(if saw_document_element {
+                    XmlPrepassError::tree(detail)
+                } else {
+                    // xml5ever can recover a malformed prologue or doctype and
+                    // then expose nodes parsed after the error. DOMParser error
+                    // documents must not retain that recovered document tree.
+                    XmlPrepassError::before_document_element(detail)
+                });
+            }
+        }
+    }
+
+    if let Some(name) = pending_start_name {
+        Some(XmlPrepassError::tree(format!(
+            "XML start tag <{name}> is incomplete"
+        )))
+    } else {
+        open_elements
+            .last()
+            .map(|(name, _)| XmlPrepassError::tree(format!("XML element <{name}> is not closed")))
+    }
+}
+
+fn decrement_xml_prefix_count(active_prefixes: &mut HashMap<String, usize>, prefix: &str) {
+    let Some(count) = active_prefixes.get_mut(prefix) else {
+        return;
+    };
+    *count -= 1;
+    if *count == 0 {
+        active_prefixes.remove(prefix);
+    }
+}
+
+fn qualified_xml_name(prefix: &str, local_name: &str) -> String {
+    if prefix.is_empty() {
+        local_name.to_owned()
+    } else {
+        format!("{prefix}:{local_name}")
     }
 }
 
@@ -587,6 +773,90 @@ mod tests {
     use super::XmlParser;
     use moli_dom::native::{DomHost, NativeDom, NativeNodeId, Node, NodeType};
     use url::Url;
+
+    #[test]
+    fn xml_parser_records_unclosed_and_mismatched_elements() {
+        for (index, source) in [
+            "<root>",
+            "<root><child></root>",
+            "<root></other>",
+            "</root>",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let dom = XmlParser.parse(
+                Url::parse(&format!("https://example.test/invalid-{index}.xml")).unwrap(),
+                source.to_owned(),
+            );
+            assert!(
+                !dom.parse_errors().is_empty(),
+                "source `{source}` should be rejected"
+            );
+        }
+
+        for (index, source) in ["<root/>", "<root><child/></root>"].into_iter().enumerate() {
+            let dom = XmlParser.parse(
+                Url::parse(&format!("https://example.test/valid-{index}.xml")).unwrap(),
+                source.to_owned(),
+            );
+            assert!(
+                dom.parse_errors().is_empty(),
+                "source `{source}`: {:?}",
+                dom.parse_errors()
+            );
+        }
+
+        let declared = XmlParser.parse(
+            Url::parse("https://example.test/declared-prefix.xml").unwrap(),
+            "<x:root xmlns:x='urn:test' x:value='ok'/>".to_owned(),
+        );
+        assert!(declared.parse_errors().is_empty());
+
+        let undeclared = XmlParser.parse(
+            Url::parse("https://example.test/undeclared-prefix.xml").unwrap(),
+            "<root x:value='invalid'/>".to_owned(),
+        );
+        assert!(!undeclared.parse_errors().is_empty());
+        assert!(
+            undeclared
+                .child_ids(undeclared.document_node_id())
+                .all(|child| !undeclared.node(child).is_some_and(Node::is_element))
+        );
+    }
+
+    #[test]
+    fn xml_parser_discards_recovered_tree_after_doctype_error() {
+        let url = Url::parse("https://example.test/doctype.xml").unwrap();
+        let invalid = XmlParser.parse(
+            url.clone(),
+            concat!(
+                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\">",
+                "<html><div id=\"test\"/></html>"
+            )
+            .to_owned(),
+        );
+        assert!(!invalid.parse_errors().is_empty());
+        assert!(
+            invalid
+                .child_ids(invalid.document_node_id())
+                .all(|child| !invalid.node(child).is_some_and(Node::is_element))
+        );
+
+        for system_id in ["", "x"] {
+            let valid = XmlParser.parse(
+                url.clone(),
+                format!(
+                    "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"{system_id}\"><html/>"
+                ),
+            );
+            assert!(
+                valid.parse_errors().is_empty(),
+                "system ID `{system_id}` should be accepted: {:?}",
+                valid.parse_errors()
+            );
+        }
+    }
 
     #[test]
     fn xml_parser_preserves_namespace_declarations_as_dom_attributes() {

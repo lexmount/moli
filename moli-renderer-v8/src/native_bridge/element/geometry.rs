@@ -11,8 +11,8 @@ pub use client_rect::ClientRect;
 #[cfg(test)]
 pub(crate) use hit_test::observable_scrollbar_hit_test;
 pub(crate) use hit_test::{
-    observable_deep_hit_test, observable_hit_test, observable_input_hit_test,
-    observable_input_surface_hit_test,
+    element_is_inert_for_hit_testing, observable_deep_hit_test, observable_hit_test,
+    observable_input_hit_test, observable_input_surface_hit_test,
 };
 pub(in crate::native_bridge) use metrics::{
     node_client_height_getter_function, node_client_left_getter_function,
@@ -25,14 +25,16 @@ pub(in crate::native_bridge) use metrics::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+pub(super) use mock::element_has_hidden_attribute;
 pub(crate) use mock::{
     compute_mock_client_rect, compute_mock_intersection_client_rect,
     compute_mock_intersection_scrollport_client_rect,
 };
 pub(crate) use provider::{
-    observable_bounding_client_rect, observable_bounding_client_rects, observable_caret_position,
-    observable_client_rects, observable_element_metrics, observable_event_offset,
-    observable_geometry_batch, observable_hit_test_all, observable_scroll_adjusted_client_rect,
+    fresh_observable_sources_with_fragments, observable_bounding_client_rect,
+    observable_bounding_client_rects, observable_caret_position, observable_client_rects,
+    observable_element_metrics, observable_event_offset, observable_geometry_batch,
+    observable_hit_test_all, observable_scroll_adjusted_client_rect,
     observable_sources_with_fragments, observable_used_grid_tracks,
 };
 pub(in crate::native_bridge) use rects::{

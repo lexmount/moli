@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_trusted_types_webidl_surface_checks_descriptors_arguments_and_brands() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({}); close();",
+            include_str!("../../../../tests/fixtures/trusted-types-webidl.js")
+        ),
+        "https://trusted-types-webidl.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker Trusted Types probe should settle")
+        .expect("worker Trusted Types probe should return a result");
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
+
+#[tokio::test]
 async fn worker_compression_streams_roundtrip_all_formats() {
     ensure_v8();
     let mut handle = spawn_worker(
@@ -69,6 +86,21 @@ async fn worker_console_capture_does_not_serialize_or_coerce_page_objects() {
         assert_eq!(expect_post_json(message), "0");
         break;
     }
+}
+
+#[tokio::test]
+async fn worker_does_not_expose_window_only_webrtc_event_interfaces() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"postMessage([typeof RTCPeerConnectionIceEvent, typeof RTCDataChannelEvent]); close();"#
+            .into(),
+        "test://webrtc-event-exposure".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker WebRTC event exposure")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"["undefined","undefined"]"#);
 }
 
 #[tokio::test]
@@ -1905,18 +1937,43 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const descriptor = Object.getOwnPropertyDescriptor(performance, "timeOrigin");
-        const before = performance.timeOrigin;
-        try { performance.timeOrigin = before + 1000000; } catch (_) {}
-        const after = performance.timeOrigin;
-        const first = performance.now();
-        const second = performance.now();
+        const original = performance;
+        const globalDescriptor = Object.getOwnPropertyDescriptor(
+            WorkerGlobalScope.prototype,
+            "performance"
+        );
+        const timeOriginDescriptor = Object.getOwnPropertyDescriptor(
+            Performance.prototype,
+            "timeOrigin"
+        );
+        const before = original.timeOrigin;
+        try { original.timeOrigin = before + 1000000; } catch (_) {}
+        const after = original.timeOrigin;
+        const first = original.now();
+        const second = original.now();
+        const replacement = {};
+        self.performance = replacement;
         postMessage({
-            readonly: descriptor && descriptor.writable === false,
+            interfaceShape:
+                original instanceof Performance
+                && original instanceof EventTarget
+                && Object.getPrototypeOf(original) === Performance.prototype,
+            globalAccessor:
+                typeof globalDescriptor?.get === "function"
+                && typeof globalDescriptor?.set === "function"
+                && globalDescriptor.enumerable === true,
+            timeOriginAccessor:
+                typeof timeOriginDescriptor?.get === "function"
+                && timeOriginDescriptor?.set === undefined
+                && timeOriginDescriptor.enumerable === true,
             unchanged: after === before,
             numeric: typeof first === "number" && typeof second === "number",
             monotonic: second >= first,
-            noLegacyMemory: !("memory" in performance) && !("MemoryInfo" in self)
+            replaceable:
+                performance === replacement
+                && Object.prototype.hasOwnProperty.call(self, "performance"),
+            originalStillWorks: typeof original.now() === "number",
+            noLegacyMemory: !("memory" in original) && !("MemoryInfo" in self)
         });
         close();
         "#
@@ -1930,7 +1987,191 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"readonly":true,"unchanged":true,"numeric":true,"monotonic":true,"noLegacyMemory":true}"#
+        r#"{"interfaceShape":true,"globalAccessor":true,"timeOriginAccessor":true,"unchanged":true,"numeric":true,"monotonic":true,"replaceable":true,"originalStillWorks":true,"noLegacyMemory":true}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_user_timing_uses_shared_mark_measure_runtime() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const capture = callback => {
+            try {
+                callback();
+                return "none";
+            } catch (error) {
+                return error.name;
+            }
+        };
+        const timingNames = [
+            "navigationStart",
+            "unloadEventStart",
+            "unloadEventEnd",
+            "redirectStart",
+            "redirectEnd",
+            "fetchStart",
+            "domainLookupStart",
+            "domainLookupEnd",
+            "connectStart",
+            "connectEnd",
+            "secureConnectionStart",
+            "requestStart",
+            "responseStart",
+            "responseEnd",
+            "domLoading",
+            "domInteractive",
+            "domContentLoadedEventStart",
+            "domContentLoadedEventEnd",
+            "domComplete",
+            "loadEventStart",
+            "loadEventEnd"
+        ];
+        const timingNamesAccepted = timingNames.every(name => {
+            const mark = performance.mark(name, { startTime: 1 });
+            performance.clearMarks(name);
+            const measure = performance.measure(name);
+            performance.clearMeasures(name);
+            return mark.name === name && measure.name === name;
+        });
+
+        const sourceDetail = { state: "before" };
+        const mark = performance.mark("worker-mark", {
+            startTime: 2,
+            detail: sourceDetail
+        });
+        sourceDetail.state = "after";
+        const measure = performance.measure("worker-measure", {
+            start: "worker-mark",
+            end: 5,
+            detail: { kind: "measure" }
+        });
+        const detached = new PerformanceMark("detached", {
+            startTime: 3,
+            detail: { kind: "detached" }
+        });
+        const reservedBoundary = capture(() => {
+            performance.mark("navigationStart", { startTime: 4 });
+            performance.measure("reserved", "navigationStart", "navigationStart");
+        });
+
+        postMessage({
+            timingNamesAccepted,
+            interfaces:
+                performance instanceof Performance
+                && mark instanceof PerformanceMark
+                && mark instanceof PerformanceEntry
+                && measure instanceof PerformanceMeasure
+                && measure instanceof PerformanceEntry
+                && detached instanceof PerformanceMark,
+            inheritance:
+                Object.getPrototypeOf(Performance) === EventTarget
+                && Object.getPrototypeOf(PerformanceMark) === PerformanceEntry
+                && Object.getPrototypeOf(PerformanceMeasure) === PerformanceEntry,
+            mark: [
+                mark.name,
+                mark.entryType,
+                mark.startTime,
+                mark.duration,
+                mark.detail.state,
+                mark.detail === sourceDetail
+            ].join(":"),
+            measure: [
+                measure.name,
+                measure.entryType,
+                measure.startTime,
+                measure.duration,
+                measure.detail.kind
+            ].join(":"),
+            entryIds:
+                Number.isSafeInteger(mark.id)
+                && mark.id > 0
+                && Number.isSafeInteger(measure.id)
+                && measure.id > mark.id
+                && mark.navigationId === 0
+                && measure.navigationId === 0
+                && detached.id === 0
+                && detached.navigationId === 0
+                && mark.toJSON().id === mark.id
+                && mark.toJSON().navigationId === 0,
+            detachedTimelineCount:
+                performance.getEntriesByName("detached", "mark").length,
+            bufferedTypes: performance.getEntries()
+                .map(entry => entry.entryType)
+                .join(","),
+            reservedBoundary,
+            missingBoundary: capture(() =>
+                performance.measure("missing", "not-a-mark")),
+            markBrand: capture(() => performance.mark.call({}, "bad")),
+            nowBrand: capture(() => performance.now.call({}))
+        });
+        close();
+        "#
+        .into(),
+        "test://worker_user_timing".into(),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"timingNamesAccepted":true,"interfaces":true,"inheritance":true,"mark":"worker-mark:mark:2:0:before:false","measure":"worker-measure:measure:2:3:measure","entryIds":true,"detachedTimelineCount":0,"bufferedTypes":"mark,measure,mark","reservedBoundary":"TypeError","missingBoundary":"SyntaxError","markBrand":"TypeError","nowBrand":"TypeError"}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_performance_observer_delivers_live_and_buffered_user_timing_entries() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const firstObserver = new PerformanceObserver((list, observer) => {
+            const liveEntries = list.getEntries();
+            observer.disconnect();
+            const bufferedObserver = new PerformanceObserver(bufferedList => {
+                const bufferedEntries = bufferedList.getEntries();
+                postMessage({
+                    interfaces:
+                        firstObserver instanceof PerformanceObserver
+                        && list instanceof PerformanceObserverEntryList,
+                    prototypeMethods:
+                        typeof list.getEntries === "function"
+                        && typeof list.getEntriesByType === "function"
+                        && typeof list.getEntriesByName === "function",
+                    supportedEntryTypes: PerformanceObserver.supportedEntryTypes.join(","),
+                    live: liveEntries
+                        .map(entry => `${entry.name}:${entry.entryType}`)
+                        .join(","),
+                    liveMarks: list.getEntriesByType("mark").length,
+                    namedMeasure: list.getEntriesByName("worker-observed-measure", "measure").length,
+                    buffered: bufferedEntries
+                        .map(entry => `${entry.name}:${entry.entryType}`)
+                        .join(",")
+                });
+                bufferedObserver.disconnect();
+                close();
+            });
+            bufferedObserver.observe({ type: "mark", buffered: true });
+        });
+        firstObserver.observe({ entryTypes: ["mark", "measure"] });
+        performance.mark("worker-observed-mark", { startTime: 1 });
+        performance.measure("worker-observed-measure", {
+            start: 1,
+            end: 3
+        });
+        "#
+        .into(),
+        "test://worker_performance_observer".into(),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"interfaces":true,"prototypeMethods":true,"supportedEntryTypes":"mark,measure,resource","live":"worker-observed-mark:mark,worker-observed-measure:measure","liveMarks":1,"namedMeasure":1,"buffered":"worker-observed-mark:mark"}"#
     );
 }
 

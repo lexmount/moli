@@ -19,7 +19,7 @@ use crate::parser_module_evaluation::{
 use crate::parser_script::action::ParserClassicScriptNextOwnerAction;
 use crate::planning::{PreparedScript, SharedScriptSourceLoad};
 use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParserModuleEvaluationReactionUpdate {
@@ -620,7 +620,7 @@ where
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
         mut convert: Convert,
     ) -> Option<ParserModuleEvaluationReactionUpdate>
     where
@@ -631,7 +631,7 @@ where
     {
         let root_entry =
             self.parser_module_evaluations
-                .mark_rejected(reaction_id, reason, error_constructor)?;
+                .mark_rejected(reaction_id, reason, error_value)?;
         let queued_ready_action_count = self.promote_ready_parser_module_evaluations(&mut convert);
         Some(ParserModuleEvaluationReactionUpdate {
             root_entry,

@@ -41,7 +41,31 @@ fn event_subclass_constructor_callback<'s>(
             init_arg.to_object(scope)
         }
     };
-    let (bubbles, cancelable, composed) = read_event_init(scope, &args);
+    let clipboard_event_init = if kind == EventSubclassKind::ClipboardEvent {
+        let Some(init) = data::parse_clipboard_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let clipboard_change_event_init = if kind == EventSubclassKind::ClipboardChangeEvent {
+        let Some(init) = data::parse_clipboard_change_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let (bubbles, cancelable, composed) = clipboard_event_init
+        .as_ref()
+        .map(data::ClipboardEventInitMembers::event_flags)
+        .or_else(|| {
+            clipboard_change_event_init
+                .as_ref()
+                .map(data::ClipboardChangeEventInitMembers::event_flags)
+        })
+        .unwrap_or_else(|| read_event_init(scope, &args));
 
     initialize_event_object(scope, event, &event_type, bubbles, cancelable);
     define_event_property(
@@ -84,7 +108,20 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::ClipboardEvent => {
-            data::initialize_clipboard_event(scope, event, init);
+            data::initialize_clipboard_event(
+                scope,
+                event,
+                clipboard_event_init.expect("ClipboardEvent init should be parsed"),
+            );
+        }
+        EventSubclassKind::ClipboardChangeEvent => {
+            if !data::initialize_clipboard_change_event(
+                scope,
+                event,
+                clipboard_change_event_init.expect("ClipboardChangeEvent init should be parsed"),
+            ) {
+                return;
+            }
         }
         EventSubclassKind::CapturedMouseEvent => {
             if !data::initialize_captured_mouse_event(scope, event, init) {
@@ -148,14 +185,27 @@ fn event_subclass_constructor_callback<'s>(
                 return;
             }
         }
-        EventSubclassKind::CommandEvent => data::initialize_command_event(scope, event, init),
+        EventSubclassKind::CommandEvent => {
+            if !data::initialize_command_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::ToggleEvent => {
             if !data::initialize_toggle_event(scope, event, init) {
                 return;
             }
         }
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
-        EventSubclassKind::PopStateEvent => data::initialize_pop_state_event(scope, event, init),
+        EventSubclassKind::PopStateEvent => {
+            if !data::initialize_pop_state_event(scope, event, init) {
+                return;
+            }
+        }
+        EventSubclassKind::HashChangeEvent => {
+            if !data::initialize_hash_change_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::PageTransitionEvent => {
             data::initialize_page_transition_event(scope, event, init);
         }

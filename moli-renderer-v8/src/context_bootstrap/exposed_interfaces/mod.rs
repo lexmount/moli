@@ -12,6 +12,7 @@ pub(super) use install::{
     filter_window_exposed_interfaces, initialize_realm_interface_registry,
     install_interface_template_metadata, install_window_exposed_interfaces,
     install_worker_exposed_interfaces, is_lazy_exposed_interface,
+    prepare_worker_event_target_template,
 };
 #[cfg(test)]
 pub(crate) use install::{

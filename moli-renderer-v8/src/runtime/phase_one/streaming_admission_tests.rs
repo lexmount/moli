@@ -753,6 +753,16 @@ fn streaming_stylesheet_and_json_ld_reach_tail_and_post_parse_boundary() {
                                         DocumentLifecycleTurnReadiness::Runnable { .. },
                                     ..
                                 } => {}
+                                DocumentLifecycleTurnOutcome {
+                                    readiness: DocumentLifecycleTurnReadiness::Blocked { .. },
+                                    ..
+                                } if pending.as_ref().is_some_and(|pending| pending.awaiting_dom_task.is_some()) => {
+                                    let loader = page_vm.request_client.clone();
+                                    assert!(page_vm.run_exact_selected_page_task_for_test(
+                                        crate::runtime::page_vm::PageSelectedTaskTestSelector::AnyDomManipulation,
+                                        &loader,
+                                    ).await?, "admitted DCL must advance through the real DOM source head");
+                                }
                                 outcome => panic!(
                                     "streaming fixture should reach DCL without parking: {outcome:?}"
                                 ),

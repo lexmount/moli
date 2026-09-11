@@ -1,3 +1,4 @@
+pub(crate) mod abort_signal_events;
 mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
@@ -10,7 +11,9 @@ mod css_fontface_runtime;
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod date_locale_runtime;
+mod dom_quad;
 mod dom_rect;
+mod dom_rect_list;
 mod event_document;
 mod event_legacy;
 mod event_template;
@@ -18,6 +21,7 @@ mod events;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
+mod geometry_clone;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
@@ -35,6 +39,7 @@ pub(crate) use exposed_interfaces::{
     ready_interface_template_names as lazy_ready_constructor_template_names,
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
+mod form_navigation;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -126,16 +131,17 @@ pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
-pub(crate) use css_fontface_runtime::rebuild_font_face_set_faces;
+pub(crate) use css_fontface_runtime::{load_font_faces_for_family, rebuild_font_face_set_faces};
+pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
-    navigate_location_object_with_child_navigate_event,
+    navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser,
 };
 pub(crate) use navigation_cancellation::inform_about_canceled_navigation_for_window;
-pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data;
+pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data;
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,
     dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
@@ -177,7 +183,7 @@ mod window_accessors;
 mod window_events;
 mod window_lazy_surface;
 mod window_receiver;
-pub(crate) use window_receiver::is_window_receiver;
+pub(crate) use window_receiver::{is_window_receiver, mark_window_receiver};
 mod window_runtime;
 
 pub(crate) use form_data_runtime::{
@@ -202,14 +208,18 @@ mod worker_host;
 mod worker_location_runtime;
 
 pub(super) use self::assets::ContextBootstrapAssets;
-use self::assets::{build_constructor_template, build_constructor_template_with_callback};
+use self::assets::{
+    build_constructor_template, build_constructor_template_for_profile,
+    build_constructor_template_with_callback,
+};
 pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
 pub(crate) use self::canvas::{
-    CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
-    build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
+    BitmapRejection, BitmapTaskResult, CanvasContextKind, attach_canvas_like_context_object,
+    build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
+    build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+    reset_html_canvas_backing_store_for_dimension_assignment, settle_bitmap_task_result,
 };
 #[cfg(test)]
 pub(crate) use self::constructors::finalize_dom_exception_realm_bindings;
@@ -234,12 +244,14 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
 pub(crate) use self::dom_rect::build_dom_rect_object;
+pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_initialized,
+    EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value,
+    apply_event_handler_return_value, clear_event_composed_path, event_initialized,
     event_internal_bool_flag, event_is_dispatching, event_is_error_event, event_is_mouse_event,
     initialize_event_object, mark_event_trusted, set_event_composed_path, set_event_internal_flag,
-    set_event_trusted,
+    set_event_source_value, set_event_trusted,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,
@@ -248,15 +260,16 @@ pub(crate) use self::file_api::{
 };
 pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
 pub(crate) use self::file_api::{
-    build_file_list_object, build_file_object, flush_one_pending_file_reader,
-    selected_file_from_object,
+    build_file_list_object, build_file_object, file_list_files_from_object,
+    flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
-use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
-pub(crate) use self::history_runtime::{
-    increment_top_level_history_length_for_runtime_owner,
-    set_top_level_history_length_at_least_for_runtime_owner,
+pub(crate) use self::geometry_clone::{
+    GeometryClonePayload, build_geometry_object_from_clone_payload,
+    geometry_clone_payload_from_object,
 };
+use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
+pub(crate) use self::history_runtime::increment_top_level_history_length_for_runtime_owner;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,
@@ -293,6 +306,7 @@ pub(crate) use self::javascript_url::{
 };
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
 pub(crate) use self::location_runtime::{
+    install_constructed_document_location_runtime_state,
     sync_document_location_runtime_state_from_window,
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
 };
@@ -305,11 +319,10 @@ pub(crate) use self::media_queries::{
     mark_simple_event_target_slot, simple_event_target_add_event_listener_callback,
     simple_event_target_dispatch_event_callback, simple_event_target_inspector_listener_snapshots,
     simple_event_target_remove_event_listener_callback, simple_event_target_slot_name,
-    simple_object_event_listeners_snapshot, simple_object_event_remove_listener_value_for_type,
-    simple_object_event_set_ordered_handler, simple_object_event_target_add_listener,
-    simple_object_event_target_remove_listener,
+    simple_object_event_listener_is_registered, simple_object_event_listeners_snapshot,
+    simple_object_event_remove_listener_value_for_type, simple_object_event_set_ordered_handler,
+    simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
 };
-use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortEventListenerId, MessagePortEventListenerSnapshot,
     MessagePortRealmBinding, PreparedMessagePortEventListener,
@@ -319,6 +332,7 @@ pub(crate) use self::message_ports::{
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
 };
+use self::message_ports::{schedule_host_callback, schedule_scope_callback};
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
@@ -347,7 +361,8 @@ pub(crate) use self::performance_runtime::{
     ResourcePerformanceEntry, bind_window_performance_seed, current_performance_time_origin,
     increment_performance_event_count, record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
-    record_performance_load_event_start, record_resource_performance_entry,
+    record_performance_load_event_end_for_window, record_performance_load_event_start,
+    record_performance_load_event_start_for_window, record_resource_performance_entry,
     run_resource_timing_buffer_full_task,
 };
 use self::range::callback_arg_node_object;
@@ -378,7 +393,7 @@ pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT,
-    WINDOW_NAME_SLOT,
+    WINDOW_DOCUMENT_SLOT, WINDOW_NAME_SLOT,
 };
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, current_runtime_message_agent_cluster,
@@ -413,8 +428,10 @@ pub use self::storage_buckets::{
     storage_bucket_indexed_db_storage_key,
 };
 pub(crate) use self::stream_adapter::{
-    cancel_readable_stream, close_stream, enqueue_byte_chunk, error_stream,
-    readable_stream_disturbed, readable_stream_has_pipe_owner, require_internal_stream_value,
+    begin_readable_stream_body_consumption, cancel_readable_stream,
+    cancel_readable_stream_for_fetch, close_stream, enqueue_byte_chunk, error_stream,
+    maybe_pull_stream, prepare_readable_stream_read_with_steps, readable_stream_disturbed,
+    readable_stream_has_pipe_owner, readable_stream_locked, require_internal_stream_value,
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
@@ -423,17 +440,16 @@ pub(crate) use self::streams::{
     initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
     new_readable_stream_from_array_buffer, new_readable_stream_from_source,
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer,
+    prepare_writable_stream_transfer, proxy_fetch_body_stream, tee_fetch_body_stream,
 };
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
-    TrustedTypesCodeGenerationCheck, check_javascript_url_trusted_types,
-    install_trusted_types_eval_runtime_state, install_trusted_types_runtime_state,
-    trusted_html_string_or_throw, trusted_html_value_string,
+    TrustedTypeKind, TrustedTypesCodeGenerationCheck, check_javascript_url_trusted_types,
+    install_trusted_types_runtime_state, trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
-    trusted_script_url_string_or_throw, trusted_types_code_generation_check,
-    trusted_types_code_generation_check_callback,
+    trusted_script_url_string_or_throw, trusted_type_kind, trusted_type_string,
+    trusted_type_string_or_throw, trusted_types_code_generation_check,
 };
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
 pub(crate) use self::web_storage::install_storage_aliases_for_window;
@@ -448,10 +464,9 @@ pub(crate) use self::webassembly_runtime::{
 };
 pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_event};
 pub(crate) use self::window_events::{
-    WINDOW_EVENT_HANDLER_PROPERTIES, dispatch_window_error_event_with_details,
-    dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
-    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
-    window_body_onerror_handler_is_compiled,
+    BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES, WINDOW_EVENT_HANDLER_PROPERTIES,
+    dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
+    dispatch_window_report_error_message,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
@@ -587,6 +602,16 @@ pub(crate) fn install_worker_lazy_exposed_interfaces<'s>(
         .map_err(|error| anyhow!("failed to initialize worker caches accessor: {error}"))
 }
 
+pub(crate) fn prepare_service_worker_event_target_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    exposed_interfaces::prepare_worker_event_target_template(
+        scope,
+        exposed_interfaces::RealmKind::ServiceWorker,
+        constructor_specs(),
+    )
+}
+
 pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: self::specs::ConstructorSpec,
@@ -600,6 +625,20 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         return Ok(template);
     }
     let template = match spec.interface.name() {
+        "DOMMatrixReadOnly" => build_constructor_template_with_callback(
+            scope,
+            spec,
+            0,
+            profile,
+            geometry_runtime::dom_matrix_readonly_worker_constructor_callback,
+        )?,
+        "DOMMatrix" => build_constructor_template_with_callback(
+            scope,
+            spec,
+            0,
+            profile,
+            geometry_runtime::dom_matrix_worker_constructor_callback,
+        )?,
         "StorageManager" => {
             let template = navigator_runtime::build_storage_manager_worker_template(scope);
             template.read_only_prototype();
@@ -633,9 +672,11 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         "EventSource" => build_constructor_template_with_callback(
             scope,
             spec,
+            1,
+            profile,
             worker_unsupported_constructor_callback,
         )?,
-        _ => build_constructor_template(scope, spec)?,
+        _ => build_constructor_template_for_profile(scope, spec, profile)?,
     };
     if profile == exposed_interfaces::TemplateBuildProfile::DedicatedWorker
         && spec.interface.name() == "FileSystemFileHandle"
@@ -785,17 +826,89 @@ struct WorkerAbortControllerTemplateDeclaration {
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
+struct WorkerGlobalScopePerformancePrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = worker_performance_getter_callback,
+        setter = worker_performance_setter_callback
+    )]
+    performance: (),
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
 struct WorkerGlobalScopeCryptoPrototypeDeclaration {
     #[webapi(accessor_property, getter = worker_crypto_getter_callback)]
     crypto: (),
 }
 
-pub(crate) fn initialize_worker_fetch_realm_state<'s>(
+pub(crate) fn initialize_worker_performance_realm_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _global: v8::Local<'s, v8::Object>,
+    global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    crate::network_host::initialize_fetch_realm_helpers(scope)?;
-    Ok(())
+    self::performance_runtime::install_worker_performance_runtime_state(scope, global)?;
+    install_worker_performance_global_attribute(scope, global)
+}
+
+fn install_worker_performance_global_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let performance = get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+        .filter(|value| !value.is_undefined())
+        .ok_or_else(|| anyhow!("worker performance runtime state did not install performance"))?;
+    let Some(prototype) = global_constructor_prototype(scope, "WorkerGlobalScope") else {
+        return define_global_value(scope, global, "performance", performance);
+    };
+    WorkerGlobalScopePerformancePrototypeDeclaration::default()
+        .initialize(scope, prototype)
+        .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope performance: {error}"))
+}
+
+fn worker_performance_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_current_worker_global_receiver(scope, args.this()) {
+        return;
+    }
+    let global = scope.get_current_context().global(scope);
+    match get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+        .filter(|value| !value.is_undefined())
+    {
+        Some(value) => rv.set(value),
+        None => rv.set_undefined(),
+    }
+}
+
+fn worker_performance_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !require_current_worker_global_receiver(scope, receiver) {
+        return;
+    }
+    let _ = receiver.define_own_property(
+        scope,
+        v8str(scope, "performance").into(),
+        args.get(0),
+        v8::PropertyAttribute::NONE,
+    );
+}
+
+fn require_current_worker_global_receiver(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) -> bool {
+    let global = scope.get_current_context().global(scope);
+    if receiver.strict_equals(global.into()) {
+        return true;
+    }
+    throw_type_error(scope, "Illegal invocation");
+    false
 }
 
 pub(crate) fn initialize_worker_crypto_realm_state<'s>(
@@ -837,11 +950,10 @@ fn worker_crypto_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    if !args.this().strict_equals(global.into()) {
-        throw_type_error(scope, "Illegal invocation");
+    if !require_current_worker_global_receiver(scope, args.this()) {
         return;
     }
+    let global = scope.get_current_context().global(scope);
     match self::crypto::ensure_worker_crypto_for_global(scope, global) {
         Ok(crypto) => rv.set(crypto.into()),
         Err(error) => throw_error(

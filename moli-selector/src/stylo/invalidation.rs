@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use dom::{ElementState, HEADING_LEVEL_OFFSET};
+use dom::ElementState;
 use indexmap::{IndexMap, IndexSet};
 use selectors::{
     OpaqueElement,
@@ -72,7 +72,10 @@ use crate::{
         NodeId,
         native::{ConnectedShadowRootSnapshot, DomHost, Element},
     },
-    stylo::style_traversal::{StyleDomHostBinding, StyleElement},
+    stylo::{
+        query::heading_state_for_element,
+        style_traversal::{StyleDomHostBinding, StyleElement},
+    },
 };
 
 pub use style::moli_invalidation::{
@@ -559,7 +562,7 @@ pub fn stylo_element_dependency_snapshot(
     Some(StyloElementDependencySnapshot::new(
         handle,
         element.local_name().to_owned(),
-        stylo_retained_dependency_state_for_element(element),
+        stylo_retained_dependency_state_for_element(host, handle, element),
         element
             .attributes()
             .iter()
@@ -1564,22 +1567,12 @@ fn ascii_whitespace_tokens(value: &str) -> Vec<String> {
     tokens
 }
 
-fn stylo_retained_dependency_state_for_element(element: &Element) -> ElementState {
-    let mut state = ElementState::empty();
-    const HEADING_NAMES: [(&str, u64); 6] = [
-        ("h1", 1),
-        ("h2", 2),
-        ("h3", 3),
-        ("h4", 4),
-        ("h5", 5),
-        ("h6", 6),
-    ];
-    if let Some(level) = HEADING_NAMES
-        .iter()
-        .find_map(|(name, level)| element.is_html_element(name).then_some(*level))
-    {
-        state |= ElementState::from_bits_retain(level << HEADING_LEVEL_OFFSET);
-    }
+fn stylo_retained_dependency_state_for_element(
+    host: &DomHost,
+    handle: NodeId,
+    element: &Element,
+) -> ElementState {
+    let mut state = heading_state_for_element(host, handle);
     if element.is_html_media() {
         state |= ElementState::PAUSED;
         if element.media_muted() {

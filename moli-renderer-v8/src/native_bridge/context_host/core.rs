@@ -237,6 +237,7 @@ impl JsContextHost {
             observers: ObserverStore::default(),
             text_codecs: TextCodecStore::default(),
             child_browsing_contexts: IndexMap::new(),
+            object_fallback_bootstraps: HashMap::new(),
             frame_owner_store,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),
             frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore::default(),
@@ -302,10 +303,16 @@ impl JsContextHost {
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
+            script_preparation_errors:
+                super::script_preparation_errors::ScriptPreparationErrorState::default(),
+            promise_rejection_tasks:
+                super::promise_rejection_tasks::PromiseRejectionTaskState::default(),
+            pending_selectedcontent_updates: HashSet::new(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
             pending_image_load_events: HashMap::new(),
             next_image_load_event_id: 1,
+            current_image_requests: HashMap::new(),
             pending_media_load_sequences: HashMap::new(),
             next_media_load_sequence_id: 1,
             pending_text_track_load_sequences: HashMap::new(),
@@ -324,7 +331,9 @@ impl JsContextHost {
             next_image_decode_id: 1,
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
+            next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId::first(),
             next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId::first(),
+            pending_bitmap_tasks: HashMap::new(),
             pending_webcrypto_tasks: HashMap::new(),
             opfs_owner_state: None,
             history_queue: HistoryQueueState::default(),
@@ -369,6 +378,7 @@ impl JsContextHost {
             child_window_event_listeners: HashMap::new(),
             next_child_window_event_registration_id: 0,
             event_callbacks: Default::default(),
+            active_window_error_report_owners: HashSet::new(),
             browser_context_runtime,
             top_level_navigation_handoff_tx,
             service_worker_task_tx,
@@ -383,9 +393,9 @@ impl JsContextHost {
             child_web_storage_opaque_context_nonces: HashMap::new(),
             broadcast_channel_wrappers: HashMap::new(),
             form_past_named_items: HashMap::new(),
-            button_element_targets: HashMap::new(),
             constructing_form_data_forms: Vec::new(),
             active_form_submission_forms: Vec::new(),
+            active_dialog_request_closes: HashSet::new(),
             pending_form_submission_child_targets: HashMap::new(),
             active_image_submitter_coordinate: None,
             current_inline_script_stack: Vec::new(),
@@ -714,6 +724,18 @@ impl JsContextHost {
             .popup_load_event()
     }
 
+    pub(crate) fn page_popup_close_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPagePopupCloseSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before popup close admission",
+            )
+            .dom_manipulation()
+            .popup_close()
+    }
+
     pub(crate) fn page_file_entry_file_callback_sender(
         &self,
     ) -> crate::page_task_queue::RendererPageFileEntryFileCallbackSender {
@@ -724,6 +746,36 @@ impl JsContextHost {
             )
             .dom_manipulation()
             .file_entry_file_callback()
+    }
+
+    pub(crate) fn page_script_preparation_error_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageScriptPreparationErrorSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its task capabilities before script preparation error admission")
+            .dom_manipulation()
+            .script_preparation_error()
+    }
+
+    pub(crate) fn page_promise_rejection_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPagePromiseRejectionSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its task capabilities before promise rejection admission")
+            .dom_manipulation()
+            .promise_rejection()
+    }
+
+    pub(crate) fn page_main_document_lifecycle_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageMainDocumentLifecycleSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its lifecycle task capability")
+            .dom_manipulation()
+            .main_document_lifecycle()
     }
 
     pub(crate) fn page_file_reading_sender(
@@ -913,6 +965,16 @@ impl JsContextHost {
             .worker_host_bridge()
     }
 
+    pub(crate) fn page_bitmap_task_sender(
+        &self,
+    ) -> &crate::page_task_queue::RendererPageBitmapTaskSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before Bitmap registration",
+            )
+            .bitmap_task()
+    }
     pub(crate) fn page_webcrypto_task_sender(
         &self,
     ) -> &crate::page_task_queue::RendererPageWebCryptoTaskSender {
@@ -1101,14 +1163,14 @@ impl JsContextHost {
         document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationRejected {
                 document_owner,
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
             },
         );
     }
@@ -1134,7 +1196,7 @@ impl JsContextHost {
         realm_id: crate::frame_owner_model::FrameRealmId,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationRejected {
@@ -1142,7 +1204,7 @@ impl JsContextHost {
                 realm_id,
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
             },
         );
     }
@@ -1424,36 +1486,6 @@ impl JsContextHost {
             .then_some(item_handle)
     }
 
-    pub(in crate::native_bridge) fn remember_button_element_target(
-        &mut self,
-        source_handle: DomHandle,
-        slot: &str,
-        target_handle: DomHandle,
-    ) {
-        self.button_element_targets
-            .insert((source_handle, slot.to_owned()), target_handle);
-    }
-
-    pub(in crate::native_bridge) fn clear_button_element_target(
-        &mut self,
-        source_handle: DomHandle,
-        slot: &str,
-    ) {
-        self.button_element_targets
-            .remove(&(source_handle, slot.to_owned()));
-    }
-
-    pub(in crate::native_bridge) fn button_element_target(
-        &self,
-        source_handle: DomHandle,
-        slot: &str,
-    ) -> Option<DomHandle> {
-        self.button_element_targets
-            .get(&(source_handle, slot.to_owned()))
-            .copied()
-            .filter(|handle| self.dom_host().node(*handle).is_some())
-    }
-
     pub(in crate::native_bridge) fn replace_active_image_submitter_coordinate(
         &mut self,
         coordinate: Option<(DomHandle, u32, u32)>,
@@ -1512,11 +1544,19 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn mark_pending_selectedcontent_update(&mut self, select: DomHandle) -> bool {
+        self.pending_selectedcontent_updates.insert(select)
+    }
+
+    pub(crate) fn take_pending_selectedcontent_update(&mut self, select: DomHandle) -> bool {
+        self.pending_selectedcontent_updates.remove(&select)
+    }
+
     pub(crate) fn pending_image_load_event(
         &self,
         handle: DomHandle,
     ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.get(&handle).copied()
+        self.pending_image_load_events.get(&handle).cloned()
     }
 
     pub(crate) fn next_image_load_event_id(&mut self) -> super::ImageLoadEventId {
@@ -1659,12 +1699,34 @@ impl JsContextHost {
         self.lazy_media_load_candidates.iter().copied().collect()
     }
 
+    pub(crate) fn set_current_image_request(
+        &mut self,
+        handle: DomHandle,
+        request_key: Option<crate::types::ImageRequestKey>,
+    ) {
+        if let Some(request_key) = request_key {
+            self.current_image_requests.insert(handle, request_key);
+        } else {
+            self.current_image_requests.remove(&handle);
+        }
+    }
+
+    pub(crate) fn current_image_request_url(&self, handle: DomHandle) -> Option<&str> {
+        self.current_image_requests
+            .get(&handle)
+            .map(crate::types::ImageRequestKey::url)
+    }
+
     pub(crate) fn begin_form_data_construction(&mut self, form_handle: DomHandle) -> bool {
         if self.constructing_form_data_forms.contains(&form_handle) {
             return false;
         }
         self.constructing_form_data_forms.push(form_handle);
         true
+    }
+
+    pub(crate) fn is_constructing_form_data_for(&self, form_handle: DomHandle) -> bool {
+        self.constructing_form_data_forms.contains(&form_handle)
     }
 
     pub(crate) fn end_form_data_construction(&mut self, form_handle: DomHandle) {
@@ -1693,6 +1755,14 @@ impl JsContextHost {
         {
             self.active_form_submission_forms.remove(index);
         }
+    }
+
+    pub(crate) fn begin_dialog_request_close(&mut self, dialog: DomHandle) -> bool {
+        self.active_dialog_request_closes.insert(dialog)
+    }
+
+    pub(crate) fn end_dialog_request_close(&mut self, dialog: DomHandle) {
+        self.active_dialog_request_closes.remove(&dialog);
     }
 
     pub(crate) fn observers_mut(
