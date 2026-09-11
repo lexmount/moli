@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 pub(super) struct ParsedWindowFetchInput {
     pub(super) url: String,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) body: Option<bytes::Bytes>,
     pub(super) body_stream: Option<v8::Global<v8::Object>>,
@@ -106,6 +107,7 @@ pub(super) fn parse_window_fetch_input<'s>(
         }
         Ok(ParsedWindowFetchInput {
             url,
+            blob_url_entry: inherited.blob_url_entry,
             method,
             body,
             body_stream,
@@ -146,6 +148,7 @@ pub(super) fn parse_window_fetch_input<'s>(
             .unwrap_or(moli_fetch::RequestRedirectMode::Follow);
         Ok(ParsedWindowFetchInput {
             url,
+            blob_url_entry: None,
             method: init.method,
             body: init.body,
             body_stream: init.body_stream,

@@ -1,5 +1,6 @@
 use super::*;
 use crate::network_host::{FetchArgumentError, convert_fetch_arguments};
+use crate::network_host::{CapturedBlobUrl, local_url_response_with_blob_entry};
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
     ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
@@ -150,6 +151,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     body: Option<bytes::Bytes>,
     headers: moli_fetch::RequestHeaders,
@@ -163,6 +165,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
 ) {
+    // Resolve local URLs before scheduling: fetch(url) already parsed and
+    // captured its entry when JavaScript regains control and may revoke it.
+    let local_response =
+        local_url_response_with_blob_entry(&resolved_url, &method, blob_url_entry.as_ref());
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
         let (result, network_request_headers) = if let Err(message) =
@@ -170,7 +176,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
             (Err(message), None)
-        } else if let Some(result) = local_url_response_result(&resolved_url, &method) {
+        } else if let Some(result) = local_response {
             (
                 result
                     .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
@@ -457,6 +463,7 @@ fn spawn_worker_fetch_service_worker(
                 referrer_policy,
                 network_partition_key,
                 resolved_url,
+                None,
                 method,
                 body,
                 headers,
@@ -662,6 +669,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         network_partition_key,
         fetch_id,
         resolved_url,
+        blob_url_entry,
         method,
         body,
         headers,
@@ -708,6 +716,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
             network_partition_key,
             request.fetch_id,
             request.url,
+            pending.blob_url_entry.clone(),
             request.method,
             request.body,
             request.headers,
@@ -726,6 +735,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         state.borrow().referrer_policy.clone(),
         network_partition_key,
         resolved_url,
+        blob_url_entry,
         method,
         body,
         headers,
@@ -1806,6 +1816,7 @@ pub(in crate::worker) fn make_rejected_promise_with_value<'s>(
 
 pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     body: Option<bytes::Bytes>,
     body_stream: Option<v8::Global<v8::Object>>,
@@ -1835,6 +1846,9 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     let signal;
     let body_stream;
     let has_stream_body;
+    let blob_url_entry = inherited
+        .as_ref()
+        .and_then(|request| request.blob_url_entry.clone());
     let (
         url_input,
         method,
@@ -1983,13 +1997,19 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         request_mode,
     )?;
     crate::network_host::validate_request_url_credentials(&resolved_url)?;
-    if let Some(referrer) = init_validation.validate(scope, request_mode.as_ref(), &metadata.cache)? { metadata.referrer = referrer; }
+    if let Some(referrer) =
+        init_validation.validate(scope, request_mode.as_ref(), &metadata.cache)?
+    {
+        metadata.referrer = referrer;
+    }
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
+    let blob_url_entry = blob_url_entry.or_else(|| CapturedBlobUrl::capture(&resolved_url));
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
     }
     Ok(ResolvedWorkerFetchInput {
         resolved_url,
+        blob_url_entry,
         method,
         body,
         body_stream,
@@ -2055,6 +2075,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
 
     let ResolvedWorkerFetchInput {
         resolved_url,
+        blob_url_entry,
         method,
         body,
         body_stream,
@@ -2248,6 +2269,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     signal_id,
                     load: load.clone(),
                     request_url: resolved_url.clone(),
+                    blob_url_entry: blob_url_entry.clone(),
                     request_method: method.clone(),
                     request_headers: headers.clone(),
                     request_body: request_body.clone(),
@@ -2346,6 +2368,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     signal_id,
                     load: load.clone(),
                     request_url: resolved_url.clone(),
+                    blob_url_entry: blob_url_entry.clone(),
                     request_method: method.clone(),
                     request_headers: headers.clone(),
                     request_body,
@@ -2401,6 +2424,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 referrer_policy,
                 network_partition_key,
                 resolved_url,
+                blob_url_entry,
                 method,
                 body,
                 headers,

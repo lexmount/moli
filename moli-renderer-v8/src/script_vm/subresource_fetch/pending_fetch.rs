@@ -42,6 +42,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         // The text snapshot is only for protocol display. Unless the client
         // explicitly replaces the body, retain the original binary upload.
@@ -115,6 +116,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -172,6 +174,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -233,6 +236,7 @@ impl ScriptVm {
                     policy_context,
                     continuation: PendingSubresourceContinuation::CspReport { client_id },
                     deferred_request_started,
+                    blob_url_entry,
                 };
                 if !self._context_host.borrow().network_offline() {
                     let maybe_pending = self.continue_csp_report_via_service_worker(
@@ -281,6 +285,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let request_url = url.unwrap_or_else(|| pending.info.url.clone());
@@ -914,6 +919,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -1070,6 +1076,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
@@ -1111,6 +1118,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         // Request-stage fulfillment has no followed redirects yet. Reuse this
         // complete head for validation and response materialization.
@@ -1443,6 +1451,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
