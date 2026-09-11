@@ -30,12 +30,16 @@ pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
 
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
+    Some(blob_response(url, body_bytes, mime_type))
+}
+
+pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: String) -> Response {
     let headers = moli_fetch::headers_from_byte_strings(&[
         ("Content-Length".to_owned(), body_bytes.len().to_string()),
         ("Content-Type".to_owned(), mime_type),
     ])
     .expect("Blob response headers contain ByteStrings");
-    Some(Response::from_head_and_lossy_body_bytes(
+    Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
             final_url: url.clone(),
             status: 200,
@@ -48,7 +52,7 @@ pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
             negotiated_http_version: None,
         },
         body_bytes,
-    ))
+    )
 }
 
 pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
@@ -89,17 +93,28 @@ pub(crate) fn local_url_response_result(
     url: &url::Url,
     method: &str,
 ) -> Option<Result<Response, LocalUrlError>> {
+    local_url_response_with_blob_entry(url, method, None)
+}
+
+pub(crate) fn local_url_response_with_blob_entry(
+    url: &url::Url,
+    method: &str,
+    entry: Option<&CapturedBlobUrl>,
+) -> Option<Result<Response, LocalUrlError>> {
     match url.scheme() {
-        "blob" if method != "GET" => Some(Err(LocalUrlError::BlobMethod {
-            method: method.to_owned(),
-        })),
-        "blob" => Some(
-            blob_url_response(url)
-                .ok_or_else(|| LocalUrlError::BlobUnavailable { url: url.clone() }),
-        ),
-        "data" => Some(
-            data_url_response(url).ok_or_else(|| LocalUrlError::InvalidData { url: url.clone() }),
-        ),
+        "blob" if method != "GET" => {
+            Some(Err(LocalUrlError::BlobMethod { method: method.to_owned() }))
+        }
+        "blob" => {
+            let response = match entry.filter(|entry| entry.matches(url)) {
+                Some(entry) => entry.response(url),
+                None => blob_url_response(url),
+            };
+            Some(response.ok_or_else(|| LocalUrlError::BlobUnavailable { url: url.clone() }))
+        }
+        "data" => {
+            Some(data_url_response(url).ok_or_else(|| LocalUrlError::InvalidData { url: url.clone() }))
+        }
         _ => None,
     }
 }
