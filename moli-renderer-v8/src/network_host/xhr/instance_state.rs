@@ -69,8 +69,6 @@ struct XmlHttpRequestStateDeclaration {
     pending_kind: (),
     #[webapi(slot = XHR_PENDING_URL_SLOT, init = "")]
     pending_url: (),
-    #[webapi(slot = XHR_PENDING_BODY_SLOT, init = "")]
-    pending_body: (),
     #[webapi(slot = XHR_PENDING_BODY_BYTES_SLOT, init = "undefined")]
     pending_body_bytes: (),
     #[webapi(slot = XHR_PENDING_HEADERS_SLOT, init = string("[]"))]
