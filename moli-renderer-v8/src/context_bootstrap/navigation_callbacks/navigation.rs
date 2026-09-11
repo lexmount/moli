@@ -803,7 +803,7 @@ const PRECOMMIT_COMMIT_ATTEMPT_ID_SLOT: &str = "__lmPrecommitCommitAttemptId";
 const NAVIGATION_PENDING_PRECOMMIT_COMMIT_SLOT: &str = "__lmNavigationPendingPrecommitCommit";
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct PrecommitCommitDataDeclaration<'scope> {
     #[webapi(slot = PRECOMMIT_COMMIT_ACTIVE_SLOT)]
     active: bool,
@@ -1340,7 +1340,7 @@ const INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT: &str = "__lmInterceptSettlementAttem
 const NAVIGATION_ACTIVE_INTERCEPT_SETTLEMENT_SLOT: &str = "__lmNavigationActiveInterceptSettlement";
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct InterceptSettlementDataDeclaration<'scope> {
     #[webapi(slot = INTERCEPT_SETTLEMENT_ACTIVE_SLOT)]
     active: bool,

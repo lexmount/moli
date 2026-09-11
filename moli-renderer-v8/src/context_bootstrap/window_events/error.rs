@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     cancelable: bool,
@@ -21,7 +21,7 @@ struct ErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct ErrorEventDetailsDeclaration<'scope> {
     message: v8::Local<'scope, v8::Value>,
     filename: v8::Local<'scope, v8::Value>,

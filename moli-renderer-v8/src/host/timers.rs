@@ -25,7 +25,7 @@ use moli_time::{TimerId, TimerReadyAllowance, TimerScheduler};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct TimerErrorEventInitDeclaration<'scope> {
     cancelable: bool,
     bubbles: bool,

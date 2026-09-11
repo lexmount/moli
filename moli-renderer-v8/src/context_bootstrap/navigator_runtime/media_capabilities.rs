@@ -27,7 +27,7 @@ struct MediaCapabilitiesPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct MediaCapabilitiesDecodingInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     supported: bool,
@@ -46,7 +46,7 @@ struct MediaCapabilitiesDecodingInfoDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct MediaCapabilitiesEncodingInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     supported: bool,

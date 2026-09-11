@@ -2,7 +2,7 @@ use super::util::{call_script_visible_function, v8_string, v8str};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DetachedFocusEventInitDeclaration<'scope> {
     bubbles: bool,
     #[webapi(constructor_default = false)]
@@ -13,7 +13,7 @@ struct DetachedFocusEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DetachedSimpleEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,

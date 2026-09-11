@@ -18,7 +18,7 @@ use native_template::build_native_bridge_template;
 use node_template::build_node_wrapper_template;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NativeBridgeGlobalDeclaration<'scope> {
     #[webapi(data_property = "__moliNativeBridge")]
     bridge: v8::Local<'scope, v8::Object>,

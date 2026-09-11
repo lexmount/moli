@@ -111,7 +111,7 @@ struct EventSourceAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct EventSourceMessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::String>,
     origin: v8::Local<'scope, v8::String>,

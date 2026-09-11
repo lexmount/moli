@@ -805,7 +805,7 @@ struct FileSystemWritableFileStreamPrototypeDeclaration {
 
 #[derive(WebApiObject)]
 // An internal UnderlyingSink record, not a Web IDL interface instance.
-#[webapi(record)]
+#[webapi(plain)]
 struct FileSystemWritableSinkObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)]
     state_json: String,

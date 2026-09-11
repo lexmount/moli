@@ -6,7 +6,7 @@ pub(in crate::native_bridge::document) use crate::util::{
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ObjectArrayItemMethodDeclaration {
     #[webapi(method, callback = object_array_item_callback)]
     item: (),

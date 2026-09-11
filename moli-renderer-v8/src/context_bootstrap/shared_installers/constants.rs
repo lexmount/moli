@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
-#[webapi(record, enumerable)]
+#[webapi(plain, enumerable)]
 struct NodeFilterConstantsObjectDeclaration {
     #[webapi(constant = "FILTER_ACCEPT", value = 1u32)]
     _filter_accept: (),

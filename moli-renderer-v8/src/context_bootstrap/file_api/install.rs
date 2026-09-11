@@ -15,7 +15,7 @@ struct FileReaderConstantsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct FileApiRuntimeQueuesDeclaration {
     #[webapi(slot = FILE_READER_QUEUE_SLOT, init = "array")]
     file_reader_queue: (),

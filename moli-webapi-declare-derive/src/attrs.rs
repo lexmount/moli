@@ -6,7 +6,7 @@ pub(crate) type ReceiverAttr = Path;
 #[derive(Clone)]
 pub(crate) enum ObjectRole {
     Instance(Path),
-    Record,
+    Plain,
     Fragment,
 }
 
@@ -14,7 +14,7 @@ impl ObjectRole {
     pub(crate) fn interface(&self) -> Option<&Path> {
         match self {
             Self::Instance(interface) => Some(interface),
-            Self::Record | Self::Fragment => None,
+            Self::Plain | Self::Fragment => None,
         }
     }
 }
@@ -235,18 +235,16 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
                 return Ok(());
             }
             if meta.path.is_ident("interface")
-                || meta.path.is_ident("record")
+                || meta.path.is_ident("plain")
                 || meta.path.is_ident("fragment")
             {
                 if parsed.role.is_some() {
-                    return Err(
-                        meta.error("choose one object role: interface, record, or fragment")
-                    );
+                    return Err(meta.error("choose one object role: interface, plain, or fragment"));
                 }
                 parsed.role = Some(if meta.path.is_ident("interface") {
                     ObjectRole::Instance(meta.value()?.parse()?)
-                } else if meta.path.is_ident("record") {
-                    ObjectRole::Record
+                } else if meta.path.is_ident("plain") {
+                    ObjectRole::Plain
                 } else {
                     ObjectRole::Fragment
                 });
@@ -998,15 +996,15 @@ mod tests {
     #[test]
     fn object_roles_are_exclusive() {
         let cases: [Vec<syn::Attribute>; 3] = [
-            syn::parse_quote!(#[webapi(record, fragment)]),
-            syn::parse_quote!(#[webapi(interface = Event, record)]),
+            syn::parse_quote!(#[webapi(plain, fragment)]),
+            syn::parse_quote!(#[webapi(interface = Event, plain)]),
             syn::parse_quote!(#[webapi(fragment, interface = Event)]),
         ];
         for attrs in cases {
             let error = parse_object_attrs(&attrs).err().expect("conflicting roles");
             assert_eq!(
                 error.to_string(),
-                "choose one object role: interface, record, or fragment"
+                "choose one object role: interface, plain, or fragment"
             );
         }
     }
@@ -1021,7 +1019,7 @@ mod tests {
             quote::quote!(#receiver).to_string(),
             "interfaces :: Event :: is_instance"
         );
-        let attrs: Vec<syn::Attribute> = syn::parse_quote!(#[webapi(record, receiver)]);
+        let attrs: Vec<syn::Attribute> = syn::parse_quote!(#[webapi(plain, receiver)]);
         assert!(parse_object_attrs(&attrs).is_err());
     }
 
@@ -1089,7 +1087,7 @@ mod tests {
     #[test]
     fn object_enumerable_default_can_be_used_without_default_data_properties() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(record, enumerable)]
+            #[webapi(plain, enumerable)]
         };
         let attrs = parse_object_attrs(&attrs)
             .expect("enumerable default should parse without data properties");
@@ -1100,7 +1098,7 @@ mod tests {
     #[test]
     fn object_data_properties_default_is_parsed() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(record, data_properties)]
+            #[webapi(plain, data_properties)]
         };
         let attrs = parse_object_attrs(&attrs).expect("data-properties default should parse");
         assert!(attrs.default_data_properties);
@@ -1109,13 +1107,13 @@ mod tests {
     #[test]
     fn rename_all_none_is_the_only_explicit_rename_rule() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(record, rename_all = "none")]
+            #[webapi(plain, rename_all = "none")]
         };
         let attrs = parse_object_attrs(&attrs).expect("rename_all none should parse");
         assert!(matches!(attrs.rename_all, RenameRule::None));
 
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(record, rename_all = "camelCase")]
+            #[webapi(plain, rename_all = "camelCase")]
         };
         let error = match parse_object_attrs(&attrs) {
             Ok(_) => panic!("explicit camelCase rename_all should be rejected"),
@@ -1295,7 +1293,7 @@ mod tests {
     #[test]
     fn removed_object_properties_spelling_is_rejected() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(record, properties)]
+            #[webapi(plain, properties)]
         };
         let error = match parse_object_attrs(&attrs) {
             Ok(_) => panic!("removed object properties spelling should be rejected"),

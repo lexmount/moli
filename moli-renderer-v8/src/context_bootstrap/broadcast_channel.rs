@@ -112,7 +112,7 @@ struct BroadcastChannelPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct BroadcastChannelMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,

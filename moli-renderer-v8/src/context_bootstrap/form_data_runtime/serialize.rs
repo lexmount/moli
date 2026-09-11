@@ -13,7 +13,7 @@ use moli_encoding::is_charset_sentinel_name;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct EmptyFileOptionsDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: &'static str,

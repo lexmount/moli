@@ -210,7 +210,7 @@ struct NotificationConstructorConstantsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NotificationConstructorPermissionDeclaration {
     #[webapi(
         accessor_property,

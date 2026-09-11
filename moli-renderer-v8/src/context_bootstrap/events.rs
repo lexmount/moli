@@ -16,14 +16,14 @@ const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct PageTransitionEventInitDeclaration {
     #[webapi(data_property, enumerable)]
     persisted: bool,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, enumerable)]
+#[webapi(plain, enumerable)]
 struct StorageEventStateDeclaration<'scope> {
     #[webapi(data_property)]
     key: v8::Local<'scope, v8::Value>,

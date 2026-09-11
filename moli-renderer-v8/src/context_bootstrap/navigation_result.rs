@@ -24,7 +24,7 @@ const NAVIGATION_ACTIVE_CROSS_DOCUMENT_PENDING_SLOT: &str =
     "__lmNavigationActiveCrossDocumentPending";
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NavigationResultDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     committed: v8::Local<'scope, v8::Promise>,
@@ -33,7 +33,7 @@ struct NavigationResultDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NavigationResultFallbackDeclaration {
     #[webapi(data_property, enumerable, name = "committed", init = "undefined")]
     committed: (),
@@ -42,7 +42,7 @@ struct NavigationResultFallbackDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CapturedPromiseResolverRecordDeclaration {
     #[webapi(data_property = "resolve", init = "undefined")]
     resolve: (),
@@ -51,7 +51,7 @@ struct CapturedPromiseResolverRecordDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CapturedPromiseResolverFunctionsDeclaration<'scope> {
     #[webapi(data_property)]
     resolve: v8::Local<'scope, v8::Value>,
@@ -60,7 +60,7 @@ struct CapturedPromiseResolverFunctionsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossDocumentPendingNavigationDeclaration<'scope> {
     #[webapi(
         slot = CROSS_DOCUMENT_PENDING_ACTIVE_SLOT,

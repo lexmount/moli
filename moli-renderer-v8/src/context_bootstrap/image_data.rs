@@ -68,7 +68,7 @@ struct ImageDataPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct ImageDataSettingsDeclaration<'scope> {
     color_space: v8::Local<'scope, v8::String>,
 }

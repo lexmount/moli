@@ -42,7 +42,7 @@ static NETWORK_BODY_SOURCES: OnceLock<Mutex<HashMap<NetworkBodySourceId, Network
     OnceLock::new();
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct OwnedNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,
@@ -51,7 +51,7 @@ struct OwnedNetworkBodySourceDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct RegisteredNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,
@@ -66,7 +66,7 @@ struct RegisteredNetworkBodySourceDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct PendingNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,

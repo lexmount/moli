@@ -157,7 +157,7 @@ struct MidiPermissionDescriptorMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NavigatorUaBrandEntryDeclaration {
     #[webapi(data_property, enumerable)]
     brand: String,
@@ -183,7 +183,7 @@ struct NavigatorUaDataObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NavigatorUaDataSnapshotDeclaration {
     #[webapi(data_property, enumerable)]
     brands: Vec<NavigatorUaBrandEntryDeclaration>,
@@ -196,7 +196,7 @@ struct NavigatorUaDataSnapshotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct NavigatorUaDataHighEntropySnapshotDeclaration {
     #[webapi(data_property, enumerable)]
     architecture: Option<String>,
@@ -246,7 +246,7 @@ struct StorageEstimateObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct StorageUsageDetailsObjectDeclaration {
     #[webapi(data_property = "indexedDB", enumerable)]
     indexed_db: Option<f64>,
@@ -323,7 +323,7 @@ struct CacheQueryOptions {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct StorageBucketCachePutPendingDataDeclaration<'scope> {
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESOLVER_SLOT)]
     resolver: v8::Local<'scope, v8::PromiseResolver>,

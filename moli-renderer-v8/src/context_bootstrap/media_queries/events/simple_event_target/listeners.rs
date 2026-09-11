@@ -25,7 +25,7 @@ const SIMPLE_EVENT_TARGET_LISTENER_TYPE_ORDER_SLOT: &str =
     "__moliSimpleEventTargetListenerTypeOrder";
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct SimpleObjectAbortListenerDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     target: v8::Local<'scope, v8::Object>,
@@ -42,7 +42,7 @@ struct SimpleObjectAbortListenerDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct SimpleObjectEventListenerEntryDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENER_ORIGINAL_SLOT)]
     original: v8::Local<'scope, v8::Value>,
@@ -63,7 +63,7 @@ struct SimpleObjectEventListenerEntryDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct SimpleObjectEventHandlerEntryDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENER_ORIGINAL_SLOT)]
     original: Option<v8::Local<'scope, v8::String>>,

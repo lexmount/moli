@@ -88,7 +88,7 @@ struct SharedWorkerObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct SharedWorkerHostEventInitDeclaration {
     #[webapi(data_property, enumerable)]
     cancelable: bool,
@@ -104,7 +104,7 @@ struct SharedWorkerHostEventFallbackDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct SharedWorkerHostErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -138,7 +138,7 @@ struct SharedWorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, scope_lifetime = 'scope, data_properties, enumerable)]
+#[webapi(plain, scope_lifetime = 'scope, data_properties, enumerable)]
 struct SharedWorkerHostErrorEventDetailsDeclaration<'scope, 'text> {
     message: &'text str,
     filename: &'text str,

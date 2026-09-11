@@ -42,14 +42,14 @@ struct TrustedTypesFactoryDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct TrustedTypeObjectDeclaration<'scope> {
     #[webapi(slot = TRUSTED_TYPE_VALUE_SLOT)]
     value: v8::Local<'scope, v8::String>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct TrustedTypePrototypeDeclaration {
     #[webapi(method = "toString", callback = trusted_type_to_string_callback, length = 0)]
     to_string: (),

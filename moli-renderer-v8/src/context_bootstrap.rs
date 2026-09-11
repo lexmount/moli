@@ -659,7 +659,7 @@ fn worker_unsupported_constructor_callback(
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -670,7 +670,7 @@ pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WorkerBase64OperationsDeclaration {
     #[webapi(
         method,

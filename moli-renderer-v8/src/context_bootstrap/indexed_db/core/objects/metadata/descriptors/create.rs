@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    record,
+    plain,
     scope_lifetime = 'scope,
     data_properties,
     enumerable
@@ -17,7 +17,7 @@ struct IndexDescriptorDeclaration<'scope, 'value> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    record,
+    plain,
     scope_lifetime = 'scope,
     data_properties,
     enumerable

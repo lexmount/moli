@@ -33,7 +33,7 @@ const XHR_STATE_FIELD_INDEX: usize = 0;
 const XHR_UPLOAD_FIELD_INDEX: usize = 1;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct XmlHttpRequestStateDeclaration {
     #[webapi(slot = XHR_EXECUTION_CONTEXT_BINDING_SLOT, init = "")]
     execution_context_binding: (),

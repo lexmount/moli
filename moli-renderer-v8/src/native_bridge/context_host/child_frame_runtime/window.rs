@@ -686,7 +686,7 @@ struct CrossOriginLocationReplaceArgs {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginWindowMethodsDeclaration {
     #[webapi(
         method,
@@ -705,7 +705,7 @@ struct CrossOriginWindowMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct CrossOriginPropertyDescriptorDeclaration<'scope> {
     value: v8::Local<'scope, v8::Value>,
     writable: bool,
@@ -714,7 +714,7 @@ struct CrossOriginPropertyDescriptorDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginLocationMethodsDeclaration {
     #[webapi(
         method,
@@ -727,7 +727,7 @@ struct CrossOriginLocationMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginLocationProxyHandlerDeclaration {
     #[webapi(method, length = 3, callback = cross_origin_location_proxy_get_callback)]
     get: (),
@@ -740,7 +740,7 @@ struct CrossOriginLocationProxyHandlerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginWindowProxyHandlerDeclaration {
     #[webapi(method, length = 2, callback = cross_origin_window_proxy_has_callback)]
     has: (),
@@ -751,7 +751,7 @@ struct CrossOriginWindowProxyHandlerDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginWindowLiveAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -770,7 +770,7 @@ struct CrossOriginWindowLiveAccessorsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CrossOriginWindowLocationAccessorDeclaration {
     #[webapi(
         accessor_property,

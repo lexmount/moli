@@ -56,7 +56,7 @@ struct ResponseCloneShellDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct ResponseInitObjectDeclaration<'scope> {
     status: Option<f64>,
     status_text: Option<String>,

@@ -55,7 +55,7 @@ struct WebGlViewportArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebGlContextStateDeclaration<'s> {
     #[webapi(slot = WEBGL_VIEWPORT_SLOT)]
     viewport: v8::Local<'s, v8::Array>,
@@ -732,7 +732,7 @@ pub(crate) fn webgl_get_context_attributes_callback(
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct WebGlContextAttributes {
     alpha: bool,
     antialias: bool,

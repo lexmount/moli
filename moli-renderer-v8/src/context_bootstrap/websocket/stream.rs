@@ -15,7 +15,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebSocketStreamPromiseResolverRecordDeclaration {
     #[webapi(slot = WEBSOCKET_STREAM_PROMISE_RESOLVE_SLOT, init = "undefined")]
     resolve: (),
@@ -24,7 +24,7 @@ struct WebSocketStreamPromiseResolverRecordDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebSocketStreamOpenInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     readable: v8::Local<'scope, v8::Object>,
@@ -37,7 +37,7 @@ struct WebSocketStreamOpenInfoDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebSocketStreamWritableSinkDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_ID_SLOT)]
     socket_id: f64,
@@ -56,7 +56,7 @@ struct WebSocketStreamWritableSinkDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebSocketStreamReadableSourceDeclaration {
     #[webapi(slot = WEBSOCKET_ID_SLOT)]
     socket_id: f64,
@@ -67,7 +67,7 @@ struct WebSocketStreamReadableSourceDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebSocketStreamPendingWriteDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_STREAM_PROMISE_SLOT)]
     promise: v8::Local<'scope, v8::Promise>,
@@ -78,7 +78,7 @@ struct WebSocketStreamPendingWriteDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct WebSocketStreamCloseInfoDeclaration<'scope> {
     close_code: f64,
     reason: Option<v8::Local<'scope, v8::String>>,

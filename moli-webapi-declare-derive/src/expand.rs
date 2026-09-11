@@ -213,7 +213,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let attrs = parse_object_attrs(&input.attrs)?;
     let role = attrs.role.as_ref().ok_or_else(|| Error::new(
-        struct_name.span(), "choose an object role with #[webapi(interface = Type)], #[webapi(record)], or #[webapi(fragment)]",
+        struct_name.span(), "choose an object role with #[webapi(interface = Type)], #[webapi(plain)], or #[webapi(fragment)]",
     ))?;
     let prototype = attrs
         .prototype
@@ -221,7 +221,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         .map(|prototype| quote!(#prototype))
         .or_else(|| match role {
             ObjectRole::Instance(interface) => Some(quote!(<#interface>::DESCRIPTOR.name())),
-            ObjectRole::Record => Some(quote!("Object")),
+            ObjectRole::Plain => Some(quote!("Object")),
             ObjectRole::Fragment => None,
         });
     let own_to_string_tag = match attrs.own_to_string_tag.as_ref() {
@@ -1769,7 +1769,7 @@ mod tests {
     #[test]
     fn inherited_receiver_cannot_silently_skip_an_already_built_getter() {
         let input = syn::parse_quote! {
-            #[webapi(record, receiver = check)]
+            #[webapi(plain, receiver = check)]
             struct Invalid {
                 #[webapi(accessor_property, getter_value = self.getter)]
                 getter: (),
@@ -1782,7 +1782,7 @@ mod tests {
     #[test]
     fn declaration_only_field_attributes_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct BadObject {
                 #[webapi(init = "null")]
                 ignored: (),
@@ -1801,7 +1801,7 @@ mod tests {
     #[test]
     fn default_data_property_fields_can_use_data_property_initializers() {
         let input = syn::parse_quote! {
-            #[webapi(record, data_properties)]
+            #[webapi(plain, data_properties)]
             struct DefaultObject {
                 #[webapi(init = "null")]
                 value: (),
@@ -1813,7 +1813,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_to_new_for_dynamic_fields() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct DynamicObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
@@ -1832,7 +1832,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_to_new_for_unit_fields() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct StaticObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
@@ -1851,7 +1851,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_uses_constructor_defaults() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct DefaultedObject {
                 #[webapi(data_property)]
                 value: u32,
@@ -1875,7 +1875,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_can_reference_previous_fields() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct DerivedDefaultObject {
                 #[webapi(data_property)]
                 client_x: i32,
@@ -1894,7 +1894,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_can_be_suppressed() {
         let input = syn::parse_quote! {
-            #[webapi(record, no_dynamic_constructor)]
+            #[webapi(plain, no_dynamic_constructor)]
             struct ManualObject {
                 #[webapi(data_property)]
                 value: u32,
@@ -1979,7 +1979,7 @@ mod tests {
     #[test]
     fn object_intrinsic_data_properties_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(record)]
+            #[webapi(plain)]
             struct BadObject {
                 #[webapi(
                     intrinsic_data_property = v8::Intrinsic::ArrayProtoValues
@@ -2145,7 +2145,7 @@ mod tests {
     #[test]
     fn object_static_method_fields_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(record, data_properties)]
+            #[webapi(plain, data_properties)]
             struct BadObject {
                 #[webapi(static_method, callback = sample_callback)]
                 create: (),
@@ -2164,7 +2164,7 @@ mod tests {
     #[test]
     fn object_constant_fields_are_supported() {
         let input = syn::parse_quote! {
-            #[webapi(record, data_properties)]
+            #[webapi(plain, data_properties)]
             struct BadObject {
                 #[webapi(constant = "READY", value = 4u32)]
                 ready: (),

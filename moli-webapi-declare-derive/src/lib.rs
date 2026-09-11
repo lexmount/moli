@@ -29,7 +29,7 @@ pub fn derive_webapi_function_template(input: TokenStream) -> TokenStream {
 
 /// Derives a Web API object declaration binder.
 ///
-/// Choose `interface = NativeType` for native identity, `record` for a plain
+/// Choose `interface = NativeType` for native identity, `plain` for a plain
 /// object, or `fragment` for shared initialization without implicit identity or
 /// prototype changes. Empty declarations and a single scope lifetime require
 /// no additional flags.

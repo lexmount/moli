@@ -6,7 +6,7 @@ use crate::util::get_private_value;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct XhrReadyStateChangeEventDeclaration<'scope> {
     r#type: &'static str,
     target: v8::Local<'scope, v8::Object>,

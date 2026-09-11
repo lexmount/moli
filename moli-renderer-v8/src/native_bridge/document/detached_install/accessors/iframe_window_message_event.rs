@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiObject;
 use url::Url;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DetachedWindowMessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     source: v8::Local<'scope, v8::Value>,

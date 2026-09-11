@@ -72,7 +72,7 @@
 //! expose Rust field spelling. Struct-level `#[webapi(enumerable)]` makes
 //! explicitly declared string-keyed data properties, methods, accessor
 //! properties, native data properties, and aliases enumerable by default. It
-//! can be used with `#[webapi(data_properties)]` for plain record-like objects,
+//! can be used with `#[webapi(data_properties)]` for plain objects,
 //! or by itself for WebIDL prototype declarations where every operation and
 //! attribute should inherit WebIDL's enumerable prototype-member default.
 //! Well-known symbol keys remain non-enumerable unless the field itself
@@ -91,7 +91,7 @@
 //!   called through `bind`, `bind_into`, or `initialize`. Its default prototype
 //!   comes from the descriptor; an explicit `prototype` can preserve another
 //!   public shape without changing native identity.
-//! - `#[webapi(record)]` describes an ordinary unbranded object, defaulting to
+//! - `#[webapi(plain)]` describes an ordinary unbranded object, defaulting to
 //!   `Object.prototype`. Field annotations and `data_properties` still control
 //!   which Rust fields become JavaScript properties.
 //! - `#[webapi(fragment)]` installs shared state or members on an existing
@@ -99,8 +99,8 @@
 //!   prototype or tag declarations are applied by `bind_into`; `initialize`
 //!   installs only the declared fields. Fragments never erase native identity.
 //!
-//! Empty declarations need no special opt-in: creating an empty record, branding
-//! a native instance and installing prototype metadata all have defined roles.
+//! Empty declarations need no special opt-in: creating an empty plain object,
+//! branding a native instance and installing prototype metadata all have defined roles.
 //! A single lifetime parameter is inferred as the V8 scope lifetime; use
 //! `scope_lifetime` only when a declaration has multiple lifetimes. Payload slots
 //! hold data, ownership and lifecycle state, not additional boolean brands.
@@ -110,8 +110,8 @@
 //! Implementation sharing does not imply interface inheritance. For example,
 //! encoding streams share TransformStream internals but have distinct native
 //! interfaces. Their factory assigns the concrete type while the shared state
-//! declaration uses `fragment`. Do not turn actual native instances into records to
-//! make them pass structured clone.
+//! declaration uses `fragment`. Do not turn actual native instances into plain
+//! objects to make them pass structured clone.
 //!
 //! Declare each interface once with `declare_web_api_interfaces!` and reference
 //! it using `#[webapi(interface = interfaces::ProgressEvent)]`. The generated

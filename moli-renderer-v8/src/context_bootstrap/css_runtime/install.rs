@@ -8,7 +8,7 @@ use crate::native_bridge::document::install_adopted_style_sheets_array_primordia
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record, own_to_string_tag = "CSS", readonly_to_string_tag)]
+#[webapi(plain, own_to_string_tag = "CSS", readonly_to_string_tag)]
 struct CssNamespaceObjectDeclaration {
     #[webapi(
         method,

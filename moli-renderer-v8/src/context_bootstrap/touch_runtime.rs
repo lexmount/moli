@@ -109,7 +109,7 @@ struct TouchListPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct TouchUiEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,

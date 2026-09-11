@@ -6,7 +6,7 @@ use crate::{
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct CloneShadowRootInitDeclaration<'scope> {
     mode: String,
     delegates_focus: Option<v8::Local<'scope, v8::Value>>,

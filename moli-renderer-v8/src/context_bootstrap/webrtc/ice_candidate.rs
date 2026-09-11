@@ -58,7 +58,7 @@ struct IceCandidatePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct IceCandidateJsonDeclaration<'scope> {
     candidate: v8::Local<'scope, v8::Value>,
     sdp_mid: v8::Local<'scope, v8::Value>,

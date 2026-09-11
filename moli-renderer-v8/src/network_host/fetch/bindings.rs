@@ -16,7 +16,7 @@ use crate::structured_clone::V8StructuredClonePayload;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 #[derive(Default, WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct FetchAbortListenerOptionsDeclaration {
     #[webapi(init = true)]
     once: (),

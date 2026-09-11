@@ -48,7 +48,7 @@ const ADOPTED_STYLE_SHEETS_ARRAY_OWNER_DOCUMENT: i32 = 1;
 const ADOPTED_STYLE_SHEETS_ARRAY_OWNER_SHADOW_ROOT: i32 = 2;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct AdoptedStyleSheetsArrayMutationMethodsDeclaration {
     #[webapi(
         method,

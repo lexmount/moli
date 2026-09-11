@@ -2,14 +2,14 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct UiEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct FocusEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,
@@ -19,7 +19,7 @@ struct FocusEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct TextEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,
@@ -27,7 +27,7 @@ struct TextEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct CustomEventInitDeclaration<'scope> {
     detail: v8::Local<'scope, v8::Value>,
 }

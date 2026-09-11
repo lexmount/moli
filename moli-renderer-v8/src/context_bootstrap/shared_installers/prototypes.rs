@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct InterfacePrototypeTagDeclaration<'tag> {
     #[webapi(to_string_tag)]
     tag: &'tag str,

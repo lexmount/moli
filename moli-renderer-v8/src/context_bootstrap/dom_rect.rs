@@ -158,7 +158,7 @@ struct DomRectConstructorDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct DomRectJsonDeclaration {
     #[webapi(data_property, enumerable)]
     x: f64,

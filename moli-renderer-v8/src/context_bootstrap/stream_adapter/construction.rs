@@ -97,14 +97,14 @@ struct ReadableStreamObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ReadableStreamStartRejectedDataDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_START_REJECTED_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ReadableStreamStartFulfilledDataDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_START_REJECTED_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,

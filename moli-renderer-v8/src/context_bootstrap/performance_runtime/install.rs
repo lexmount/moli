@@ -78,7 +78,7 @@ struct PerformanceObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct PerformanceJsonSnapshotDeclaration<'scope> {
     time_origin: Option<v8::Local<'scope, v8::Value>>,
     timing: Option<v8::Local<'scope, v8::Value>>,

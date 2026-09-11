@@ -9,7 +9,7 @@ use crate::util::{throw_type_error, v8_string_from_utf16_units, v8_string_to_u16
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct StorageValuePropertyDescriptorDeclaration<'scope> {
     value: v8::Local<'scope, v8::Value>,
     writable: bool,
@@ -18,7 +18,7 @@ struct StorageValuePropertyDescriptorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct StorageAccessorPropertyDescriptorDeclaration<'scope> {
     get: Option<v8::Local<'scope, v8::Value>>,
     set: Option<v8::Local<'scope, v8::Value>>,

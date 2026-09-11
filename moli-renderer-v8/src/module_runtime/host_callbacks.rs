@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ImportMetaDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     url: v8::Local<'scope, v8::String>,

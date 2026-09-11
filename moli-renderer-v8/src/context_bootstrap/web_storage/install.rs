@@ -21,7 +21,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
-#[webapi(record, enumerable)]
+#[webapi(plain, enumerable)]
 struct StoragePrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = storage_get_item_callback)]
     get_item: (),
@@ -45,7 +45,7 @@ struct StoragePrototypeMetadataDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct StorageAliasesDeclaration<'scope> {
     #[webapi(data_property = "localStorage")]
     local_storage: v8::Local<'scope, v8::Object>,
@@ -54,7 +54,7 @@ struct StorageAliasesDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct StorageConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "Storage")]
     constructor: v8::Local<'scope, v8::Function>,

@@ -82,7 +82,7 @@ struct AudioWorkletNodeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct AudioWorkletModuleStateDeclaration<'scope> {
     #[webapi(slot = AUDIO_WORKLET_MODULE_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
@@ -99,21 +99,21 @@ struct AudioWorkletModuleStateDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct AudioWorkletWorkerCallbackDataDeclaration<'scope> {
     #[webapi(slot = AUDIO_WORKLET_CALLBACK_MODULE_SLOT)]
     module_state: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct AudioWorkletBlobOptionsDeclaration {
     #[webapi(data_property = "type")]
     kind: &'static str,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct AudioWorkletWorkerOptionsDeclaration {
     #[webapi(data_property = "type")]
     kind: &'static str,
@@ -121,7 +121,7 @@ struct AudioWorkletWorkerOptionsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct AudioWorkletProcessorConstructMessageDeclaration<'scope> {
     #[webapi(data_property = "__moliAudioWorkletType")]
     message_type: &'static str,
@@ -245,7 +245,7 @@ struct AnalyserNodePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct OfflineAudioCompletePayloadDeclaration<'scope> {
     #[webapi(slot = OFFLINE_AUDIO_COMPLETE_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,

@@ -468,7 +468,7 @@ struct UserActivationObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, scope_lifetime = 'scope)]
+#[webapi(plain, scope_lifetime = 'scope)]
 struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
     #[webapi(data_property, enumerable)]
     user_agent: &'profile str,
@@ -571,7 +571,7 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, scope_lifetime = 'scope)]
+#[webapi(plain, scope_lifetime = 'scope)]
 struct WorkerNavigatorBackingDeclaration<'scope, 'profile> {
     #[webapi(data_property, enumerable)]
     user_agent: &'profile str,

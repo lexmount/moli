@@ -55,7 +55,7 @@ const WEBASSEMBLY_DEFAULT_PROTOTYPE_NAMES: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyStreamingDataDeclaration<'scope> {
     #[webapi(slot = STREAMING_OPTIONS_SLOT)]
     options: v8::Local<'scope, v8::Value>,
@@ -64,7 +64,7 @@ struct WebAssemblyStreamingDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyInstantiateStreamingResultDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     module: v8::Local<'scope, v8::Object>,
@@ -73,7 +73,7 @@ struct WebAssemblyInstantiateStreamingResultDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyMemoryNativeDescriptorDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     initial: v8::Local<'scope, v8::Value>,
@@ -84,7 +84,7 @@ struct WebAssemblyMemoryNativeDescriptorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyMemoryTypeDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     minimum: v8::Local<'scope, v8::Value>,
@@ -95,7 +95,7 @@ struct WebAssemblyMemoryTypeDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyMemoryTypeCloneDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     minimum: v8::Local<'scope, v8::Value>,
@@ -106,7 +106,7 @@ struct WebAssemblyMemoryTypeCloneDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTableNativeDescriptorDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     element: v8::Local<'scope, v8::Value>,
@@ -117,7 +117,7 @@ struct WebAssemblyTableNativeDescriptorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTableTypeDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     minimum: v8::Local<'scope, v8::Value>,
@@ -128,7 +128,7 @@ struct WebAssemblyTableTypeDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTableTypeCloneDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     minimum: v8::Local<'scope, v8::Value>,
@@ -139,7 +139,7 @@ struct WebAssemblyTableTypeCloneDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyGlobalNativeDescriptorDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     mutable: v8::Local<'scope, v8::Value>,
@@ -148,7 +148,7 @@ struct WebAssemblyGlobalNativeDescriptorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyGlobalTypeDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     mutable: bool,
@@ -157,7 +157,7 @@ struct WebAssemblyGlobalTypeDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyGlobalTypeCloneDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#mutable: v8::Local<'scope, v8::Value>,
@@ -166,21 +166,21 @@ struct WebAssemblyGlobalTypeCloneDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTagTypeDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     parameters: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyMemoryFallbackTypeDeclaration {
     #[webapi(data_property, enumerable)]
     minimum: f64,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTableFallbackTypeDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     minimum: f64,
@@ -189,7 +189,7 @@ struct WebAssemblyTableFallbackTypeDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyTagTypeCloneDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     parameters: Option<v8::Local<'scope, v8::Array>>,

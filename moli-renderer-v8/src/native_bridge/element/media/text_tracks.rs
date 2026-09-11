@@ -195,7 +195,7 @@ struct TextTrackTemplateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct TrackEventInitDeclaration<'scope> {
     track: v8::Local<'scope, v8::Object>,
 }

@@ -17,7 +17,7 @@ use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use super::*;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DetachedCollectionItemsAndNamedDataDeclaration<'scope> {
     items: v8::Local<'scope, v8::Value>,
     named: v8::Local<'scope, v8::Object>,

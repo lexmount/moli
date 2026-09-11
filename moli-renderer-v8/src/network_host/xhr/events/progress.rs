@@ -2,14 +2,14 @@ use super::super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct ProgressEventTargetDeclaration<'scope> {
     target: v8::Local<'scope, v8::Object>,
     current_target: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct ProgressEventInitDeclaration {
     length_computable: bool,
     loaded: f64,

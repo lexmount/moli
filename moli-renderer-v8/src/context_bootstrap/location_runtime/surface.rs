@@ -4,7 +4,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowLocationAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -17,7 +17,7 @@ struct WindowLocationAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowHistoryAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -28,7 +28,7 @@ struct WindowHistoryAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowNavigationAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -40,7 +40,7 @@ struct WindowNavigationAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct DocumentLocationAccessorDeclaration {
     #[webapi(
         accessor_property,

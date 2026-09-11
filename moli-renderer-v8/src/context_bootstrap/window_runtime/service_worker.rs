@@ -107,7 +107,7 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ServiceWorkerNavigationPreloadStateDeclaration {
     #[webapi(data_property, enumerable)]
     enabled: bool,
@@ -284,7 +284,7 @@ struct ServiceWorkerObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ServiceWorkerMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,

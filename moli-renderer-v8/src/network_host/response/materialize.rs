@@ -32,7 +32,7 @@ impl From<crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFi
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, prototype = "Response")]
+#[webapi(plain, prototype = "Response")]
 struct FetchResponseHeadDeclaration {
     #[webapi(slot = RESPONSE_STATUS_SLOT)]
     status: f64,
@@ -47,14 +47,14 @@ struct FetchResponseHeadDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct FetchResponseInternalUrlDeclaration {
     #[webapi(slot = RESPONSE_INTERNAL_URL_SLOT)]
     internal_url: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct FetchResponseBodyDeclaration<'scope> {
     #[webapi(slot = RESPONSE_STATUS_TEXT_SLOT)]
     status_text: String,

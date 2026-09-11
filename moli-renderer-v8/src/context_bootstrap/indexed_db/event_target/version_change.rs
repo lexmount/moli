@@ -4,7 +4,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct IdbVersionChangeEventFieldsDeclaration<'scope> {
     old_version: u64,
     new_version: v8::Local<'scope, v8::Value>,

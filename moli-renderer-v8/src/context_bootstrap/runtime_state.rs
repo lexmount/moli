@@ -135,7 +135,7 @@ struct DocumentPrototypeRuntimeDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowComputedStyleMethodDeclaration {
     #[webapi(
         method,
@@ -147,7 +147,7 @@ struct WindowComputedStyleMethodDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
     history_slot: v8::Local<'scope, v8::Value>,
     navigation_slot: v8::Local<'scope, v8::Value>,
@@ -264,7 +264,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record, enumerable)]
+#[webapi(plain, enumerable)]
 struct WindowLegacyAliasAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -374,7 +374,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct ConsoleObjectDeclaration {
     #[webapi(method, callback = console_log_callback)]
     log: (),
@@ -454,14 +454,14 @@ struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WindowEvalGlobalDeclaration<'scope> {
     #[webapi(data_property = "eval")]
     intrinsic_eval: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebAssemblyNamespaceDeclaration {
     #[webapi(method, length = 1, callback = webassembly_namespace_instance_callback)]
     namespace_instance: (),
@@ -469,12 +469,12 @@ struct WebAssemblyNamespaceDeclaration {
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(record, prototype = "WebDriver", require_prototype)]
+#[webapi(plain, prototype = "WebDriver", require_prototype)]
 struct WebDriverObjectDeclaration {}
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebDriverPrototypeDeclaration {
     #[webapi(method, length = 0, callback = webdriver_delete_all_cookies_callback)]
     delete_all_cookies: (),
@@ -482,7 +482,7 @@ struct WebDriverPrototypeDeclaration {
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct WebDriverPrototypeMetadataDeclaration<'scope> {
     #[webapi(data_property = "constructor")]
     constructor: v8::Local<'scope, v8::Function>,

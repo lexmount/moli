@@ -16,7 +16,7 @@ use super::super::super::detached_native_handle_for_runtime;
 use super::iframe_style_viewport::detached_iframe_viewport_width;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct DetachedIframeWindowComputedStyleMethodDeclaration<'scope> {
     iframe: v8::Local<'scope, v8::Object>,
     #[webapi(

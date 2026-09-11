@@ -7,19 +7,19 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct NamedAlgorithmDeclaration<'scope> {
     name: Option<v8::Local<'scope, v8::String>>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct AlgorithmNameCloneDeclaration<'scope> {
     name: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct AlgorithmCloneDeclaration<'scope> {
     name: v8::Local<'scope, v8::Value>,
     hash: Option<v8::Local<'scope, v8::Object>>,
@@ -30,7 +30,7 @@ struct AlgorithmCloneDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct HmacAlgorithmDeclaration<'scope> {
     name: Option<v8::Local<'scope, v8::String>>,
     hash: v8::Local<'scope, v8::Object>,
@@ -38,14 +38,14 @@ struct HmacAlgorithmDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct SymmetricAlgorithmDeclaration<'scope> {
     name: Option<v8::Local<'scope, v8::String>>,
     length: usize,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct RsaAlgorithmDeclaration<'scope> {
     name: Option<v8::Local<'scope, v8::String>>,
     hash: v8::Local<'scope, v8::Object>,
@@ -54,7 +54,7 @@ struct RsaAlgorithmDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct NamedCurveAlgorithmDeclaration<'scope> {
     name: Option<v8::Local<'scope, v8::String>>,
     named_curve: Option<v8::Local<'scope, v8::String>>,

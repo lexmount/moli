@@ -15,7 +15,7 @@ pub(super) const STORAGE_OWNER_INTERNAL_FIELD_INDEX: usize = 1;
 pub(super) const STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliStorageOwnerChildHandle";
 
 #[derive(Default, WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct StoragePrototypeIndexDescriptorStoreDeclaration {}
 
 const STORAGE_INTERNAL_NAME_UNITS: &[u16] = &[

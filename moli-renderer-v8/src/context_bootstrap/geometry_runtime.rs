@@ -120,7 +120,7 @@ dom_matrix_object_declaration!(DomMatrixObjectDeclaration, DOMMatrix);
 dom_matrix_object_declaration!(DomMatrixReadOnlyObjectDeclaration, DOMMatrixReadOnly);
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DomPointJsonDeclaration {
     x: f64,
     y: f64,
@@ -129,7 +129,7 @@ struct DomPointJsonDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct DomMatrixJsonDeclaration {
     a: f64,
     b: f64,

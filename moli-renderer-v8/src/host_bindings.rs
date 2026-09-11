@@ -15,7 +15,7 @@ use super::{
 use crate::{context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT, util::get_private_value};
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct HostBindingsDeclaration<'scope> {
     external: v8::Local<'scope, v8::External>,
 
@@ -612,7 +612,7 @@ fn host_selector_debug_stats_callback(
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct SelectorDebugStatsDeclaration {
     query_selector: u32,
     query_selector_all: u32,

@@ -14,7 +14,7 @@ const XHR_PROGRESS_DATA_INTERNAL_ID: &str = "internalId";
 const XHR_PROGRESS_MINIMUM_INTERVAL_MS: u32 = 50;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct XhrProgressTimerDataDeclaration<'scope> {
     xhr: v8::Local<'scope, v8::Object>,
     internal_id: f64,

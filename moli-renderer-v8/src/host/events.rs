@@ -11,7 +11,7 @@ use moli_webapi_declare::WebApiObject;
 use std::collections::HashSet;
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct HostErrorEventInitDeclaration<'scope> {
     cancelable: bool,
     bubbles: bool,
@@ -23,7 +23,7 @@ struct HostErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct HostEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,

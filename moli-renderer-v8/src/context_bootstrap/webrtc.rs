@@ -121,7 +121,7 @@ struct RtcDataChannelObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct RtcSessionDescriptionInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,

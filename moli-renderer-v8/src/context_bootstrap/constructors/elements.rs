@@ -3,7 +3,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct HtmlElementConstructorTrapHandlerDeclaration<'scope> {
     #[webapi(data_property)]
     construct: v8::Local<'scope, v8::Function>,

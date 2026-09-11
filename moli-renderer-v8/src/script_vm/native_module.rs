@@ -583,13 +583,13 @@ const MODULE_REACTION_DOCUMENT_ID_SLOT: &str = "documentId";
 const MODULE_REACTION_REALM_ID_SLOT: &str = "realmId";
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct NativeDynamicModuleReactionDataDeclaration<'scope> {
     reaction_id: v8::Local<'scope, v8::BigInt>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct NativeModuleScriptReactionDataDeclaration<'scope> {
     module_script_reaction_id: v8::Local<'scope, v8::BigInt>,
     scheduler_lane_id: v8::Local<'scope, v8::BigInt>,
@@ -598,7 +598,7 @@ struct NativeModuleScriptReactionDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct NativeChildModuleScriptReactionDataDeclaration<'scope> {
     module_script_reaction_id: v8::Local<'scope, v8::BigInt>,
     scheduler_lane_id: v8::Local<'scope, v8::BigInt>,

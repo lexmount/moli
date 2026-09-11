@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct LoadingWorkerWrapperProbeDeclaration {}
 
 fn loading_worker_wrapper_probe<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {

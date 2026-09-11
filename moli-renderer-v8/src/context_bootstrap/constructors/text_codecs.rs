@@ -79,7 +79,7 @@ struct TextDecoderPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct TextEncoderEncodeIntoResultDeclaration {
     read: usize,
     written: usize,

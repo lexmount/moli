@@ -64,7 +64,7 @@ const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct WindowMessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     origin: v8::Local<'scope, v8::String>,
@@ -73,7 +73,7 @@ struct WindowMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
+#[webapi(plain, data_properties, enumerable)]
 struct WindowDocumentEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,

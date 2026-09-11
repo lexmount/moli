@@ -15,7 +15,7 @@ const CANVAS_HAS_CONTEXT_SLOT: &str = "__moliCanvasHasContext";
 const CANVAS_2D_CONTEXT_SLOT: &str = "__moliCanvas2DContext";
 
 #[derive(WebApiObject)]
-#[webapi(record)]
+#[webapi(plain)]
 struct CanvasContextOwnerDeclaration<'scope> {
     #[webapi(data_property)]
     canvas: v8::Local<'scope, v8::Object>,

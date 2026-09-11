@@ -252,13 +252,13 @@ mod tests {
     use moli_webapi_declare::WebApiObject;
 
     #[derive(WebApiObject)]
-    #[webapi(record, data_properties)]
+    #[webapi(plain, data_properties)]
     struct TestForeignElementDeclaration {
         local_name: String,
     }
 
     #[derive(WebApiObject)]
-    #[webapi(record, data_properties)]
+    #[webapi(plain, data_properties)]
     struct TestForeignDocumentDeclaration<'scope> {
         node_name: &'static str,
         document_element: v8::Local<'scope, v8::Object>,

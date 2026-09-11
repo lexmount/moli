@@ -15,8 +15,8 @@ struct Base {}
 struct Derived {}
 
 #[derive(WebApiObject)]
-#[webapi(record, data_properties, enumerable)]
-struct Record {
+#[webapi(plain, data_properties, enumerable)]
+struct PlainObject {
     value: u32,
 }
 
@@ -50,7 +50,7 @@ fn declarations_brand_instances_and_preserve_derived_identity_across_realms() {
         let object = Base::new().bind(scope).unwrap();
         Derived::new().initialize(scope, object).unwrap();
         Base::new().initialize(scope, object).unwrap();
-        Record::new(7).initialize(scope, object).unwrap();
+        PlainObject::new(7).initialize(scope, object).unwrap();
         assert_eq!(
             web_api_object_type(scope, object).unwrap().name(),
             "TestDerived"
@@ -108,9 +108,9 @@ fn identity_is_own_private_and_never_invokes_author_code() {
         assert_eq!(web_api_object_type(scope, object), None, "{source}");
         assert!(!implements_interface(scope, object, "TestBase"), "{source}");
     }
-    let record = Record::new(7).bind(scope).unwrap();
+    let plain = PlainObject::new(7).bind(scope).unwrap();
     let prototype = PrototypeMembers::new().bind(scope).unwrap();
-    assert_eq!(web_api_object_type(scope, record), None);
+    assert_eq!(web_api_object_type(scope, plain), None);
     assert_eq!(web_api_object_type(scope, prototype), None);
 }
 
