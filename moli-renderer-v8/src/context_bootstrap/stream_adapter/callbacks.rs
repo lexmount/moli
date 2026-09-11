@@ -376,9 +376,9 @@ pub(in crate::context_bootstrap) fn invoke_stored_stream_promise_algorithm<'s>(
                     return Err(error);
                 }
             };
-            if let Ok(promise) = v8::Local::<v8::Promise>::try_from(result) {
-                return Ok(Some(promise.into()));
-            }
+            // Web IDL Promise<T> conversion creates a new capability even
+            // when the callback returned a Promise. Resolving it observes
+            // thenables and preserves the adoption boundary in this Realm.
             let Some(resolver) = v8::PromiseResolver::new(scope) else {
                 return Err(v8::undefined(scope).into());
             };

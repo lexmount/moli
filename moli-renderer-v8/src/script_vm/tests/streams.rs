@@ -1,6 +1,7 @@
 use super::*;
 
 mod compression;
+mod transform_finish;
 
 fn stream_test_vm() -> StandaloneScriptVmHarness {
     new_storage_test_vm("https://stream-runtime.test/")
@@ -404,10 +405,12 @@ fn transform_stream_cancel_callback_uses_one_shared_terminal_residence() {
     }
   });
   const nestedCancelPromise = nested.readable.cancel(nestedCancelReason);
+  nested.writable.getWriter().closed.catch(error => {
+    events.push(`nested:closed:${error === nestedAbortReason}`);
+  });
   Promise.allSettled([nestedCancelPromise, nestedAbortPromise]).then(results => {
     events.push(
-      `nested:settled:${nestedCalls}:${results[0].reason === nestedAbortReason}:` +
-      `${results[1].reason === nestedAbortReason}`
+      `nested:settled:${nestedCalls}:${results[0].status}:${results[1].status}`
     );
   });
 })()
@@ -438,7 +441,8 @@ JSON.stringify({
   abortFulfilled:
     __transformCancelCallbackEvents.includes("abort:fulfilled"),
   nestedSharedFinish:
-    __transformCancelCallbackEvents.includes("nested:settled:1:true:true"),
+    __transformCancelCallbackEvents.includes("nested:settled:1:fulfilled:fulfilled") &&
+    __transformCancelCallbackEvents.includes("nested:closed:true"),
   unexpectedFlush:
     __transformCancelCallbackEvents.some(event =>
       event.includes("unexpected-flush")
@@ -3795,7 +3799,7 @@ fn readable_stream_pipe_through_duck_typed_pass_through_drains_async_pulls() {
 
     assert_eq!(
         result,
-        r#"{"result":"[1,2,3,4,5]","events":["pull:1","write:1","pull:2","pull:3","write:2","pull:4","write:3","pull:5","write:4","pull:6","write:5","close-writable","resolved"]}"#
+        r#"{"result":"[1,2,3,4,5]","events":["pull:1","write:1","pull:2","write:2","pull:3","write:3","pull:4","write:4","pull:5","write:5","pull:6","close-writable","resolved"]}"#
     );
 }
 

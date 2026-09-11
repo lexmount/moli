@@ -745,21 +745,6 @@ pub(in crate::context_bootstrap::stream_adapter) fn transform_stream_readable_ca
     let FinishAlgorithm::Cancel(algorithm) = algorithm else {
         unreachable!("readable cancel must claim the transform cancel algorithm")
     };
-    let writable_state_before_algorithm = writable_stream_snapshot(scope, writable).state();
-    if matches!(algorithm, TransformCancelAlgorithm::None) {
-        clear_transform_stream_terminal_algorithms(scope, writable);
-        let fulfillment_plan = transform_stream_snapshot(scope, writable, readable)
-            .plan_source_cancel_fulfillment_after_algorithm(writable_state_before_algorithm);
-        apply_transform_source_cancel_fulfillment(
-            scope,
-            writable,
-            residence,
-            reason,
-            fulfillment_plan,
-        );
-        rv.set(finish_promise.into());
-        return;
-    }
     let cancel_result =
         invoke_transform_stream_cancel_algorithm(scope, writable, reason, algorithm);
     clear_transform_stream_terminal_algorithms(scope, writable);
@@ -775,20 +760,7 @@ pub(in crate::context_bootstrap::stream_adapter) fn transform_stream_readable_ca
         rv.set(finish_promise.into());
         return;
     };
-    // Freeze the writable-side outcome at the cancel-algorithm boundary.
-    // A synchronous controller error or abort from inside `cancel()` must
-    // reject this finish residence, while a controller action after
-    // `readable.cancel()` returns must not retroactively reject it.
-    let fulfillment_plan = transform_stream_snapshot(scope, writable, readable)
-        .plan_source_cancel_fulfillment_after_algorithm(writable_state_before_algorithm);
-    attach_transform_source_cancel_reactions(
-        scope,
-        cancel_promise,
-        writable,
-        residence,
-        reason,
-        fulfillment_plan,
-    );
+    attach_transform_source_cancel_reactions(scope, cancel_promise, writable, residence, reason);
     rv.set(finish_promise.into());
 }
 
@@ -932,21 +904,11 @@ fn attach_transform_source_cancel_reactions<'s>(
     writable: v8::Local<'s, v8::Object>,
     residence: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    fulfillment_plan: FinishSettlementPlan,
 ) {
-    let data = v8::Array::new(scope, 4);
+    let data = v8::Array::new(scope, 3);
     let _ = data.set_index(scope, 0, writable.into());
     let _ = data.set_index(scope, 1, residence.into());
     let _ = data.set_index(scope, 2, reason);
-    let reject_with_stored_error = matches!(
-        fulfillment_plan,
-        FinishSettlementPlan::RejectWithWritableStoredError
-    );
-    let _ = data.set_index(
-        scope,
-        3,
-        v8::Boolean::new(scope, reject_with_stored_error).into(),
-    );
     publish_required_stream_promise_reactions(
         scope,
         cancel_promise,
@@ -964,31 +926,33 @@ fn transform_source_cancel_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, residence, reason, fulfillment_plan)) =
+    let Some((writable, residence, reason)) =
         transform_source_cancel_reaction_values(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
-    let Some(_readable) = stream_slot_object(scope, writable, WRITABLE_STREAM_TARGET_READABLE_SLOT)
+    let Some(readable) = stream_slot_object(scope, writable, WRITABLE_STREAM_TARGET_READABLE_SLOT)
         .filter(|readable| !readable.is_null_or_undefined())
     else {
         reject_pending_read(scope, residence, reason);
         rv.set_undefined();
         return;
     };
-    apply_transform_source_cancel_fulfillment(scope, writable, residence, reason, fulfillment_plan);
+    apply_transform_source_cancel_fulfillment(scope, writable, readable, residence, reason);
     rv.set_undefined();
 }
 
 fn apply_transform_source_cancel_fulfillment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     writable: v8::Local<'s, v8::Object>,
+    readable: v8::Local<'s, v8::Object>,
     residence: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    fulfillment_plan: FinishSettlementPlan,
 ) {
-    match fulfillment_plan {
+    match transform_stream_snapshot(scope, writable, readable)
+        .plan_finish_settlement(FinishOperation::ReadableCancel, AlgorithmOutcome::Fulfilled)
+    {
         FinishSettlementPlan::RejectWithWritableStoredError => {
             let error = writable_stream_stored_error(scope, writable).unwrap_or(reason);
             reject_pending_read(scope, residence, error);
@@ -1006,7 +970,7 @@ fn transform_source_cancel_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, residence, _, _)) =
+    let Some((writable, residence, _)) =
         transform_source_cancel_reaction_values(scope, args.data())
     else {
         rv.set_undefined();
@@ -1039,7 +1003,6 @@ fn transform_source_cancel_reaction_values<'s>(
     v8::Local<'s, v8::Object>,
     v8::Local<'s, v8::Object>,
     v8::Local<'s, v8::Value>,
-    FinishSettlementPlan,
 )> {
     let data = v8::Local::<v8::Array>::try_from(data).ok()?;
     let writable = data
@@ -1051,15 +1014,7 @@ fn transform_source_cancel_reaction_values<'s>(
     let reason = data
         .get_index(scope, 2)
         .unwrap_or_else(|| v8::undefined(scope).into());
-    let fulfillment_plan = if data
-        .get_index(scope, 3)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        FinishSettlementPlan::RejectWithWritableStoredError
-    } else {
-        FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
-    };
-    Some((writable, residence, reason, fulfillment_plan))
+    Some((writable, residence, reason))
 }
 
 fn transform_stream_sink_abort_algorithm<'s>(
@@ -1100,11 +1055,6 @@ fn transform_stream_sink_abort_algorithm_in_relevant_realm<'s>(
     let FinishAlgorithm::Cancel(algorithm) = algorithm else {
         unreachable!("writable abort must claim the transform cancel algorithm")
     };
-    if matches!(algorithm, TransformCancelAlgorithm::None) {
-        clear_transform_stream_terminal_algorithms(scope, writable);
-        apply_transform_sink_abort_fulfillment(scope, writable, readable, residence, reason);
-        return Some(finish_promise.into());
-    }
     let cancel_result =
         invoke_transform_stream_cancel_algorithm(scope, writable, reason, algorithm);
     clear_transform_stream_terminal_algorithms(scope, writable);
@@ -1425,7 +1375,18 @@ pub(in crate::context_bootstrap) fn set_transform_stream_start_result<'s>(
     readable: v8::Local<'s, v8::Object>,
     result: Option<v8::Local<'s, v8::Value>>,
 ) {
-    let Some(promise) = normalize_stream_algorithm_result(scope, result) else {
+    // InitializeTransformStream gives the underlying controllers an algorithm
+    // returning the shared startPromise, resolved with transformer.start's
+    // result. SetUpWritableStreamDefaultController in turn resolves its own
+    // start promise with that result. Preserve this adoption: writable must
+    // remain Erroring until the controller's start reaction can run.
+    let result = result.unwrap_or_else(|| v8::undefined(scope).into());
+    let Some(start_promise) = resolved_promise_value(scope, result) else {
+        return;
+    };
+    let Some(promise) = resolved_promise_value(scope, start_promise)
+        .and_then(|promise| v8::Local::<v8::Promise>::try_from(promise).ok())
+    else {
         return;
     };
     let data = transform_promise_reaction_data(scope, writable, readable);
