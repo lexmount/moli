@@ -836,6 +836,19 @@ def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ..
     )
 
 
+@lru_cache(maxsize=None)
+def _script_content_type_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "html/semantics/scripting-1/the-script-element/serve-with-content-type.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
 def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
