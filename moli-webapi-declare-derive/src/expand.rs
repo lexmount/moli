@@ -5,9 +5,9 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Field, Fields, GenericParam, Ident, Lit, LitStr, Type};
 
 use crate::attrs::{
-    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind,
-    FunctionTemplateAttrs, ObjectAttrs, RenameRule, ValueInitAttr, parse_field_attrs_with_defaults,
-    parse_function_template_attrs, parse_object_attrs,
+    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind, ObjectAttrs,
+    RenameRule, ValueInitAttr, parse_field_attrs_with_defaults, parse_function_template_attrs,
+    parse_object_attrs,
 };
 
 struct DeclaredField {
@@ -15,11 +15,30 @@ struct DeclaredField {
     attrs: FieldAttrs,
 }
 
-fn declared_fields(data: &Data, defaults: FieldDefaults<'_>) -> Result<Vec<DeclaredField>, Error> {
+fn declared_fields(
+    data: &Data,
+    rename_all: RenameRule,
+    defaults: FieldDefaults<'_>,
+) -> Result<Vec<DeclaredField>, Error> {
     named_fields(data)?
         .into_iter()
         .map(|field| {
-            let attrs = parse_field_attrs_with_defaults(&field, defaults)?;
+            let mut attrs = parse_field_attrs_with_defaults(&field, defaults)?;
+            if attrs.name.is_none()
+                && attrs.symbol.is_none()
+                && !matches!(
+                    attrs.kind,
+                    FieldKind::Input | FieldKind::Prototype | FieldKind::ToStringTag
+                )
+            {
+                let rename = if matches!(attrs.kind, FieldKind::Slot | FieldKind::Hidden) {
+                    RenameRule::None
+                } else {
+                    rename_all
+                };
+                let name = implicit_field_name(&field, rename)?;
+                attrs.name = Some(syn::parse_quote!(#name));
+            }
             Ok(DeclaredField { field, attrs })
         })
         .collect()
@@ -94,6 +113,7 @@ pub(crate) fn expand_webapi_function_template(
     });
     let fields = declared_fields(
         &input.data,
+        attrs.rename_all,
         FieldDefaults {
             receiver: attrs.receiver.as_ref(),
             enumerable: attrs.default_enumerable,
@@ -107,7 +127,7 @@ pub(crate) fn expand_webapi_function_template(
             }
         })
     });
-    let template_fields = expand_function_template_fields(&fields, &attrs, &template_name)?;
+    let template_fields = expand_function_template_fields(&fields, &template_name)?;
     let FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,
@@ -234,6 +254,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     };
     let fields = declared_fields(
         &input.data,
+        attrs.rename_all,
         FieldDefaults {
             receiver: attrs.receiver.as_ref(),
             data_properties: attrs.default_data_properties,
@@ -262,7 +283,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     let method_scope_generic = scope_lifetime.is_none().then(|| quote!(<'__webapi_scope>));
     let fields = fields
         .iter()
-        .filter_map(|field| expand_object_field(field, &attrs))
+        .filter_map(expand_object_field)
         .collect::<Result<Vec<_>, _>>()?;
     if fields.is_empty() && !attrs.allow_empty && !has_explicit_prototype {
         return Err(Error::new(
@@ -285,109 +306,51 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         #initialize_brand
         ::std::result::Result::Ok(())
     };
-    let trait_impl = match scope_lifetime {
-        Some(lifetime) => {
-            quote! {
-                impl #impl_generics ::moli_webapi_declare::WebApiObjectDeclaration<#lifetime> for #struct_name #ty_generics #where_clause {
-                    const INTERFACE: &'static str = #interface;
-                    const OWN_TO_STRING_TAG: ::std::option::Option<&'static str> = #own_to_string_tag;
+    let mut trait_generics = generics.clone();
+    if scope_lifetime.is_none() {
+        trait_generics
+            .params
+            .insert(0, syn::parse_quote!('__webapi_scope));
+    }
+    let (trait_impl_generics, _, trait_where_clause) = trait_generics.split_for_impl();
+    let trait_impl = quote! {
+        impl #trait_impl_generics ::moli_webapi_declare::WebApiObjectDeclaration<#method_scope_lifetime> for #struct_name #ty_generics #trait_where_clause {
+            const INTERFACE: &'static str = #interface;
+            const OWN_TO_STRING_TAG: ::std::option::Option<&'static str> = #own_to_string_tag;
 
-                    fn initialize(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<#lifetime, '_>,
-                        object: ::moli_webapi_declare::v8::Local<#lifetime, ::moli_webapi_declare::v8::Object>,
-                    ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
-                        self.initialize(scope, object)
-                    }
+            fn initialize(
+                &self,
+                scope: &mut ::moli_webapi_declare::v8::PinScope<#method_scope_lifetime, '_>,
+                object: ::moli_webapi_declare::v8::Local<#method_scope_lifetime, ::moli_webapi_declare::v8::Object>,
+            ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
+                self.initialize(scope, object)
+            }
 
-                    fn bind_into(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<#lifetime, '_>,
-                        object: ::moli_webapi_declare::v8::Local<#lifetime, ::moli_webapi_declare::v8::Object>,
-                    ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
-                        self.bind_into(scope, object)
-                    }
+            fn bind_into(
+                &self,
+                scope: &mut ::moli_webapi_declare::v8::PinScope<#method_scope_lifetime, '_>,
+                object: ::moli_webapi_declare::v8::Local<#method_scope_lifetime, ::moli_webapi_declare::v8::Object>,
+            ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
+                self.bind_into(scope, object)
+            }
 
-                    fn bind(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<#lifetime, '_>,
-                    ) -> ::std::result::Result<
-                        ::moli_webapi_declare::v8::Local<#lifetime, ::moli_webapi_declare::v8::Object>,
-                        ::moli_webapi_declare::BindError,
-                    > {
-                        self.bind(scope)
-                    }
-                }
+            fn bind(
+                &self,
+                scope: &mut ::moli_webapi_declare::v8::PinScope<#method_scope_lifetime, '_>,
+            ) -> ::std::result::Result<
+                ::moli_webapi_declare::v8::Local<#method_scope_lifetime, ::moli_webapi_declare::v8::Object>,
+                ::moli_webapi_declare::BindError,
+            > {
+                self.bind(scope)
             }
         }
-        None => {
-            let mut trait_generics = generics.clone();
-            trait_generics
-                .params
-                .insert(0, syn::parse_quote!('__webapi_scope));
-            let (trait_impl_generics, _, trait_where_clause) = trait_generics.split_for_impl();
-            quote! {
-                impl #trait_impl_generics ::moli_webapi_declare::WebApiObjectDeclaration<'__webapi_scope> for #struct_name #ty_generics #trait_where_clause {
-                    const INTERFACE: &'static str = #interface;
-                    const OWN_TO_STRING_TAG: ::std::option::Option<&'static str> = #own_to_string_tag;
 
-                    fn initialize(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<'__webapi_scope, '_>,
-                        object: ::moli_webapi_declare::v8::Local<'__webapi_scope, ::moli_webapi_declare::v8::Object>,
-                    ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
-                        self.initialize(scope, object)
-                    }
-
-                    fn bind_into(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<'__webapi_scope, '_>,
-                        object: ::moli_webapi_declare::v8::Local<'__webapi_scope, ::moli_webapi_declare::v8::Object>,
-                    ) -> ::std::result::Result<(), ::moli_webapi_declare::BindError> {
-                        self.bind_into(scope, object)
-                    }
-
-                    fn bind(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<'__webapi_scope, '_>,
-                    ) -> ::std::result::Result<
-                        ::moli_webapi_declare::v8::Local<'__webapi_scope, ::moli_webapi_declare::v8::Object>,
-                        ::moli_webapi_declare::BindError,
-                    > {
-                        self.bind(scope)
-                    }
-                }
-            }
-        }
-    };
-    let value_impl = match scope_lifetime {
-        Some(lifetime) => {
-            quote! {
-                impl #impl_generics ::moli_webapi_declare::WebApiValue<#lifetime> for #struct_name #ty_generics #where_clause {
-                    fn to_v8_value(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<#lifetime, '_>,
-                    ) -> ::std::option::Option<::moli_webapi_declare::v8::Local<#lifetime, ::moli_webapi_declare::v8::Value>> {
-                        self.bind(scope).ok().map(::std::convert::Into::into)
-                    }
-                }
-            }
-        }
-        None => {
-            let mut trait_generics = generics.clone();
-            trait_generics
-                .params
-                .insert(0, syn::parse_quote!('__webapi_scope));
-            let (trait_impl_generics, _, trait_where_clause) = trait_generics.split_for_impl();
-            quote! {
-                impl #trait_impl_generics ::moli_webapi_declare::WebApiValue<'__webapi_scope> for #struct_name #ty_generics #trait_where_clause {
-                    fn to_v8_value(
-                        &self,
-                        scope: &mut ::moli_webapi_declare::v8::PinScope<'__webapi_scope, '_>,
-                    ) -> ::std::option::Option<::moli_webapi_declare::v8::Local<'__webapi_scope, ::moli_webapi_declare::v8::Value>> {
-                        self.bind(scope).ok().map(::std::convert::Into::into)
-                    }
-                }
+        impl #trait_impl_generics ::moli_webapi_declare::WebApiValue<#method_scope_lifetime> for #struct_name #ty_generics #trait_where_clause {
+            fn to_v8_value(
+                &self,
+                scope: &mut ::moli_webapi_declare::v8::PinScope<#method_scope_lifetime, '_>,
+            ) -> ::std::option::Option<::moli_webapi_declare::v8::Local<#method_scope_lifetime, ::moli_webapi_declare::v8::Value>> {
+                self.bind(scope).ok().map(::std::convert::Into::into)
             }
         }
     };
@@ -429,7 +392,6 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         }
 
         #trait_impl
-        #value_impl
     })
 }
 
@@ -483,7 +445,6 @@ struct FunctionTemplateFieldExpansions {
 
 fn expand_function_template_fields(
     fields: &[DeclaredField],
-    template_attrs: &FunctionTemplateAttrs,
     template_name: &LitStr,
 ) -> Result<FunctionTemplateFieldExpansions, Error> {
     let mut template_methods = Vec::new();
@@ -494,23 +455,20 @@ fn expand_function_template_fields(
             template_methods.push(expand_function_template_constant_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 quote!(template),
             )?);
             prototype_methods.push(expand_function_template_constant_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 quote!(prototype),
             )?);
             continue;
         }
         if matches!(attrs.kind, FieldKind::StaticMethod) {
             let binding = format_ident!("__webapi_template_static_method_{index}");
-            template_methods.push(expand_function_template_static_method_field(
+            template_methods.push(expand_function_template_method_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 template_name,
                 binding,
             )?);
@@ -519,18 +477,13 @@ fn expand_function_template_fields(
         if matches!(attrs.kind, FieldKind::Method) {
             let binding = format_ident!("__webapi_template_method_{index}");
             if attrs.symbol.is_none()
-                && let Some(name) = webapi_field_name_literal(
-                    field,
-                    attrs.name.as_ref(),
-                    template_attrs.rename_all,
-                )?
+                && let Some(name) = webapi_field_name_literal(attrs.name.as_ref())
             {
                 method_bindings.insert(name.value(), binding.clone());
             }
             prototype_methods.push(expand_function_template_method_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 template_name,
                 binding,
             )?);
@@ -540,24 +493,19 @@ fn expand_function_template_fields(
             prototype_methods.push(expand_function_template_accessor_property_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 template_name,
             )?);
             continue;
         }
         if matches!(attrs.kind, FieldKind::NativeDataProperty) {
             prototype_methods.push(expand_function_template_native_data_property_field(
-                field,
-                attrs,
-                template_attrs.rename_all,
+                field, attrs,
             )?);
             continue;
         }
         if matches!(attrs.kind, FieldKind::IntrinsicDataProperty(_)) {
             prototype_methods.push(expand_function_template_intrinsic_data_property_field(
-                field,
-                attrs,
-                template_attrs.rename_all,
+                field, attrs,
             )?);
             continue;
         }
@@ -565,7 +513,6 @@ fn expand_function_template_fields(
             prototype_methods.push(expand_function_template_alias_field(
                 field,
                 attrs,
-                template_attrs.rename_all,
                 &method_bindings,
             )?);
             continue;
@@ -586,10 +533,9 @@ fn expand_function_template_fields(
 fn expand_function_template_constant_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
     template: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let Some(value) = attrs.value.as_ref() else {
@@ -621,78 +567,37 @@ fn expand_function_template_constant_field(
     })
 }
 
-fn expand_function_template_static_method_field(
-    field: &Field,
-    attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
-    template_name: &LitStr,
-    binding: syn::Ident,
-) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
-    let name = key.display_name;
-    let (property_key, function_name) = expand_template_method_key(
-        key.property_key,
-        key.function_name,
-        key.shared_template_method_name,
-    );
-    let Some(callback) = attrs.callback.as_ref() else {
-        return Err(Error::new(
-            field.span(),
-            "static method field requires #[webapi(callback = path)]",
-        ));
-    };
-    let length = attrs.length.unwrap_or(0);
-    let attributes = template_property_attributes(attrs);
-    let callback = expand_callback(callback, attrs, false);
-    let member = expand_template_function_member(
-        &callback,
-        length,
-        attrs.data.as_ref(),
-        template_name,
-        &name,
-        function_name,
-    );
-    let field_read = field
-        .ident
-        .as_ref()
-        .map(|ident| quote!(let _ = ::std::stringify!(#ident);));
-    Ok(quote! {
-        #field_read
-        #property_key
-        let __webapi_member = #member;
-        let #binding = ::moli_webapi_declare::__private::install_function_template_static_method(
-            scope,
-            template,
-            __webapi_property_key,
-            __webapi_member,
-            #attributes,
-        );
-        let _ = #name;
-    })
-}
-
 fn expand_function_template_method_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
     template_name: &LitStr,
     binding: syn::Ident,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let (property_key, function_name) = expand_template_method_key(
         key.property_key,
         key.function_name,
         key.shared_template_method_name,
     );
-    let Some(callback) = attrs.callback.as_ref() else {
-        return Err(Error::new(
-            field.span(),
+    let (target, install, missing_callback) = if matches!(attrs.kind, FieldKind::StaticMethod) {
+        (
+            quote!(template),
+            quote!(::moli_webapi_declare::__private::install_function_template_static_method),
+            "static method field requires #[webapi(callback = path)]",
+        )
+    } else {
+        (
+            quote!(prototype),
+            quote!(::moli_webapi_declare::__private::install_function_template_method),
             "method field requires #[webapi(callback = path)]",
-        ));
+        )
+    };
+    let Some(callback) = attrs.callback.as_ref() else {
+        return Err(Error::new(field.span(), missing_callback));
     };
     let length = attrs.length.unwrap_or(0);
-    let attributes = template_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let callback = expand_callback(callback, attrs, false);
     let member = expand_template_function_member(
         &callback,
@@ -710,9 +615,9 @@ fn expand_function_template_method_field(
         #field_read
         #property_key
         let __webapi_member = #member;
-        let #binding = ::moli_webapi_declare::__private::install_function_template_method(
+        let #binding = #install(
             scope,
-            prototype,
+            #target,
             __webapi_property_key,
             __webapi_member,
             #attributes,
@@ -757,7 +662,6 @@ fn expand_template_method_key(
 fn expand_function_template_accessor_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
     template_name: &LitStr,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.readonly {
@@ -766,7 +670,7 @@ fn expand_function_template_accessor_property_field(
             "function-template `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
         ));
     }
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let getter_class_name = expand_template_accessor_class_name(
         "get",
         &key.display_name,
@@ -808,7 +712,7 @@ fn expand_function_template_accessor_property_field(
         quote!(::std::option::Option::Some(#setter_member))
     });
     let setter = setter.unwrap_or_else(|| quote!(::std::option::Option::None));
-    let attributes = accessor_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -860,7 +764,6 @@ fn expand_template_accessor_class_name(
 fn expand_function_template_native_data_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.readonly {
         return Err(Error::new(
@@ -874,7 +777,7 @@ fn expand_function_template_native_data_property_field(
             "function-template `native_data_property` fields share one callback data value and cannot use #[webapi(setter_data = ...)]",
         ));
     }
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let Some(getter) = attrs.getter.as_ref() else {
@@ -893,7 +796,7 @@ fn expand_function_template_native_data_property_field(
             .data((#data).into())
         }
     });
-    let attributes = accessor_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -916,9 +819,8 @@ fn expand_function_template_native_data_property_field(
 fn expand_function_template_intrinsic_data_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let FieldKind::IntrinsicDataProperty(intrinsic) = &attrs.kind else {
@@ -927,7 +829,7 @@ fn expand_function_template_intrinsic_data_property_field(
             "function template intrinsic data property requires an intrinsic value",
         ));
     };
-    let attributes = template_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -946,7 +848,6 @@ fn expand_function_template_intrinsic_data_property_field(
 fn expand_function_template_alias_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
     method_bindings: &HashMap<String, syn::Ident>,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.callback.is_some()
@@ -975,10 +876,10 @@ fn expand_function_template_alias_field(
             "function template alias source must refer to an earlier string-named method",
         ));
     };
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    let attributes = template_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -1010,7 +911,6 @@ fn single_lifetime_param(generics: &syn::Generics) -> Option<syn::Lifetime> {
 
 fn expand_object_field(
     declaration: &DeclaredField,
-    object_attrs: &ObjectAttrs,
 ) -> Option<Result<proc_macro2::TokenStream, Error>> {
     let DeclaredField { field, attrs } = declaration;
     if !attrs.has_installation_kind() {
@@ -1035,7 +935,7 @@ fn expand_object_field(
         )));
     }
     if matches!(attrs.kind, FieldKind::Constant) {
-        let name = match webapi_field_name(field, attrs.name.as_ref(), object_attrs.rename_all) {
+        let name = match webapi_field_name(field, attrs.name.as_ref()) {
             Ok(name) => name,
             Err(error) => return Some(Err(error)),
         };
@@ -1054,29 +954,16 @@ fn expand_object_field(
         }));
     }
     if matches!(attrs.kind, FieldKind::Method) {
-        return Some(expand_object_method_field(
-            field,
-            attrs,
-            object_attrs.rename_all,
-        ));
+        return Some(expand_object_method_field(field, attrs));
     }
     if matches!(attrs.kind, FieldKind::AccessorProperty) {
-        return Some(expand_accessor_property_field(
-            field,
-            attrs,
-            object_attrs.rename_all,
-            quote!(object),
-        ));
+        return Some(expand_accessor_property_field(field, attrs, quote!(object)));
     }
     if matches!(attrs.kind, FieldKind::NativeDataProperty) {
-        return Some(expand_native_data_property_field(
-            field,
-            attrs,
-            object_attrs.rename_all,
-        ));
+        return Some(expand_native_data_property_field(field, attrs));
     }
     if matches!(attrs.kind, FieldKind::Alias(_)) {
-        return Some(expand_alias_field(field, attrs, object_attrs.rename_all));
+        return Some(expand_alias_field(field, attrs));
     }
     if matches!(attrs.kind, FieldKind::Prototype | FieldKind::ToStringTag) {
         let field_is_option = type_is_option(&field.ty);
@@ -1126,12 +1013,7 @@ fn expand_object_field(
     ) {
         return None;
     }
-    let rename_all = if matches!(attrs.kind, FieldKind::Hidden | FieldKind::Slot) {
-        RenameRule::None
-    } else {
-        object_attrs.rename_all
-    };
-    let name = match webapi_field_name(field, attrs.name.as_ref(), rename_all) {
+    let name = match webapi_field_name(field, attrs.name.as_ref()) {
         Ok(name) => name,
         Err(error) => return Some(Err(error)),
     };
@@ -1163,50 +1045,26 @@ fn expand_object_field(
                 #configurable,
             )?;
         }
-    } else if attrs.readonly || attrs.dont_delete {
-        let mut property_attributes = if attrs.enumerable {
-            quote!(::moli_webapi_declare::v8::PropertyAttribute::NONE)
-        } else {
-            quote!(::moli_webapi_declare::v8::PropertyAttribute::DONT_ENUM)
-        };
-        if attrs.readonly {
-            property_attributes = quote! {
-                #property_attributes
-                    | ::moli_webapi_declare::v8::PropertyAttribute::READ_ONLY
-            };
-        }
-        if attrs.dont_delete {
-            property_attributes = quote! {
-                #property_attributes
-                    | ::moli_webapi_declare::v8::PropertyAttribute::DONT_DELETE
-            };
-        }
-        quote! {
-            ::moli_webapi_declare::define_declared_data_property_with_attributes(
-                scope,
-                object,
-                #name,
-                __webapi_value_ref,
-                #property_attributes,
-            )?;
-        }
-    } else if attrs.enumerable {
-        quote! {
-            ::moli_webapi_declare::define_declared_enumerable_data_property(
-                scope,
-                object,
-                #name,
-                __webapi_value_ref,
-            )?;
-        }
     } else {
+        let (install, attributes) = if attrs.readonly || attrs.dont_delete {
+            let attributes = property_attributes(attrs);
+            (
+                quote!(::moli_webapi_declare::define_declared_data_property_with_attributes),
+                quote!(, #attributes),
+            )
+        } else if attrs.enumerable {
+            (
+                quote!(::moli_webapi_declare::define_declared_enumerable_data_property),
+                quote!(),
+            )
+        } else {
+            (
+                quote!(::moli_webapi_declare::define_declared_data_property),
+                quote!(),
+            )
+        };
         quote! {
-            ::moli_webapi_declare::define_declared_data_property(
-                scope,
-                object,
-                #name,
-                __webapi_value_ref,
-            )?;
+            #install(scope, object, #name, __webapi_value_ref #attributes)?;
         }
     };
     if optional {
@@ -1214,23 +1072,6 @@ fn expand_object_field(
             if let ::std::option::Option::Some(__webapi_value_ref) = #value {
                 #define_value
             }
-        }));
-    }
-    if matches!(attrs.kind, FieldKind::Hidden) {
-        return Some(Ok(quote! {
-            #value
-            #define_value
-        }));
-    }
-    if matches!(attrs.kind, FieldKind::Slot) {
-        return Some(Ok(quote! {
-            #value
-            ::moli_webapi_declare::define_declared_private_slot(
-                scope,
-                object,
-                #name,
-                __webapi_value_ref,
-            )?;
         }));
     }
     Some(Ok(quote! {
@@ -1242,7 +1083,6 @@ fn expand_object_field(
 fn expand_accessor_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
     object: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.readonly {
@@ -1251,7 +1091,7 @@ fn expand_accessor_property_field(
             "runtime-object `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
         ));
     }
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     if attrs.getter.is_some() && attrs.getter_value.is_some() {
@@ -1262,7 +1102,7 @@ fn expand_accessor_property_field(
     }
     let getter = if let Some(getter) = attrs.getter.as_ref() {
         let getter = expand_callback(getter, attrs, false);
-        let getter = expand_accessor_function_builder(&getter, 0, attrs.data.as_ref(), &name);
+        let getter = expand_function_builder(&getter, 0, attrs.data.as_ref(), &name);
         quote! {
             #getter.ok_or_else(|| {
                 ::moli_webapi_declare::BindError::new(
@@ -1281,7 +1121,7 @@ fn expand_accessor_property_field(
     let setter = attrs.setter.as_ref().map(|setter| {
         let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
         let setter = expand_callback(setter, attrs, true);
-        expand_accessor_function_builder(&setter, 1, setter_data, &name)
+        expand_function_builder(&setter, 1, setter_data, &name)
     });
     let setter = match setter {
         Some(setter) => quote! {
@@ -1295,7 +1135,7 @@ fn expand_accessor_property_field(
         },
         None => quote!(::std::option::Option::None),
     };
-    let attributes = accessor_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -1319,7 +1159,6 @@ fn expand_accessor_property_field(
 fn expand_native_data_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.readonly {
         return Err(Error::new(
@@ -1327,7 +1166,7 @@ fn expand_native_data_property_field(
             "`native_data_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
         ));
     }
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let Some(getter) = attrs.getter.as_ref() else {
@@ -1346,7 +1185,7 @@ fn expand_native_data_property_field(
             .data((#data).into())
         }
     });
-    let attributes = accessor_property_attributes(attrs);
+    let attributes = property_attributes(attrs);
     let field_read = field
         .ident
         .as_ref()
@@ -1378,9 +1217,8 @@ fn expand_native_data_property_field(
 fn expand_object_method_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let set_function_name = key.function_name.map(|function_name| {
@@ -1399,8 +1237,7 @@ fn expand_object_method_field(
     let writable = !attrs.readonly;
     let configurable = !attrs.dont_delete;
     let callback = expand_callback(callback, attrs, false);
-    let build_function =
-        expand_method_function_builder(&callback, length, attrs.data.as_ref(), &name);
+    let build_function = expand_function_builder(&callback, length, attrs.data.as_ref(), &name);
     let install_method = quote! {
         let function = #build_function.ok_or_else(|| {
             ::moli_webapi_declare::BindError::new(
@@ -1450,9 +1287,8 @@ fn expand_object_method_field(
 fn expand_alias_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    let key = webapi_field_key(field, attrs, rename_all)?;
+    let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
     let FieldKind::Alias(source_name) = &attrs.kind else {
@@ -1588,88 +1424,34 @@ fn expand_callback(
     }}
 }
 
-fn expand_accessor_function_builder(
+fn expand_function_builder(
     callback: &proc_macro2::TokenStream,
     length: i32,
     data: Option<&syn::Expr>,
     display_name: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    match data {
-        Some(data) => quote! {
-            {
-                let __webapi_callback_data = (#data);
-                let __webapi_callback_data =
-                    ::moli_webapi_declare::WebApiValue::to_v8_value(
-                        &__webapi_callback_data,
-                        scope,
-                    )
-                    .ok_or_else(|| {
-                        ::moli_webapi_declare::BindError::new(
-                            ::std::format!("failed to convert declared `{}` callback data", #display_name)
-                        )
-                    })?;
-                ::moli_webapi_declare::v8::Function::builder(#callback)
-                    .length(#length)
-                    .data(__webapi_callback_data)
-                    .constructor_behavior(
-                        ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                    )
-                    .build(scope)
-            }
-        },
-        None => quote! {
-            ::moli_webapi_declare::v8::Function::builder(#callback)
-                .length(#length)
-                .constructor_behavior(
-                    ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
+    // Evaluate callback state during installation, where both `scope` and
+    // `self` exist. Merely carrying Rust state does not expose a JS property.
+    let convert_data = data.map(|data| quote! {
+        let __webapi_callback_data = (#data);
+        let __webapi_callback_data =
+            ::moli_webapi_declare::WebApiValue::to_v8_value(
+                &__webapi_callback_data, scope,
+            ).ok_or_else(|| {
+                ::moli_webapi_declare::BindError::new(
+                    ::std::format!("failed to convert declared `{}` callback data", #display_name)
                 )
-                .build(scope)
-        },
-    }
-}
-
-fn expand_method_function_builder(
-    callback: &proc_macro2::TokenStream,
-    length: i32,
-    data: Option<&syn::Expr>,
-    display_name: &proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    // `data` is evaluated inside the generated `initialize` body, so it can use
-    // the V8 `scope` parameter and `self` fields. This is how declarations pass
-    // non-reflectable callback state without declaring that state as a JS
-    // data_property or private slot.
-    match data {
-        Some(data) => quote! {
-            {
-                let __webapi_callback_data = (#data);
-                let __webapi_callback_data =
-                    ::moli_webapi_declare::WebApiValue::to_v8_value(
-                        &__webapi_callback_data,
-                        scope,
-                    )
-                    .ok_or_else(|| {
-                        ::moli_webapi_declare::BindError::new(
-                            ::std::format!("failed to convert declared `{}` callback data", #display_name)
-                        )
-                    })?;
-                ::moli_webapi_declare::v8::Function::builder(#callback)
-                    .length(#length)
-                    .data(__webapi_callback_data)
-                    .constructor_behavior(
-                        ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                    )
-                    .build(scope)
-            }
-        },
-        None => quote! {
-            ::moli_webapi_declare::v8::Function::builder(#callback)
-                .length(#length)
-                .constructor_behavior(
-                    ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                )
-                .build(scope)
-        },
-    }
+            })?;
+    });
+    let attach_data = data.map(|_| quote!(.data(__webapi_callback_data)));
+    quote! {{
+        #convert_data
+        ::moli_webapi_declare::v8::Function::builder(#callback)
+            .length(#length)
+            #attach_data
+            .constructor_behavior(::moli_webapi_declare::v8::ConstructorBehavior::Throw)
+            .build(scope)
+    }}
 }
 
 fn expand_template_function_member(
@@ -1713,28 +1495,7 @@ fn expand_template_function_member(
     }
 }
 
-fn accessor_property_attributes(attrs: &crate::attrs::FieldAttrs) -> proc_macro2::TokenStream {
-    let mut property_attributes = if attrs.enumerable {
-        quote!(::moli_webapi_declare::v8::PropertyAttribute::NONE)
-    } else {
-        quote!(::moli_webapi_declare::v8::PropertyAttribute::DONT_ENUM)
-    };
-    if attrs.readonly {
-        property_attributes = quote! {
-            #property_attributes
-                | ::moli_webapi_declare::v8::PropertyAttribute::READ_ONLY
-        };
-    }
-    if attrs.dont_delete {
-        property_attributes = quote! {
-            #property_attributes
-                | ::moli_webapi_declare::v8::PropertyAttribute::DONT_DELETE
-        };
-    }
-    property_attributes
-}
-
-fn template_property_attributes(attrs: &crate::attrs::FieldAttrs) -> proc_macro2::TokenStream {
+fn property_attributes(attrs: &crate::attrs::FieldAttrs) -> proc_macro2::TokenStream {
     let mut property_attributes = if attrs.enumerable {
         quote!(::moli_webapi_declare::v8::PropertyAttribute::NONE)
     } else {
@@ -1781,13 +1542,12 @@ fn to_string_tag_property_attributes(attrs: &crate::attrs::FieldAttrs) -> proc_m
 fn webapi_field_key(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    rename_all: RenameRule,
 ) -> Result<WebApiFieldKey, Error> {
     let mut key = if let Some(symbol) = attrs.symbol.as_ref() {
         webapi_symbol_field_key(symbol)?
     } else {
-        let name = webapi_field_name(field, attrs.name.as_ref(), rename_all)?;
-        let name_literal = webapi_field_name_literal(field, attrs.name.as_ref(), rename_all)?;
+        let name = webapi_field_name(field, attrs.name.as_ref())?;
+        let name_literal = webapi_field_name_literal(attrs.name.as_ref());
         WebApiFieldKey {
             display_name: name.clone(),
             display_name_literal: name_literal,
@@ -1850,50 +1610,36 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
 fn webapi_field_name(
     field: &Field,
     explicit: Option<&syn::Expr>,
-    rename_all: RenameRule,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    if let Some(name) = explicit {
-        return Ok(quote!(#name));
-    }
-    let Some(ident) = field.ident.as_ref() else {
-        return Err(Error::new(field.span(), "object field requires a name"));
-    };
-    let name = ident.to_string();
-    let name = name.strip_prefix("r#").unwrap_or(&name);
-    let name = name.strip_prefix('_').unwrap_or(name);
-    if name.is_empty() {
-        return Err(Error::new(field.span(), "webapi field requires a name"));
-    }
-    let name = apply_rename_rule(name, rename_all);
-    let name = LitStr::new(&name, ident.span());
+    let name = explicit.ok_or_else(|| Error::new(field.span(), "webapi field requires a name"))?;
     Ok(quote!(#name))
 }
 
-fn webapi_field_name_literal(
-    field: &Field,
-    explicit: Option<&syn::Expr>,
-    rename_all: RenameRule,
-) -> Result<Option<LitStr>, Error> {
-    if let Some(name) = explicit {
-        return match name {
-            syn::Expr::Lit(expr) => match &expr.lit {
-                Lit::Str(name) => Ok(Some(name.clone())),
-                _ => Ok(None),
-            },
-            _ => Ok(None),
-        };
+fn webapi_field_name_literal(explicit: Option<&syn::Expr>) -> Option<LitStr> {
+    match explicit {
+        Some(syn::Expr::Lit(syn::ExprLit {
+            lit: Lit::Str(name),
+            ..
+        })) => Some(name.clone()),
+        _ => None,
     }
-    let Some(ident) = field.ident.as_ref() else {
-        return Err(Error::new(field.span(), "object field requires a name"));
-    };
+}
+
+fn implicit_field_name(field: &Field, rename_all: RenameRule) -> Result<LitStr, Error> {
+    let ident = field
+        .ident
+        .as_ref()
+        .ok_or_else(|| Error::new(field.span(), "object field requires a name"))?;
     let name = ident.to_string();
     let name = name.strip_prefix("r#").unwrap_or(&name);
     let name = name.strip_prefix('_').unwrap_or(name);
     if name.is_empty() {
         return Err(Error::new(field.span(), "webapi field requires a name"));
     }
-    let name = apply_rename_rule(name, rename_all);
-    Ok(Some(LitStr::new(&name, ident.span())))
+    Ok(LitStr::new(
+        &apply_rename_rule(name, rename_all),
+        ident.span(),
+    ))
 }
 
 fn apply_rename_rule(name: &str, rename_all: RenameRule) -> String {
@@ -1946,72 +1692,21 @@ fn expand_object_field_value(
             .ident
             .as_ref()
             .map(|ident| quote!(let _ = &self.#ident;));
-        return Ok(match init {
-            ValueInitAttr::Null => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::null(scope);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::Object => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Object::new(scope);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::NullObject => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Object::new(scope);
-                    let __webapi_null = ::moli_webapi_declare::v8::null(scope);
-                    let _ = __webapi_value.set_prototype(scope, __webapi_null.into());
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::Array => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Array::new(scope, 0);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::Undefined => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::undefined(scope);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::True => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Boolean::new(scope, true);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::False => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Boolean::new(scope, false);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::Zero => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::Number::new(scope, 0.0);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
-            ValueInitAttr::EmptyString => {
-                quote! {
-                    #field_read
-                    let __webapi_value = ::moli_webapi_declare::v8::String::empty(scope);
-                    let __webapi_value_ref = &__webapi_value;
-                }
-            }
+        let value = match init {
+            ValueInitAttr::Null => quote!(::moli_webapi_declare::v8::null(scope)),
+            ValueInitAttr::Object => quote!(::moli_webapi_declare::v8::Object::new(scope)),
+            ValueInitAttr::NullObject => quote!({
+                let object = ::moli_webapi_declare::v8::Object::new(scope);
+                let null = ::moli_webapi_declare::v8::null(scope);
+                let _ = object.set_prototype(scope, null.into());
+                object
+            }),
+            ValueInitAttr::Array => quote!(::moli_webapi_declare::v8::Array::new(scope, 0)),
+            ValueInitAttr::Undefined => quote!(::moli_webapi_declare::v8::undefined(scope)),
+            ValueInitAttr::True => quote!(::moli_webapi_declare::v8::Boolean::new(scope, true)),
+            ValueInitAttr::False => quote!(::moli_webapi_declare::v8::Boolean::new(scope, false)),
+            ValueInitAttr::Zero => quote!(::moli_webapi_declare::v8::Number::new(scope, 0.0)),
+            ValueInitAttr::EmptyString => quote!(::moli_webapi_declare::v8::String::empty(scope)),
             ValueInitAttr::String(value) => {
                 let field_name = field
                     .ident
@@ -2020,23 +1715,20 @@ fn expand_object_field_value(
                     .unwrap_or_else(|| "<unnamed>".to_string());
                 let field_name = LitStr::new(&field_name, field.span());
                 quote! {
-                    #field_read
-                    let __webapi_init_value = #value;
-                    let __webapi_value =
-                        ::moli_webapi_declare::WebApiValue::to_v8_value(
-                            &__webapi_init_value,
-                            scope,
-                        )
-                        .ok_or_else(|| {
-                            ::moli_webapi_declare::BindError::new(
-                                ::std::format!("failed to convert declared `{}` initializer", #field_name)
-                            )
-                        })?;
-                    let __webapi_value_ref = &__webapi_value;
+                    ::moli_webapi_declare::WebApiValue::to_v8_value(&#value, scope)
+                        .ok_or_else(|| ::moli_webapi_declare::BindError::new(
+                            ::std::format!("failed to convert declared `{}` initializer", #field_name)
+                        ))?
                 }
             }
+        };
+        return Ok(quote! {
+            #field_read
+            let __webapi_value = #value;
+            let __webapi_value_ref = &__webapi_value;
         });
     }
+
     if matches!(attrs.kind, FieldKind::DataProperty | FieldKind::Hidden)
         || matches!(
             attrs.kind,
@@ -2166,7 +1858,6 @@ mod tests {
             struct DynamicObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
-
                 #[webapi(data_property)]
                 value: u32,
             }
@@ -2186,7 +1877,6 @@ mod tests {
             struct StaticObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
-
                 #[webapi(method, callback = static_callback)]
                 action: (),
             }
@@ -2206,13 +1896,10 @@ mod tests {
             struct DefaultedObject {
                 #[webapi(data_property)]
                 value: u32,
-
                 #[webapi(data_property, constructor_default = "ready")]
                 state: &'static str,
-
                 #[webapi(data_property, constructor_default = Vec::new())]
                 items: Vec<u32>,
-
                 #[webapi(data_property, constructor_default)]
                 count: usize,
             }
@@ -2233,7 +1920,6 @@ mod tests {
             struct DerivedDefaultObject {
                 #[webapi(data_property)]
                 client_x: i32,
-
                 #[webapi(data_property, constructor_default = client_x)]
                 x: i32,
             }
@@ -2300,7 +1986,6 @@ mod tests {
                     intrinsic_data_property = v8::Intrinsic::ArrayProtoValues
                 )]
                 values: (),
-
                 #[webapi(
                     intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
                     symbol = "iterator",
@@ -2360,7 +2045,6 @@ mod tests {
             struct SampleTemplate {
                 #[webapi(native_data_property, getter = sample_getter)]
                 value: (),
-
                 #[webapi(native_data_property = "named", getter = sample_getter, setter = sample_setter, dont_delete)]
                 named: (),
             }
@@ -2376,7 +2060,6 @@ mod tests {
             struct SampleTemplate {
                 #[webapi(accessor_property, getter = sample_getter)]
                 value: (),
-
                 #[webapi(accessor_property = "named", getter = sample_getter, setter = sample_setter, data = getter_data, setter_data = setter_data, dont_delete)]
                 named: (),
             }
@@ -2453,7 +2136,6 @@ mod tests {
             #[webapi(interface = "Sample")]
             struct BadObject<'scope> {
                 getter: ::moli_webapi_declare::v8::Local<'scope, ::moli_webapi_declare::v8::Function>,
-
                 #[webapi(accessor_property, getter = sample_getter, getter_value = self.getter)]
                 value: (),
             }
@@ -2475,7 +2157,6 @@ mod tests {
             struct SampleObject {
                 #[webapi(native_data_property, getter = sample_getter)]
                 value: (),
-
                 #[webapi(native_data_property = "named", getter = sample_getter, setter = sample_setter, dont_delete)]
                 named: (),
             }
@@ -2540,7 +2221,6 @@ mod tests {
             struct BadTemplate {
                 #[webapi(alias = "entries", symbol = "iterator")]
                 iterator: (),
-
                 #[webapi(method, callback = sample_callback)]
                 entries: (),
             }
@@ -2559,7 +2239,6 @@ mod tests {
             struct BadTemplate {
                 #[webapi(method, symbol = "iterator", callback = sample_callback)]
                 entries: (),
-
                 #[webapi(alias = "entries", symbol = "asyncIterator")]
                 async_iterator: (),
             }
