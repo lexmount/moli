@@ -9,4 +9,5 @@ mod misc;
 mod query_realms;
 mod shadow_dom;
 mod style_invalidation;
+mod upload_preflight;
 mod xhr;

@@ -42,6 +42,7 @@ pub struct Request {
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
     pub request_mode: RequestMode,
+    use_cors_preflight: bool,
     pub redirect_mode: RequestRedirectMode,
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
@@ -398,6 +399,7 @@ impl Request {
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -429,6 +431,7 @@ impl Request {
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -491,6 +494,7 @@ impl Request {
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Cors,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -624,6 +628,16 @@ impl Request {
 
     pub fn browser_request_metadata(&self) -> Option<BrowserRequestMetadata> {
         self.browser_request_metadata
+    }
+
+    /// Require a CORS preflight even for a safelisted method and header list.
+    pub fn with_use_cors_preflight(mut self, use_cors_preflight: bool) -> Self {
+        self.use_cors_preflight = use_cors_preflight;
+        self
+    }
+
+    pub fn use_cors_preflight(&self) -> bool {
+        self.use_cors_preflight
     }
 
     pub fn with_browser_navigation_kind(mut self, kind: BrowserNavigationRequestKind) -> Self {
