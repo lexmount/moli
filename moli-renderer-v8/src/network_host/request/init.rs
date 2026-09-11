@@ -4,6 +4,30 @@ use crate::webidl;
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestMode, RequestRedirectMode};
 use std::str::FromStr;
 
+/// Fetch rejects with the original conversion exception, including primitive
+/// values. Keep the catch boundary around argument conversion, before a body
+/// is consumed or any request is dispatched.
+pub(crate) fn convert_fetch_arguments<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    convert: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Result<T, String>,
+) -> Result<T, v8::Local<'s, v8::Value>> {
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut conversion_scope = try_catch.init();
+    let result = convert(&mut conversion_scope);
+    if conversion_scope.has_caught() {
+        let exception = conversion_scope
+            .exception()
+            .unwrap_or_else(|| v8::undefined(&conversion_scope).into());
+        conversion_scope.reset();
+        return Err(exception);
+    }
+    result.map_err(|message| {
+        crate::util::v8_string(&conversion_scope, &message)
+            .map(|message| v8::Exception::type_error(&conversion_scope, message))
+            .unwrap_or_else(|| v8::undefined(&conversion_scope).into())
+    })
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedFetchInit {
     pub(crate) method: String,
@@ -173,9 +197,15 @@ fn request_init_headers_member<'s>(
     object: v8::Local<'s, v8::Object>,
     _key: &str,
 ) -> Result<Option<Vec<(String, String)>>, webidl::WebIdlError> {
-    webidl::property_non_nullish(scope, object, "headers")
-        .map(|headers| headers_entries_from_init(scope, headers).map(Some))
-        .unwrap_or(Ok(None))
+    webidl::property_result(
+        scope,
+        object,
+        "headers",
+        webidl::Context::member("RequestInit", "headers"),
+    )?
+    .filter(|value| !value.is_null_or_undefined())
+    .map(|headers| headers_entries_from_init(scope, headers).map(Some))
+    .unwrap_or(Ok(None))
 }
 
 pub(crate) fn parse_fetch_init<'s>(
