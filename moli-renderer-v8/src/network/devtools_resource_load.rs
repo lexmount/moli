@@ -99,6 +99,7 @@ impl RendererNetworkResourceLoadResponse {
         moli_fetch::ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: None,
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
