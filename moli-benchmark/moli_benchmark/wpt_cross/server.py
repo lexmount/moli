@@ -2175,6 +2175,12 @@ def _make_handler(
             if path == LINK_STYLESHEET_COUNTER_PATH:
                 self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
                 return
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/"
+                "serve-with-content-type.py"
+            ):
+                self._serve_script_with_content_type(parsed.query, emit_body=emit_body)
+                return
             if path == "/fetch/api/resources/status.py":
                 self._serve_fetch_status(parsed.query, emit_body=emit_body)
                 return
@@ -2879,7 +2885,8 @@ def _make_handler(
                 self.send_error(400, "Not enough parameters or file not found")
                 return
             self._send_bytes(
-                content_type, body, emit_body=emit_body,
+                None, body, emit_body=emit_body,
+                extra_headers=[("Content-Type", content_type)],
             )
 
         def _serve_delayed_module_script(self, query: str, *, emit_body: bool) -> None:
