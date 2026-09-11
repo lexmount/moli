@@ -151,25 +151,20 @@ pub(crate) fn window_fetch_callback<'s>(
     // caller's realm is still current. Besides choosing the right realm for
     // conversion failures, this permits getters to run; the frozen receiver
     // is revalidated only after all such author code has completed.
-    let mut parsed = match parse_window_fetch_input(scope, &args) {
+    let (mut parsed, signal) = match convert_fetch_arguments(scope, |scope| {
+        let parsed = parse_window_fetch_input(scope, &args)?;
+        let signal = window_fetch_signal_value(scope, &args)?
+            .map(|value| validate_window_fetch_signal(scope, unsafe { &mut *host_ptr }, value))
+            .transpose()?
+            .flatten()
+            .map(|signal| v8::Global::new(scope, signal));
+        Ok((parsed, signal))
+    }) {
         Ok(parsed) => parsed,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
+        Err(exception) => {
+            rv.set(make_rejected_promise_with_value(scope, exception).into());
             return;
         }
-    };
-    let signal_value = window_fetch_signal_value(scope, &args);
-    let signal = match signal_value {
-        Some(value) => {
-            match validate_window_fetch_signal(scope, unsafe { &mut *host_ptr }, value) {
-                Ok(signal) => signal,
-                Err(message) => {
-                    rv.set(make_rejected_promise(scope, &message).into());
-                    return;
-                }
-            }
-        }
-        None => None,
     };
 
     let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) else {
@@ -186,7 +181,6 @@ pub(crate) fn window_fetch_callback<'s>(
         return;
     };
     let fetch_context = crate::native_bridge::WindowFetchContext::from_realm(binding);
-    let signal = signal.map(|signal| v8::Global::new(scope, signal));
     let relevant_context = {
         let context = fetch_context.script_realm().context(scope);
         v8::Global::new(scope, context)
@@ -353,18 +347,23 @@ fn window_fetch_callback_in_relevant_realm<'s>(
 fn window_fetch_signal_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<v8::Local<'s, v8::Value>> {
+) -> Result<Option<v8::Local<'s, v8::Value>>, String> {
     let signal_key = v8str(scope, "signal");
     if args.length() > 1 {
         let init_arg = args.get(1);
         if !init_arg.is_null_or_undefined()
             && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-            && init.has(scope, signal_key.into()).unwrap_or(false)
+            && init
+                .has(scope, signal_key.into())
+                .ok_or("Failed to read RequestInit.signal")?
         {
-            let value = init
-                .get(scope, signal_key.into())
-                .unwrap_or_else(|| v8::undefined(scope).into());
-            return Some(value);
+            return crate::webidl::property_result(
+                scope,
+                init,
+                "signal",
+                crate::webidl::Context::member("RequestInit", "signal"),
+            )
+            .map_err(|error| error.to_string());
         }
     }
 
@@ -372,12 +371,17 @@ fn window_fetch_signal_value<'s>(
     if !request_like.is_null_or_undefined()
         && request_like.is_object()
         && let Ok(request_like) = v8::Local::<v8::Object>::try_from(request_like)
-        && let Some(value) = request_like.get(scope, signal_key.into())
     {
-        return Some(value);
+        return crate::webidl::property_result(
+            scope,
+            request_like,
+            "signal",
+            crate::webidl::Context::member("Request", "signal"),
+        )
+        .map_err(|error| error.to_string());
     }
 
-    None
+    Ok(None)
 }
 
 fn validate_window_fetch_signal<'s>(

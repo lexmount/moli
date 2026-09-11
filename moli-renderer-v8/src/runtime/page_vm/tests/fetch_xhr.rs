@@ -4356,6 +4356,73 @@ async fn blob_fetch_and_xhr_reject_non_get_methods_in_window_and_worker() {
 }
 
 #[tokio::test]
+async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming_input() {
+    run_page_vm_async_test(async move {
+        for worker in [false, true] {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            let probe = r#"(async () => {
+                const check = (value, message) => { if (!value) throw new Error(message); };
+                const url = 'data:text/plain,must-not-fetch';
+                for (const api of ['Request', 'fetch']) {
+                    for (const member of ['method', 'headers', 'signal']) {
+                        for (const sentinel of [undefined, null, false, 0, 'sentinel', {}, new Error('sentinel')]) {
+                            const input = new Request(url, {method:'POST', body:'kept'});
+                            const init = {};
+                            Object.defineProperty(init, member, {get() { throw sentinel; }});
+                            let result, caught, threw = false;
+                            try { result = api === 'Request' ? new Request(input, init) : fetch(input, init); }
+                            catch (error) { threw = true; caught = error; }
+                            if (api === 'Request') {
+                                check(threw && Object.is(caught, sentinel), 'Request must rethrow ' + member);
+                            } else {
+                                check(!threw && result instanceof Promise, 'fetch conversion must return a Promise');
+                                let rejected = false;
+                                await result.then(() => {}, error => { rejected = true; caught = error; });
+                                check(rejected && Object.is(caught, sentinel), 'fetch must reject with original ' + member);
+                            }
+                            check(!input.bodyUsed, 'failed ' + member + ' conversion consumed input body');
+                        }
+                    }
+                }
+                if (typeof document !== 'undefined') {
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    const other = frame.contentWindow;
+                    const sentinel = new other.Error('cross-realm');
+                    const promise = other.fetch.call(window, url, {get headers() { throw sentinel; }});
+                    check(promise instanceof other.Promise, 'conversion rejection must belong to function realm');
+                    let caught;
+                    await promise.catch(error => { caught = error; });
+                    check(caught === sentinel, 'cross-realm exception identity');
+                    frame.remove();
+                }
+                return 'ok';
+            })()"#;
+            let script = if worker {
+                let source = serde_json::to_string(&format!("{probe}.then(postMessage, error => postMessage(String(error)))")).unwrap();
+                format!(r#"globalThis.__initExceptionResult = 'pending';
+                    const source = URL.createObjectURL(new Blob([{source}]));
+                    const worker = new Worker(source);
+                    worker.onmessage = e => {{ globalThis.__initExceptionResult = e.data; worker.terminate(); URL.revokeObjectURL(source); }};
+                    worker.onerror = e => {{ globalThis.__initExceptionResult = e.message; }};"#)
+            } else {
+                format!("globalThis.__initExceptionResult = 'pending'; {probe}.then(value => {{ globalThis.__initExceptionResult = value; }}, error => {{ globalThis.__initExceptionResult = String(error); }})")
+            };
+            let (result, network_output) = local_executor.run(async move {
+                page_vm.vm_mut().eval(&script)?;
+                drive_websocket_until_done(&mut page_vm, "String(globalThis.__initExceptionResult !== 'pending')", "RequestInit exception checks should finish").await?;
+                let result = page_vm.vm_mut().eval("globalThis.__initExceptionResult")?;
+                Ok::<_, anyhow::Error>((result, page_vm.vm_mut().take_network_output()))
+            }).await.expect("RequestInit exceptions should run on owner lane");
+            assert_eq!(result, "ok", "worker={worker}");
+            let (records, _, _) = split_network_output_items(network_output);
+            assert!(records.iter().all(|record| record.resource_type() != SubresourceResourceType::Fetch), "failed argument conversion dispatched a fetch; worker={worker}");
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn blob_url_entries_survive_request_cloning_and_xhr_open_in_window_and_worker() {
     run_page_vm_async_test(async move {
         for worker in [false, true] {

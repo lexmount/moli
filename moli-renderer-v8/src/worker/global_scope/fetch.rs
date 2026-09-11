@@ -1,5 +1,7 @@
 use super::*;
-use crate::network_host::{CapturedBlobUrl, local_url_response_with_blob_entry};
+use crate::network_host::{
+    CapturedBlobUrl, convert_fetch_arguments, local_url_response_with_blob_entry,
+};
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
     ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
@@ -1717,16 +1719,29 @@ pub(in crate::worker) fn worker_fetch_signal_option<'s>(
         let init_arg = args.get(1);
         if !init_arg.is_null_or_undefined()
             && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-            && init.has(scope, signal_key.into()).unwrap_or(false)
+            && init
+                .has(scope, signal_key.into())
+                .ok_or("Failed to read RequestInit.signal")?
         {
-            let signal = init
-                .get(scope, signal_key.into())
-                .unwrap_or_else(|| v8::undefined(scope).into());
+            let signal = webidl::property_result(
+                scope,
+                init,
+                "signal",
+                webidl::Context::member("RequestInit", "signal"),
+            )
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(|| v8::undefined(scope).into());
             return validate_worker_fetch_signal(scope, signal);
         }
     }
     if let Some(request_like) = request_like
-        && let Some(signal) = request_like.get(scope, signal_key.into())
+        && let Some(signal) = webidl::property_result(
+            scope,
+            request_like,
+            "signal",
+            webidl::Context::member("Request", "signal"),
+        )
+        .map_err(|error| error.to_string())?
     {
         return validate_worker_fetch_signal(scope, signal);
     }
@@ -1998,10 +2013,12 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         priority,
         metadata: request_metadata,
         signal,
-    } = match resolve_worker_fetch_input(scope, &args, &document_url) {
+    } = match convert_fetch_arguments(scope, |scope| {
+        resolve_worker_fetch_input(scope, &args, &document_url)
+    }) {
         Ok(resolved) => resolved,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
+        Err(exception) => {
+            rv.set(make_rejected_promise_with_value(scope, exception).into());
             return;
         }
     };
