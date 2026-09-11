@@ -190,7 +190,7 @@ fn screen_orientation_lock_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -221,7 +221,7 @@ fn screen_orientation_unlock_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -233,7 +233,7 @@ fn screen_event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
+    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -245,7 +245,7 @@ fn screen_event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
+    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -257,7 +257,7 @@ fn screen_event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
+    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -269,7 +269,7 @@ fn screen_orientation_event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -281,7 +281,7 @@ fn screen_orientation_event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -293,7 +293,7 @@ fn screen_orientation_event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -365,7 +365,7 @@ fn screen_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
+    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -447,7 +447,7 @@ fn screen_orientation_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -485,7 +485,7 @@ fn screen_orientation_onchange_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -500,7 +500,7 @@ fn screen_orientation_onchange_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
+    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

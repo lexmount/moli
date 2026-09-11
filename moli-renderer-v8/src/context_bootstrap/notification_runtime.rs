@@ -210,7 +210,7 @@ struct NotificationConstructorConstantsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NotificationConstructorPermissionDeclaration {
     #[webapi(
         accessor_property,
@@ -1301,7 +1301,7 @@ fn notification_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "Notification")
+    web_api_interfaces::Notification::is_instance(scope, receiver)
 }
 
 fn notification_event_target_add_event_listener_callback<'s>(

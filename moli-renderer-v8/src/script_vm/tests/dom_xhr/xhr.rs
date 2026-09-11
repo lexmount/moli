@@ -3,11 +3,11 @@ use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", allow_empty)]
+#[webapi(record)]
 struct PendingBodyOwnerProbeDeclaration {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", allow_empty)]
+#[webapi(record)]
 struct StreamingXhrProbeDeclaration {}
 
 fn pending_body_owner_probe<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {

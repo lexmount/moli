@@ -64,7 +64,7 @@ const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WindowMessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     origin: v8::Local<'scope, v8::String>,
@@ -73,7 +73,7 @@ struct WindowMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WindowDocumentEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,
@@ -1982,7 +1982,7 @@ fn idle_deadline_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, "IdleDeadline") {
+    if web_api_interfaces::IdleDeadline::is_instance(scope, receiver) {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

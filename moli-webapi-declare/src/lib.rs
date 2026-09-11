@@ -84,21 +84,33 @@
 //! `data = self.some_field`, which lets a declaration carry callback data
 //! without expanding the object reflection surface.
 //!
-//! Named interface instances automatically receive a private Web API type after
-//! their fields initialize successfully. `bind`, `bind_into`, and `initialize`
-//! all use this path. `interface = "Object"` describes an unbranded record;
-//! `#[webapi(unbranded)]` explicitly opts named prototype/constructor installers,
-//! dictionaries, and shared initialization fragments out of instance branding.
-//! These fragments never erase an identity already present on their target.
-//! Use payload slots for data, handles, ownership, and lifecycle state instead
-//! of maintaining separate boolean brands. A named native declaration can use
-//! `prototype = "Object"` to preserve an existing plain public prototype while
-//! still assigning native identity.
+//! Object declarations choose one role:
+//!
+//! - `#[webapi(interface = interfaces::Event)]` creates a native instance. It
+//!   receives private identity after its fields initialize successfully, whether
+//!   called through `bind`, `bind_into`, or `initialize`. Its default prototype
+//!   comes from the descriptor; an explicit `prototype` can preserve another
+//!   public shape without changing native identity.
+//! - `#[webapi(record)]` describes an ordinary unbranded object, defaulting to
+//!   `Object.prototype`. Field annotations and `data_properties` still control
+//!   which Rust fields become JavaScript properties.
+//! - `#[webapi(fragment)]` installs shared state or members on an existing
+//!   target. It assigns no identity and has no implicit prototype. Explicit
+//!   prototype or tag declarations are applied by `bind_into`; `initialize`
+//!   installs only the declared fields. Fragments never erase native identity.
+//!
+//! Empty declarations need no special opt-in: creating an empty record, branding
+//! a native instance and installing prototype metadata all have defined roles.
+//! A single lifetime parameter is inferred as the V8 scope lifetime; use
+//! `scope_lifetime` only when a declaration has multiple lifetimes. Payload slots
+//! hold data, ownership and lifecycle state, not additional boolean brands.
+//! Explicit prototype and tag expressions can use `Type::DESCRIPTOR.name()`
+//! to share names with generated interface metadata.
 //!
 //! Implementation sharing does not imply interface inheritance. For example,
 //! encoding streams share TransformStream internals but have distinct native
 //! interfaces. Their factory assigns the concrete type while the shared state
-//! fragment stays unbranded. Do not opt actual instances out of branding to
+//! declaration uses `fragment`. Do not turn actual native instances into records to
 //! make them pass structured clone.
 //!
 //! Declare each interface once with `declare_web_api_interfaces!` and reference

@@ -440,7 +440,7 @@ pub(crate) fn ensure_css_rule_object<'s>(
     interface: &'static str,
     member: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "CSSRule") {
+    if web_api_interfaces::CSSRule::is_instance(scope, object) {
         return true;
     }
     throw_type_error(
@@ -457,7 +457,7 @@ pub(crate) fn ensure_css_rule_type_object<'s>(
     member: &str,
     expected_type: u32,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "CSSRule")
+    if web_api_interfaces::CSSRule::is_instance(scope, object)
         && css_rule_type_from_object(scope, object) == Some(expected_type)
     {
         return true;
@@ -734,7 +734,7 @@ pub(crate) fn css_rule_type_from_object<'s>(
             return Some(css_rule_type);
         }
     }
-    moli_webapi_declare::implements_interface(scope, object, "CSSRule").then_some(())?;
+    web_api_interfaces::CSSRule::is_instance(scope, object).then_some(())?;
     Some(private_u32(scope, object, CSS_AT_RULE_TYPE_SLOT).unwrap_or(CSS_RULE_UNKNOWN_RULE_TYPE))
 }
 

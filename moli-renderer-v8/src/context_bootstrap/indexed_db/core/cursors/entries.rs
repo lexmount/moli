@@ -3,7 +3,7 @@ use crate::util::serialize_v8_iter_array;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct CursorSnapshotEntryObjectDeclaration<'scope> {
     #[webapi(data_property)]
     key: v8::Local<'scope, v8::Value>,

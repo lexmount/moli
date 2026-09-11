@@ -15,7 +15,7 @@ use url::Url;
 pub(crate) const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ChildDocumentStreamMethodsDeclaration<'scope> {
     handle: v8::Local<'scope, v8::Value>,
     #[webapi(method, callback = child_document_open_callback, data = self.handle)]

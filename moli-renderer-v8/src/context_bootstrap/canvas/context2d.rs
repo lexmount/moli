@@ -308,12 +308,8 @@ fn require_canvas_context_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, "CanvasRenderingContext2D")
-        || moli_webapi_declare::implements_interface(
-            scope,
-            receiver,
-            "OffscreenCanvasRenderingContext2D",
-        )
+    if web_api_interfaces::CanvasRenderingContext2D::is_instance(scope, receiver)
+        || web_api_interfaces::OffscreenCanvasRenderingContext2D::is_instance(scope, receiver)
     {
         return true;
     }

@@ -11,7 +11,7 @@ use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Window")]
+#[webapi(fragment, prototype = "Window")]
 struct WindowGlobalEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

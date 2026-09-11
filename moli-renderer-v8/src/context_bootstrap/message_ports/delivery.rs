@@ -11,7 +11,7 @@ use crate::worker::worker_message_port_wrapper;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct MessagePortMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,

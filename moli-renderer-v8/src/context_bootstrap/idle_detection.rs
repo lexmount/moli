@@ -112,7 +112,7 @@ fn idle_detector_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, "IdleDetector") {
+    if web_api_interfaces::IdleDetector::is_instance(scope, receiver) {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

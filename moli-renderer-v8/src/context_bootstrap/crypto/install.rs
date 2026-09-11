@@ -21,15 +21,15 @@ const CRYPTO_SUBTLE_AVAILABLE_SLOT: &str = "__moliCryptoSubtleAvailable";
 const WINDOW_CRYPTO_SUBTLE_AVAILABLE_SLOT: &str = "__moliWindowCryptoSubtleAvailable";
 
 #[derive(Default, WebApiObject)]
-#[webapi(allow_empty, interface = web_api_interfaces::Crypto)]
+#[webapi(interface = web_api_interfaces::Crypto)]
 struct CryptoObjectDeclaration {}
 
 #[derive(Default, WebApiObject)]
-#[webapi(allow_empty, interface = web_api_interfaces::SubtleCrypto)]
+#[webapi(interface = web_api_interfaces::SubtleCrypto)]
 struct SubtleCryptoObjectDeclaration {}
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Crypto")]
+#[webapi(fragment, prototype = "Crypto")]
 struct CryptoPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -53,7 +53,7 @@ struct CryptoPrototypeOperationsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Crypto")]
+#[webapi(fragment, prototype = "Crypto")]
 struct CryptoSecurePrototypeOperationsDeclaration {
     #[webapi(
         method = "randomUUID",
@@ -234,7 +234,7 @@ fn crypto_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
+    if !web_api_interfaces::Crypto::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

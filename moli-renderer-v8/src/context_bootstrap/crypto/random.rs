@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::ptr;
 
 use moli_crypto::fill_secure_random;
@@ -13,7 +14,7 @@ pub(super) fn crypto_get_random_values_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
+    if !web_api_interfaces::Crypto::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -87,7 +88,7 @@ pub(super) fn crypto_random_uuid_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
+    if !web_api_interfaces::Crypto::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

@@ -5,8 +5,8 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Field, Fields, GenericParam, Ident, Lit, LitStr, Type};
 
 use crate::attrs::{
-    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind, InterfaceAttr,
-    ObjectAttrs, RenameRule, ValueInitAttr, parse_field_attrs_with_defaults,
+    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind, ObjectAttrs,
+    ObjectRole, RenameRule, ValueInitAttr, parse_field_attrs_with_defaults,
     parse_function_template_attrs, parse_object_attrs,
 };
 
@@ -62,7 +62,7 @@ pub(crate) fn expand_webapi_function_template(
     let template_name = if let Some(name) = &attrs.name {
         quote!(#name)
     } else if let Some(interface) = &attrs.interface {
-        interface.name()
+        quote!(<#interface>::DESCRIPTOR.name())
     } else {
         let name = LitStr::new(&struct_name.to_string(), struct_name.span());
         quote!(#name)
@@ -76,7 +76,7 @@ pub(crate) fn expand_webapi_function_template(
             quote!(::moli_webapi_declare::illegal_constructor_callback)
         }
         ConstructorAttr::Callback(callback) => {
-            let Some(InterfaceAttr::Descriptor(interface)) = &attrs.interface else {
+            let Some(interface) = &attrs.interface else {
                 return Err(Error::new(
                     struct_name.span(),
                     "constructor_callback requires an interface descriptor",
@@ -212,17 +212,18 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     let generics = input.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let attrs = parse_object_attrs(&input.attrs)?;
-    let interface = attrs
-        .interface
-        .clone()
-        .ok_or_else(|| Error::new(struct_name.span(), "missing #[webapi(interface = \"...\")]"))?;
-    let has_explicit_prototype = attrs.prototype.is_some();
-    let interface_name = interface.name();
+    let role = attrs.role.as_ref().ok_or_else(|| Error::new(
+        struct_name.span(), "choose an object role with #[webapi(interface = Type)], #[webapi(record)], or #[webapi(fragment)]",
+    ))?;
     let prototype = attrs
         .prototype
         .as_ref()
-        .map(|name| quote!(#name))
-        .unwrap_or_else(|| interface_name.clone());
+        .map(|prototype| quote!(#prototype))
+        .or_else(|| match role {
+            ObjectRole::Instance(interface) => Some(quote!(<#interface>::DESCRIPTOR.name())),
+            ObjectRole::Record => Some(quote!("Object")),
+            ObjectRole::Fragment => None,
+        });
     let own_to_string_tag = match attrs.own_to_string_tag.as_ref() {
         Some(tag) => quote!(::std::option::Option::Some(#tag)),
         None => quote!(::std::option::Option::None),
@@ -250,15 +251,21 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
             }
         }
     };
-    let set_prototype = if attrs.require_prototype {
-        quote! {
+    let set_prototype = match (prototype, attrs.require_prototype) {
+        (Some(prototype), true) => quote! {
             ::moli_webapi_declare::set_required_interface_prototype(scope, object, #prototype)?;
             true
-        }
-    } else {
-        quote! {
+        },
+        (Some(prototype), false) => quote!(
             ::moli_webapi_declare::set_interface_prototype(scope, object, #prototype)
+        ),
+        (None, true) => {
+            return Err(Error::new(
+                struct_name.span(),
+                "require_prototype on a fragment requires an explicit prototype",
+            ));
         }
+        (None, false) => quote!(false),
     };
     let define_fallback_to_string_tag = quote! {
         if !prototype_bound {
@@ -300,31 +307,12 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         .iter()
         .filter_map(expand_object_field)
         .collect::<Result<Vec<_>, _>>()?;
-    if fields.is_empty() && !attrs.allow_empty && !has_explicit_prototype {
-        return Err(Error::new(
-            struct_name.span(),
-            "empty WebApiObject declaration requires #[webapi(allow_empty)]",
-        ));
-    }
-
-    let initialize_brand = if attrs.unbranded {
-        quote!()
-    } else {
-        match &interface {
-            InterfaceAttr::Descriptor(path) => {
-                quote!(<#path>::DESCRIPTOR.initialize(scope, object)?;)
-            }
-            InterfaceAttr::Name(name) if name.value() == "Object" => quote!(),
-            InterfaceAttr::Name(name) => {
-                quote!(::moli_webapi_declare::initialize_web_api_object(scope, object, #name)?;)
-            }
+    let initialize_brand = role.interface().map(|interface| {
+        quote! {
+            <#interface>::DESCRIPTOR.initialize(scope, object)?;
         }
-    };
-    let register_parent = attrs.parent.as_ref().map(|parent| quote! {
-        ::moli_webapi_declare::register_web_api_interfaces(scope, [(#interface_name, Some(#parent))])?;
     });
     let initialize_body = quote! {
-        #register_parent
         #(#fields)*
         #initialize_brand
         ::std::result::Result::Ok(())
@@ -338,9 +326,6 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     let (trait_impl_generics, _, trait_where_clause) = trait_generics.split_for_impl();
     let trait_impl = quote! {
         impl #trait_impl_generics ::moli_webapi_declare::WebApiObjectDeclaration<#method_scope_lifetime> for #struct_name #ty_generics #trait_where_clause {
-            const INTERFACE: &'static str = #interface_name;
-            const OWN_TO_STRING_TAG: ::std::option::Option<&'static str> = #own_to_string_tag;
-
             fn initialize(
                 &self,
                 scope: &mut ::moli_webapi_declare::v8::PinScope<#method_scope_lifetime, '_>,
@@ -1403,14 +1388,7 @@ fn expand_callback(
         return quote!(#callback);
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
-        let check = match receiver {
-            crate::attrs::ReceiverAttr::Predicate(predicate) => {
-                quote!(#predicate(scope, args.this()))
-            }
-            crate::attrs::ReceiverAttr::Interface(interface) => quote!(
-                ::moli_webapi_declare::implements_interface(scope, args.this(), #interface)
-            ),
-        };
+        let check = quote!(#receiver(scope, args.this()));
         quote! {
             if !#check {
                 ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
@@ -1833,7 +1811,7 @@ mod tests {
     #[test]
     fn inherited_receiver_cannot_silently_skip_an_already_built_getter() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object", receiver = check)]
+            #[webapi(record, receiver = check)]
             struct Invalid {
                 #[webapi(accessor_property, getter_value = self.getter)]
                 getter: (),
@@ -1846,7 +1824,7 @@ mod tests {
     #[test]
     fn declaration_only_field_attributes_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct BadObject {
                 #[webapi(init = "null")]
                 ignored: (),
@@ -1865,7 +1843,7 @@ mod tests {
     #[test]
     fn default_data_property_fields_can_use_data_property_initializers() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object", data_properties)]
+            #[webapi(record, data_properties)]
             struct DefaultObject {
                 #[webapi(init = "null")]
                 value: (),
@@ -1877,7 +1855,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_to_new_for_dynamic_fields() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct DynamicObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
@@ -1896,7 +1874,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_to_new_for_unit_fields() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct StaticObject {
                 #[webapi(data_property, init = true)]
                 brand: (),
@@ -1915,7 +1893,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_uses_constructor_defaults() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct DefaultedObject {
                 #[webapi(data_property)]
                 value: u32,
@@ -1939,7 +1917,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_defaults_can_reference_previous_fields() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct DerivedDefaultObject {
                 #[webapi(data_property)]
                 client_x: i32,
@@ -1958,7 +1936,7 @@ mod tests {
     #[test]
     fn object_generated_constructor_can_be_suppressed() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object", no_dynamic_constructor)]
+            #[webapi(record, no_dynamic_constructor)]
             struct ManualObject {
                 #[webapi(data_property)]
                 value: u32,
@@ -2043,7 +2021,7 @@ mod tests {
     #[test]
     fn object_intrinsic_data_properties_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object")]
+            #[webapi(record)]
             struct BadObject {
                 #[webapi(
                     intrinsic_data_property = v8::Intrinsic::ArrayProtoValues
@@ -2137,7 +2115,7 @@ mod tests {
     #[test]
     fn object_readonly_accessor_property_fields_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Sample")]
+            #[webapi(interface = interfaces::Sample)]
             struct BadObject {
                 #[webapi(accessor_property, getter = sample_getter, readonly)]
                 value: (),
@@ -2156,7 +2134,7 @@ mod tests {
     #[test]
     fn object_accessor_property_rejects_callback_and_getter_value_together() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Sample")]
+            #[webapi(interface = interfaces::Sample)]
             struct BadObject<'scope> {
                 getter: ::moli_webapi_declare::v8::Local<'scope, ::moli_webapi_declare::v8::Function>,
                 #[webapi(accessor_property, getter = sample_getter, getter_value = self.getter)]
@@ -2176,7 +2154,7 @@ mod tests {
     #[test]
     fn object_native_data_property_fields_are_supported() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Sample", enumerable)]
+            #[webapi(interface = interfaces::Sample, enumerable)]
             struct SampleObject {
                 #[webapi(native_data_property, getter = sample_getter)]
                 value: (),
@@ -2190,7 +2168,7 @@ mod tests {
     #[test]
     fn object_readonly_native_data_property_fields_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Sample")]
+            #[webapi(interface = interfaces::Sample)]
             struct BadObject {
                 #[webapi(native_data_property, getter = sample_getter, readonly)]
                 value: (),
@@ -2209,7 +2187,7 @@ mod tests {
     #[test]
     fn object_static_method_fields_are_rejected() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object", data_properties)]
+            #[webapi(record, data_properties)]
             struct BadObject {
                 #[webapi(static_method, callback = sample_callback)]
                 create: (),
@@ -2228,7 +2206,7 @@ mod tests {
     #[test]
     fn object_constant_fields_are_supported() {
         let input = syn::parse_quote! {
-            #[webapi(interface = "Object", data_properties)]
+            #[webapi(record, data_properties)]
             struct BadObject {
                 #[webapi(constant = "READY", value = 4u32)]
                 ready: (),

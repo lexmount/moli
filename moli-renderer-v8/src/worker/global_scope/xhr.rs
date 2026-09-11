@@ -22,7 +22,7 @@ pub(in crate::worker) const WORKER_XHR_TIMEOUT_DATA_XHR: &str = "xhr";
 pub(in crate::worker) const WORKER_XHR_TIMEOUT_DATA_XHR_ID: &str = "xhrId";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WorkerXhrTimeoutDataDeclaration<'scope> {
     xhr: v8::Local<'scope, v8::Object>,
     xhr_id: f64,

@@ -15,7 +15,7 @@ use crate::util::v8str;
 use crate::worker::{WorkerParentErrorEventKind, WorkerToParentMessage};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerHostEventInitDeclaration {
     #[webapi(data_property, enumerable)]
     cancelable: bool,
@@ -31,7 +31,7 @@ struct WorkerHostEventFallbackDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerHostMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -51,7 +51,7 @@ struct WorkerHostMessageEventFallbackDeclaration<'scope, 'event> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerHostErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -85,7 +85,7 @@ struct WorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope, data_properties, enumerable)]
+#[webapi(record, scope_lifetime = 'scope, data_properties, enumerable)]
 struct WorkerHostErrorEventDetailsDeclaration<'scope, 'text> {
     message: &'text str,
     filename: &'text str,

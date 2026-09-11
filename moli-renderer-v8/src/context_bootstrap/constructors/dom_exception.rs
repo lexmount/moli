@@ -211,7 +211,7 @@ fn dom_exception_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, "DOMException") {
+    if web_api_interfaces::DOMException::is_instance(scope, receiver) {
         Some(receiver)
     } else {
         throw_type_error(
@@ -226,7 +226,7 @@ fn dom_error_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, "DOMError") {
+    if web_api_interfaces::DOMError::is_instance(scope, receiver) {
         Some(receiver)
     } else {
         throw_type_error(scope, "DOMError getter called on incompatible receiver.");
@@ -238,7 +238,7 @@ pub(crate) fn dom_exception_clone_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(String, String)> {
-    moli_webapi_declare::implements_interface(scope, object, "DOMException").then_some(())?;
+    web_api_interfaces::DOMException::is_instance(scope, object).then_some(())?;
     let message = get_private_value(scope, object, DOM_EXCEPTION_MESSAGE_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
@@ -254,7 +254,7 @@ pub(crate) fn quota_exceeded_error_clone_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(String, Option<f64>, Option<f64>)> {
-    moli_webapi_declare::implements_interface(scope, object, "QuotaExceededError").then_some(())?;
+    web_api_interfaces::QuotaExceededError::is_instance(scope, object).then_some(())?;
     let (message, _) = dom_exception_clone_fields(scope, object)?;
     let quota = nullable_double_clone_slot(scope, object, QUOTA_EXCEEDED_ERROR_QUOTA_SLOT)?;
     let requested = nullable_double_clone_slot(scope, object, QUOTA_EXCEEDED_ERROR_REQUESTED_SLOT)?;
@@ -383,7 +383,9 @@ fn dom_exception_subclass_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     interface_name: &'static str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, interface_name) {
+    if web_api_interfaces::descriptor(interface_name)
+        .is_some_and(|interface| interface.is_instance(scope, receiver))
+    {
         Some(receiver)
     } else {
         throw_type_error(
@@ -722,7 +724,7 @@ pub(crate) fn websocket_error_close_info<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<(Option<u16>, String)> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    moli_webapi_declare::implements_interface(scope, object, "WebSocketError").then_some(())?;
+    web_api_interfaces::WebSocketError::is_instance(scope, object).then_some(())?;
     let close_code_value = get_private_value(scope, object, WEBSOCKET_ERROR_CLOSE_CODE_SLOT)?;
     let reason_value = get_private_value(scope, object, WEBSOCKET_ERROR_REASON_SLOT)?;
     let close_code = if close_code_value.is_null_or_undefined() {

@@ -972,7 +972,7 @@ pub(super) fn svg_transform_value_or_throw<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = v8::Local::<v8::Object>::try_from(value).ok();
     if let Some(object) = object
-        && moli_webapi_declare::implements_interface(scope, object, "SVGTransform")
+        && web_api_interfaces::SVGTransform::is_instance(scope, object)
     {
         return Some(object);
     }
@@ -1004,7 +1004,7 @@ pub(super) fn svg_matrix_value_or_throw<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = v8::Local::<v8::Object>::try_from(value).ok();
     if let Some(object) = object
-        && moli_webapi_declare::implements_interface(scope, object, "SVGMatrix")
+        && web_api_interfaces::SVGMatrix::is_instance(scope, object)
     {
         return Some(object);
     }

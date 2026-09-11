@@ -516,6 +516,6 @@ fn readable_stream_reader_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     reader: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, reader, "ReadableStreamDefaultReader")
-        || moli_webapi_declare::implements_interface(scope, reader, "ReadableStreamBYOBReader")
+    web_api_interfaces::ReadableStreamDefaultReader::is_instance(scope, reader)
+        || web_api_interfaces::ReadableStreamBYOBReader::is_instance(scope, reader)
 }

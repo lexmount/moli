@@ -112,7 +112,7 @@ struct BroadcastChannelPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct BroadcastChannelMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -345,7 +345,7 @@ fn broadcast_channel_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "BroadcastChannel")
+    web_api_interfaces::BroadcastChannel::is_instance(scope, receiver)
 }
 
 fn broadcast_channel_event_target_add_event_listener_callback<'s>(

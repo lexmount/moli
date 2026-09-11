@@ -243,7 +243,7 @@ fn require_view_transition_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, "ViewTransition") {
+    if web_api_interfaces::ViewTransition::is_instance(scope, receiver) {
         return true;
     }
     throw_type_error(

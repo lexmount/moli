@@ -13,7 +13,7 @@ use live_attribute_bridge::install_live_attribute_bridge_methods;
 use node::{install_detached_node_methods, install_detached_parent_node_move_before};
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "ParentNode")]
+#[webapi(fragment, prototype = "ParentNode")]
 struct DocumentFragmentParentNodeQueryMethodsDeclaration {
     #[webapi(method, callback = node_query_selector_callback)]
     query_selector: (),
@@ -23,7 +23,7 @@ struct DocumentFragmentParentNodeQueryMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "DocumentFragment")]
+#[webapi(fragment, prototype = "DocumentFragment")]
 struct DocumentFragmentGetElementByIdDeclaration {
     #[webapi(method, length = 1, callback = document_fragment_get_element_by_id_callback)]
     get_element_by_id: (),

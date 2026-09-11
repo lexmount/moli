@@ -60,7 +60,7 @@ struct NavigationTransitionObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigationTransitionSettleDataDeclaration<'scope> {
     #[webapi(slot = NAVIGATION_TRANSITION_SETTLE_NAVIGATION_SLOT)]
     navigation: v8::Local<'scope, v8::Object>,

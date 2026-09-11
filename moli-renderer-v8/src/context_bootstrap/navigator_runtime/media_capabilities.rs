@@ -27,7 +27,7 @@ struct MediaCapabilitiesPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record)]
 struct MediaCapabilitiesDecodingInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     supported: bool,
@@ -46,7 +46,7 @@ struct MediaCapabilitiesDecodingInfoDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record)]
 struct MediaCapabilitiesEncodingInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     supported: bool,
@@ -475,7 +475,7 @@ fn media_capabilities_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "MediaCapabilities")
+    web_api_interfaces::MediaCapabilities::is_instance(scope, receiver)
 }
 
 fn media_capabilities_is_secure_context<'s>(

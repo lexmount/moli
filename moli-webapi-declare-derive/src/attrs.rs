@@ -1,76 +1,39 @@
 use syn::spanned::Spanned;
 use syn::{Error, Expr, ExprLit, Field, Lit, LitInt, LitStr, Path, Token};
 
+pub(crate) type ReceiverAttr = Path;
+
 #[derive(Clone)]
-pub(crate) enum InterfaceAttr {
-    Name(LitStr),
-    Descriptor(Path),
+pub(crate) enum ObjectRole {
+    Instance(Path),
+    Record,
+    Fragment,
 }
 
-impl syn::parse::Parse for InterfaceAttr {
-    fn parse(input: syn::parse::ParseStream<'_>) -> Result<Self, Error> {
-        if input.peek(LitStr) {
-            input.parse().map(Self::Name)
-        } else {
-            input.parse().map(Self::Descriptor)
-        }
-    }
-}
-
-impl InterfaceAttr {
-    pub(crate) fn name(&self) -> proc_macro2::TokenStream {
+impl ObjectRole {
+    pub(crate) fn interface(&self) -> Option<&Path> {
         match self {
-            Self::Name(name) => quote::quote!(#name),
-            Self::Descriptor(path) => quote::quote!(<#path>::DESCRIPTOR.name()),
+            Self::Instance(interface) => Some(interface),
+            Self::Record | Self::Fragment => None,
         }
     }
 }
 
 fn resolve_interface_receiver(
     receiver: &mut Option<ReceiverAttr>,
-    interface: Option<&InterfaceAttr>,
+    interface: Option<&Path>,
     shorthand: Option<proc_macro2::Span>,
 ) -> Result<(), Error> {
     if let Some(span) = shorthand {
         if receiver.is_some() {
             return Err(Error::new(span, "receiver can only be specified once"));
         }
-        *receiver = Some(match interface {
-            Some(InterfaceAttr::Descriptor(path)) => {
-                ReceiverAttr::Predicate(syn::parse_quote!(#path::is_instance))
-            }
-            _ => {
-                return Err(Error::new(
-                    span,
-                    "receiver shorthand requires an interface descriptor",
-                ));
-            }
-        });
+        let interface = interface.ok_or_else(|| {
+            Error::new(span, "receiver shorthand requires an interface descriptor")
+        })?;
+        *receiver = Some(syn::parse_quote!(#interface::is_instance));
     }
     Ok(())
-}
-
-#[derive(Clone)]
-pub(crate) enum ReceiverAttr {
-    Predicate(Path),
-    Interface(LitStr),
-}
-
-impl syn::parse::Parse for ReceiverAttr {
-    fn parse(input: syn::parse::ParseStream<'_>) -> Result<Self, Error> {
-        if input.peek(LitStr) {
-            let name: LitStr = input.parse()?;
-            if name.value().is_empty() || name.value() == "Object" {
-                return Err(Error::new(
-                    name.span(),
-                    "receiver requires a Web IDL interface name",
-                ));
-            }
-            Ok(Self::Interface(name))
-        } else {
-            input.parse().map(Self::Predicate)
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -109,25 +72,22 @@ pub(crate) enum RenameRule {
 #[derive(Default)]
 pub(crate) struct ObjectAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
-    pub(crate) interface: Option<InterfaceAttr>,
-    pub(crate) parent: Option<LitStr>,
-    pub(crate) prototype: Option<LitStr>,
-    pub(crate) own_to_string_tag: Option<LitStr>,
-    pub(crate) fallback_to_string_tag: Option<LitStr>,
+    pub(crate) role: Option<ObjectRole>,
+    pub(crate) prototype: Option<Expr>,
+    pub(crate) own_to_string_tag: Option<Expr>,
+    pub(crate) fallback_to_string_tag: Option<Expr>,
     pub(crate) readonly_to_string_tag: bool,
     pub(crate) scope_lifetime: Option<syn::Lifetime>,
     pub(crate) require_prototype: bool,
     pub(crate) rename_all: RenameRule,
-    pub(crate) allow_empty: bool,
     pub(crate) default_data_properties: bool,
     pub(crate) default_enumerable: bool,
     pub(crate) no_dynamic_constructor: bool,
-    pub(crate) unbranded: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct FunctionTemplateAttrs {
-    pub(crate) interface: Option<InterfaceAttr>,
+    pub(crate) interface: Option<Path>,
     pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) name: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
@@ -266,14 +226,6 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
     let mut interface_receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("parent") {
-                parsed.parent = Some(meta.value()?.parse()?);
-                return Ok(());
-            }
-            if meta.path.is_ident("unbranded") {
-                parsed.unbranded = true;
-                return Ok(());
-            }
             if meta.path.is_ident("receiver") {
                 if meta.input.peek(Token![=]) {
                     parsed.receiver = Some(meta.value()?.parse()?);
@@ -282,8 +234,22 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
                 }
                 return Ok(());
             }
-            if meta.path.is_ident("interface") {
-                parsed.interface = Some(meta.value()?.parse()?);
+            if meta.path.is_ident("interface")
+                || meta.path.is_ident("record")
+                || meta.path.is_ident("fragment")
+            {
+                if parsed.role.is_some() {
+                    return Err(
+                        meta.error("choose one object role: interface, record, or fragment")
+                    );
+                }
+                parsed.role = Some(if meta.path.is_ident("interface") {
+                    ObjectRole::Instance(meta.value()?.parse()?)
+                } else if meta.path.is_ident("record") {
+                    ObjectRole::Record
+                } else {
+                    ObjectRole::Fragment
+                });
                 return Ok(());
             }
             if meta.path.is_ident("prototype") {
@@ -315,10 +281,6 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
                 parsed.rename_all = parse_rename_rule(&value)?;
                 return Ok(());
             }
-            if meta.path.is_ident("allow_empty") {
-                parsed.allow_empty = true;
-                return Ok(());
-            }
             if meta.path.is_ident("data_properties") {
                 parsed.default_data_properties = true;
                 return Ok(());
@@ -334,17 +296,9 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
             Err(meta.error("unsupported #[webapi(...)] object attribute"))
         })?;
     }
-    if let Some(parent) = &parsed.parent
-        && matches!(parsed.interface, Some(InterfaceAttr::Descriptor(_)))
-    {
-        return Err(Error::new(
-            parent.span(),
-            "parent belongs in the interface descriptor, not the object declaration",
-        ));
-    }
     resolve_interface_receiver(
         &mut parsed.receiver,
-        parsed.interface.as_ref(),
+        parsed.role.as_ref().and_then(ObjectRole::interface),
         interface_receiver,
     )?;
     Ok(parsed)
@@ -1040,6 +994,36 @@ mod tests {
     use syn::Field;
 
     #[test]
+    fn object_roles_are_exclusive() {
+        let cases: [Vec<syn::Attribute>; 3] = [
+            syn::parse_quote!(#[webapi(record, fragment)]),
+            syn::parse_quote!(#[webapi(interface = Event, record)]),
+            syn::parse_quote!(#[webapi(fragment, interface = Event)]),
+        ];
+        for attrs in cases {
+            let error = parse_object_attrs(&attrs).err().expect("conflicting roles");
+            assert_eq!(
+                error.to_string(),
+                "choose one object role: interface, record, or fragment"
+            );
+        }
+    }
+
+    #[test]
+    fn receiver_shorthand_requires_and_uses_the_declared_interface() {
+        let attrs: Vec<syn::Attribute> =
+            syn::parse_quote!(#[webapi(interface = interfaces::Event, receiver)]);
+        let parsed = parse_object_attrs(&attrs).expect("native instance receiver");
+        let receiver = parsed.receiver.expect("resolved receiver");
+        assert_eq!(
+            quote::quote!(#receiver).to_string(),
+            "interfaces :: Event :: is_instance"
+        );
+        let attrs: Vec<syn::Attribute> = syn::parse_quote!(#[webapi(record, receiver)]);
+        assert!(parse_object_attrs(&attrs).is_err());
+    }
+
+    #[test]
     fn installation_kinds_conflict_even_across_separate_attributes() {
         let fields: [Field; 3] = [
             syn::parse_quote!(#[webapi(method)] #[webapi(slot)] value: ()),
@@ -1057,7 +1041,7 @@ mod tests {
 
     #[test]
     fn inherited_defaults_respect_member_roles() {
-        let receiver = syn::parse_quote!("Example");
+        let receiver = syn::parse_quote!(is_example);
         let defaults = FieldDefaults {
             receiver: Some(&receiver),
             data_properties: true,
@@ -1103,7 +1087,7 @@ mod tests {
     #[test]
     fn object_enumerable_default_can_be_used_without_default_data_properties() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(interface = "Object", enumerable)]
+            #[webapi(record, enumerable)]
         };
         let attrs = parse_object_attrs(&attrs)
             .expect("enumerable default should parse without data properties");
@@ -1114,7 +1098,7 @@ mod tests {
     #[test]
     fn object_data_properties_default_is_parsed() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(interface = "Object", data_properties)]
+            #[webapi(record, data_properties)]
         };
         let attrs = parse_object_attrs(&attrs).expect("data-properties default should parse");
         assert!(attrs.default_data_properties);
@@ -1123,13 +1107,13 @@ mod tests {
     #[test]
     fn rename_all_none_is_the_only_explicit_rename_rule() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(interface = "Object", rename_all = "none")]
+            #[webapi(record, rename_all = "none")]
         };
         let attrs = parse_object_attrs(&attrs).expect("rename_all none should parse");
         assert!(matches!(attrs.rename_all, RenameRule::None));
 
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(interface = "Object", rename_all = "camelCase")]
+            #[webapi(record, rename_all = "camelCase")]
         };
         let error = match parse_object_attrs(&attrs) {
             Ok(_) => panic!("explicit camelCase rename_all should be rejected"),
@@ -1300,7 +1284,7 @@ mod tests {
     #[test]
     fn removed_object_properties_spelling_is_rejected() {
         let attrs: Vec<syn::Attribute> = syn::parse_quote! {
-            #[webapi(interface = "Object", properties)]
+            #[webapi(record, properties)]
         };
         let error = match parse_object_attrs(&attrs) {
             Ok(_) => panic!("removed object properties spelling should be rejected"),

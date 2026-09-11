@@ -45,7 +45,7 @@ struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PerformanceEntryJsonSnapshotDeclaration {
     name: String,
     entry_type: String,
@@ -118,7 +118,7 @@ struct PerformanceResourceTimingSlotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PerformanceResourceTimingJsonSnapshotDeclaration {
     name: String,
     entry_type: String,

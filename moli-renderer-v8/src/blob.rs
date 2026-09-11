@@ -315,7 +315,7 @@ pub(super) fn is_blob_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "Blob")
+    web_api_interfaces::Blob::is_instance(scope, object)
 }
 
 pub(super) fn blob_mime_type_from_object<'s>(

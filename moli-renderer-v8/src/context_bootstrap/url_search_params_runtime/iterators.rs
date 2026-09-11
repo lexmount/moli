@@ -43,7 +43,7 @@ struct UrlSearchParamsIteratorPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct UrlSearchParamsIteratorResultDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     done: bool,

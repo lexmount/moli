@@ -51,7 +51,7 @@ fn receiver_is_media_devices<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "MediaDevices")
+    web_api_interfaces::MediaDevices::is_instance(scope, receiver)
 }
 
 fn enumerate_devices_callback<'s>(

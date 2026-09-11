@@ -17,14 +17,14 @@ struct WorkerLocationObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerLocationGlobalDeclaration<'scope> {
     #[webapi(data_property = "location")]
     location: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "WorkerLocation", enumerable)]
+#[webapi(fragment, prototype = "WorkerLocation", enumerable)]
 struct WorkerLocationPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -94,7 +94,7 @@ struct WorkerLocationPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerLocationBackingDeclaration {
     #[webapi(data_property, enumerable)]
     href: String,

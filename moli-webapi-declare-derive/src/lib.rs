@@ -29,6 +29,11 @@ pub fn derive_webapi_function_template(input: TokenStream) -> TokenStream {
 
 /// Derives a Web API object declaration binder.
 ///
+/// Choose `interface = NativeType` for native identity, `record` for a plain
+/// object, or `fragment` for shared initialization without implicit identity or
+/// prototype changes. Empty declarations and a single scope lifetime require
+/// no additional flags.
+///
 /// Each annotated field selects one installation path: JavaScript own data
 /// property, WebIDL constant, method, JavaScript accessor property, V8 native
 /// data property, non-enumerable hidden property, V8 private slot, runtime

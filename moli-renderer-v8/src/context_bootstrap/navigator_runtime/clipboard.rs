@@ -409,14 +409,14 @@ fn clipboard_item_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "ClipboardItem")
+    web_api_interfaces::ClipboardItem::is_instance(scope, receiver)
 }
 
 fn clipboard_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "Clipboard")
+    web_api_interfaces::Clipboard::is_instance(scope, receiver)
 }
 
 fn clipboard_item_presentation_style_getter<'s>(

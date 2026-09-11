@@ -42,7 +42,7 @@ struct ResizeObserverEntryDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ResizeObserverObservedRecordDeclaration<'scope> {
     #[webapi(slot = RESIZE_OBSERVER_RECORD_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,

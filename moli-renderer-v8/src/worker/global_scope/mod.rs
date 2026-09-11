@@ -182,7 +182,7 @@ const SERVICE_WORKER_CLIENT_ID_SLOT: &str = "__lmServiceWorkerClientId";
 const WORKER_ORIGINAL_CONSOLE_SLOT: &str = "__moliWorkerOriginalConsole";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record)]
 struct WorkerGlobalBootstrapPropertiesDeclaration<'scope> {
     #[webapi(slot = WORKER_STATE_SLOT)]
     worker_state: v8::Local<'scope, v8::External>,
@@ -197,35 +197,35 @@ struct WorkerGlobalBootstrapPropertiesDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalNameDeclaration {
     #[webapi(data_property, enumerable)]
     name: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalOriginDeclaration {
     #[webapi(data_property, readonly)]
     origin: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalConsoleDeclaration<'scope> {
     #[webapi(data_property)]
     console: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalPerformanceDeclaration<'scope> {
     #[webapi(data_property)]
     performance: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerConsoleObjectDeclaration {
     #[webapi(method, enumerable, callback = console_log_callback, data = v8str(scope, "log"))]
     log: (),
@@ -281,7 +281,7 @@ struct WorkerPerformanceObjectDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct WorkerGlobalCommonEventHandlersDeclaration {
     #[webapi(
         accessor_property = "onerror",
@@ -316,7 +316,7 @@ struct WorkerGlobalCommonEventHandlersDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct DedicatedWorkerGlobalEventHandlersDeclaration {
     #[webapi(
         accessor_property = "onmessage",
@@ -333,7 +333,7 @@ struct DedicatedWorkerGlobalEventHandlersDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct SharedWorkerGlobalEventHandlersDeclaration {
     #[webapi(
         accessor_property = "onconnect",
@@ -344,7 +344,7 @@ struct SharedWorkerGlobalEventHandlersDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalCommonEventHandlerStateDeclaration {
     #[webapi(slot = WORKER_GLOBAL_ONERROR_SLOT, init = "null")]
     onerror: (),
@@ -359,7 +359,7 @@ struct WorkerGlobalCommonEventHandlerStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DedicatedWorkerGlobalEventHandlerStateDeclaration {
     #[webapi(slot = WORKER_GLOBAL_ONMESSAGE_SLOT, init = "null")]
     onmessage: (),
@@ -368,35 +368,35 @@ struct DedicatedWorkerGlobalEventHandlerStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct SharedWorkerGlobalEventHandlerStateDeclaration {
     #[webapi(slot = WORKER_GLOBAL_ONCONNECT_SLOT, init = "null")]
     onconnect: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "DedicatedWorkerGlobalScope", enumerable)]
+#[webapi(fragment, prototype = "DedicatedWorkerGlobalScope", enumerable)]
 struct DedicatedWorkerGlobalMethodsDeclaration {
     #[webapi(method, callback = worker_close_callback, length = 0)]
     close: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DedicatedWorkerGlobalPostMessageDeclaration {
     #[webapi(method = "postMessage", callback = worker_post_message_callback, length = 1)]
     post_message: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "SharedWorkerGlobalScope", enumerable)]
+#[webapi(fragment, prototype = "SharedWorkerGlobalScope", enumerable)]
 struct SharedWorkerGlobalMethodsDeclaration {
     #[webapi(method, callback = worker_close_callback, length = 0)]
     close: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalCommonOperationsDeclaration {
     #[webapi(
         method = "structuredClone",
@@ -411,7 +411,7 @@ struct WorkerGlobalCommonOperationsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalTimerOperationsDeclaration {
     #[webapi(method = "setTimeout", callback = worker_set_timeout_callback, length = 1)]
     set_timeout: (),
@@ -442,7 +442,7 @@ struct WorkerGlobalTimerOperationsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalCreateImageBitmapDeclaration {
     #[webapi(
         method = "createImageBitmap",
@@ -453,7 +453,7 @@ struct WorkerGlobalCreateImageBitmapDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct ServiceWorkerGlobalEventHandlersDeclaration {
     #[webapi(
         accessor_property = "oninstall",
@@ -518,7 +518,7 @@ struct ServiceWorkerGlobalEventHandlersDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerGlobalEventHandlerStateDeclaration {
     #[webapi(slot = WORKER_GLOBAL_ONINSTALL_SLOT, init = "null")]
     oninstall: (),
@@ -564,7 +564,7 @@ struct ServiceWorkerClientsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerGlobalRuntimeDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     registration: v8::Local<'scope, v8::Object>,
@@ -594,56 +594,56 @@ struct ExtendableEventTemplateDeclaration {
 struct ExtendableMessageEventTemplateDeclaration {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerGlobalScopeConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "WorkerGlobalScope")]
     constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DedicatedWorkerGlobalScopeConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "DedicatedWorkerGlobalScope")]
     constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct SharedWorkerGlobalScopeConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "SharedWorkerGlobalScope")]
     constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerGlobalScopeConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "ServiceWorkerGlobalScope")]
     constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ExtendableEventConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "ExtendableEvent")]
     extendable_event: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ExtendableMessageEventConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "ExtendableMessageEvent")]
     extendable_message_event: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerScopePrototypeConstructorDeclaration<'scope> {
     #[webapi(data_property = "constructor")]
     constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerPrototypeTagDeclaration {
     #[webapi(to_string_tag, readonly)]
     tag: &'static str,
@@ -850,7 +850,7 @@ struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerNavigationPreloadStateDeclaration {
     #[webapi(data_property, enumerable)]
     enabled: bool,

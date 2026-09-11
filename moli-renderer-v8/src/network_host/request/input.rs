@@ -1,5 +1,6 @@
 use super::super::headers::HeadersGuard;
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 
 pub(in crate::network_host) fn normalize_request_method(
@@ -265,7 +266,7 @@ fn request_body_stream_locked<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
         return false;
     };
-    if !moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
+    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return false;
     }
     stream

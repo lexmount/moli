@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct LiveAttributeBridgeMethodsDeclaration {
     #[webapi(
         method = "__setAttributeNodeForLiveElement",

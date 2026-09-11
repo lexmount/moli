@@ -17,7 +17,7 @@ use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use super::*;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DetachedCollectionItemsAndNamedDataDeclaration<'scope> {
     items: v8::Local<'scope, v8::Value>,
     named: v8::Local<'scope, v8::Object>,
@@ -47,7 +47,7 @@ struct DetachedDocumentAllCollectionDeclaration<'scope> {
 /// All fixed members come from the shared `NodeList` prototype. The wrapper
 /// only carries its indexed values and private collection brand/length state.
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NodeList, require_prototype, allow_empty)]
+#[webapi(interface = web_api_interfaces::NodeList, require_prototype)]
 struct DetachedNodeListDeclaration {}
 
 /// Declares the detached `HTMLCollection` wrapper surface.
@@ -56,7 +56,7 @@ struct DetachedNodeListDeclaration {}
 /// reusable interface template. Only indexed/named snapshot entries remain
 /// own properties.
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::HTMLCollection, require_prototype, allow_empty)]
+#[webapi(interface = web_api_interfaces::HTMLCollection, require_prototype)]
 struct DetachedHtmlCollectionDeclaration {}
 
 #[derive(webidl::WebIdlArgs)]

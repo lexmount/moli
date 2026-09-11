@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct KeyboardEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,

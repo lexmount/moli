@@ -103,7 +103,7 @@ pub(super) fn url_search_params_is_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "URLSearchParams")
+    web_api_interfaces::URLSearchParams::is_instance(scope, object)
 }
 
 pub(crate) fn url_search_params_request_body<'s>(

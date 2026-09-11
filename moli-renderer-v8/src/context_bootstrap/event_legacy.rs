@@ -184,14 +184,14 @@ struct KeyboardEventGetModifierStateArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyUiEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: i32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyTextEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,
@@ -199,7 +199,7 @@ struct LegacyTextEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyMouseEventBaseInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: i32,
@@ -219,7 +219,7 @@ struct LegacyMouseEventBaseInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyMouseEventTailInitDeclaration<'scope> {
     #[webapi(constructor_default = 0)]
     buttons: i32,
@@ -231,7 +231,7 @@ struct LegacyMouseEventTailInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyKeyboardEventInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     #[webapi(constructor_default = 0)]
@@ -253,7 +253,7 @@ struct LegacyKeyboardEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct LegacyCustomEventInitDeclaration<'scope> {
     detail: v8::Local<'scope, v8::Value>,
 }

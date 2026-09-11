@@ -113,7 +113,7 @@ pub(crate) enum PopupClassicScriptLoadApplication {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct LightweightPopupDocumentStreamMethodsDeclaration<'scope> {
     popup_id: v8::Local<'scope, v8::BigInt>,
     #[webapi(
@@ -156,14 +156,14 @@ struct LightweightPopupPopStateEventDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct LightweightPopupWindowMethodsDeclaration {
     #[webapi(method, length = 0, callback = lightweight_popup_close_callback)]
     close: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct LightweightPopupComputedStyleMethodDeclaration<'scope> {
     document: v8::Local<'scope, v8::BigInt>,
     #[webapi(

@@ -122,7 +122,7 @@ fn readable_stream_body_arg<'s>(
         return None;
     }
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    moli_webapi_declare::implements_interface(scope, object, "ReadableStream").then_some(object)
+    web_api_interfaces::ReadableStream::is_instance(scope, object).then_some(object)
 }
 
 fn readable_stream_body_locked(

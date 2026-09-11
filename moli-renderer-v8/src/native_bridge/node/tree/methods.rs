@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 pub(in crate::native_bridge) fn node_contains_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -123,7 +124,7 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
     // disconnected even when this runtime cannot resolve its live tree handle.
     let other_value = args.get(0);
     if let Ok(other_object) = v8::Local::<v8::Object>::try_from(other_value)
-        && moli_webapi_declare::implements_interface(scope, other_object, "Node")
+        && web_api_interfaces::Node::is_instance(scope, other_object)
     {
         let order_bit = disconnected_order_bit(args.this(), other_object);
         rv.set(

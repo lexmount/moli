@@ -308,7 +308,7 @@ pub(super) fn is_font_face_value<'s>(
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
         return false;
     };
-    moli_webapi_declare::implements_interface(scope, object, "FontFace")
+    web_api_interfaces::FontFace::is_instance(scope, object)
 }
 
 pub(super) fn array_contains_value(

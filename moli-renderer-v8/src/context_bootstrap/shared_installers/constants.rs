@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct NodeFilterConstantsObjectDeclaration {
     #[webapi(constant = "FILTER_ACCEPT", value = 1u32)]
     _filter_accept: (),
@@ -40,7 +40,7 @@ struct NodeFilterConstantsObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "Window")]
+#[webapi(fragment, prototype = "Window")]
 struct NodeFilterGlobalDeclaration<'scope> {
     #[webapi(data_property = "NodeFilter")]
     node_filter: v8::Local<'scope, v8::Function>,

@@ -1,11 +1,12 @@
 use super::*;
+use crate::web_api_interfaces;
 
 pub(crate) fn subtle_crypto_receiver_is_valid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, args.this(), "SubtleCrypto") {
+    if web_api_interfaces::SubtleCrypto::is_instance(scope, args.this()) {
         true
     } else {
         set_rejected_webcrypto_promise(scope, rv, WebCryptoRejection::Type);

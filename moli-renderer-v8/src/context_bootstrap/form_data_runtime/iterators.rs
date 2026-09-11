@@ -37,7 +37,7 @@ struct FormDataIteratorPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct FormDataIteratorResultDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     done: bool,

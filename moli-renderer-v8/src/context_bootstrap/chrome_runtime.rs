@@ -19,7 +19,7 @@ const INSTALL_STATE_NOT_INSTALLED: &str = "not_installed";
 const RUNNING_STATE_CANNOT_RUN: &str = "cannot_run";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ChromeInstallStateDeclaration {
     #[webapi(data_property = "DISABLED")]
     disabled: &'static str,
@@ -30,7 +30,7 @@ struct ChromeInstallStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ChromeRunningStateDeclaration {
     #[webapi(data_property = "CANNOT_RUN")]
     cannot_run: &'static str,
@@ -41,7 +41,7 @@ struct ChromeRunningStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct ChromeAppDeclaration<'scope> {
     #[webapi(
         native_data_property = "isInstalled",

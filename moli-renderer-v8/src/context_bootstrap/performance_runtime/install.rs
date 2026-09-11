@@ -78,7 +78,7 @@ struct PerformanceObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PerformanceJsonSnapshotDeclaration<'scope> {
     time_origin: Option<v8::Local<'scope, v8::Value>>,
     timing: Option<v8::Local<'scope, v8::Value>>,
@@ -86,7 +86,7 @@ struct PerformanceJsonSnapshotDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "PerformanceObserver")]
+#[webapi(fragment, prototype = "PerformanceObserver")]
 struct PerformanceObserverConstructorDeclaration {
     #[webapi(data_property = "supportedEntryTypes")]
     supported_entry_types: &'static [&'static str],

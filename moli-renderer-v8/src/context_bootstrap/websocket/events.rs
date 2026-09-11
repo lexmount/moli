@@ -10,7 +10,7 @@ struct WebSocketSimpleEventFallbackDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -19,7 +19,7 @@ struct WebSocketMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WebSocketCloseEventInitDeclaration<'scope> {
     code: u16,
     reason: v8::Local<'scope, v8::String>,

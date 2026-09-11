@@ -1,4 +1,5 @@
 use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::JsContextHost,
@@ -49,7 +50,7 @@ pub(crate) fn registry_association_from_value<'s>(
         return Some(CustomElementRegistryAssociation::Null);
     }
     let registry = v8::Local::<v8::Object>::try_from(value).ok()?;
-    if !moli_webapi_declare::implements_interface(scope, registry, "CustomElementRegistry") {
+    if !web_api_interfaces::CustomElementRegistry::is_instance(scope, registry) {
         return None;
     }
     Some(CustomElementRegistryAssociation::Registry(

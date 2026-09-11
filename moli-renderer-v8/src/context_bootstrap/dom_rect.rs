@@ -158,7 +158,7 @@ struct DomRectConstructorDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DomRectJsonDeclaration {
     #[webapi(data_property, enumerable)]
     x: f64,
@@ -558,7 +558,7 @@ fn dom_rect_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "DOMRectReadOnly")
+    web_api_interfaces::DOMRectReadOnly::is_instance(scope, receiver)
 }
 
 const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str] = &[

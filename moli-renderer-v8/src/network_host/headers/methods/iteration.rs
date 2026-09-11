@@ -36,7 +36,7 @@ enum HeadersIteratorKind {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct HeadersIteratorResultDeclaration<'scope> {
     done: bool,
     value: v8::Local<'scope, v8::Value>,

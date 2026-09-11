@@ -121,7 +121,7 @@ struct RtcDataChannelObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct RtcSessionDescriptionInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -584,14 +584,14 @@ fn rtc_peer_connection_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "RTCPeerConnection")
+    web_api_interfaces::RTCPeerConnection::is_instance(scope, receiver)
 }
 
 fn rtc_data_channel_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "RTCDataChannel")
+    web_api_interfaces::RTCDataChannel::is_instance(scope, receiver)
 }
 
 fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {

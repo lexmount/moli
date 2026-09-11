@@ -5,7 +5,7 @@ const DELAYED_PENDING_READ_REJECT_SLOT: &str = "__moliReadableStreamDelayedRejec
 const DELAYED_PENDING_READ_REASON_SLOT: &str = "__moliReadableStreamDelayedReason";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct StreamIteratorResultDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     value: v8::Local<'scope, v8::Value>,
@@ -14,7 +14,7 @@ struct StreamIteratorResultDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PendingReadEntryDeclaration {
     #[webapi(slot = READABLE_STREAM_PENDING_READ_PROMISE_SLOT, init = "undefined")]
     promise: (),
@@ -25,14 +25,14 @@ struct PendingReadEntryDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PendingReadPromiseDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_PENDING_READ_PROMISE_SLOT)]
     promise: v8::Local<'scope, v8::Promise>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PendingReadResolverDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_PENDING_READ_RESOLVE_SLOT)]
     resolve: v8::Local<'scope, v8::Value>,
@@ -41,7 +41,7 @@ struct PendingReadResolverDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DelayedPendingReadRejectDeclaration<'scope> {
     #[webapi(slot = DELAYED_PENDING_READ_REJECT_SLOT)]
     reject: v8::Local<'scope, v8::Function>,

@@ -18,7 +18,7 @@ use crate::{
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct FormDataEventInitDeclaration<'scope> {
     form_data: v8::Local<'scope, v8::Object>,
     bubbles: bool,

@@ -95,14 +95,14 @@ struct WebSocketStreamRegisteredSocketDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamAbortListenerDataDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamAbortListenerOptionsDeclaration {
     #[webapi(data_property, enumerable)]
     once: bool,

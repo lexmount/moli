@@ -64,7 +64,7 @@ pub(crate) fn is_branded_data_transfer_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "DataTransfer")
+    web_api_interfaces::DataTransfer::is_instance(scope, object)
 }
 
 #[derive(Default, WebApiObject)]

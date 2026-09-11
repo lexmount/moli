@@ -27,7 +27,7 @@ impl ScrollRestoration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "History")]
+#[webapi(fragment, prototype = "History")]
 struct HistoryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = history_length_getter_function, enumerable)]
     length: (),
@@ -45,7 +45,7 @@ struct HistoryPrototypeAccessorsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Navigation")]
+#[webapi(fragment, prototype = "Navigation")]
 struct NavigationPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "canGoBack", getter = navigation_can_go_back_getter_function, enumerable)]
     can_go_back: (),

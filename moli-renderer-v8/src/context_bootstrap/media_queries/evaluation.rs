@@ -68,7 +68,7 @@ struct MediaQueryListPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, allow_empty)]
+#[webapi(interface = web_api_interfaces::Event)]
 struct MediaQueryListChangeEventObjectDeclaration {}
 
 #[derive(WebApiObject)]

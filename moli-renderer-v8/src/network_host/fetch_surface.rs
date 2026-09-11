@@ -56,7 +56,7 @@ struct ResponseCloneShellDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ResponseInitObjectDeclaration<'scope> {
     status: Option<f64>,
     status_text: Option<String>,
@@ -178,7 +178,7 @@ pub(crate) fn is_branded_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "Request")
+    web_api_interfaces::Request::is_instance(scope, object)
 }
 
 pub(crate) fn request_headers_entries<'s>(
@@ -304,7 +304,7 @@ pub(crate) fn is_branded_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "Response")
+    web_api_interfaces::Response::is_instance(scope, object)
 }
 
 fn require_response_receiver<'s>(
@@ -928,7 +928,7 @@ fn clone_response_readable_stream_body<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(value) else {
         return Ok(None);
     };
-    if !moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
+    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return Ok(None);
     }
     if readable_stream_locked(scope, stream) {

@@ -3,13 +3,13 @@ use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties)]
+#[webapi(record, data_properties)]
 struct NullableRequiredDictionaryValueProbe<'scope> {
     value: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", allow_empty)]
+#[webapi(record)]
 struct NullableRequiredDictionaryAbsentProbe {}
 
 #[test]

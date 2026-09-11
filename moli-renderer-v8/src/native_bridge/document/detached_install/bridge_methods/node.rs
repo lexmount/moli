@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Node")]
+#[webapi(fragment, prototype = "Node")]
 struct DetachedNodeMethodsDeclaration {
     #[webapi(method, callback = detached_append_child_method_callback)]
     append_child: (),
@@ -73,7 +73,7 @@ pub(super) fn install_detached_parent_node_move_before<'s>(
     prototype: v8::Local<'s, v8::Object>,
 ) {
     #[derive(Default, WebApiObject)]
-    #[webapi(unbranded, interface = "ParentNode")]
+    #[webapi(fragment, prototype = "ParentNode")]
     struct DetachedParentNodeMoveBeforeDeclaration {
         #[webapi(method, length = 2, callback = detached_move_before_method_callback)]
         move_before: (),

@@ -280,5 +280,5 @@ fn writable_stream_writer_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     writer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, writer, "WritableStreamDefaultWriter")
+    web_api_interfaces::WritableStreamDefaultWriter::is_instance(scope, writer)
 }

@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct RuntimeBindingDataDeclaration<'scope> {
     host: v8::Local<'scope, v8::External>,
     name: v8::Local<'scope, v8::String>,

@@ -88,7 +88,7 @@ const SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT: &str = "__lmServiceWorkerPerio
 const MAX_REPORTED_WORKER_PROMISE_REJECTIONS: usize = 1024;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -99,7 +99,7 @@ struct WorkerMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -116,7 +116,7 @@ struct WorkerErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     cancelable: bool,
@@ -227,7 +227,7 @@ struct ServiceWorkerMessageEventDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerExtendableMessageEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -242,7 +242,7 @@ struct ServiceWorkerExtendableMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerMessageDispatchMethodsDeclaration {
     #[webapi(
         method = "preventDefault",
@@ -344,7 +344,7 @@ struct ServiceWorkerPeriodicSyncEventDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerRespondWithCallbackDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     event_id: v8::Local<'scope, v8::BigInt>,
@@ -353,21 +353,21 @@ struct ServiceWorkerRespondWithCallbackDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerRespondWithLifetimeCallbackDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     event_id: v8::Local<'scope, v8::BigInt>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerRespondWithBodyCallbackDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     event_id: v8::Local<'scope, v8::BigInt>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerRespondWithStreamChunkCallbackDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     event_id: v8::Local<'scope, v8::BigInt>,
@@ -2834,7 +2834,7 @@ fn build_service_worker_wait_until_callback<'s>(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ServiceWorkerWaitUntilCallbackDataDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     event_id: v8::Local<'scope, v8::BigInt>,

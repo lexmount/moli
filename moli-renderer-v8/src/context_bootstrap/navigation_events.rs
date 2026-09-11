@@ -64,7 +64,7 @@ const ACTIVE_NAVIGATE_EVENT_SIGNAL_SLOT: &str = "__lmActiveNavigateEventSignal";
 const ACTIVE_NAVIGATE_EVENT_HREF_SLOT: &str = "__lmActiveNavigateEventHref";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     from: v8::Local<'scope, v8::Value>,
@@ -73,7 +73,7 @@ struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigationErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -88,14 +88,14 @@ struct NavigationErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PopStateEventStateDeclaration<'scope> {
     #[webapi(data_property)]
     state: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct HashChangeEventStateDeclaration {
     #[webapi(data_property = "oldURL")]
     old_url: String,
@@ -104,14 +104,14 @@ struct HashChangeEventStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PageTransitionEventStateDeclaration {
     #[webapi(data_property)]
     persisted: bool,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigateEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     navigation_type: v8::Local<'scope, v8::Value>,
@@ -138,7 +138,7 @@ struct NavigateEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ActiveNavigateEventDataDeclaration<'scope> {
     #[webapi(slot = ACTIVE_NAVIGATE_EVENT_EVENT_SLOT)]
     event: v8::Local<'scope, v8::Object>,

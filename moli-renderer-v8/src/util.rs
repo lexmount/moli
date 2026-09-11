@@ -644,19 +644,19 @@ mod tests {
     use url::Url;
 
     #[derive(WebApiObject)]
-    #[webapi(interface = "Object", data_properties)]
+    #[webapi(record, data_properties)]
     struct TestParentObjectDeclaration<'scope> {
         parent_node: v8::Local<'scope, v8::Object>,
     }
 
     #[derive(WebApiObject)]
-    #[webapi(interface = "Object", data_properties)]
+    #[webapi(record, data_properties)]
     struct TestParentValueDeclaration<'scope> {
         parent_node: v8::Local<'scope, v8::Value>,
     }
 
     #[derive(WebApiObject)]
-    #[webapi(interface = "Object", allow_empty)]
+    #[webapi(record)]
     struct TestIdentityObjectDeclaration {}
 
     fn primitive_host_defined_options<'s>(

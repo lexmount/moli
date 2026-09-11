@@ -5,7 +5,7 @@ use super::{construct_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct MouseEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -23,7 +23,7 @@ struct MouseEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PointerEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -50,7 +50,7 @@ struct PointerEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DragEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -65,7 +65,7 @@ struct DragEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WheelEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,
@@ -83,7 +83,7 @@ struct WheelEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct TouchEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -94,7 +94,7 @@ struct TouchEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct TouchInitDeclaration<'scope> {
     identifier: i32,
     target: v8::Local<'scope, v8::Object>,
@@ -107,7 +107,7 @@ struct TouchInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct KeyboardEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -295,7 +295,7 @@ fn keyboard_event_key_code_for_printable_key(key: &str) -> Option<u32> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct FocusEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -304,7 +304,7 @@ struct FocusEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct SimpleEventInitDeclaration {
     bubbles: bool,
     cancelable: bool,
@@ -312,7 +312,7 @@ struct SimpleEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct SubmitEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -320,7 +320,7 @@ struct SubmitEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct CommandEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -330,7 +330,7 @@ struct CommandEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ToggleEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,
@@ -341,7 +341,7 @@ struct ToggleEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct InterestEventInitDeclaration<'scope> {
     bubbles: bool,
     cancelable: bool,

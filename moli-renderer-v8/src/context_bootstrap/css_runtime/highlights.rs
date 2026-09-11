@@ -13,7 +13,7 @@ const HIGHLIGHT_ITERATOR_PROTOTYPE_SLOT: &str = "__moliHighlightIteratorPrototyp
 const HIGHLIGHT_REGISTRY_ITERATOR_PROTOTYPE_SLOT: &str = "__moliHighlightRegistryIteratorPrototype";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct HighlightIteratorObjectDeclaration<'s> {
     #[webapi(slot = HIGHLIGHT_ITERATOR_RECORDS_SLOT)]
     records: v8::Local<'s, v8::Array>,
@@ -24,7 +24,7 @@ struct HighlightIteratorObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct HighlightIteratorResultDeclaration<'s> {
     value: v8::Local<'s, v8::Value>,
     done: bool,

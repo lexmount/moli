@@ -271,7 +271,7 @@ fn storage_access_handle_get_directory_callback<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "StorageAccessHandle") {
+    if !web_api_interfaces::StorageAccessHandle::is_instance(scope, args.this()) {
         reject_type_error(scope, resolver, "Illegal invocation");
         return;
     }

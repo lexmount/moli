@@ -70,7 +70,7 @@ pub(super) use service_worker::{
 pub(super) use structured_clone::window_structured_clone_callback;
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ChildWindowOwnMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_open_callback)]
     open: (),

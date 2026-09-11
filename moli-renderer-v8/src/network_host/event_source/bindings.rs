@@ -111,7 +111,7 @@ struct EventSourceAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct EventSourceMessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::String>,
     origin: v8::Local<'scope, v8::String>,
@@ -608,7 +608,7 @@ fn event_source_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_source: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, event_source, "EventSource")
+    web_api_interfaces::EventSource::is_instance(scope, event_source)
 }
 
 fn event_source_string_slot<'s>(

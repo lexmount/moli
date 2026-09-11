@@ -73,7 +73,7 @@ pub(crate) struct PendingChildCrossDocumentTraversal {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct NavigationResultDeclaration<'scope> {
     committed: v8::Local<'scope, v8::Promise>,
     finished: v8::Local<'scope, v8::Promise>,

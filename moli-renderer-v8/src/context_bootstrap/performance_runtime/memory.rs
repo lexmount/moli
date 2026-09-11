@@ -15,7 +15,7 @@ const MEMORY_SLOTS: &[&str] = &[TOTAL_HEAP_SLOT, USED_HEAP_SLOT, HEAP_LIMIT_SLOT
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct MemoryInfoPrototypeDeclaration {
     #[webapi(accessor_property, name = "totalJSHeapSize", enumerable, getter = memory_info_getter, data = callback_data_index_value(scope, 0))]
     total_js_heap_size: (),

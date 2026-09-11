@@ -5,6 +5,7 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use crate::types::NetworkBodySourceId;
+use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
 use moli_webapi_declare::WebApiObject;
 
@@ -31,7 +32,7 @@ impl From<crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFi
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", prototype = "Response")]
+#[webapi(record, prototype = "Response")]
 struct FetchResponseHeadDeclaration {
     #[webapi(slot = RESPONSE_STATUS_SLOT)]
     status: f64,
@@ -46,14 +47,14 @@ struct FetchResponseHeadDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct FetchResponseInternalUrlDeclaration {
     #[webapi(slot = RESPONSE_INTERNAL_URL_SLOT)]
     internal_url: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct FetchResponseBodyDeclaration<'scope> {
     #[webapi(slot = RESPONSE_STATUS_TEXT_SLOT)]
     status_text: String,
@@ -673,7 +674,7 @@ fn response_body_locked<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
         return false;
     };
-    if !moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
+    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return false;
     }
     stream

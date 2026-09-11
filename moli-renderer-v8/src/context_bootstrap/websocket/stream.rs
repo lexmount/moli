@@ -11,10 +11,11 @@ use crate::context_bootstrap::stream_adapter::{
     new_lazy_readable_stream_object, new_writable_stream_object, readable_stream_queue_total_size,
 };
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamPromiseResolverRecordDeclaration {
     #[webapi(slot = WEBSOCKET_STREAM_PROMISE_RESOLVE_SLOT, init = "undefined")]
     resolve: (),
@@ -23,7 +24,7 @@ struct WebSocketStreamPromiseResolverRecordDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamOpenInfoDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     readable: v8::Local<'scope, v8::Object>,
@@ -36,7 +37,7 @@ struct WebSocketStreamOpenInfoDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamWritableSinkDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_ID_SLOT)]
     socket_id: f64,
@@ -55,7 +56,7 @@ struct WebSocketStreamWritableSinkDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamReadableSourceDeclaration {
     #[webapi(slot = WEBSOCKET_ID_SLOT)]
     socket_id: f64,
@@ -66,7 +67,7 @@ struct WebSocketStreamReadableSourceDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebSocketStreamPendingWriteDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_STREAM_PROMISE_SLOT)]
     promise: v8::Local<'scope, v8::Promise>,
@@ -77,7 +78,7 @@ struct WebSocketStreamPendingWriteDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WebSocketStreamCloseInfoDeclaration<'scope> {
     close_code: f64,
     reason: Option<v8::Local<'scope, v8::String>>,
@@ -651,7 +652,7 @@ pub(super) fn is_websocket_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "WebSocketStream")
+    web_api_interfaces::WebSocketStream::is_instance(scope, object)
 }
 
 fn call_websocket_stream_function_slot<'s>(

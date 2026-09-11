@@ -13,7 +13,7 @@ use super::callbacks::{
 use super::items::{document_all_items_array, document_all_named_lookup};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DocumentAllCollectionDataDeclaration<'scope> {
     items: v8::Local<'scope, v8::Array>,
     named: v8::Local<'scope, v8::Object>,

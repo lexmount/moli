@@ -131,7 +131,7 @@ pub(crate) enum MaplikeWebIdlIteratorMethod {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct SnapshotWebIdlIteratorDeclaration<'s> {
     #[webapi(slot = SNAPSHOT_ITERATOR_VALUES_SLOT)]
     values: v8::Local<'s, v8::Array>,
@@ -140,7 +140,7 @@ struct SnapshotWebIdlIteratorDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NativeCollectionWebIdlIteratorDeclaration<'s> {
     #[webapi(slot = NATIVE_COLLECTION_ITERATOR_SLOT)]
     iterator: v8::Local<'s, v8::Object>,
@@ -149,7 +149,7 @@ struct NativeCollectionWebIdlIteratorDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct SnapshotWebIdlIteratorResultDeclaration<'s> {
     value: v8::Local<'s, v8::Value>,
     done: bool,

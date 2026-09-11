@@ -16,7 +16,7 @@ use crate::{native_bridge::NavigationAttemptId, util::get_private_value};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigationFinishedResolveDataDeclaration<'scope> {
     #[webapi(slot = NAVIGATION_FINISH_RESOLVE_SLOT)]
     resolve: v8::Local<'scope, v8::Function>,
@@ -26,7 +26,7 @@ struct NavigationFinishedResolveDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigationFinishedRejectDataDeclaration<'scope> {
     #[webapi(slot = NAVIGATION_FINISH_REJECT_SLOT)]
     reject: v8::Local<'scope, v8::Function>,

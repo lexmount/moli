@@ -189,7 +189,9 @@ fn collection_length_getter_for<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
     interface: &'static str,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), interface) {
+    if !web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, args.this()))
+    {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -256,7 +258,9 @@ fn collection_item_callback_for<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    if !moli_webapi_declare::implements_interface(scope, this_obj, interface) {
+    if !web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, this_obj))
+    {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -279,7 +283,9 @@ fn collection_named_item_callback_for<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    if !moli_webapi_declare::implements_interface(scope, this_obj, interface) {
+    if !web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, this_obj))
+    {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -302,7 +308,7 @@ fn plugin_array_refresh_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "PluginArray") {
+    if !web_api_interfaces::PluginArray::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
     }
 }

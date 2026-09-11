@@ -82,7 +82,7 @@ struct AudioWorkletNodeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AudioWorkletModuleStateDeclaration<'scope> {
     #[webapi(slot = AUDIO_WORKLET_MODULE_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
@@ -99,21 +99,21 @@ struct AudioWorkletModuleStateDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AudioWorkletWorkerCallbackDataDeclaration<'scope> {
     #[webapi(slot = AUDIO_WORKLET_CALLBACK_MODULE_SLOT)]
     module_state: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct AudioWorkletBlobOptionsDeclaration {
     #[webapi(data_property = "type")]
     kind: &'static str,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct AudioWorkletWorkerOptionsDeclaration {
     #[webapi(data_property = "type")]
     kind: &'static str,
@@ -121,7 +121,7 @@ struct AudioWorkletWorkerOptionsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct AudioWorkletProcessorConstructMessageDeclaration<'scope> {
     #[webapi(data_property = "__moliAudioWorkletType")]
     message_type: &'static str,
@@ -245,7 +245,7 @@ struct AnalyserNodePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct OfflineAudioCompletePayloadDeclaration<'scope> {
     #[webapi(slot = OFFLINE_AUDIO_COMPLETE_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
@@ -265,7 +265,7 @@ struct OfflineAudioCompletionEventDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::AudioDestinationNode, allow_empty)]
+#[webapi(interface = web_api_interfaces::AudioDestinationNode)]
 struct AudioDestinationNodeObjectDeclaration {}
 
 #[derive(WebApiObject)]
@@ -552,7 +552,7 @@ pub(in crate::context_bootstrap) fn is_audio_context_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "AudioContext")
+    web_api_interfaces::AudioContext::is_instance(scope, object)
 }
 
 fn audio_context_close_callback<'s>(
@@ -1313,7 +1313,7 @@ fn require_base_audio_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "BaseAudioContext") {
+    if web_api_interfaces::BaseAudioContext::is_instance(scope, object) {
         return true;
     }
     throw_type_error(scope, "Illegal invocation: expected a BaseAudioContext.");

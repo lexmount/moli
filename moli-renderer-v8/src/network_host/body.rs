@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 
 pub(in crate::network_host) const URL_SEARCH_PARAMS_CONTENT_TYPE: &str =
@@ -46,7 +47,7 @@ pub(in crate::network_host) fn body_init<'s>(
             let content_type = (!mime_type.is_empty()).then_some(mime_type);
             return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
         }
-        if moli_webapi_declare::implements_interface(scope, object, "ReadableStream") {
+        if web_api_interfaces::ReadableStream::is_instance(scope, object) {
             return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));
         }
     }

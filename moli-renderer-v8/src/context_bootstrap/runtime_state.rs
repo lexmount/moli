@@ -70,14 +70,14 @@ struct HtmlScriptElementSupportsArgs {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "HTMLScriptElement", enumerable)]
+#[webapi(fragment, prototype = "HTMLScriptElement", enumerable)]
 struct HtmlScriptElementStaticMethodsDeclaration {
     #[webapi(method, length = 1, callback = html_script_element_supports_callback)]
     supports: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Document", enumerable)]
+#[webapi(fragment, prototype = "Document", enumerable)]
 struct DocumentStaticMethodsDeclaration {
     #[webapi(
         method = "parseHTMLUnsafe",
@@ -88,7 +88,7 @@ struct DocumentStaticMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Document", enumerable)]
+#[webapi(fragment, prototype = "Document", enumerable)]
 struct DocumentPrototypeRuntimeDeclaration {
     #[webapi(
         accessor_property = "designMode",
@@ -135,7 +135,7 @@ struct DocumentPrototypeRuntimeDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WindowComputedStyleMethodDeclaration {
     #[webapi(
         method,
@@ -147,7 +147,7 @@ struct WindowComputedStyleMethodDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record)]
 struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
     history_slot: v8::Local<'scope, v8::Value>,
     navigation_slot: v8::Local<'scope, v8::Value>,
@@ -264,7 +264,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct WindowLegacyAliasAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -289,7 +289,7 @@ struct WindowLegacyAliasAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "Window", enumerable)]
+#[webapi(fragment, prototype = "Window", enumerable)]
 struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     origin_name: v8::Local<'scope, v8::Value>,
     inner_width_name: v8::Local<'scope, v8::Value>,
@@ -374,7 +374,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ConsoleObjectDeclaration {
     #[webapi(method, callback = console_log_callback)]
     log: (),
@@ -454,14 +454,14 @@ struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WindowEvalGlobalDeclaration<'scope> {
     #[webapi(data_property = "eval")]
     intrinsic_eval: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebAssemblyNamespaceDeclaration {
     #[webapi(method, length = 1, callback = webassembly_namespace_instance_callback)]
     namespace_instance: (),
@@ -469,17 +469,12 @@ struct WebAssemblyNamespaceDeclaration {
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(
-    allow_empty,
-    interface = "Object",
-    prototype = "WebDriver",
-    require_prototype
-)]
+#[webapi(record, prototype = "WebDriver", require_prototype)]
 struct WebDriverObjectDeclaration {}
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebDriverPrototypeDeclaration {
     #[webapi(method, length = 0, callback = webdriver_delete_all_cookies_callback)]
     delete_all_cookies: (),
@@ -487,7 +482,7 @@ struct WebDriverPrototypeDeclaration {
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebDriverPrototypeMetadataDeclaration<'scope> {
     #[webapi(data_property = "constructor")]
     constructor: v8::Local<'scope, v8::Function>,

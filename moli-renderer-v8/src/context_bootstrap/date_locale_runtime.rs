@@ -11,7 +11,7 @@ const ORIGINAL_INTL_DATETIME_FORMAT_RESOLVED_OPTIONS_SLOT: &str =
     "__moliOriginalIntlDateTimeFormatResolvedOptions";
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Date")]
+#[webapi(fragment, prototype = "Date")]
 struct DateLocalePrototypeDeclaration {
     #[webapi(method, length = 0, callback = date_to_locale_string_callback)]
     to_locale_string: (),
@@ -22,7 +22,7 @@ struct DateLocalePrototypeDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "Intl.DateTimeFormat")]
+#[webapi(fragment, prototype = "Intl.DateTimeFormat")]
 struct IntlDateTimeFormatPrototypeDeclaration {
     #[webapi(
         method = "resolvedOptions",

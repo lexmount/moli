@@ -107,7 +107,7 @@ pub(in crate::context_bootstrap) const SERVICE_WORKER_OWNER_TOKEN_SLOT: &str =
     "__moliServiceWorkerOwner";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Permissions, allow_empty)]
+#[webapi(interface = web_api_interfaces::Permissions)]
 struct PermissionsObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -323,7 +323,7 @@ struct NavigatorConnectionDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = web_api_interfaces::StorageManager)]
+#[webapi(interface = web_api_interfaces::StorageManager)]
 struct StorageManagerObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
@@ -377,7 +377,7 @@ pub(in crate::context_bootstrap) fn install_storage_manager_constructor_template
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = web_api_interfaces::StorageBucketManager)]
+#[webapi(interface = web_api_interfaces::StorageBucketManager)]
 struct StorageBucketManagerObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -468,7 +468,7 @@ struct UserActivationObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
     #[webapi(data_property, enumerable)]
     user_agent: &'profile str,
@@ -571,7 +571,7 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct WorkerNavigatorBackingDeclaration<'scope, 'profile> {
     #[webapi(data_property, enumerable)]
     user_agent: &'profile str,
@@ -694,7 +694,7 @@ pub(in crate::context_bootstrap) fn navigator_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigator: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, navigator, "Navigator")
+    web_api_interfaces::Navigator::is_instance(scope, navigator)
 }
 
 pub(crate) fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -707,7 +707,7 @@ fn navigator_user_activation_state_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "UserActivation") {
+    if !web_api_interfaces::UserActivation::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -782,7 +782,7 @@ fn navigator_connection_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "NetworkInformation")
+    web_api_interfaces::NetworkInformation::is_instance(scope, receiver)
 }
 
 pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(

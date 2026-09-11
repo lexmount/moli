@@ -42,14 +42,14 @@ struct TrustedTypesFactoryDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct TrustedTypeObjectDeclaration<'scope> {
     #[webapi(slot = TRUSTED_TYPE_VALUE_SLOT)]
     value: v8::Local<'scope, v8::String>,
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct TrustedTypePrototypeDeclaration {
     #[webapi(method = "toString", callback = trusted_type_to_string_callback, length = 0)]
     to_string: (),
@@ -572,7 +572,7 @@ fn trusted_type_string<'s>(
     kind: TrustedTypeKind,
 ) -> Option<String> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    if !moli_webapi_declare::implements_interface(scope, object, kind.constructor_name()) {
+    if !kind.interface().is_instance(scope, object) {
         return None;
     }
     let value = get_private_value(scope, object, TRUSTED_TYPE_VALUE_SLOT)?;

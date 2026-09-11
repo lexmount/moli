@@ -448,7 +448,7 @@ fn speech_synthesis_speak_callback<'s>(
     let branded = v8::Local::<v8::Object>::try_from(utterance)
         .ok()
         .is_some_and(|object| {
-            moli_webapi_declare::implements_interface(scope, object, "SpeechSynthesisUtterance")
+            web_api_interfaces::SpeechSynthesisUtterance::is_instance(scope, object)
         });
     if !branded {
         throw_type_error(
@@ -620,9 +620,7 @@ fn speech_utterance_voice_setter<'s>(
     }
     let valid = v8::Local::<v8::Object>::try_from(value)
         .ok()
-        .is_some_and(|object| {
-            moli_webapi_declare::implements_interface(scope, object, "SpeechSynthesisVoice")
-        });
+        .is_some_and(|object| web_api_interfaces::SpeechSynthesisVoice::is_instance(scope, object));
     if !valid {
         throw_type_error(
             scope,
@@ -794,7 +792,9 @@ fn require_brand<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, slot) {
+    if web_api_interfaces::descriptor(slot)
+        .is_some_and(|interface| interface.is_instance(scope, receiver))
+    {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");

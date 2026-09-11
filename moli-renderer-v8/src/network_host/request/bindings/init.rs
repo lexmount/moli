@@ -6,6 +6,7 @@ use super::super::input::{
     try_resolve_request_constructor_url_for_scope,
 };
 use super::super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_fetch::{RequestMode, RequestRedirectMode};
 
@@ -147,9 +148,7 @@ pub(super) fn apply_request_init_overrides<'s>(
     )?;
     let init_body_is_readable_stream = init_body_value
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|object| {
-            moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
-        });
+        .is_some_and(|object| web_api_interfaces::ReadableStream::is_instance(scope, object));
     let body_from_init = init_body_value
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
         .transpose()?

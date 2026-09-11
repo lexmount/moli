@@ -179,7 +179,9 @@ fn endpoint_getter<'s, const DECOMPRESS: bool, const READABLE: bool>(
     } else {
         "CompressionStream"
     };
-    if !moli_webapi_declare::implements_interface(scope, args.this(), interface) {
+    if !web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, args.this()))
+    {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 
 pub(in crate::context_bootstrap) fn callback_value_string(
     scope: &mut v8::PinScope<'_, '_>,
@@ -59,7 +60,7 @@ pub(in crate::context_bootstrap) fn require_url_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, object, "URL") {
+    if web_api_interfaces::URL::is_instance(scope, object) {
         return Some(object);
     }
     throw_type_error(scope, "Illegal invocation");

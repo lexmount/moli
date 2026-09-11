@@ -229,5 +229,5 @@ pub(super) fn offscreen_canvas_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "OffscreenCanvas")
+    web_api_interfaces::OffscreenCanvas::is_instance(scope, receiver)
 }

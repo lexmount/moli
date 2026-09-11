@@ -157,7 +157,7 @@ struct MidiPermissionDescriptorMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigatorUaBrandEntryDeclaration {
     #[webapi(data_property, enumerable)]
     brand: String,
@@ -183,7 +183,7 @@ struct NavigatorUaDataObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigatorUaDataSnapshotDeclaration {
     #[webapi(data_property, enumerable)]
     brands: Vec<NavigatorUaBrandEntryDeclaration>,
@@ -196,7 +196,7 @@ struct NavigatorUaDataSnapshotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NavigatorUaDataHighEntropySnapshotDeclaration {
     #[webapi(data_property, enumerable)]
     architecture: Option<String>,
@@ -233,7 +233,7 @@ struct NavigatorUaDataHighEntropySnapshotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "StorageEstimate")]
+#[webapi(fragment, prototype = "StorageEstimate")]
 struct StorageEstimateObjectDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     quota: f64,
@@ -246,7 +246,7 @@ struct StorageEstimateObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct StorageUsageDetailsObjectDeclaration {
     #[webapi(data_property = "indexedDB", enumerable)]
     indexed_db: Option<f64>,
@@ -291,7 +291,7 @@ struct NavigatorBatteryStatusObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = web_api_interfaces::StorageBucket)]
+#[webapi(interface = web_api_interfaces::StorageBucket)]
 struct StorageBucketObjectDeclaration {}
 
 #[derive(Debug)]
@@ -323,7 +323,7 @@ struct CacheQueryOptions {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct StorageBucketCachePutPendingDataDeclaration<'scope> {
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESOLVER_SLOT)]
     resolver: v8::Local<'scope, v8::PromiseResolver>,
@@ -552,7 +552,7 @@ fn battery_status_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "BatteryManager")
+    web_api_interfaces::BatteryManager::is_instance(scope, receiver)
 }
 
 pub(in crate::context_bootstrap) fn navigator_permissions_query_callback<'s>(
@@ -614,7 +614,7 @@ fn permissions_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "Permissions")
+    web_api_interfaces::Permissions::is_instance(scope, receiver)
 }
 
 fn build_permission_status_object<'s>(
@@ -2420,7 +2420,7 @@ fn storage_bucket_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "StorageBucket")
+    web_api_interfaces::StorageBucket::is_instance(scope, receiver)
 }
 
 fn build_storage_bucket_object<'s>(
@@ -2565,7 +2565,9 @@ fn branded_promise_resolver<'s>(
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     rv.set(resolver.get_promise(scope).into());
-    if !moli_webapi_declare::implements_interface(scope, args.this(), interface) {
+    if !web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, args.this()))
+    {
         reject_illegal_invocation(scope, resolver, interface, method);
         return None;
     }
@@ -3378,7 +3380,7 @@ fn navigator_ua_data_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "NavigatorUAData")
+    web_api_interfaces::NavigatorUAData::is_instance(scope, receiver)
 }
 
 pub(in crate::context_bootstrap) fn build_navigator_ua_data_object<'s>(
@@ -3525,5 +3527,5 @@ fn media_devices_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "MediaDevices")
+    web_api_interfaces::MediaDevices::is_instance(scope, receiver)
 }

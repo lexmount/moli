@@ -12,7 +12,7 @@ use super::iframe_window_message_event::{detached_window_message_event, detached
 const DETACHED_IFRAME_WINDOW_EVENT_LISTENERS_SLOT: &str = "__lmDetachedIframeWindowEventListeners";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DetachedIframeWindowMethodsDeclaration {
     #[webapi(method, length = 1, callback = detached_iframe_window_post_message)]
     post_message: (),

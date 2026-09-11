@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "Document")]
+#[webapi(fragment, prototype = "Document")]
 struct DetachedDocumentStateAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -15,7 +15,7 @@ struct DetachedDocumentStateAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "HTMLDocument")]
+#[webapi(fragment, prototype = "HTMLDocument")]
 struct DetachedHtmlDocumentCreationMethodsDeclaration {
     #[webapi(method, callback = detached_create_html_element_method_callback)]
     create_element: (),
@@ -37,7 +37,7 @@ struct DetachedHtmlDocumentCreationMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "XMLDocument")]
+#[webapi(fragment, prototype = "XMLDocument")]
 struct DetachedXmlDocumentCreationMethodsDeclaration {
     #[webapi(method, callback = detached_create_xml_element_method_callback)]
     create_element: (),
@@ -56,7 +56,7 @@ struct DetachedXmlDocumentCreationMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(unbranded, interface = "Document")]
+#[webapi(fragment, prototype = "Document")]
 struct DetachedDocumentCommonMethodsDeclaration {
     #[webapi(method, callback = detached_create_attribute_method_callback)]
     create_attribute: (),

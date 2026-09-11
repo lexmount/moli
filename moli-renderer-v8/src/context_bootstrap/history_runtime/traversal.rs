@@ -46,7 +46,7 @@ const TRAVERSAL_INTERCEPT_PROMISE_SLOT: &str = "__lmTraversalInterceptPromise";
 const NAVIGATION_ACTIVE_TRAVERSAL_INTERCEPT_SLOT: &str = "__lmNavigationActiveTraversalIntercept";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct TraversalPrecommitDataDeclaration<'scope> {
     #[webapi(slot = TRAVERSAL_PRECOMMIT_ACTIVE_SLOT)]
     active: bool,
@@ -77,7 +77,7 @@ struct TraversalPrecommitDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct TraversalInterceptSettlementDataDeclaration<'scope> {
     #[webapi(slot = TRAVERSAL_INTERCEPT_ACTIVE_SLOT)]
     active: bool,

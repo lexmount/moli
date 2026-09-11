@@ -103,7 +103,7 @@ fn visual_viewport_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "VisualViewport") {
+    if !web_api_interfaces::VisualViewport::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

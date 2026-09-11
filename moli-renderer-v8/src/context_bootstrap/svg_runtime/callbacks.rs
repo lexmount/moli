@@ -1,6 +1,7 @@
 use super::builders::*;
 use super::*;
 use crate::util::serialize_v8_array;
+use crate::web_api_interfaces;
 
 const SVG_RECT_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["x", "y", "width", "height", "rx", "ry"];
 const SVG_CIRCLE_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["cx", "cy", "r"];
@@ -35,7 +36,9 @@ fn require_svg_receiver<'s>(
     interface: &str,
     member: &str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, interface) {
+    if web_api_interfaces::descriptor(interface)
+        .is_some_and(|interface| interface.is_instance(scope, receiver))
+    {
         return true;
     }
     webidl::throw_type_error(

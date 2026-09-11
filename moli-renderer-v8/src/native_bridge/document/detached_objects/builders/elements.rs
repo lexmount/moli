@@ -23,7 +23,7 @@ use moli_webapi_declare::WebApiObject;
 const DETACHED_ELEMENT_BRIDGE_PROTOTYPE_SLOT: &str = "__moliDetachedElementBridgePrototype";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct GenericHtmlElementProxyHandlerDeclaration {
     #[webapi(method, length = 3, callback = generic_html_element_proxy_get_callback)]
     get: (),
@@ -34,7 +34,7 @@ struct GenericHtmlElementProxyHandlerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct SelectHtmlElementProxyHandlerDeclaration {
     #[webapi(method, length = 3, callback = select_html_element_proxy_get_callback)]
     get: (),
@@ -45,7 +45,7 @@ struct SelectHtmlElementProxyHandlerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct DetachedElementObjectDeclaration<'scope, 'tag> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

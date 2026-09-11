@@ -55,7 +55,7 @@ struct WebGlViewportArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WebGlContextStateDeclaration<'s> {
     #[webapi(slot = WEBGL_VIEWPORT_SLOT)]
     viewport: v8::Local<'s, v8::Array>,
@@ -90,7 +90,6 @@ struct WebGl2GetInternalformatParameterArgs {
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLBuffer,
     fallback_to_string_tag = "WebGLBuffer"
 )]
@@ -98,7 +97,6 @@ struct WebGlBufferHandleDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLProgram,
     fallback_to_string_tag = "WebGLProgram"
 )]
@@ -106,7 +104,6 @@ struct WebGlProgramHandleDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLShader,
     fallback_to_string_tag = "WebGLShader"
 )]
@@ -114,7 +111,6 @@ struct WebGlShaderHandleDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLUniformLocation,
     fallback_to_string_tag = "WebGLUniformLocation"
 )]
@@ -122,7 +118,6 @@ struct WebGlUniformLocationHandleDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLFramebuffer,
     fallback_to_string_tag = "WebGLFramebuffer"
 )]
@@ -130,7 +125,6 @@ struct WebGlFramebufferHandleDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    allow_empty,
     interface = web_api_interfaces::WebGLRenderbuffer,
     fallback_to_string_tag = "WebGLRenderbuffer"
 )]
@@ -738,7 +732,7 @@ pub(crate) fn webgl_get_context_attributes_callback(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WebGlContextAttributes {
     alpha: bool,
     antialias: bool,
@@ -834,7 +828,7 @@ fn is_webgl2_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "WebGL2RenderingContext")
+    web_api_interfaces::WebGL2RenderingContext::is_instance(scope, object)
 }
 
 pub(crate) fn webgl2_color_space_getter_callback<'s>(
@@ -842,7 +836,7 @@ pub(crate) fn webgl2_color_space_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "WebGL2RenderingContext") {
+    if !web_api_interfaces::WebGL2RenderingContext::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -871,7 +865,7 @@ pub(crate) fn webgl2_color_space_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "WebGL2RenderingContext") {
+    if !web_api_interfaces::WebGL2RenderingContext::is_instance(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

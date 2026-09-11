@@ -2,7 +2,7 @@ use crate::dom::native::LiveDomNodeMetadata;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct NodeMetadataDeclaration<'scope> {
     kind: v8::Local<'scope, v8::Value>,
     node_type: u8,

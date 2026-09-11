@@ -79,7 +79,7 @@ struct TextDecoderPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct TextEncoderEncodeIntoResultDeclaration {
     read: usize,
     written: usize,
@@ -422,14 +422,14 @@ fn text_encoder_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "TextEncoder")
+    web_api_interfaces::TextEncoder::is_instance(scope, receiver)
 }
 
 fn text_decoder_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "TextDecoder")
+    web_api_interfaces::TextDecoder::is_instance(scope, receiver)
 }
 
 fn init_text_decoder_state(

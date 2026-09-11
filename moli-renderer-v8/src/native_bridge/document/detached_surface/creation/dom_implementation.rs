@@ -1,12 +1,12 @@
 use super::super::*;
+use crate::web_api_interfaces;
 
 fn value_is_document_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> bool {
-    v8::Local::<v8::Object>::try_from(value).is_ok_and(|object| {
-        moli_webapi_declare::implements_interface(scope, object, "DocumentType")
-    })
+    v8::Local::<v8::Object>::try_from(value)
+        .is_ok_and(|object| web_api_interfaces::DocumentType::is_instance(scope, object))
 }
 
 pub(in crate::native_bridge) fn bridge_create_detached_document_callback<'a>(

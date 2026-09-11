@@ -5,14 +5,14 @@ use crate::{
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ChildWindowWebAssemblyConstructorDataDeclaration<'scope> {
     name: v8::Local<'scope, v8::String>,
     native_constructor: v8::Local<'scope, v8::Function>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ChildWindowInstancePrototypeDeclaration<'scope> {
     #[webapi(data_property)]
     constructor: v8::Local<'scope, v8::Function>,

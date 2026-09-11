@@ -17,7 +17,7 @@ const EVENT_TIMESTAMP_PRIVATE_SLOT: &str = "__moliEventTimeStamp";
 const EVENT_IS_TRUSTED_GETTER_FUNCTION_SLOT: &str = "__moliEventIsTrustedGetterFunction";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct InitializedEventHeaderDeclaration<'scope> {
     #[webapi(data_property = "type")]
     event_type: v8::Local<'scope, v8::String>,
@@ -49,7 +49,7 @@ struct InitializedEventStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct InitializedEventIsTrustedAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -61,7 +61,7 @@ struct InitializedEventIsTrustedAccessorDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct InitializedEventTailDeclaration {
     #[webapi(init = false)]
     composed: (),

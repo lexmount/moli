@@ -267,7 +267,7 @@ struct SampleLocalObjectSlot<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct GeneratedConstructorObject<'scope> {
     #[webapi(data_property, init = true)]
     brand: (),
@@ -280,7 +280,7 @@ struct GeneratedConstructorObject<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NestedValueRecord {
     #[webapi(data_property, enumerable)]
     name: &'static str,
@@ -290,7 +290,7 @@ struct NestedValueRecord {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DefaultNameObject<'scope> {
     #[webapi(data_property, enumerable)]
     _visible_label: &'static str,
@@ -351,7 +351,7 @@ struct DefaultNameObject<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AliasObject {
     #[webapi(method, enumerable, length = 0, callback = sample_now_callback)]
     entries: (),
@@ -361,7 +361,7 @@ struct AliasObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ConstantObject {
     #[webapi(constant = "READY", value = 4u32)]
     ready: (),
@@ -462,7 +462,7 @@ struct IntrinsicIteratorTemplateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ExplicitFunctionNameSymbolMethodObject {
     #[webapi(
         method,
@@ -474,14 +474,14 @@ struct ExplicitFunctionNameSymbolMethodObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct NativeDataPropertyObject {
     #[webapi(native_data_property, getter = sample_native_holder_getter)]
     native_holder: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(record, enumerable)]
 struct DefaultEnumerableMembersObject {
     #[webapi(data_property)]
     property_value: &'static str,
@@ -501,7 +501,7 @@ struct DefaultEnumerableMembersObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DefaultEnumerablePropertiesObject {
     client_x: f64,
     is_2d: bool,
@@ -516,7 +516,7 @@ struct PrototypeBackedEnumerablePropertiesObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", rename_all = "none", data_properties, enumerable)]
+#[webapi(record, rename_all = "none", data_properties, enumerable)]
 struct ExplicitSnakeCasePropertiesObject {
     snake_case_name: &'static str,
 }
@@ -526,32 +526,23 @@ struct ExplicitSnakeCasePropertiesObject {
     interface = interfaces::SamplePerformance,
     own_to_string_tag = "ReadonlySample",
     readonly_to_string_tag,
-    allow_empty
 )]
 struct ReadonlyTagObject {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = interfaces::MissingSampleInterface, require_prototype, allow_empty)]
+#[webapi(interface = interfaces::MissingSampleInterface, require_prototype)]
 struct RequiredPrototypeObject {}
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = "Object",
-    prototype = "SamplePerformance",
-    require_prototype
-)]
+#[webapi(record, prototype = "SamplePerformance", require_prototype)]
 struct PrototypeOnlyObject {}
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = "Object",
-    prototype = "MissingSampleInterface",
-    require_prototype
-)]
+#[webapi(record, prototype = "MissingSampleInterface", require_prototype)]
 struct MissingPrototypeOnlyObject {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct RuntimePrototypeTaggedObject<'scope, 'tag> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,
@@ -561,14 +552,14 @@ struct RuntimePrototypeTaggedObject<'scope, 'tag> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct RuntimeTagOnlyObject<'tag> {
     #[webapi(to_string_tag)]
     to_string_tag: Option<&'tag str>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct RuntimeReadonlyLockedTagObject {
     #[webapi(to_string_tag, readonly, dont_delete, init = string("LockedRuntimeTag"))]
     to_string_tag: (),
@@ -578,7 +569,6 @@ struct RuntimeReadonlyLockedTagObject {
 #[webapi(
     interface = interfaces::SamplePerformance,
     fallback_to_string_tag = "SampleFallback",
-    allow_empty
 )]
 struct PrototypeBackedFallbackTagObject {}
 
@@ -586,7 +576,6 @@ struct PrototypeBackedFallbackTagObject {}
 #[webapi(
     interface = interfaces::MissingSampleInterface,
     fallback_to_string_tag = "MissingSample",
-    allow_empty
 )]
 struct MissingPrototypeFallbackTagObject {}
 

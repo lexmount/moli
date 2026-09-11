@@ -301,7 +301,7 @@ fn geolocation_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "Geolocation")
+    web_api_interfaces::Geolocation::is_instance(scope, receiver)
 }
 
 fn take_next_watch_id<'s>(
@@ -439,7 +439,7 @@ fn geolocation_position_error_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if moli_webapi_declare::implements_interface(scope, receiver, "GeolocationPositionError") {
+    if web_api_interfaces::GeolocationPositionError::is_instance(scope, receiver) {
         Some(receiver)
     } else {
         throw_type_error(scope, "Illegal invocation");

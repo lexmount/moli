@@ -42,8 +42,7 @@ fn require_view_transition_type_set_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> Option<v8::Local<'s, v8::Set>> {
-    let branded =
-        moli_webapi_declare::implements_interface(scope, receiver, "ViewTransitionTypeSet");
+    let branded = web_api_interfaces::ViewTransitionTypeSet::is_instance(scope, receiver);
     let backing = get_private_value(scope, receiver, VIEW_TRANSITION_TYPE_SET_BACKING_SLOT)
         .and_then(|value| v8::Local::<v8::Set>::try_from(value).ok());
     if branded && backing.is_some() {

@@ -97,14 +97,14 @@ struct ReadableStreamObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ReadableStreamStartRejectedDataDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_START_REJECTED_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ReadableStreamStartFulfilledDataDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_START_REJECTED_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
@@ -146,7 +146,7 @@ struct WritableStreamObjectDeclaration<'scope, 'value> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TransformStream", unbranded)]
+#[webapi(fragment, prototype = "TransformStream")]
 struct TransformStreamObjectDeclaration<'scope> {
     #[webapi(slot = TRANSFORM_STREAM_READABLE_SLOT)]
     readable: v8::Local<'scope, v8::Object>,

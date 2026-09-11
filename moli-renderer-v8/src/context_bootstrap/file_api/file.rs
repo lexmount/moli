@@ -223,7 +223,7 @@ pub(crate) fn selected_file_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<SelectedFile> {
-    if !moli_webapi_declare::implements_interface(scope, object, "File") {
+    if !web_api_interfaces::File::is_instance(scope, object) {
         return None;
     }
     let bytes = blob::blob_bytes_from_object(scope, object)?;

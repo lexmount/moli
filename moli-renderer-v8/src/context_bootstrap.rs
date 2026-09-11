@@ -659,7 +659,7 @@ fn worker_unsupported_constructor_callback(
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -670,7 +670,7 @@ pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerBase64OperationsDeclaration {
     #[webapi(
         method,
@@ -784,7 +784,7 @@ struct WorkerAbortControllerTemplateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(unbranded, interface = "WorkerGlobalScope", enumerable)]
+#[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
 struct WorkerGlobalScopeCryptoPrototypeDeclaration {
     #[webapi(accessor_property, getter = worker_crypto_getter_callback)]
     crypto: (),

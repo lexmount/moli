@@ -7,21 +7,21 @@ use moli_webapi_declare::{
 };
 
 #[derive(WebApiObject)]
-#[webapi(interface = interfaces::TestBase, allow_empty)]
+#[webapi(interface = interfaces::TestBase)]
 struct Base {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = interfaces::TestDerived, allow_empty)]
+#[webapi(interface = interfaces::TestDerived)]
 struct Derived {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct Record {
     value: u32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = interfaces::TestBase, unbranded, allow_empty)]
+#[webapi(fragment, prototype = <interfaces::TestBase>::DESCRIPTOR.name())]
 struct PrototypeMembers {}
 
 fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
@@ -220,7 +220,7 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
 }
 
 #[derive(moli_webapi_declare::WebApiFunctionTemplate)]
-#[webapi(name = "TestBase", receiver = "TestBase")]
+#[webapi(interface = interfaces::TestBase, receiver)]
 struct CheckedBaseTemplate {
     #[webapi(method, callback = convert_argument)]
     convert: (),
@@ -340,5 +340,39 @@ fn cyclic_native_descriptors_fail_during_registration() {
             .unwrap_err()
             .to_string()
             .contains("cycle")
+    );
+}
+
+#[derive(WebApiObject)]
+#[webapi(fragment)]
+struct SharedState {
+    #[webapi(slot = "__sharedState")]
+    value: u32,
+}
+
+#[test]
+fn shared_fragments_preserve_target_identity_and_prototype() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let real = Derived::new().bind(scope).unwrap();
+    let prototype = v8::Object::new(scope);
+    real.set_prototype(scope, prototype.into()).unwrap();
+    SharedState::new(7).bind_into(scope, real).unwrap();
+    assert!(
+        real.get_prototype(scope)
+            .unwrap()
+            .strict_equals(prototype.into())
+    );
+    assert!(interfaces::TestDerived::is_instance(scope, real));
+    assert!(interfaces::TestBase::is_instance(scope, real));
+    assert_eq!(
+        moli_v8_util::get_private_value(scope, real, "__sharedState")
+            .unwrap()
+            .uint32_value(scope),
+        Some(7)
     );
 }

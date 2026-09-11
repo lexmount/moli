@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
 #[cfg(test)]
@@ -415,7 +416,7 @@ pub(crate) fn ensure_css_rule_list_object<'s>(
     object: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "CSSRuleList") {
+    if web_api_interfaces::CSSRuleList::is_instance(scope, object) {
         return true;
     }
     throw_type_error(

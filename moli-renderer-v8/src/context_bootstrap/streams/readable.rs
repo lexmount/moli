@@ -73,7 +73,7 @@ pub(crate) fn is_readable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
+    web_api_interfaces::ReadableStream::is_instance(scope, object)
 }
 
 pub(crate) fn new_readable_stream_from_array_buffer<'s>(

@@ -1,11 +1,12 @@
 use super::*;
+use crate::web_api_interfaces;
 
 pub(crate) fn ensure_media_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "MediaList") {
+    if web_api_interfaces::MediaList::is_instance(scope, object) {
         return true;
     }
     throw_type_error(

@@ -16,7 +16,7 @@ const READ_REQUEST_CLOSE_STEPS_SLOT: &str = "__moliStreamReadRequestCloseSteps";
 const READ_REQUEST_ERROR_STEPS_SLOT: &str = "__moliStreamReadRequestErrorSteps";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct InternalReadRequestDeclaration<'scope> {
     #[webapi(slot = READ_REQUEST_CHUNK_STEPS_SLOT)]
     chunk_steps: v8::Local<'scope, v8::Function>,

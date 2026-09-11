@@ -3,14 +3,14 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DetachedBridgePrototypeDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct DetachedObjectWithPrototypeDeclaration<'scope, 'tag> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,
@@ -20,7 +20,7 @@ struct DetachedObjectWithPrototypeDeclaration<'scope, 'tag> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct DetachedObjectTagDeclaration {
     #[webapi(to_string_tag)]
     to_string_tag: String,

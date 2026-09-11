@@ -46,9 +46,12 @@ struct DomPointObjectDeclaration {
 }
 
 macro_rules! dom_matrix_object_declaration {
-    ($name:ident, $interface:literal) => {
+    ($name:ident, $interface:ident) => {
         #[derive(WebApiObject)]
-        #[webapi(interface = $interface, fallback_to_string_tag = $interface)]
+        #[webapi(
+                    interface = web_api_interfaces::$interface,
+                    fallback_to_string_tag = <web_api_interfaces::$interface>::DESCRIPTOR.name()
+                )]
         struct $name {
             #[webapi(slot = DOM_MATRIX_M11_SLOT)]
             m11: f64,
@@ -113,11 +116,11 @@ macro_rules! dom_matrix_object_declaration {
     };
 }
 
-dom_matrix_object_declaration!(DomMatrixObjectDeclaration, "DOMMatrix");
-dom_matrix_object_declaration!(DomMatrixReadOnlyObjectDeclaration, "DOMMatrixReadOnly");
+dom_matrix_object_declaration!(DomMatrixObjectDeclaration, DOMMatrix);
+dom_matrix_object_declaration!(DomMatrixReadOnlyObjectDeclaration, DOMMatrixReadOnly);
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DomPointJsonDeclaration {
     x: f64,
     y: f64,
@@ -126,7 +129,7 @@ struct DomPointJsonDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DomMatrixJsonDeclaration {
     a: f64,
     b: f64,
@@ -859,14 +862,14 @@ fn dom_point_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "DOMPoint")
+    web_api_interfaces::DOMPoint::is_instance(scope, receiver)
 }
 
 fn dom_matrix_require_readonly_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, "DOMMatrixReadOnly") {
+    if web_api_interfaces::DOMMatrixReadOnly::is_instance(scope, receiver) {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");
@@ -877,7 +880,7 @@ fn dom_matrix_require_mutable_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, "DOMMatrix") {
+    if web_api_interfaces::DOMMatrix::is_instance(scope, receiver) {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");

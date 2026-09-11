@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PromiseRejectionEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     cancelable: bool,

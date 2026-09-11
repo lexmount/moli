@@ -5,6 +5,7 @@ use crate::context_bootstrap::{
 use crate::protocol_types::SubresourceResponseBody;
 use crate::types::NetworkBodySourceId;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::worker::get_worker_state;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -41,7 +42,7 @@ static NETWORK_BODY_SOURCES: OnceLock<Mutex<HashMap<NetworkBodySourceId, Network
     OnceLock::new();
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct OwnedNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,
@@ -50,7 +51,7 @@ struct OwnedNetworkBodySourceDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct RegisteredNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,
@@ -65,7 +66,7 @@ struct RegisteredNetworkBodySourceDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PendingNetworkBodySourceDeclaration<'scope> {
     #[webapi(slot = NETWORK_BODY_SOURCE_KIND_SLOT)]
     kind: &'static str,
@@ -1403,7 +1404,7 @@ fn readable_body_stream_from_value<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(value) else {
         return None;
     };
-    if moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
+    if web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return Some(stream);
     }
     None

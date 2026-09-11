@@ -35,14 +35,14 @@ pub(super) type WorkerModuleEvaluationId = u64;
 const WORKER_MODULE_EVALUATION_REACTION_ID_SLOT: &str = "workerModuleEvaluationReactionId";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerModuleEvaluationReactionDataDeclaration {
     #[webapi(slot = WORKER_MODULE_EVALUATION_REACTION_ID_SLOT)]
     evaluation_id: f64,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct WorkerImportMetaDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     url: v8::Local<'scope, v8::String>,

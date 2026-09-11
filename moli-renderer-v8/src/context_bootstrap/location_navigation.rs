@@ -823,7 +823,7 @@ const NAVIGATION_ACTIVE_LOCATION_INTERCEPT_SETTLEMENT_SLOT: &str =
     "__lmNavigationActiveLocationInterceptSettlement";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct LocationInterceptSettlementDataDeclaration<'scope> {
     #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_ACTIVE_SLOT)]
     active: bool,

@@ -30,7 +30,7 @@ const PIPE_OWNER_SHUTDOWN_REASON_SLOT: &str = "__moliPipeOwnerShutdownReason";
 const PIPE_OWNER_ABORT_REGISTRATION_SLOT: &str = "__moliPipeOwnerAbortRegistration";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct PipeOwnerDeclaration<'scope> {
     #[webapi(slot = PIPE_OWNER_SOURCE_SLOT)]
     source: v8::Local<'scope, v8::Object>,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 #[cfg(test)]
 thread_local! {
@@ -273,8 +274,7 @@ pub(crate) fn adopted_style_sheet_objects_from_array_object<'s>(
     (0..length)
         .filter_map(|index| {
             let object = array.get_index(scope, index)?.try_into().ok()?;
-            moli_webapi_declare::implements_interface(scope, object, "CSSStyleSheet")
-                .then_some(object)
+            web_api_interfaces::CSSStyleSheet::is_instance(scope, object).then_some(object)
         })
         .collect()
 }
@@ -947,7 +947,7 @@ pub(crate) fn css_style_sheet_replace_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !moli_webapi_declare::implements_interface(scope, args.this(), "CSSStyleSheet") {
+    if !web_api_interfaces::CSSStyleSheet::is_instance(scope, args.this()) {
         let promise = rejected_type_error_promise(
             scope,
             "Failed to execute 'replace' on 'CSSStyleSheet': Illegal invocation.",
@@ -1034,7 +1034,7 @@ pub(crate) fn ensure_css_style_sheet_object<'s>(
     interface: &'static str,
     member: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "CSSStyleSheet") {
+    if web_api_interfaces::CSSStyleSheet::is_instance(scope, object) {
         return true;
     }
     throw_type_error(
@@ -1095,7 +1095,7 @@ pub(crate) fn ensure_style_sheet_list_object<'s>(
     object: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, object, "StyleSheetList") {
+    if web_api_interfaces::StyleSheetList::is_instance(scope, object) {
         return true;
     }
     throw_type_error(

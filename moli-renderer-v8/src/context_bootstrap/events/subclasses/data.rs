@@ -128,26 +128,26 @@ struct NavigateEventMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct DragEventInitDeclaration<'scope> {
     data_transfer: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ClipboardEventInitDeclaration<'scope> {
     clipboard_data: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct CapturedMouseEventInitDeclaration {
     surface_x: i32,
     surface_y: i32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct MessageEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     origin: v8::Local<'scope, v8::String>,
@@ -157,7 +157,7 @@ struct MessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct InputEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     input_type: v8::Local<'scope, v8::String>,
@@ -165,20 +165,20 @@ struct InputEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct CommandEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
     command: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct InterestEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct ToggleEventStateDeclaration<'scope> {
     #[webapi(data_property = "oldState", readonly, dont_delete)]
     old_state: String,
@@ -189,7 +189,7 @@ struct ToggleEventStateDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PopStateEventInitDeclaration<'scope> {
     state: v8::Local<'scope, v8::Value>,
     #[webapi(data_property = "hasUAVisualTransition")]
@@ -197,13 +197,13 @@ struct PopStateEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PageTransitionEventOwnInitDeclaration {
     persisted: bool,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ErrorEventInitDeclaration<'scope> {
     message: v8::Local<'scope, v8::String>,
     filename: v8::Local<'scope, v8::String>,
@@ -213,7 +213,7 @@ struct ErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PromiseRejectionEventInitDeclaration<'scope> {
     promise: v8::Local<'scope, v8::Value>,
     reason: v8::Local<'scope, v8::Value>,
@@ -258,14 +258,14 @@ struct SecurityPolicyViolationEventInitMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
     from: v8::Local<'scope, v8::Value>,
     navigation_type: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct NavigateEventInitDeclaration<'scope> {
     navigation_type: v8::Local<'scope, v8::String>,
     destination: v8::Local<'scope, v8::Value>,

@@ -27,7 +27,7 @@ const KEYFRAME_EFFECT_TARGET_SLOT: &str = "__moliKeyframeEffectTarget";
 const KEYFRAME_EFFECT_KEYFRAMES_SLOT: &str = "__moliKeyframeEffectKeyframes";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AnimationPromiseEntryDeclaration {
     #[webapi(slot = ANIMATION_PROMISE_RESOLVE_SLOT, init = "undefined")]
     resolve: (),
@@ -156,7 +156,7 @@ struct ElementAnimationPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AnimationFinishMicrotaskPayloadDeclaration<'s> {
     #[webapi(slot = ANIMATION_MICROTASK_ANIMATION_SLOT)]
     animation: v8::Local<'s, v8::Object>,
@@ -165,7 +165,7 @@ struct AnimationFinishMicrotaskPayloadDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct AnimationPromiseResolverDeclaration<'s> {
     #[webapi(slot = ANIMATION_PROMISE_RESOLVE_SLOT)]
     resolve: v8::Local<'s, v8::Value>,
@@ -275,7 +275,7 @@ fn require_animation_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if moli_webapi_declare::implements_interface(scope, receiver, "Animation") {
+    if web_api_interfaces::Animation::is_instance(scope, receiver) {
         return true;
     }
     throw_type_error(

@@ -29,7 +29,7 @@ impl<'scope> webidl::WebIdlConverter<'scope> for PointerEventReference<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct MouseEventBaseInitDeclaration<'scope> {
     view: v8::Local<'scope, v8::Value>,
     detail: f64,
@@ -48,7 +48,7 @@ struct MouseEventBaseInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct MouseEventModifierInitDeclaration {
     ctrl_key: bool,
     shift_key: bool,
@@ -57,13 +57,13 @@ struct MouseEventModifierInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct MouseEventRelatedTargetDeclaration<'scope> {
     related_target: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct WheelEventDeltaInitDeclaration {
     delta_x: f64,
     delta_y: f64,
@@ -72,7 +72,7 @@ struct WheelEventDeltaInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PointerEventNumberInitDeclaration {
     pointer_id: f64,
     width: f64,
@@ -87,7 +87,7 @@ struct PointerEventNumberInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct PointerEventTailInitDeclaration<'scope> {
     is_primary: bool,
     pointer_type: v8::Local<'scope, v8::String>,

@@ -805,7 +805,7 @@ struct FileSystemWritableFileStreamPrototypeDeclaration {
 
 #[derive(WebApiObject)]
 // An internal UnderlyingSink record, not a Web IDL interface instance.
-#[webapi(interface = "Object")]
+#[webapi(record)]
 struct FileSystemWritableSinkObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)]
     state_json: String,
@@ -1225,7 +1225,7 @@ fn handle_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemHandleState> {
-    let branded = moli_webapi_declare::implements_interface(scope, object, "FileSystemHandle");
+    let branded = web_api_interfaces::FileSystemHandle::is_instance(scope, object);
     if !branded {
         return None;
     }
@@ -2180,11 +2180,8 @@ fn file_system_directory_iterator_next_callback<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-    if !moli_webapi_declare::implements_interface(
-        scope,
-        args.this(),
-        "FileSystemDirectoryHandle AsyncIterator",
-    ) {
+    if !web_api_interfaces::FileSystemDirectoryHandleAsyncIterator::is_instance(scope, args.this())
+    {
         reject_type_error(scope, resolver, "Illegal invocation");
         return;
     }
@@ -2551,7 +2548,7 @@ fn sync_access_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemSyncAccessHandleState> {
-    if !moli_webapi_declare::implements_interface(scope, object, "FileSystemSyncAccessHandle") {
+    if !web_api_interfaces::FileSystemSyncAccessHandle::is_instance(scope, object) {
         return None;
     }
     let json = get_private_value(scope, object, FILE_SYSTEM_SYNC_ACCESS_STATE_SLOT)?
@@ -3075,7 +3072,7 @@ fn writable_stream_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, stream, "FileSystemWritableFileStream")
+    web_api_interfaces::FileSystemWritableFileStream::is_instance(scope, stream)
 }
 
 fn file_system_writable_mode_getter_callback<'s>(

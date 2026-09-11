@@ -68,7 +68,7 @@ struct ImageDataPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(record, data_properties, enumerable)]
 struct ImageDataSettingsDeclaration<'scope> {
     color_space: v8::Local<'scope, v8::String>,
 }
@@ -168,7 +168,7 @@ fn image_data_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    moli_webapi_declare::implements_interface(scope, receiver, "ImageData")
+    web_api_interfaces::ImageData::is_instance(scope, receiver)
 }
 
 fn image_data_constructor_parts<'s>(

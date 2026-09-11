@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_fetch::{
     FetchCancelHandle, RequestCredentialsMode, RequestMode, RequestRedirectMode,
@@ -337,7 +338,7 @@ fn navigator_beacon_body<'s>(
     }
     let data = args.get(1);
     if let Ok(object) = v8::Local::<v8::Object>::try_from(data)
-        && moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
+        && web_api_interfaces::ReadableStream::is_instance(scope, object)
     {
         crate::util::throw_type_error(scope, "sendBeacon cannot have a ReadableStream body.");
         return None;

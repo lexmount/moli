@@ -6,7 +6,7 @@ use moli_webapi_declare::WebApiObject;
 use url::Url;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(record, scope_lifetime = 'scope)]
 struct DetachedDocumentObjectDeclaration<'scope, 'tag> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,
