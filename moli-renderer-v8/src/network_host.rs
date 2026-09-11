@@ -47,10 +47,10 @@ pub(crate) use self::async_fetch::{
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
 pub(crate) use self::body::append_default_body_content_type;
+pub(crate) use self::body::body_stream_object;
 pub(in crate::network_host) use self::body::{
     PreparedBodyInit, PreparedBodySource, body_init, readable_body_stream_unusable,
 };
-pub(crate) use self::body::{body_stream_object, has_header};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
