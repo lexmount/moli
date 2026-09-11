@@ -11,8 +11,6 @@ const RESPONSE_STATUS_TEXT: &str = "statusText";
 const RESPONSE_URL: &str = "url";
 const RESPONSE_HEADERS: &str = "headers";
 const RESPONSE_BODY: &str = "body";
-const RESPONSE_BODY_TEXT: &str = "bodyText";
-const RESPONSE_BODY_LENGTH: &str = "bodyLength";
 
 /// Each queued job owns its complete outcome. A later open()/send() cannot
 /// overwrite a shared pending payload or let an old job consume the new one.
@@ -45,10 +43,6 @@ struct XhrPendingResponse<'s> {
     headers: String,
     #[webapi(slot = RESPONSE_BODY)]
     body: Option<v8::Local<'s, v8::Value>>,
-    #[webapi(slot = RESPONSE_BODY_TEXT)]
-    body_text: String,
-    #[webapi(slot = RESPONSE_BODY_LENGTH)]
-    body_length: usize,
 }
 
 #[derive(WebApiObject)]
@@ -70,38 +64,16 @@ pub(in crate::network_host::xhr) fn queue_xhr_response_delivery<'s>(
     response: Response,
 ) {
     let (head, body) = response.into_body();
-    let response_type = xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
-        .as_deref()
-        .and_then(XmlHttpRequestResponseType::parse)
-        .unwrap_or(XmlHttpRequestResponseType::Default);
-    let (body, body_text, body_length) = match response_type {
-        XmlHttpRequestResponseType::ArrayBuffer | XmlHttpRequestResponseType::Blob => {
-            let bytes = body
-                .try_into_materialized_bytes()
-                .expect("XHR response body should remain materialized at the delivery boundary");
-            let length = bytes.len();
-            let body =
-                crate::network_host::network_body_source_object_from_bytes(scope, None, bytes);
-            (Some(body.into()), String::new(), length)
-        }
-        XmlHttpRequestResponseType::Json
-        | XmlHttpRequestResponseType::Document
-        | XmlHttpRequestResponseType::Default
-        | XmlHttpRequestResponseType::Text => {
-            let (text, bytes) = body
-                .try_into_lossy_materialized_text()
-                .expect("XHR response body should remain materialized at the delivery boundary");
-            (None, text, bytes.len())
-        }
-    };
+    let bytes = body
+        .try_into_materialized_bytes()
+        .expect("XHR response body should remain materialized at the delivery boundary");
+    let body = crate::network_host::network_body_source_object_from_bytes(scope, None, bytes);
     let response = XhrPendingResponse::new(
         head.status,
         head.status_text().to_owned(),
         head.final_url.to_string(),
         serde_json::to_string(&head.headers).unwrap_or_else(|_| "[]".to_owned()),
-        body,
-        body_text,
-        body_length,
+        Some(body.into()),
     );
     queue_xhr_delivery(scope, xhr, XhrPendingDelivery::Response(response));
 }
@@ -171,10 +143,6 @@ fn xhr_complete_callback<'s>(
         .unwrap_or_default();
     let body = get_private_value(scope, response, RESPONSE_BODY)
         .filter(|value| !value.is_null_or_undefined());
-    let body_text = response_string(scope, response, RESPONSE_BODY_TEXT);
-    let body_length = get_private_value(scope, response, RESPONSE_BODY_LENGTH)
-        .and_then(|value| value.number_value(scope))
-        .expect("queued XHR body length") as usize;
     apply_xhr_response_pending_body(
         scope,
         xhr,
@@ -191,8 +159,6 @@ fn xhr_complete_callback<'s>(
             negotiated_http_version: None,
         },
         body,
-        body_text,
-        Some(body_length),
     );
 }
 
