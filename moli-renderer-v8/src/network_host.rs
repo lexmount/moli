@@ -143,6 +143,7 @@ pub(crate) use self::request::{
     request_object_credentials_mode, validate_fetch_body,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
+pub(in crate::network_host) use self::request::{RequestMethodError, normalize_request_method};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
