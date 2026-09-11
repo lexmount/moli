@@ -4,9 +4,12 @@ use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 mod base;
 mod init;
+mod input;
 mod kind;
 mod methods;
 mod subclasses;
+
+pub(crate) use input::{TextInputType, construct_original_input_event};
 
 const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";

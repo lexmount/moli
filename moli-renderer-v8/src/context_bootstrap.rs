@@ -119,8 +119,8 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    construct_original_event, construct_original_page_transition_event,
-    construct_original_storage_event_utf16,
+    TextInputType, construct_original_event, construct_original_input_event,
+    construct_original_page_transition_event, construct_original_storage_event_utf16,
 };
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,

@@ -1,12 +1,10 @@
-use super::events::{
-    dispatch_text_control_event, queue_text_control_select_event,
-    queue_text_control_selection_change_event,
-};
+use super::events::{queue_text_control_select_event, queue_text_control_selection_change_event};
 use super::value::{
     char_offset_to_byte_index, clamp_text_control_offset, is_text_control,
     supports_variable_length_selection,
 };
 use super::*;
+use crate::context_bootstrap::{TextInputType, construct_original_input_event};
 use crate::util::v8str;
 use crate::webidl;
 
@@ -125,13 +123,16 @@ pub(crate) fn replace_text_control_selection(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     replacement_text: &str,
+    input_type: TextInputType,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if !is_text_control(runtime, handle) {
         return false;
     }
 
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(before_input) =
+        construct_original_input_event(scope, "beforeinput", input_type, replacement_text)
+    else {
         return false;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
@@ -140,7 +141,7 @@ pub(crate) fn replace_text_control_selection(
     }
 
     let value = text_control_value(runtime, handle);
-    let (start, end) = runtime
+    let (mut start, mut end) = runtime
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
@@ -158,6 +159,18 @@ pub(crate) fn replace_text_control_selection(
             (value_len, value_len)
         });
 
+    // Delete relative to the selection only after beforeinput has run. A
+    // canceled deletion must not move the caret or extend the selection.
+    if start == end {
+        match input_type {
+            TextInputType::DeleteContentBackward => start = start.saturating_sub(1),
+            TextInputType::DeleteContentForward => {
+                end = end.saturating_add(1).min(value.chars().count() as u32);
+            }
+            _ => {}
+        }
+    }
+
     let next_value = format!(
         "{}{}{}",
         &value[..char_offset_to_byte_index(&value, start)],
@@ -173,8 +186,11 @@ pub(crate) fn replace_text_control_selection(
     let caret = start + replacement_text.chars().count() as u32;
     let selection_changed =
         text_control_set_selection_range_internal(scope, runtime_ptr, handle, caret, caret);
-    if changed || selection_changed {
-        dispatch_text_control_event(scope, runtime_ptr, handle, "input");
+    if (changed || selection_changed)
+        && let Some(event) =
+            construct_original_input_event(scope, "input", input_type, replacement_text)
+    {
+        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     changed || selection_changed
 }

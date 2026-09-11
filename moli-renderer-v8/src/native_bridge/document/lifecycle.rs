@@ -8,12 +8,14 @@ use super::{
     is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
-    char_offset_to_byte_index, contenteditable_editing_host, dispatch_text_control_event,
-    is_text_control, queue_text_control_document_selection_change_event,
-    replace_contenteditable_selection, replace_text_control_selection, text_control_value,
+    char_offset_to_byte_index, contenteditable_editing_host, is_text_control,
+    queue_text_control_document_selection_change_event, replace_contenteditable_selection,
+    replace_text_control_selection, text_control_value,
 };
 use crate::{
-    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
+    context_bootstrap::{
+        TextInputType, WINDOW_EVENT_HANDLER_PROPERTIES, construct_original_input_event,
+    },
     custom_elements,
     document_runtime::DomHandle,
     util::{call_object_method, node_wrapper_from_handle, v8str},
@@ -479,7 +481,13 @@ fn exec_command_insert_text(
         return false;
     };
     if is_text_control(unsafe { &*runtime_ptr }, active) {
-        return replace_text_control_selection(scope, runtime_ptr, active, replacement);
+        return replace_text_control_selection(
+            scope,
+            runtime_ptr,
+            active,
+            replacement,
+            TextInputType::InsertText,
+        );
     }
     let Some(editing_host) = contenteditable_editing_host(unsafe { &*runtime_ptr }, active) else {
         return false;
@@ -772,7 +780,19 @@ fn exec_command_delete_text_control(
     let selection_changed =
         runtime.set_selection_range_with_direction(handle, caret, caret, "none");
     if changed || selection_changed {
-        dispatch_text_control_event(scope, runtime_ptr, handle, "input");
+        let input_type = if command == "forwarddelete" {
+            TextInputType::DeleteContentForward
+        } else {
+            TextInputType::DeleteContentBackward
+        };
+        if let Some(event) = construct_original_input_event(scope, "input", input_type, "") {
+            let _ = crate::native_bridge::element::dispatch_public_event(
+                scope,
+                runtime_ptr,
+                handle,
+                event,
+            );
+        }
         queue_text_control_document_selection_change_event(scope, runtime_ptr, handle);
     }
     Some(changed || selection_changed)

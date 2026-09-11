@@ -1,6 +1,6 @@
 use crate::context_bootstrap::{
-    LocationNavigationKind, navigate_location_object_with_source_element,
-    selection_value_for_window,
+    LocationNavigationKind, TextInputType, construct_original_input_event,
+    navigate_location_object_with_source_element, selection_value_for_window,
 };
 use crate::dom::{
     forms::InputType,
@@ -217,7 +217,13 @@ fn perform_text_drop_default_action(
     if text.is_empty() {
         return false;
     }
-    replace_text_control_selection(scope, runtime_ptr, handle, &text)
+    replace_text_control_selection(
+        scope,
+        runtime_ptr,
+        handle,
+        &text,
+        TextInputType::InsertFromDrop,
+    )
 }
 
 fn slice_chars(value: &str, start: usize, end: usize) -> String {
@@ -542,7 +548,12 @@ pub(crate) fn replace_contenteditable_selection(
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(before_input) = construct_original_input_event(
+        scope,
+        "beforeinput",
+        TextInputType::InsertText,
+        replacement_text,
+    ) else {
         return false;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
@@ -572,7 +583,9 @@ pub(crate) fn replace_contenteditable_selection(
     if !inserted {
         return false;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
+    if let Some(event) =
+        construct_original_input_event(scope, "input", TextInputType::InsertText, replacement_text)
+    {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     true

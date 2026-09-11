@@ -10,6 +10,7 @@ use super::inspector::{
     option_is_disabled, radio_group_members,
 };
 use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
+use crate::context_bootstrap::TextInputType;
 use crate::document_runtime::DomHandle;
 use crate::dom::{
     forms::InputType,
@@ -1770,7 +1771,13 @@ impl ScriptVm {
         };
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            if replace_text_control_selection(scope, runtime_ptr, handle, text) {
+            if replace_text_control_selection(
+                scope,
+                runtime_ptr,
+                handle,
+                text,
+                TextInputType::InsertText,
+            ) {
                 return Ok(true);
             }
             let runtime = unsafe { &*runtime_ptr };
@@ -1883,6 +1890,7 @@ impl ScriptVm {
                             runtime_ptr,
                             handle,
                             &normalized_text,
+                            TextInputType::InsertLineBreak,
                         )));
                     }
                     return Ok(input_dispatch_outcome(replace_text_control_selection(
@@ -1890,6 +1898,7 @@ impl ScriptVm {
                         runtime_ptr,
                         handle,
                         text,
+                        TextInputType::InsertText,
                     )));
                 }
                 if let Some(editing_host) = contenteditable_editing_host(runtime, handle) {
@@ -1931,6 +1940,7 @@ impl ScriptVm {
                         runtime_ptr,
                         handle,
                         "\n",
+                        TextInputType::InsertLineBreak,
                     )));
                 }
                 if target.is_button_like || target.is_anchor_like {
@@ -2055,40 +2065,30 @@ impl ScriptVm {
 
             if target.is_text_control && key_lower == "backspace" {
                 let (start, end) = current_selection_range(runtime, handle);
-                let (from, to) = if start != end {
-                    (start, end)
-                } else if start == 0 {
+                if start == end && start == 0 {
                     return Ok(input_dispatch_outcome(true));
-                } else {
-                    (start - 1, start)
-                };
-                let _ =
-                    text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
+                }
                 return Ok(input_dispatch_outcome(replace_text_control_selection(
                     scope,
                     runtime_ptr,
                     handle,
                     "",
+                    TextInputType::DeleteContentBackward,
                 )));
             }
 
             if target.is_text_control && key_lower == "delete" {
                 let value_len = text_control_value(runtime, handle).chars().count() as u32;
                 let (start, end) = current_selection_range(runtime, handle);
-                let (from, to) = if start != end {
-                    (start, end)
-                } else if start >= value_len {
+                if start == end && start >= value_len {
                     return Ok(input_dispatch_outcome(true));
-                } else {
-                    (start, start + 1)
-                };
-                let _ =
-                    text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
+                }
                 return Ok(input_dispatch_outcome(replace_text_control_selection(
                     scope,
                     runtime_ptr,
                     handle,
                     "",
+                    TextInputType::DeleteContentForward,
                 )));
             }
 
