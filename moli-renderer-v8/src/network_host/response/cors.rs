@@ -586,6 +586,7 @@ mod tests {
         moli_fetch::ResponseHead {
             final_url,
             status: 200,
+            status_text: None,
             headers,
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
@@ -602,6 +603,7 @@ mod tests {
             let mut head = moli_fetch::ResponseHead {
                 final_url: url("https://final.test/script.js"),
                 status: 200,
+                status_text: None,
                 headers: vec![("Access-Control-Allow-Origin".to_owned(), "*".to_owned())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
