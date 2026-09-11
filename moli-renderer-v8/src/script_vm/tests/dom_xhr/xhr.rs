@@ -1077,6 +1077,91 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 }
 
 #[test]
+fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
+    for child_realm in [false, true] {
+        for (mime, response_type) in [
+            ("application/xml", ""),
+            ("application/xml", "document"),
+            ("text/html", "document"),
+        ] {
+            let mut vm = new_parsed_test_vm(
+                "https://requester.example/page/index.html",
+                "<!doctype html><html><body></body></html>",
+            );
+            vm.eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    globalThis.__originRealm = {child_realm} ? frame.contentWindow : self;
+                    globalThis.__documentXhr = new __originRealm.XMLHttpRequest();
+                    __documentXhr.open('GET', '/initial');
+                    __documentXhr.responseType = '{response_type}';
+                }})()"#
+            ))
+            .expect("create XHR in its owning realm");
+            let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context;
+            vm.renderer_document_isolate.with_entered_renderer_document_isolate(move |isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let xhr = context.global(scope).get(scope, v8str(scope, "__documentXhr").into())
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()).unwrap();
+                crate::network_host::apply_xhr_response_body_source(
+                    scope,
+                    xhr,
+                    moli_fetch::ResponseHead {
+                        final_url: Url::parse("https://response.example/resource/doc#fragment").unwrap(),
+                        status: 200,
+                        headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    moli_fetch::ResponseBody::materialized_bytes(br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><base href="../assets/" /></head><body><a id="link" href="child">link</a></body></html>"#.to_vec()),
+                );
+                Ok(())
+            }).expect("deliver response from a different origin in the parent realm");
+            let result = vm
+                .eval(
+                    r#"(() => {
+                const doc = __documentXhr.responseXML;
+                const check = (value, message) => { if (!value) throw new Error(message); };
+                const url = 'https://response.example/resource/doc#fragment';
+                check(doc instanceof __originRealm.Document, 'XHR creation realm');
+                check(doc.URL === url && doc.documentURI === url, 'response URL metadata');
+                check(__documentXhr.responseURL === url.split('#')[0], 'responseURL serialization');
+                check(doc.domain === 'requester.example', 'origin belongs to requester');
+                check(doc.defaultView === null && doc.hidden, 'windowless response document');
+                check(doc.baseURI === 'https://response.example/assets/', 'relative parsed base');
+                const link = doc.getElementById('link');
+                check(link.href === 'https://response.example/assets/child', 'relative link');
+                doc.querySelector('base').remove();
+                check(doc.baseURI === url && link.baseURI === url, 'base removal');
+                const base = doc.createElementNS('http://www.w3.org/1999/xhtml', 'base');
+                base.href = '../changed/';
+                doc.documentElement.appendChild(base);
+                check(doc.baseURI === 'https://response.example/changed/', 'base insertion');
+                document.head.appendChild(base);
+                check(doc.baseURI === url, 'base adoption');
+                __documentXhr.open('GET', '/next');
+                check(__documentXhr.responseXML === null && doc.URL === url, 'XHR reuse');
+                return 'ok';
+            })()"#,
+                )
+                .expect("response document metadata should remain coherent");
+            assert_eq!(
+                result, "ok",
+                "child_realm={child_realm}, mime={mime}, response_type={response_type}"
+            );
+        }
+    }
+}
+
+#[test]
 fn xml_http_request_serializes_document_bodies_and_limits_charset_rewriting_to_text() {
     let vm = new_storage_test_vm("https://xhr-document-body.test/");
     let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
