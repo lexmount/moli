@@ -3598,7 +3598,7 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
   assert(parsed.images.length === 1, "parsed images");
   assert(parsed.hidden === true, "parsed hidden");
   assert(parsed.visibilityState === "hidden", "parsed visibility");
-  assert(xml.images === undefined, "xml images");
+  assert(xml.images instanceof HTMLCollection && xml.images.length === 0, "xml images");
   assert(xml.hidden === true, "xml hidden");
   assert(xml.visibilityState === "hidden", "xml visibility");
 
@@ -3625,6 +3625,104 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
         result,
         "false,false,false,false,false,false,false,false,false,false,false,false,false,false|false,false,false,false,false,false,false,false,false,false,false,false,false,false||detached-document-prototype-state.test|detached-document-prototype-state.test"
     );
+}
+
+#[test]
+fn document_collections_track_html_elements_in_xml_and_detached_html_documents() {
+    let mut vm = new_storage_test_vm("https://document-collections.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = "http://www.w3.org/1999/xhtml";
+  const assert = (ok, message) => { if (!ok) throw new Error(message); };
+  const equal = (list, values, message) => assert(
+    list.length === values.length && values.every((value, i) => list[i] === value), message
+  );
+  const factories = [
+    () => new Document(),
+    () => document.implementation.createDocument(null, "root"),
+    () => document.implementation.createDocument("http://www.w3.org/2000/svg", "svg"),
+    () => new DOMParser().parseFromString("<root/>", "application/xml"),
+    () => new DOMParser().parseFromString(`<root xmlns="${html}"/>`, "application/xhtml+xml"),
+    () => document.implementation.createHTMLDocument(""),
+    () => new DOMParser().parseFromString("<!doctype html><body></body>", "text/html")
+  ];
+  const kinds = [
+    ["images", "img"], ["forms", "form"], ["scripts", "script"],
+    ["links", "a", "href"], ["anchors", "a", "name"],
+    ["embeds", "embed"], ["plugins", "embed"], ["applets", "applet"]
+  ];
+  const errors = [];
+  for (const [index, factory] of factories.entries()) {
+    for (const [name, tag, attr] of kinds) {
+      try {
+        const doc = factory(), list = doc[name];
+        const root = doc.body || doc.documentElement || doc.appendChild(doc.createElement("root"));
+        assert(list instanceof HTMLCollection, "HTMLCollection brand");
+        assert(list === doc[name], "SameObject before mutation");
+        const make = (ns, qualifiedName) => {
+          const node = doc.createElementNS(ns, qualifiedName);
+          if (attr) node.setAttributeNS(null, attr, "");
+          root.appendChild(node);
+          return node;
+        };
+        make(null, tag);
+        make("urn:foreign", tag);
+        make(html, tag.toUpperCase());
+        const first = make(html, tag), second = make(html, "h:" + tag);
+        if (name === "applets") {
+          make(html, "object");
+          make(html, "__moli-never-match__");
+          equal(list, [], "applets never matches elements");
+          continue;
+        }
+        equal(list, [first, second], "exact namespace and local name");
+        first.setAttribute("id", "first");
+        second.setAttribute("name", "second");
+        assert(list.namedItem("first") === first && list.second === second, "named access");
+        root.insertBefore(second, first);
+        equal(list, [second, first], "reordering");
+        assert(list.item(1) === first, "item identity");
+        const other = document.implementation.createDocument(null, "other");
+        const otherList = other[name];
+        other.documentElement.appendChild(other.adoptNode(second));
+        equal(list, [first], "adoption removes member");
+        equal(otherList, [second], "adoption adds member");
+        first.setAttribute("id", "renamed");
+        assert(list.namedItem("first") === null && list.renamed === first, "renamed id");
+        if (attr) {
+          first.removeAttributeNS(null, attr);
+          first.setAttributeNS("urn:attribute", attr, "");
+          first.setAttributeNS(null, attr.toUpperCase(), "");
+          equal(list, [], "namespaced and uppercase attributes excluded");
+          first.setAttributeNS(null, attr, "");
+          equal(list, [first], "empty unnamespaced attribute included");
+        }
+        if (name === "links") {
+          const area = make(html, "area");
+          equal(list, [first, area], "area with href included");
+          area.removeAttributeNS(null, "href");
+          equal(list, [first], "area href removal");
+        }
+        first.remove();
+        equal(list, [], "node removal");
+        assert(list.renamed === undefined, "removed named property");
+        assert(list === doc[name], "SameObject after mutation");
+        assert(doc.plugins === doc.embeds, "plugins aliases embeds");
+      } catch (error) {
+        errors.push(`${index}/${name}: ${error.message}`);
+      }
+    }
+  }
+  return JSON.stringify(errors);
+})()
+"#,
+        )
+        .expect("Document collection mutation and filtering probes should evaluate");
+
+    assert_eq!(result, "[]");
 }
 
 #[test]

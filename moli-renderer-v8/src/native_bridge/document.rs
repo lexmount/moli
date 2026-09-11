@@ -21,7 +21,7 @@ use super::node::{
 };
 use super::{
     JsContextHost, callback_arg_namespace, callback_arg_string, collections,
-    identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind},
+    identity::{CollectionKind, LiveCollectionQueryKind},
     runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
     validate_qualified_name_and_namespace,
@@ -159,9 +159,6 @@ pub(in crate::native_bridge) use detached_install::{
     set_detached_text_replacement_value,
 };
 use detached_install::{
-    detached_document_anchors_value, detached_document_applets_value,
-    detached_document_embeds_value, detached_document_forms_value, detached_document_images_value,
-    detached_document_links_value, detached_document_scripts_value,
     install_detached_character_data_instance_properties,
     install_detached_document_instance_properties,
     install_detached_document_type_instance_properties,
@@ -1550,7 +1547,7 @@ fn document_forms_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Forms);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Forms);
 }
 
 fn document_images_getter_function<'s>(
@@ -1558,7 +1555,7 @@ fn document_images_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Images);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Images);
 }
 
 fn document_scripts_getter_function<'s>(
@@ -1566,7 +1563,7 @@ fn document_scripts_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Scripts);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Scripts);
 }
 
 fn document_links_getter_function<'s>(
@@ -1574,7 +1571,7 @@ fn document_links_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Links);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Links);
 }
 
 fn document_anchors_getter_function<'s>(
@@ -1582,7 +1579,7 @@ fn document_anchors_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Anchors);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Anchors);
 }
 
 fn document_embeds_getter_function<'s>(
@@ -1590,7 +1587,7 @@ fn document_embeds_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Embeds);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Embeds);
 }
 
 fn document_plugins_getter_function<'s>(
@@ -1598,7 +1595,7 @@ fn document_plugins_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Plugins);
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Embeds);
 }
 
 fn document_applets_getter_function<'s>(
@@ -1606,90 +1603,40 @@ fn document_applets_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    document_html_collection_getter(scope, args, rv, DocumentCollectionAccessorKind::Applets);
-}
-
-#[derive(Clone, Copy)]
-enum DocumentCollectionAccessorKind {
-    Forms,
-    Images,
-    Scripts,
-    Links,
-    Anchors,
-    Embeds,
-    Plugins,
-    Applets,
+    document_html_collection_getter(scope, args, rv, LiveCollectionQueryKind::Applets);
 }
 
 fn document_html_collection_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    kind: DocumentCollectionAccessorKind,
+    kind: LiveCollectionQueryKind,
 ) {
     let receiver = args.this();
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_undefined();
+        throw_type_error(
+            scope,
+            "Document collection getter called on incompatible receiver.",
+        );
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !is_html_document(runtime, handle) {
-        rv.set_undefined();
-        return;
-    }
-    if detached_native_handle_for_runtime(scope, runtime_ptr, receiver).is_some() {
-        match detached_document_collection_for_kind(scope, receiver, kind) {
-            Some(collection) => rv.set(collection.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    let (query_kind, query, tag_name_html_document) = match kind {
-        DocumentCollectionAccessorKind::Forms => (LiveCollectionQueryKind::Forms, None, None),
-        DocumentCollectionAccessorKind::Images => (LiveCollectionQueryKind::Images, None, None),
-        DocumentCollectionAccessorKind::Scripts => (LiveCollectionQueryKind::Scripts, None, None),
-        DocumentCollectionAccessorKind::Links => (LiveCollectionQueryKind::Links, None, None),
-        DocumentCollectionAccessorKind::Anchors => (LiveCollectionQueryKind::Anchors, None, None),
-        DocumentCollectionAccessorKind::Embeds | DocumentCollectionAccessorKind::Plugins => (
-            LiveCollectionQueryKind::TagName,
-            Some("embed".to_owned()),
-            Some(true),
-        ),
-        DocumentCollectionAccessorKind::Applets => (
-            LiveCollectionQueryKind::TagName,
-            Some("__moli-never-match__".to_owned()),
-            Some(true),
-        ),
-    };
-    let descriptor = LiveCollectionDescriptor {
-        collection_kind: CollectionKind::HtmlCollection,
-        query_kind,
-        root: handle,
-        query,
-        include_root: true,
-        tag_name_html_document,
-        resolution_cache: Default::default(),
-    };
-    let collection = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
+    // A child Document wrapper can precede its Window realm. Follow the
+    // associated Window once available, including through a borrowed getter.
+    let context = document_associated_window_for_object(scope, runtime_ptr, handle, receiver)
+        .and_then(|window| window.get_creation_context(scope))
+        .or_else(|| receiver.get_creation_context(scope))
+        .expect("Document must have a creation context");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let collection = collections::build_live_collection_for_node(
+        scope,
+        runtime_ptr,
+        handle,
+        CollectionKind::HtmlCollection,
+        kind,
+        None,
+        false,
+    );
     rv.set(collection.into());
-}
-
-fn detached_document_collection_for_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    kind: DocumentCollectionAccessorKind,
-) -> Option<v8::Local<'s, v8::Object>> {
-    match kind {
-        DocumentCollectionAccessorKind::Forms => detached_document_forms_value(scope, document),
-        DocumentCollectionAccessorKind::Images => detached_document_images_value(scope, document),
-        DocumentCollectionAccessorKind::Scripts => detached_document_scripts_value(scope, document),
-        DocumentCollectionAccessorKind::Links => detached_document_links_value(scope, document),
-        DocumentCollectionAccessorKind::Anchors => detached_document_anchors_value(scope, document),
-        DocumentCollectionAccessorKind::Embeds | DocumentCollectionAccessorKind::Plugins => {
-            detached_document_embeds_value(scope, document)
-        }
-        DocumentCollectionAccessorKind::Applets => detached_document_applets_value(scope, document),
-    }
 }
 
 fn document_default_view_getter_function<'s>(

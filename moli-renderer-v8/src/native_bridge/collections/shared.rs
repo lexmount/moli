@@ -21,6 +21,8 @@ pub(in crate::native_bridge::collections) fn callback_arg_live_collection_kind(
         Some("scripts") => Some(LiveCollectionQueryKind::Scripts),
         Some("links") => Some(LiveCollectionQueryKind::Links),
         Some("anchors") => Some(LiveCollectionQueryKind::Anchors),
+        Some("embeds") => Some(LiveCollectionQueryKind::Embeds),
+        Some("applets") => Some(LiveCollectionQueryKind::Applets),
         _ => None,
     }
 }
