@@ -177,7 +177,6 @@ struct RendererBrowserContextRuntimeInner {
     shared_worker_runtime: shared_workers::LazySharedWorkerRuntime,
     service_worker_runtime: service_worker_runtime::LazyServiceWorkerRuntime,
     storage_partition_identity: RendererStoragePartitionIdentity,
-    next_web_storage_opaque_context_nonce: AtomicU64,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
@@ -529,7 +528,6 @@ impl RendererBrowserContextRuntime {
                 shared_worker_runtime,
                 service_worker_runtime,
                 storage_partition_identity,
-                next_web_storage_opaque_context_nonce: AtomicU64::default(),
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
@@ -697,12 +695,11 @@ impl RendererBrowserContextRuntime {
     pub(crate) fn next_web_storage_opaque_context_nonce(
         &self,
     ) -> moli_storage_key::OpaqueOriginNonce {
-        moli_storage_key::OpaqueOriginNonce::new(
-            self.inner
-                .next_web_storage_opaque_context_nonce
-                .fetch_add(1, Ordering::Relaxed)
-                .saturating_add(1),
-        )
+        // Windows and Workers compare storage keys in the same partition.
+        // Their opaque origins must draw from the same nonce namespace.
+        self.inner
+            .broadcast_channel_registry
+            .next_opaque_context_nonce()
     }
 
     pub(crate) fn allocate_child_document_loader_id(&self) -> String {

@@ -3273,6 +3273,38 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
 }
 
 #[test]
+fn blob_url_revocation_respects_browser_partitions_and_allows_same_origin_realms() {
+    for document_url in ["https://blob-url-revocation.test/", "data:text/html,opaque"] {
+        let markup = "<!doctype html><html><body></body></html>";
+        let mut creator = new_parsed_test_vm(document_url, markup);
+        let mut other_partition = new_parsed_test_vm(document_url, markup);
+        let url = creator
+            .eval("URL.createObjectURL(new Blob(['payload']))")
+            .expect("create object URL");
+        let url_literal = serde_json::to_string(&url).unwrap();
+        other_partition
+            .eval(&format!("URL.revokeObjectURL({url_literal})"))
+            .expect("foreign partition revocation is a silent no-op");
+        assert_eq!(
+            crate::blob::object_url_body_and_type(&url).unwrap().0,
+            "payload"
+        );
+        // The initial about:blank child inherits even its opaque parent's key.
+        creator
+            .eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    const revoke = frame.contentWindow.URL.revokeObjectURL;
+                    revoke.call(null, {url_literal});
+                }})()"#
+            ))
+            .expect("same-origin child can revoke parent URL");
+        assert!(crate::blob::object_url_body_and_type(&url).is_none());
+    }
+}
+
+#[test]
 fn removing_child_frame_revokes_only_its_blob_object_urls() {
     let mut vm = new_parsed_test_vm(
         "https://blob-url-child-lifetime.test/",
