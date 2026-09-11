@@ -823,6 +823,9 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
             return;
         };
         if let Some(response_code) = response_code {
+            if response.head.status != response_code {
+                response.head.status_text = None;
+            }
             response.head.status = response_code;
         }
         if let Some(response_headers) = response_headers {
@@ -1098,6 +1101,9 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
             return;
         };
         if let Some(response_code) = response_code {
+            if response.head.status != response_code {
+                response.head.status_text = None;
+            }
             response.head.status = response_code;
         }
         if let Some(response_headers) = response_headers {
@@ -2459,6 +2465,7 @@ pub(in crate::worker) fn worker_response_from_body(
     body: RendererSyntheticResponseBody,
 ) -> Response {
     body.into_fetch_response(ResponseHead {
+        status_text: None,
         final_url,
         status,
         headers,

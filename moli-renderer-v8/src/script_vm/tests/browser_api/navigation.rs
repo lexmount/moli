@@ -778,6 +778,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
     let mut vm = new_storage_test_vm(document_url.as_str());
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: script_url.clone(),
             status: 200,
             headers: vec![(
