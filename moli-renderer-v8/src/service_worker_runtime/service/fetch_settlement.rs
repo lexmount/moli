@@ -333,6 +333,9 @@ impl ServiceWorkerRuntimeService {
         };
         let cancel_handle = job.cancel_handle.clone();
         let redirect_chain = job.redirect_chain.clone();
+        let document_url = job.network_context.document_url.clone();
+        let request_mode = job.request_mode;
+        let credentials_mode = job.credentials_mode;
         job.resource_task_runner.spawn(async move {
             let result = match request_client
                 .fetch_raw_stream_with_cancel(request, cancel_handle)
@@ -350,6 +353,25 @@ impl ServiceWorkerRuntimeService {
                         head.redirect_chain = combined_redirect_chain;
                         head.redirected = true;
                     }
+                    // This is a network response after a synthetic redirect,
+                    // not a worker-produced readable Response. Authorize CORS
+                    // before the direct consumer can trust an absent filter.
+                    if request_mode == moli_fetch::RequestMode::Cors
+                        && let Err(message) = crate::network_host::validate_cors_response_chain(
+                            &document_url,
+                            &head,
+                            credentials_mode,
+                        )
+                    {
+                        let _ =
+                            completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
+                        return;
+                    }
+                    let response_filter = crate::network_host::network_response_filter(
+                        &document_url,
+                        &head,
+                        request_mode,
+                    );
                     let body = response.clone_body_bytes();
                     let navigation_response =
                         crate::protocol_types::NavigationResponse::from_head_and_body(
@@ -359,7 +381,7 @@ impl ServiceWorkerRuntimeService {
                         );
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
                         response: Box::new(navigation_response),
-                        response_filter: None,
+                        response_filter,
                     })
                 }
                 Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),

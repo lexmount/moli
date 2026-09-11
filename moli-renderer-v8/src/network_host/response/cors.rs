@@ -50,6 +50,41 @@ pub(crate) fn validate_cors_response(
     }
 
     let origin = origin_ascii_serialization(document_url);
+    validate_cors_response_for_origin(&origin, response_headers, credentials_mode)
+}
+
+/// Validates an already fetched network response, including each redirect.
+/// Once CORS-tainted, a redirect across origins changes the request origin to
+/// null, even when the final URL returns to the initiating document's origin.
+pub(crate) fn validate_cors_response_chain(
+    document_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
+    credentials_mode: RequestCredentialsMode,
+) -> Result<(), String> {
+    let mut origin = origin_ascii_serialization(document_url);
+    let mut cors_tainted = false;
+    for redirect in &head.redirect_chain {
+        cors_tainted |= !same_origin(document_url, &redirect.from_url);
+        if cors_tainted {
+            validate_cors_response_for_origin(&origin, &redirect.headers, credentials_mode)?;
+            if !same_origin(&redirect.from_url, &redirect.to_url) {
+                origin = "null".to_owned();
+            }
+        }
+    }
+    if matches!(head.final_url.scheme(), "http" | "https")
+        && (cors_tainted || !same_origin(document_url, &head.final_url))
+    {
+        validate_cors_response_for_origin(&origin, &head.headers, credentials_mode)?;
+    }
+    Ok(())
+}
+
+fn validate_cors_response_for_origin(
+    origin: &str,
+    response_headers: &[(String, String)],
+    credentials_mode: RequestCredentialsMode,
+) -> Result<(), String> {
     let Some(allow_origin) = response_header_value(response_headers, "access-control-allow-origin")
     else {
         return Err(format!(

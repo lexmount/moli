@@ -424,6 +424,9 @@ impl NativeModuleGraphFetchRequest {
         let kind = self.kind;
         let integrity = self.fetch_metadata.request_metadata.integrity.clone();
         let request = self.request()?;
+        let initiator_url = self.initiator_url.clone();
+        let request_mode = request.request_mode;
+        let credentials_mode = request.credentials_mode;
         let completion = move |response: anyhow::Result<moli_fetch::Response>| {
             let mut network_result: Option<SharedNavigationResponseResult> = None;
             let result = response
@@ -465,9 +468,19 @@ impl NativeModuleGraphFetchRequest {
                             &response.headers,
                         );
                     let (head, _, body_bytes) = response.into_parts();
-                    if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
+                    let response_is_eligible = crate::network_host::network_response_filter(
+                        &initiator_url,
+                        &head,
+                        request_mode,
+                    ).is_none() && crate::network_host::validate_cors_response_chain(
+                        &initiator_url,
+                        &head,
+                        credentials_mode,
+                    ).is_ok();
+                    if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
                         integrity.as_deref(),
+                        response_is_eligible,
                     ) {
                         return Err(ModuleLoadError::new(
                             ModuleLoadStage::Fetch,

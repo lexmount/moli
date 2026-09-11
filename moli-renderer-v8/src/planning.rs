@@ -377,7 +377,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     }
     let request = external_script_request(script, request_resource_type);
     match browser_context_runtime
-        .fetch_service_worker_subresource_for_client(
+        .fetch_service_worker_subresource_for_client_with_metadata(
             service_worker_client_id,
             document_url,
             &request,
@@ -390,9 +390,10 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     {
         Ok(Some(response)) => external_script_source_load_outcome_from_response_inner(
             script,
-            response,
+            *response.response,
             document_character_set,
-            true,
+            response.response_filter,
+            response.response_filter.is_none(),
         ),
         Ok(None) => {
             load_prepared_script_source_outcome_with_document_character_set(
@@ -501,11 +502,24 @@ pub(crate) fn external_script_source_load_outcome_from_response(
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let request_mode = external_script_request_mode(script.kind, &script.fetch_metadata);
+    let head = response.head();
+    let response_filter =
+        crate::network_host::network_response_filter(&script.initiator_url, &head, request_mode);
+    let response_is_eligible = response_filter.is_none()
+        && (request_mode == RequestMode::NoCors
+            || crate::network_host::validate_cors_response_chain(
+                &script.initiator_url,
+                &head,
+                external_script_credentials_mode(script.kind, &script.fetch_metadata),
+            )
+            .is_ok());
     external_script_source_load_outcome_from_response_inner(
         script,
         response,
         document_character_set,
-        false,
+        response_filter,
+        response_is_eligible,
     )
 }
 
@@ -528,10 +542,13 @@ fn external_script_source_load_outcome_from_response_inner(
     script: &PreparedScript,
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,
-    allow_opaque_status_zero: bool,
+    response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    response_is_eligible: bool,
 ) -> PreparedScriptSourceLoadOutcome {
     let response_bytes = response.body_bytes().to_vec();
-    let opaque_status_zero = allow_opaque_status_zero && response.status == 0;
+    let opaque_status_zero = response_filter
+        == Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque)
+        && response.status == 0;
     let source_result = if !(opaque_status_zero || (200..=299).contains(&response.status)) {
         Err(format!(
             "script request `{}` returned HTTP {}",
@@ -542,9 +559,10 @@ fn external_script_source_load_outcome_from_response_inner(
             validate_external_script_response_mime(&script.url, script.kind, &response)
     {
         Err(error)
-    } else if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
+    } else if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
         &response_bytes,
         script.fetch_metadata.integrity.as_deref(),
+        response_is_eligible && response_filter.is_none(),
     ) {
         Err(format!(
             "script request `{}` failed its integrity check",
@@ -617,6 +635,9 @@ pub(crate) fn external_script_credentials_mode(
 ) -> RequestCredentialsMode {
     match kind {
         ScriptKind::Module => module_script_credentials_mode(metadata.cross_origin.as_deref()),
+        ScriptKind::Classic if metadata.cross_origin.is_some() => {
+            module_script_credentials_mode(metadata.cross_origin.as_deref())
+        }
         ScriptKind::Classic | ScriptKind::ImportMap | ScriptKind::DataBlock => {
             RequestCredentialsMode::Include
         }
@@ -1284,8 +1305,13 @@ mod tests {
             source.as_bytes().to_vec(),
         );
 
-        let outcome =
-            external_script_source_load_outcome_from_response_inner(&script, response, None, true);
+        let outcome = external_script_source_load_outcome_from_response_inner(
+            &script,
+            response,
+            None,
+            Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+            false,
+        );
 
         assert_eq!(outcome.source_result.expect("opaque script source"), source);
         assert_eq!(

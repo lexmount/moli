@@ -69,13 +69,28 @@ fn response_filter(
     head: &moli_fetch::ResponseHead,
     request_mode: RequestMode,
 ) -> FetchResponseFilter {
+    network_response_filter(document_url, head, request_mode)
+        .map_or(FetchResponseFilter::None, Into::into)
+}
+
+/// Classifies a network response using the whole redirect chain. A no-cors
+/// response stays opaque even when a cross-origin hop redirects back home.
+/// Service worker responses must retain their own filter instead: their URL
+/// does not determine whether the worker returned a readable response.
+pub(crate) fn network_response_filter(
+    document_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
+    request_mode: RequestMode,
+) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
+    use crate::types::AsyncSubresourceFetchResponseFilter;
+
     if is_redirect_status(head.status) {
-        FetchResponseFilter::OpaqueRedirect
+        Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
     } else if request_mode == RequestMode::NoCors && no_cors_response_is_opaque(document_url, head)
     {
-        FetchResponseFilter::Opaque
+        Some(AsyncSubresourceFetchResponseFilter::Opaque)
     } else {
-        FetchResponseFilter::None
+        None
     }
 }
 

@@ -1,5 +1,7 @@
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
+#[path = "scripts/integrity.rs"]
+mod integrity;
 
 use moli_test_support as support;
 

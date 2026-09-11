@@ -31,9 +31,13 @@ struct ParsedIntegrityToken {
     expected_digest: Option<Vec<u8>>,
 }
 
-pub(crate) fn response_body_matches_subresource_integrity_metadata(
+/// HTML scripts ignore empty or unsupported metadata. With supported metadata,
+/// check response eligibility before hashing: observing a digest match against
+/// opaque internal bytes would expose a cross-origin content oracle.
+pub(crate) fn response_matches_subresource_integrity_metadata(
     body: &[u8],
     integrity: Option<&str>,
+    response_is_eligible: bool,
 ) -> bool {
     let Some(integrity) = integrity
         .map(str::trim)
@@ -50,6 +54,9 @@ pub(crate) fn response_body_matches_subresource_integrity_metadata(
     else {
         return true;
     };
+    if !response_is_eligible {
+        return false;
+    }
     let actual_digest = strongest_algorithm.digest_algorithm().digest_bytes(body);
     metadata.tokens.iter().any(|token| {
         token.algorithm == strongest_algorithm
@@ -142,6 +149,50 @@ fn decode_integrity_digest(digest: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response_body_matches_subresource_integrity_metadata(
+        body: &[u8],
+        integrity: Option<&str>,
+    ) -> bool {
+        response_matches_subresource_integrity_metadata(body, integrity, true)
+    }
+
+    #[test]
+    fn integrity_rejects_ineligible_responses_even_with_matching_metadata() {
+        let body = b"console.log('opaque body')";
+        let digest = base64::engine::general_purpose::STANDARD
+            .encode(DigestAlgorithm::Sha384.digest_bytes(body));
+        let matching = format!("sha384-{digest}");
+        assert!(response_matches_subresource_integrity_metadata(
+            body,
+            Some(&matching),
+            true
+        ));
+        assert!(!response_matches_subresource_integrity_metadata(
+            body,
+            Some(&matching),
+            false
+        ));
+    }
+
+    #[test]
+    fn empty_or_ignored_integrity_does_not_require_a_readable_response() {
+        for integrity in [
+            None,
+            Some(""),
+            Some(" \t\n"),
+            Some("sha384-***"),
+            Some("sha1-ignored"),
+        ] {
+            for response_is_eligible in [true, false] {
+                assert!(response_matches_subresource_integrity_metadata(
+                    b"opaque body",
+                    integrity,
+                    response_is_eligible,
+                ));
+            }
+        }
+    }
 
     #[test]
     fn script_integrity_metadata_parses_matching_supported_hash() {
