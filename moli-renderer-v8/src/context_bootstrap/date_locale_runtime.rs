@@ -2,6 +2,7 @@ use super::*;
 use crate::util::{get_private_value, set_private_value};
 use anyhow::Result;
 
+mod bindings;
 mod date;
 mod intl;
 mod overrides;

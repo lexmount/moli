@@ -1,6 +1,128 @@
 use super::*;
 
 #[test]
+fn date_and_intl_declared_wrappers_preserve_native_method_descriptors() {
+    let mut vm = new_storage_test_vm("https://date-intl-declarations.test/");
+    let probe = r#"JSON.stringify((() => {
+      const constructors = ['Collator', 'DateTimeFormat', 'DisplayNames', 'DurationFormat',
+        'ListFormat', 'NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Segmenter'];
+      const methods = [[Date, 'parse', 1], ...constructors
+        .filter(name => typeof Intl[name] === 'function')
+        .map(name => [Intl[name].prototype, 'resolvedOptions', 0])];
+      return methods.map(([owner, name, length]) => {
+        const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+        const method = descriptor.value;
+        let nonConstructible = false;
+        // Test [[Construct]] without executing the method with an invalid receiver.
+        try { Reflect.construct(function() {}, [], method); }
+        catch (error) { nonConstructible = error instanceof TypeError; }
+        return [method.name === name, method.length === length,
+          !descriptor.enumerable, descriptor.writable, descriptor.configurable,
+          !Object.hasOwn(method, 'prototype'), nonConstructible];
+      });
+    })())"#;
+    for timezone in [None, Some("Europe/Paris"), None] {
+        vm.set_timezone_override(timezone);
+        let rows: Vec<Vec<bool>> = serde_json::from_str(&vm.eval(probe).unwrap()).unwrap();
+        assert!(
+            rows.len() >= 9,
+            "Date and native Intl methods must be covered"
+        );
+        for (index, row) in rows.into_iter().enumerate() {
+            assert_eq!(row, vec![true; 7], "method {index}, timezone {timezone:?}");
+        }
+    }
+}
+
+#[test]
+fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
+    let mut vm = new_storage_test_vm("https://date-intl-raw-arguments.test/");
+    let probe = r#"JSON.stringify((() => {
+      const sentinel = {};
+      const poison = {[Symbol.toPrimitive]() { throw sentinel; }};
+      const ignored = typeof Date(poison) === 'string' &&
+        typeof Date.call(poison, poison) === 'string';
+      const conversions = [];
+      const fields = [2024, 0, 2, 3, 4, 5, 6].map((value, index) => ({
+        [Symbol.toPrimitive](hint) { conversions.push(`${index}:${hint}`); return value; }
+      }));
+      class DerivedDate extends Date {}
+      const date = new DerivedDate(...fields, poison);
+      const localFields = [date.getFullYear(), date.getMonth(), date.getDate(),
+        date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds()];
+      class DerivedFormat extends Intl.DateTimeFormat {}
+      const format = new DerivedFormat('en-US', {timeZone: 'UTC'});
+      const callable = [Intl.Collator, Intl.DateTimeFormat, Intl.NumberFormat].every(
+        Ctor => Ctor('en-US') instanceof Ctor);
+      const constructOnly = ['DisplayNames', 'DurationFormat', 'ListFormat',
+        'PluralRules', 'RelativeTimeFormat', 'Segmenter'].every(name => {
+          const Ctor = Intl[name];
+          if (typeof Ctor !== 'function') return true;
+          try { Ctor(poison, poison); return false; }
+          catch (error) { return error instanceof TypeError; }
+        });
+      return [ignored, conversions, localFields,
+        Object.getPrototypeOf(date) === DerivedDate.prototype,
+        Object.getPrototypeOf(format) === DerivedFormat.prototype,
+        callable, constructOnly, Number.isNaN(Date.parse()),
+        Number.isNaN(+new Date(undefined)), Number.isFinite(+new Date()),
+        Date.parse('2024-01-01T00:00:00Z', poison) === 1704067200000];
+    })())"#;
+    for (locale, timezone) in [
+        (None, None),
+        (Some("fr_FR"), Some("America/New_York")),
+        (Some("zh_Hant_TW"), Some("Asia/Shanghai")),
+        (None, None),
+    ] {
+        vm.set_locale_override(locale);
+        vm.set_timezone_override(timezone);
+        assert_eq!(
+            vm.eval(probe).unwrap(),
+            r#"[true,["0:number","1:number","2:number","3:number","4:number","5:number","6:number"],[2024,0,2,3,4,5,6],true,true,true,true,true,true,true,true]"#,
+            "locale {locale:?}, timezone {timezone:?}"
+        );
+    }
+}
+
+#[test]
+fn emulation_private_declarations_do_not_invoke_inherited_setters() {
+    let mut vm = new_storage_test_vm("https://date-intl-private-declarations.test/");
+    vm.set_timezone_override(Some("Europe/Paris"));
+    let result = vm
+        .eval(
+            r#"JSON.stringify((() => {
+      const keys = ['get', 'timeZone', 'original', 'timezone'];
+      const before = keys.map(key => Object.getOwnPropertyDescriptor(Object.prototype, key));
+      const sentinel = {};
+      // These setters must not participate in building the private handler,
+      // callback data or default options objects.
+      try {
+        for (const key of keys) Object.defineProperty(Object.prototype, key, {
+          set() { throw sentinel; }, configurable: true
+        });
+        const date = new Date('2024-01-01T00:00:00Z');
+        const frozen = Object.freeze({timeZone: undefined});
+        const explicit = {timeZone: 'Europe/Paris'};
+        return [
+          new Intl.DateTimeFormat('en-US').resolvedOptions().timeZone,
+          new Intl.DateTimeFormat('en-US', frozen).resolvedOptions().timeZone,
+          ...['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].map(method =>
+            date[method]('en-US') === date[method]('en-US', explicit) &&
+            date[method]('en-US', frozen) === date[method]('en-US', explicit))
+        ];
+      } finally {
+        keys.forEach((key, index) => {
+          if (before[index]) Object.defineProperty(Object.prototype, key, before[index]);
+          else delete Object.prototype[key];
+        });
+      }
+    })())"#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"["Europe/Paris","Europe/Paris",true,true,true]"#);
+}
+
+#[test]
 fn icu_locale_conversion_is_fallible_and_does_not_set_the_global_default() {
     let mut vm = new_storage_test_vm("https://icu-language-tag.test/");
     let baseline = vm

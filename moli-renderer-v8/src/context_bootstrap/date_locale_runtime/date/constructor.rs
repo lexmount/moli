@@ -1,9 +1,53 @@
-use super::*;
-use crate::util::call_script_visible_function;
+use super::{DateIntrinsic, original_date_method};
+use crate::util::{call_script_visible_function, v8_string, v8str};
+use crate::webidl;
 use anyhow::{Result, anyhow};
+use moli_webapi_declare::WebApiObject;
 
+use super::super::bindings::{
+    ConstructorApplyArgs, ConstructorConstructArgs, ReflectIntrinsics, callback_data,
+};
 use super::super::overrides::current_date_locale_overrides;
 use super::parse_input::local_date_parse_input_as_utc;
+
+#[derive(WebApiObject)]
+#[webapi(fragment)]
+struct DateParseDeclaration<'s> {
+    original: v8::Local<'s, v8::Function>,
+    #[webapi(method, length = 1, callback = date_parse_callback, data = self.original)]
+    parse: (),
+}
+
+#[derive(Clone, Copy, WebApiObject, webidl::WebIdlDictionary)]
+#[webapi(plain, data_properties)]
+struct DateApplyData<'s> {
+    #[webidl(required)]
+    reflect_apply: v8::Local<'s, v8::Function>,
+    #[webidl(required)]
+    date_now: v8::Local<'s, v8::Function>,
+}
+
+#[derive(Clone, Copy, WebApiObject, webidl::WebIdlDictionary)]
+#[webapi(plain, data_properties)]
+struct DateConstructData<'s> {
+    #[webidl(required)]
+    reflect_construct: v8::Local<'s, v8::Function>,
+    #[webidl(required)]
+    date_utc: v8::Local<'s, v8::Function>,
+    #[webidl(required)]
+    date_parse: v8::Local<'s, v8::Function>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct DateConstructorHandler<'s> {
+    apply_data: DateApplyData<'s>,
+    construct_data: DateConstructData<'s>,
+    #[webapi(method, length = 3, callback = date_constructor_proxy_apply_callback, data = self.apply_data)]
+    apply: (),
+    #[webapi(method, length = 3, callback = date_constructor_proxy_construct_callback, data = self.construct_data)]
+    construct: (),
+}
 
 pub(super) fn install_date_parse_override<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -12,16 +56,7 @@ pub(super) fn install_date_parse_override<'s>(
     let Some(original) = original_date_method(scope, DateIntrinsic::Parse) else {
         return Ok(());
     };
-    let Some(wrapper) = v8::Function::builder(date_parse_callback)
-        .data(original.into())
-        .length(1)
-        .build(scope)
-    else {
-        return Err(anyhow!("failed to create Date.parse override"));
-    };
-    let name = v8str(scope, "parse");
-    wrapper.set_name(name);
-    let _ = constructor.set(scope, name.into(), wrapper.into());
+    DateParseDeclaration::new(original).initialize(scope, constructor.into())?;
     Ok(())
 }
 
@@ -31,22 +66,7 @@ pub(super) fn install_date_constructor_proxy<'s>(
     original: v8::Local<'s, v8::Function>,
     prototype: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let Some(reflect) = global
-        .get(scope, v8str(scope, "Reflect").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return Ok(());
-    };
-    let Some(reflect_apply) = reflect
-        .get(scope, v8str(scope, "apply").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return Ok(());
-    };
-    let Some(reflect_construct) = reflect
-        .get(scope, v8str(scope, "construct").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some(reflect) = ReflectIntrinsics::from_global(scope, global) else {
         return Ok(());
     };
     let Some(date_now) = original_date_method(scope, DateIntrinsic::Now) else {
@@ -59,32 +79,11 @@ pub(super) fn install_date_constructor_proxy<'s>(
         return Ok(());
     };
 
-    let apply_data = v8::Array::new(scope, 2);
-    let _ = apply_data.set_index(scope, 0, reflect_apply.into());
-    let _ = apply_data.set_index(scope, 1, date_now.into());
-    let Some(apply) = v8::Function::builder(date_constructor_proxy_apply_callback)
-        .data(apply_data.into())
-        .length(3)
-        .build(scope)
-    else {
-        return Err(anyhow!("failed to create Date constructor apply trap"));
-    };
-
-    let construct_data = v8::Array::new(scope, 3);
-    let _ = construct_data.set_index(scope, 0, reflect_construct.into());
-    let _ = construct_data.set_index(scope, 1, date_utc.into());
-    let _ = construct_data.set_index(scope, 2, date_parse.into());
-    let Some(construct) = v8::Function::builder(date_constructor_proxy_construct_callback)
-        .data(construct_data.into())
-        .length(3)
-        .build(scope)
-    else {
-        return Err(anyhow!("failed to create Date constructor construct trap"));
-    };
-
-    let handler = v8::Object::new(scope);
-    let _ = handler.set(scope, v8str(scope, "apply").into(), apply.into());
-    let _ = handler.set(scope, v8str(scope, "construct").into(), construct.into());
+    let handler = DateConstructorHandler::new(
+        DateApplyData::new(reflect.apply, date_now),
+        DateConstructData::new(reflect.construct, date_utc, date_parse),
+    )
+    .bind(scope)?;
     let Some(proxy) = v8::Proxy::new(scope, original.into(), handler) else {
         return Err(anyhow!("failed to create Date constructor proxy"));
     };
@@ -98,31 +97,19 @@ fn date_constructor_proxy_apply_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok(data) = v8::Local::<v8::Array>::try_from(args.data()) else {
-        rv.set_undefined();
+    let Some(data) = callback_data::<DateApplyData>(scope, args.data()) else {
         return;
     };
-    let Some(reflect_apply) = data
-        .get_index(scope, 0)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(date_now) = data
-        .get_index(scope, 1)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set_undefined();
+    let Some(args) = webidl::parse_args::<ConstructorApplyArgs>(scope, &args) else {
         return;
     };
     let (_, timezone_override) = current_date_locale_overrides(scope);
     let Some(timezone) = timezone_override.as_deref() else {
-        let invoke_args = [args.get(0), args.get(1), args.get(2)];
+        let invoke_args = [args.target, args.receiver, args.arguments.into()];
         let receiver = v8::undefined(scope);
         if let Some(result) = call_script_visible_function(
             scope,
-            reflect_apply,
+            data.reflect_apply,
             receiver.into(),
             &invoke_args,
             "invoke Date through Reflect.apply",
@@ -138,7 +125,7 @@ fn date_constructor_proxy_apply_callback<'s>(
     let receiver = v8::undefined(scope);
     let Some(now) = call_script_visible_function(
         scope,
-        date_now,
+        data.date_now,
         receiver.into(),
         &[],
         "read Date.now for the Date function",
@@ -159,51 +146,32 @@ fn date_constructor_proxy_construct_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok(data) = v8::Local::<v8::Array>::try_from(args.data()) else {
-        rv.set_undefined();
+    let Some(data) = callback_data::<DateConstructData>(scope, args.data()) else {
         return;
     };
-    let Some(reflect_construct) = data
-        .get_index(scope, 0)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(date_utc) = data
-        .get_index(scope, 1)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(date_parse) = data
-        .get_index(scope, 2)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let Ok(arguments) = v8::Local::<v8::Array>::try_from(args.get(1)) else {
-        rv.set_undefined();
+    let Some(args) = webidl::parse_args::<ConstructorConstructArgs>(scope, &args) else {
         return;
     };
     let (_, timezone_override) = current_date_locale_overrides(scope);
     let replacement = match timezone_override.as_deref() {
         Some(timezone) => match date_constructor_timezone_arguments(
-            scope, arguments, date_utc, date_parse, timezone,
+            scope,
+            args.arguments,
+            data.date_utc,
+            data.date_parse,
+            timezone,
         ) {
             Ok(replacement) => replacement,
             Err(()) => return,
         },
         None => None,
     };
-    let arguments = replacement.unwrap_or(arguments);
-    let invoke_args = [args.get(0), arguments.into(), args.get(2)];
+    let arguments = replacement.unwrap_or(args.arguments);
+    let invoke_args = [args.target, arguments.into(), args.new_target];
     let receiver = v8::undefined(scope);
     if let Some(result) = call_script_visible_function(
         scope,
-        reflect_construct,
+        data.reflect_construct,
         receiver.into(),
         &invoke_args,
         "invoke Date through Reflect.construct",
