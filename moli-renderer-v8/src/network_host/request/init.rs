@@ -243,7 +243,7 @@ pub(crate) fn parse_fetch_init<'s>(
     .map_err(|error| error.to_string())?;
     let body_stream = body_value
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .filter(|object| crate::context_bootstrap::is_readable_stream_object(scope, *object))
+        .filter(|object| crate::web_api_interfaces::ReadableStream::is_instance(scope, *object))
         .map(|stream| v8::Global::new(scope, stream));
     let prepared_body = body_value
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))

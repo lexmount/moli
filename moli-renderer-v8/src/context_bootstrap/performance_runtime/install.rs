@@ -1129,13 +1129,6 @@ fn apply_lifecycle_to_navigation_entry<'s>(
     }
 }
 
-pub(super) fn is_window_performance<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    performance: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, performance, PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT).is_some()
-}
-
 pub(super) fn performance_navigation_type_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,

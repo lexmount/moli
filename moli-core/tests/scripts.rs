@@ -1,6 +1,3 @@
-#[path = "scripts/child_script_text.rs"]
-mod child_script_text;
-
 use moli_test_support as support;
 
 use anyhow::Result;

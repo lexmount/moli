@@ -102,7 +102,6 @@ pub(super) use super::performance_observer_runtime::{
     performance_observer_disconnect_callback, performance_observer_observe_callback,
     performance_observer_take_records_callback,
 };
-pub(crate) use entries::is_performance_entry_object;
 use entries::{
     append_performance_entry, create_performance_entry, initialize_resource_timing_slots,
     push_performance_entry,

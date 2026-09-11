@@ -25,7 +25,7 @@ const SUCCEEDED: &str = "__moliBodyConsumerSucceeded";
 const REASON: &str = "__moliBodyConsumerReason";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(plain)]
 struct BodyConsumerDeclaration<'scope> {
     #[webapi(slot = BODY_OWNER)]
     body_owner: v8::Local<'scope, v8::Object>,

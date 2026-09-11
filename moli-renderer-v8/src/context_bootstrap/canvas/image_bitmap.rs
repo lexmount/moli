@@ -188,7 +188,7 @@ impl<'s> webidl::WebIdlConverter<'s> for BitmapSource<'s> {
         } else if offscreen_canvas_receiver_branded(scope, object) || is_html_canvas(scope, object)
         {
             BitmapSourceKind::Canvas
-        } else if crate::context_bootstrap::image_data::is_image_data_object(scope, object) {
+        } else if web_api_interfaces::ImageData::is_instance(scope, object) {
             BitmapSourceKind::ImageData
         } else if image_bitmap_receiver_branded(scope, object) {
             BitmapSourceKind::ImageBitmap

@@ -9,9 +9,9 @@ use super::stream_adapter::{
     parse_writable_stream_sink_object, readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
-    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_array,
-    stream_slot_object, suppress_promise_unhandled_rejection, writable_stream_close_internal,
-    writable_stream_locked, writable_stream_snapshot,
+    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
+    suppress_promise_unhandled_rejection, writable_stream_close_internal, writable_stream_locked,
+    writable_stream_snapshot,
 };
 use super::stream_objects::{
     new_readable_stream_byob_reader_object, new_readable_stream_reader_object,

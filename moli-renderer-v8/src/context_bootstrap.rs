@@ -244,7 +244,7 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
 pub(crate) use self::dom_rect::build_dom_rect_object;
-pub(crate) use self::dom_rect_list::{build_dom_rect_list_object};
+pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value,
@@ -440,8 +440,7 @@ pub(crate) use self::streams::{
     initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
     new_readable_stream_from_array_buffer, new_readable_stream_from_source,
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer,
-    proxy_fetch_body_stream, tee_fetch_body_stream,
+    prepare_writable_stream_transfer, proxy_fetch_body_stream, tee_fetch_body_stream,
 };
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;

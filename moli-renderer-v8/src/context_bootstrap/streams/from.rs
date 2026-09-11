@@ -9,7 +9,7 @@ const READABLE_STREAM_FROM_REACTION_STREAM_SLOT: &str = "__moliReadableStreamFro
 const READABLE_STREAM_FROM_REACTION_SYNC_SLOT: &str = "__moliReadableStreamFromReactionSync";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(plain)]
 struct ReadableStreamFromSourceDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_FROM_ITERATOR_SLOT)]
     iterator: v8::Local<'scope, v8::Object>,
@@ -24,7 +24,7 @@ struct ReadableStreamFromSourceDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(plain)]
 struct ReadableStreamFromReactionDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_FROM_REACTION_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,

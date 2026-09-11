@@ -5,7 +5,6 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use crate::types::NetworkBodySourceId;
-use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
 use moli_webapi_declare::WebApiObject;
 

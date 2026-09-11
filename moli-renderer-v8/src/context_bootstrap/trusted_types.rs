@@ -846,7 +846,9 @@ fn build_trusted_script_code_like_carrier<'s>(
     TrustedTypeObjectDeclaration::new(value)
         .initialize(scope, object)
         .expect("TrustedScript code-like carrier declaration should initialize");
-    web_api_interfaces::TrustedScript::DESCRIPTOR.initialize(scope, object).ok()?;
+    web_api_interfaces::TrustedScript::DESCRIPTOR
+        .initialize(scope, object)
+        .ok()?;
     Some(object)
 }
 
@@ -871,9 +873,8 @@ fn trusted_type_to_string_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let this = args.this();
-    if !trusted_type_kind(scope, this.into()).is_some_and(|kind| {
-        v8str(scope, kind.constructor_name()).strict_equals(args.data())
-    })
+    if !trusted_type_kind(scope, this.into())
+        .is_some_and(|kind| v8str(scope, kind.constructor_name()).strict_equals(args.data()))
     {
         throw_type_error(scope, "Illegal invocation");
         return;
