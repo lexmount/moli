@@ -4,11 +4,12 @@ use crate::text_codec::{TextCodecStore, TextDecodeError};
 use crate::util::get_private_value;
 use finish_context::{TransformFinishContext, TransformFinishWithReason};
 use moli_streams::queue::{QueueBounds, QueueRemainderPlan};
+use moli_streams::readable::ReadableState;
 use moli_streams::strategy::StrategySnapshot;
 use moli_streams::transform::{
     AlgorithmOutcome, EnqueueErrorSource, ErrorReasonSource, FinishAlgorithm, FinishClaimPlan,
-    FinishOperation, FinishResidenceState, FinishSettlementPlan, FinishSetupFailurePlan,
-    ReadableErrorAction, ReadableTerminateAction, StartSettlementPlan, TransformCancelAlgorithm,
+    FinishOperation, FinishResidenceState, FinishSetupFailurePlan, ReadableErrorAction,
+    ReadableTerminateAction, StartSettlementPlan, TransformCancelAlgorithm,
     TransformCloseAdmissionPlan, TransformEnqueueFailure, TransformFlushAlgorithm, TransformMode,
     TransformReadableSnapshot, TransformSnapshot, TransformWriteAdmissionPlan,
     TransformWriteAlgorithm, WritableCloseSettlementPlan, WriteSettlementPlan,
@@ -949,36 +950,16 @@ fn transform_source_cancel_fulfilled_callback<'s>(
         rv.set_undefined();
         return;
     };
-    apply_transform_source_cancel_fulfillment(
-        scope,
-        finish.writable,
-        finish.readable,
-        finish.residence,
-        reason,
-    );
-    rv.set_undefined();
-}
-
-fn apply_transform_source_cancel_fulfillment<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    writable: v8::Local<'s, v8::Object>,
-    readable: v8::Local<'s, v8::Object>,
-    residence: v8::Local<'s, v8::Object>,
-    reason: v8::Local<'s, v8::Value>,
-) {
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::ReadableCancel, AlgorithmOutcome::Fulfilled)
-    {
-        FinishSettlementPlan::RejectWithWritableStoredError => {
-            let error = writable_stream_stored_error(scope, writable).unwrap_or(reason);
-            reject_pending_read(scope, residence, error);
-        }
-        FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve => {
-            error_writable_stream_with_value(scope, writable, reason);
-            resolve_pending_promise(scope, residence, v8::undefined(scope).into());
-        }
-        _ => unreachable!("readable cancel fulfillment produced an invalid plan"),
+    // Observe the state when the cancel promise fulfills, including errors
+    // that occurred while an asynchronous cancel callback was pending.
+    if writable_stream_snapshot(scope, finish.writable).state() == WritableState::Errored {
+        let error = writable_stream_stored_error(scope, finish.writable).unwrap_or(reason);
+        reject_pending_read(scope, finish.residence, error);
+    } else {
+        error_writable_stream_with_value(scope, finish.writable, reason);
+        resolve_pending_promise(scope, finish.residence, v8::undefined(scope).into());
     }
+    rv.set_undefined();
 }
 
 fn transform_source_cancel_rejected_callback<'s>(
@@ -992,21 +973,9 @@ fn transform_source_cancel_rejected_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let TransformFinishContext {
-        writable,
-        readable,
-        residence,
-    } = context.finish;
     let error = args.get(0);
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::ReadableCancel, AlgorithmOutcome::Rejected)
-    {
-        FinishSettlementPlan::ErrorWritableWithCallbackErrorAndReject => {
-            error_writable_stream_with_value(scope, writable, error);
-            reject_pending_read(scope, residence, error);
-        }
-        _ => unreachable!("readable cancel rejection produced an invalid plan"),
-    }
+    error_writable_stream_with_value(scope, context.finish.writable, error);
+    reject_pending_read(scope, context.finish.residence, error);
     rv.set_undefined();
 }
 
@@ -1101,36 +1070,14 @@ fn transform_sink_abort_fulfilled_callback<'s>(
         rv.set_undefined();
         return;
     };
-    apply_transform_sink_abort_fulfillment(
-        scope,
-        finish.writable,
-        finish.readable,
-        finish.residence,
-        reason,
-    );
-    rv.set_undefined();
-}
-
-fn apply_transform_sink_abort_fulfillment<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    writable: v8::Local<'s, v8::Object>,
-    readable: v8::Local<'s, v8::Object>,
-    residence: v8::Local<'s, v8::Object>,
-    reason: v8::Local<'s, v8::Value>,
-) {
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::WritableAbort, AlgorithmOutcome::Fulfilled)
-    {
-        FinishSettlementPlan::RejectWithReadableStoredError => {
-            let error = readable_stream_error(scope, readable).unwrap_or(reason);
-            reject_pending_read(scope, residence, error);
-        }
-        FinishSettlementPlan::ErrorReadableWithOriginalReasonAndResolve => {
-            error_stream(scope, readable, reason);
-            resolve_pending_promise(scope, residence, v8::undefined(scope).into());
-        }
-        _ => unreachable!("writable abort fulfillment produced an invalid plan"),
+    if readable_stream_snapshot(scope, finish.readable).state() == ReadableState::Errored {
+        let error = readable_stream_error(scope, finish.readable).unwrap_or(reason);
+        reject_pending_read(scope, finish.residence, error);
+    } else {
+        error_stream(scope, finish.readable, reason);
+        resolve_pending_promise(scope, finish.residence, v8::undefined(scope).into());
     }
+    rv.set_undefined();
 }
 
 fn transform_sink_abort_rejected_callback<'s>(
@@ -1144,21 +1091,9 @@ fn transform_sink_abort_rejected_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let TransformFinishContext {
-        writable,
-        readable,
-        residence,
-    } = context.finish;
     let error = args.get(0);
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::WritableAbort, AlgorithmOutcome::Rejected)
-    {
-        FinishSettlementPlan::ErrorReadableWithCallbackErrorAndReject => {
-            error_stream(scope, readable, error);
-            reject_pending_read(scope, residence, error);
-        }
-        _ => unreachable!("writable abort rejection produced an invalid plan"),
-    }
+    error_stream(scope, context.finish.readable, error);
+    reject_pending_read(scope, context.finish.residence, error);
     rv.set_undefined();
 }
 
@@ -2686,31 +2621,25 @@ fn transform_sink_close_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let StreamOwnerPublication::Published(TransformFinishContext {
-        writable,
-        readable,
-        residence,
-    }) = TransformFinishContext::from_callback_data(scope, args.data())
+    let StreamOwnerPublication::Published(context) =
+        TransformFinishContext::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::WritableClose, AlgorithmOutcome::Fulfilled)
-    {
-        FinishSettlementPlan::RejectWithReadableStoredError => {
-            let error = readable_stream_error(scope, readable)
+    match readable_stream_snapshot(scope, context.readable).state() {
+        ReadableState::Errored => {
+            let error = readable_stream_error(scope, context.readable)
                 .unwrap_or_else(|| v8::undefined(scope).into());
-            reject_pending_read(scope, residence, error);
+            reject_pending_read(scope, context.residence, error);
         }
-        FinishSettlementPlan::CloseReadableAndResolve => {
-            close_stream(scope, readable);
-            resolve_pending_promise(scope, residence, v8::undefined(scope).into());
+        ReadableState::Readable => {
+            close_stream(scope, context.readable);
+            resolve_pending_promise(scope, context.residence, v8::undefined(scope).into());
         }
-        FinishSettlementPlan::Resolve => {
-            resolve_pending_promise(scope, residence, v8::undefined(scope).into());
+        ReadableState::Closed => {
+            resolve_pending_promise(scope, context.residence, v8::undefined(scope).into());
         }
-        _ => unreachable!("transform flush fulfillment produced an invalid plan"),
     }
     rv.set_undefined();
 }
@@ -2720,25 +2649,15 @@ fn transform_sink_close_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let StreamOwnerPublication::Published(TransformFinishContext {
-        writable,
-        readable,
-        residence,
-    }) = TransformFinishContext::from_callback_data(scope, args.data())
+    let StreamOwnerPublication::Published(context) =
+        TransformFinishContext::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
     let error = args.get(0);
-    match transform_stream_snapshot(scope, writable, readable)
-        .plan_finish_settlement(FinishOperation::WritableClose, AlgorithmOutcome::Rejected)
-    {
-        FinishSettlementPlan::ErrorReadableWithCallbackErrorAndReject => {
-            error_stream(scope, readable, error);
-            reject_pending_read(scope, residence, error);
-        }
-        _ => unreachable!("transform flush rejection produced an invalid plan"),
-    }
+    error_stream(scope, context.readable, error);
+    reject_pending_read(scope, context.residence, error);
     rv.set_undefined();
 }
 
