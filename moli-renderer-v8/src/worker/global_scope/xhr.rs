@@ -698,7 +698,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         };
 
     Ok(PreparedWorkerXhrSendRequest {
-        use_cors_preflight: xhr_has_upload_listeners(scope, xhr),
+        use_cors_preflight: capture_xhr_upload_listener_flag(scope, xhr),
         document_url,
         resolved_url,
         blob_url_entry: blob_url_entry(scope, xhr),
