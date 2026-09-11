@@ -30,6 +30,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.request_origin.clone(),
         prepared.network_partition_key,
         prepared.policy_context,
+        prepared.blob_url_entry,
         PendingSubresourceFetchInfo {
             internal_id: 0,
             network_request_handle: None,
@@ -151,7 +152,11 @@ pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
 ) -> Result<Option<Response>, LocalUrlError> {
-    let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) else {
+    let Some(result) = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    ) else {
         return Ok(None);
     };
     let response = result.inspect_err(|error| {
