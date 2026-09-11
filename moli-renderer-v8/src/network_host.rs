@@ -200,7 +200,7 @@ pub(crate) use self::xhr::{
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
     install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
     set_xhr_state_number, throw_synchronous_xhr_failure, xhr_author_request_headers,
-    xhr_constructor_callback, xhr_dispatch_progress_event, xhr_ensure_send_allowed,
+    xhr_constructor_callback, xhr_ensure_send_allowed,
     xhr_response_text_decoder,
     xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
 };

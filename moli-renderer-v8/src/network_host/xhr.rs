@@ -61,7 +61,6 @@ pub(crate) use self::delivery::{
     finish_xhr_abort, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
-pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_REQUEST_HEADERS_SLOT, XHR_RESPONSE_URL_SLOT,
