@@ -44,10 +44,18 @@ struct BlobPrototypeDeclaration {
     r#type: (),
 }
 
-static BLOB_STORE: OnceLock<BlobStore<ResourceOwnerId, RendererStoragePartitionIdentity>> =
-    OnceLock::new();
+#[derive(Debug, PartialEq, Eq)]
+struct ObjectUrlAccessKey {
+    partition: RendererStoragePartitionIdentity,
+    storage_key: moli_storage_key::MoliStorageKey,
+}
 
-fn blob_store() -> &'static BlobStore<ResourceOwnerId, RendererStoragePartitionIdentity> {
+type RendererBlobStore =
+    BlobStore<ResourceOwnerId, RendererStoragePartitionIdentity, ObjectUrlAccessKey>;
+
+static BLOB_STORE: OnceLock<RendererBlobStore> = OnceLock::new();
+
+fn blob_store() -> &'static RendererBlobStore {
     BLOB_STORE.get_or_init(BlobStore::default)
 }
 
@@ -390,17 +398,41 @@ pub(super) fn blob_mime_type_from_object<'s>(
 pub(super) fn create_object_url_for_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    origin: &str,
+    storage_key: moli_storage_key::MoliStorageKey,
 ) -> Option<String> {
     let blob_id = blob_id_from_object(scope, object)?;
+    let partition = current_blob_storage_partition_identity(scope)?;
     let owner_id = current_resource_owner_id(scope);
     let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
         .map(native_bridge::RuntimeObservableContextToken::as_u64);
-    blob_store().create_object_url_with_lifetime(owner_id, lifetime_id, blob_id, origin)
+    let origin = storage_key.origin().to_owned();
+    blob_store().create_object_url_with_lifetime_and_access_key(
+        owner_id,
+        lifetime_id,
+        blob_id,
+        &origin,
+        Some(ObjectUrlAccessKey {
+            partition,
+            storage_key,
+        }),
+    )
 }
 
-pub(super) fn revoke_object_url(url: &str) {
-    blob_store().revoke_object_url(url);
+pub(super) fn revoke_object_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    url: &str,
+    storage_key: moli_storage_key::MoliStorageKey,
+) {
+    let Some(partition) = current_blob_storage_partition_identity(scope) else {
+        return;
+    };
+    blob_store().revoke_object_url_with_access_key(
+        url,
+        &ObjectUrlAccessKey {
+            partition,
+            storage_key,
+        },
+    );
 }
 
 pub(super) fn object_url_body_and_type(url: &str) -> Option<(String, String)> {
