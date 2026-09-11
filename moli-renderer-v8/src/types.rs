@@ -924,7 +924,7 @@ pub(super) struct EventSourceStreamingChunkDelivery<'s> {
 }
 
 pub(super) struct XhrStreamingResponseState {
-    pending_utf8_bytes: Vec<u8>,
+    decoder: Option<moli_encoding::XhrResponseDecoder>,
     loaded: usize,
     total: Option<usize>,
 }
@@ -936,44 +936,20 @@ impl XhrStreamingResponseState {
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
             .and_then(|(_, value)| value.trim().parse::<usize>().ok());
         Self {
-            pending_utf8_bytes: Vec::new(),
+            decoder: None,
             loaded: 0,
             total,
         }
     }
 
-    pub(super) fn append(&mut self, bytes: &[u8]) -> (String, usize, Option<usize>) {
+    pub(super) fn append(
+        &mut self,
+        bytes: &[u8],
+        make_decoder: impl FnOnce() -> moli_encoding::XhrResponseDecoder,
+    ) -> (String, usize, Option<usize>) {
         self.loaded = self.loaded.saturating_add(bytes.len());
-        self.pending_utf8_bytes.extend_from_slice(bytes);
-
-        let mut decoded = String::new();
-        let mut consumed = 0;
-        while consumed < self.pending_utf8_bytes.len() {
-            let remaining = &self.pending_utf8_bytes[consumed..];
-            match std::str::from_utf8(remaining) {
-                Ok(text) => {
-                    decoded.push_str(text);
-                    consumed = self.pending_utf8_bytes.len();
-                }
-                Err(error) => {
-                    let valid_end = consumed + error.valid_up_to();
-                    decoded.push_str(
-                        std::str::from_utf8(&self.pending_utf8_bytes[consumed..valid_end])
-                            .expect("Utf8Error::valid_up_to must identify a valid UTF-8 prefix"),
-                    );
-                    consumed = valid_end;
-                    let Some(invalid_len) = error.error_len() else {
-                        break;
-                    };
-                    decoded.push('\u{fffd}');
-                    consumed += invalid_len;
-                }
-            }
-        }
-        if consumed > 0 {
-            self.pending_utf8_bytes.drain(..consumed);
-        }
-        (decoded, self.loaded, self.total)
+        let decoder = self.decoder.get_or_insert_with(make_decoder);
+        (decoder.push(bytes), self.loaded, self.total)
     }
 }
 

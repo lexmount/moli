@@ -1760,7 +1760,11 @@ impl JsContextHost {
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
             let xhr = v8::Local::new(scope, xhr);
             state.body_writer.append(bytes);
-            let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes);
+            let headers = &state.head.headers;
+            let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes, || {
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::network_host::xhr_response_text_decoder(scope, xhr, headers)
+            });
             crate::types::XhrStreamingChunkDelivery {
                 context,
                 xhr,

@@ -424,9 +424,25 @@ pub(crate) fn parse_detached_html_document_from_source<'s>(
     document_url: Url,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    parse_detached_html_document_from_source_with_encoding(scope, document_url, source, None)
+}
+
+pub(crate) fn parse_detached_html_document_from_source_with_encoding<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
+    source: &str,
+    character_set: Option<&str>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let parsed = HtmlParser::with_scripting_enabled(false)
         .parse_without_declarative_shadow_roots(document_url, source.to_owned());
-    build_detached_document(scope, parsed, DetachedDocumentKind::Html, false)
+    build_detached_document_from_dom_host_with_content_type(
+        scope,
+        DomHost::from_dom(parsed),
+        DetachedDocumentKind::Html,
+        false,
+        Some("text/html"),
+        character_set,
+    )
 }
 
 pub(crate) fn parse_detached_html_document_from_source_with_declarative_shadow_roots<'s>(
@@ -523,21 +539,6 @@ pub(crate) fn plain_text_document_parser_input(source: &str) -> String {
 fn child_document_url_is_xml_like(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
     path.ends_with(".xml") || path.ends_with(".xhtml") || path.ends_with(".svg")
-}
-
-fn build_detached_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: NativeDom,
-    kind: DetachedDocumentKind,
-    expose_declarative_shadow_roots: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    build_detached_document_with_content_type(
-        scope,
-        parsed,
-        kind,
-        expose_declarative_shadow_roots,
-        None,
-    )
 }
 
 fn build_detached_document_with_content_type<'s>(
