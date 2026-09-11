@@ -98,6 +98,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
         .expect("the browser-owned network error page URL must be valid");
     let error_page = NetworkErrorPageNavigation::new(error_text, unreachable_url.clone());
     let head = ResponseHead {
+        status_text: None,
         final_url: error_page_url,
         status: 200,
         headers: vec![(
@@ -1098,6 +1099,7 @@ fn decoded_data_url_navigation_response(
         let requested_url = Url::parse(raw_url).context("failed to parse data url")?;
         let response = RawResponse::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: requested_url.clone(),
                 status: 200,
                 headers: vec![(
@@ -1197,6 +1199,7 @@ async fn load_inline_html_navigation_with_engine_async(
                 response_headers,
             } = source?;
             let head = ResponseHead {
+                status_text: None,
                 final_url: document_url.clone(),
                 status: 200,
                 headers: response_headers,
@@ -2912,6 +2915,7 @@ impl CdpConnection {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&final_url, &response_headers);
         let head = ResponseHead {
+            status_text: None,
             final_url,
             status: response_status,
             headers: response_headers,

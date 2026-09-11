@@ -39,6 +39,7 @@ pub(crate) fn merge_cached_not_modified_streaming_response_lookup(
         request_url,
         &final_url,
         cached.status,
+        cached.metadata.status_text.as_deref(),
         &headers,
         false,
     ) {

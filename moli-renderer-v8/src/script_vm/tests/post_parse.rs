@@ -348,6 +348,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
     let final_url = Url::parse("https://cdn.test/final.js").unwrap();
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: Vec::new(),
