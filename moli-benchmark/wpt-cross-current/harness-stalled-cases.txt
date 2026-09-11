@@ -30,6 +30,8 @@ html/semantics/embedded-content/the-img-element/decode/image-decode-iframe.html
 html/semantics/embedded-content/the-object-element/object-events.html
 html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
+navigation-api/navigate-event/intercept-cross-origin.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 resource-timing/nested-context-navigations-embed.html

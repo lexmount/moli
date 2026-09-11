@@ -20,6 +20,7 @@ content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
@@ -416,7 +417,6 @@ css/css-flexbox/relayout-align-items.html
 css/css-flexbox/scrollbars-auto.html
 css/css-flexbox/scrollbars-no-margin.html
 css/css-flexbox/scrollbars.html
-css/css-flexbox/select-as-flex-item-child-with-overflow.html
 css/css-flexbox/select-as-flex-item-with-overflow.html
 css/css-flexbox/shrinking-column-flexbox.html
 css/css-flexbox/stretched-child-shrink-on-relayout.html
@@ -517,9 +517,8 @@ css/css-grid/abspos/orthogonal-positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
-css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-009.html
+css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -571,7 +570,6 @@ css/css-grid/alignment/grid-alignment-implies-size-change-010.html
 css/css-grid/alignment/grid-alignment-implies-size-change-011.html
 css/css-grid/alignment/grid-alignment-implies-size-change-012.html
 css/css-grid/alignment/grid-alignment-implies-size-change-013.html
-css/css-grid/alignment/grid-alignment-implies-size-change-014.html
 css/css-grid/alignment/grid-alignment-implies-size-change-017.html
 css/css-grid/alignment/grid-alignment-implies-size-change-018.html
 css/css-grid/alignment/grid-alignment-implies-size-change-019.html
@@ -2257,7 +2255,6 @@ css/css-typed-om/the-stylepropertymap/properties/vector-effect.html
 css/css-typed-om/the-stylepropertymap/properties/vertical-align.html
 css/css-typed-om/the-stylepropertymap/properties/visibility.html
 css/css-typed-om/the-stylepropertymap/properties/white-space.html
-css/css-typed-om/the-stylepropertymap/properties/widows.html
 css/css-typed-om/the-stylepropertymap/properties/width.html
 css/css-typed-om/the-stylepropertymap/properties/will-change.html
 css/css-typed-om/the-stylepropertymap/properties/word-break.html
@@ -2522,7 +2519,6 @@ css/selectors/invalidation/empty-pseudo-in-has-display-none.html
 css/selectors/invalidation/heading-pseudo-class-in-has.html
 css/selectors/is-where-error-recovery.html
 css/selectors/is-where-shadow.html
-css/selectors/media/media-playback-state-timing.html
 css/selectors/media/media-playback-state.html
 css/selectors/media/sound-state.html
 css/selectors/missing-right-token.html
@@ -2830,7 +2826,6 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-docu
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-traversal.html
-html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-same-document-traversal.html
@@ -2861,6 +2856,7 @@ html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
+html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
 html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/document_location.html
@@ -2872,6 +2868,7 @@ html/browsers/history/the-location-interface/location_assign_about_blank.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
+html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
@@ -2987,7 +2984,6 @@ html/infrastructure/safe-passing-of-structured-data/transfer-audiodata.html
 html/infrastructure/safe-passing-of-structured-data/transfer-mediasourcehandle.html
 html/infrastructure/safe-passing-of-structured-data/transfer-videoframe.html
 html/infrastructure/terminology/plugins/text-plain.html
-html/infrastructure/urls/terminology-0/document-base-url.html
 html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
 html/interaction/focus/focus-management/focus-events.html
 html/interaction/focus/focus-selection.html
@@ -3014,9 +3010,7 @@ html/obsolete/requirements-for-implementations/other-elements-attributes-and-api
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-overflow.html
-html/semantics/document-metadata/the-base-element/base_about_blank.html
 html/semantics/document-metadata/the-base-element/base_multiple.html
-html/semantics/document-metadata/the-base-element/base_srcdoc.html
 html/semantics/document-metadata/the-link-element/link-error-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/link-load-error-events.html
 html/semantics/document-metadata/the-link-element/link-load-fired-before-scripting-unblocked.html
@@ -3164,7 +3158,7 @@ html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.h
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3185,15 +3179,11 @@ html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/popovers/popovertarget-reflection.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
-html/semantics/scripting-1/the-script-element/css-module/integrity.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
-html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
-html/semantics/scripting-1/the-script-element/import-attributes/invalid-type-attribute-error.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
-html/semantics/scripting-1/the-script-element/json-module/integrity.html
 html/semantics/scripting-1/the-script-element/json-module/json-module-service-worker-test.https.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror-module.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror.html
@@ -3222,7 +3212,6 @@ html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-3.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-6.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-7.html
-html/semantics/scripting-1/the-script-element/module/integrity.html
 html/semantics/scripting-1/the-script-element/module/specifier-error.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/delay-load-event-1.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/delay-load-event-2.html
@@ -3300,7 +3289,6 @@ html/webappapis/scripting/events/event-handler-processing-algorithm-error/worker
 html/webappapis/scripting/events/inline-event-handler-ordering.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
-html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
@@ -3309,9 +3297,6 @@ html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promis
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-5.html
 html/webappapis/scripting/reporterror-cross-realm-method.html
 html/webappapis/structured-clone/structured-clone-cross-realm-method.html
-import-maps/dynamic-integrity.html
-import-maps/no-referencing-script-integrity.html
-import-maps/static-integrity.html
 inert/dynamic-inert-on-focused-element.html
 inert/inert-and-find-flat-tree.html
 inert/inert-and-find.html
@@ -3406,7 +3391,6 @@ pointerevents/compat/pointerevent_touch-action-verification.html
 pointerevents/pointerevent_on_event_handlers.html
 pointerevents/pointerevent_root_hit_test.html
 pointerevents/pointerevent_touch-action-verification.html
-preload/modulepreload-sri-importmap.html
 preload/modulepreload-sri.html
 quirks/line-height-calculation.html
 quirks/percentage-height-calculation.html
@@ -3537,7 +3521,6 @@ service-workers/service-worker/skip-waiting.https.html
 service-workers/service-worker/srcdoc-iframe.https.html
 service-workers/service-worker/static-router-cross-origin-navigation.https.html
 service-workers/service-worker/static-router-fetch-event.https.html
-service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
@@ -3588,10 +3571,6 @@ streams/readable-streams/owning-type-video-frame.any.js?moli-wpt-any=dedicatedwo
 streams/readable-streams/owning-type-video-frame.any.js?moli-wpt-any=window
 streams/readable-streams/owning-type.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/owning-type.any.js?moli-wpt-any=window
-streams/transform-streams/errors.any.js?moli-wpt-any=dedicatedworker
-streams/transform-streams/errors.any.js?moli-wpt-any=window
-streams/transform-streams/general.any.js?moli-wpt-any=dedicatedworker
-streams/transform-streams/general.any.js?moli-wpt-any=window
 subresource-integrity/signatures/tentative/inline.html
 subresource-integrity/subresource-integrity.html
 svg/coordinate-systems/outer-svg-intrinsic-size-001.html
@@ -3754,10 +3733,8 @@ url/a-element.html?exclude=(file|javascript|mailto)
 url/a-element.html?include=file
 url/a-element.html?include=javascript
 url/a-element.html?include=mailto
-url/failure.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
-wasm/jsapi/functions/entry-different-function-realm.html
 wasm/jsapi/proto-from-ctor-realm.html
 webcodecs/videoFrame-canvasImageSource.html
 webidl/current-realm.html
@@ -3779,5 +3756,5 @@ worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
+xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expiring value after load fires
 xml/xml-prolog-accepted-versions.html

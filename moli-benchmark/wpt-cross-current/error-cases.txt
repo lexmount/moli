@@ -1,7 +1,11 @@
+css/css-flexbox/select-as-flex-item-child-with-overflow.html
+css/css-typed-om/the-stylepropertymap/properties/widows.html
 dom/ranges/Range-insertNode.html
 dom/ranges/Range-mutations-dataChange.html
 dom/ranges/Range-surroundContents.html
+encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?3001-4000
 html/browsers/the-window-object/window-open-windowfeatures-values.html
+html/webappapis/dynamic-markup-insertion/document-write/017.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait
 infrastructure/expected-fail/user-prompt.html?type=confirm

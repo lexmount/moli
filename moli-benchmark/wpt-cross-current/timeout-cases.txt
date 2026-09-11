@@ -29,7 +29,9 @@ content-security-policy/xslt/document-function-blocked.html
 content-security-policy/xslt/xsltprocessor-include-blocked.html
 cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
+css/css-color/parsing/color-computed-hex-color.html
 css/css-flexbox/inline-flex-column-image-load.html
+css/css-grid/alignment/grid-alignment-implies-size-change-014.html
 css/css-values/dynamic-viewport-units-rule-cache.html
 css/css-variables/variable-animation-from-to.html
 css/css-variables/variable-animation-over-transition.html
@@ -50,6 +52,7 @@ css/cssom-view/scrollIntoView-multiple-nested.html
 css/cssom-view/scrollIntoView-multiple.html
 css/cssom-view/smooth-scroll-nonstop.html
 css/cssom-view/smooth-scrollIntoView-with-smooth-fragment-scroll.html
+css/selectors/media/media-playback-state-timing.html
 document-policy/required-policy/required-document-policy-nested.html
 dom/events/EventListener-invoke-legacy.html
 dom/events/scrolling/scrollend-fires-to-text-input.html
@@ -91,13 +94,11 @@ html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/l
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-pageshow.html
-html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent-then-fragment.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-hashchange.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-pushstate.html
 html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/004.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
-html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-iframe.html
 html/browsers/history/the-history-interface/001.html
 html/browsers/history/the-history-interface/002.html
 html/browsers/history/the-history-interface/joint_session_history/001.html
@@ -108,12 +109,10 @@ html/browsers/history/the-history-interface/traverse_the_history_write_after_loa
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_2.html
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_2.html
-html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/location-protocol-setter-non-broken.html
 html/browsers/history/the-location-interface/location-protocol-setter-sameish.html
 html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/history/the-location-interface/reload_document_open_write.html
-html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
@@ -132,16 +131,9 @@ html/browsers/windows/auxiliary-browsing-contexts/opener-noreferrer.html
 html/browsers/windows/auxiliary-browsing-contexts/opener.html
 html/browsers/windows/browsing-context-names/choose-_blank-002.html
 html/browsers/windows/browsing-context-names/choose-_blank-003.html
-html/browsers/windows/browsing-context-names/choose-_parent-001.html
-html/browsers/windows/browsing-context-names/choose-_parent-002.html
-html/browsers/windows/browsing-context-names/choose-_parent-003.html
-html/browsers/windows/browsing-context-names/choose-_parent-004.html
-html/browsers/windows/browsing-context-names/choose-_self-001.html
-html/browsers/windows/browsing-context-names/choose-_self-002.html
 html/browsers/windows/browsing-context-names/choose-_top-001.html
 html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
-html/browsers/windows/browsing-context-names/choose-existing-001.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
@@ -175,9 +167,9 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
+html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
-html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
@@ -197,7 +189,6 @@ import-maps/data-driven/resolving.html?scopes.json
 import-maps/data-driven/resolving.html?tricky-specifiers.json
 import-maps/data-driven/resolving.html?url-specifiers-schemes.json
 import-maps/data-driven/resolving.html?url-specifiers.json
-import-maps/nonimport-integrity.html
 infrastructure/assumptions/allowed-to-play.html
 infrastructure/channels/test_call.html
 infrastructure/channels/test_postMessage.html
@@ -211,7 +202,6 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
-navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigate-history-back-noop.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
@@ -238,7 +228,6 @@ page-visibility/iframe-unload.html
 page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html
 page-visibility/unload.html
-preload/modulepreload-multiple.html
 preload/preload-link-cached-stylesheet-different-doc.html
 requestidlecallback/callback-suspended.html
 resource-timing/document-domain-no-impact-opener.html
@@ -280,9 +269,9 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
+service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
-shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-failure.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
 svg/coordinate-systems/outer-svg-intrinsic-size-002.html
 svg/linking/scripted/href-mpath-element.html

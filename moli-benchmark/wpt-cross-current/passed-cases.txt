@@ -114,7 +114,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -384,7 +383,6 @@ css/css-color/nested-color-mix-with-currentcolor.html
 css/css-color/parsing/alpha-color-parsing-invalid.html
 css/css-color/parsing/color-computed-color-function.html
 css/css-color/parsing/color-computed-contrast-color-function.html
-css/css-color/parsing/color-computed-hex-color.html
 css/css-color/parsing/color-computed-hwb.html
 css/css-color/parsing/color-computed-lab.html
 css/css-color/parsing/color-computed-named-color.html
@@ -1539,14 +1537,15 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-015.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
+css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
+css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
 css/css-grid/abspos/positioned-grid-items-001.html
@@ -4794,7 +4793,6 @@ encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?15001-16000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?16001-17000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?17001-last
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?2001-3000
-encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?3001-4000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?4001-5000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?5001-6000
 encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?6001-7000
@@ -5177,8 +5175,10 @@ html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-for
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-same-origin-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup.html
+html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent-then-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/forward-to-pruned-entry.html
@@ -5188,6 +5188,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-history-back.html
+html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-iframe.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-popup.html
 html/browsers/browsing-the-web/unloading-documents/navigation-within-beforeunload.html
 html/browsers/browsing-the-web/unloading-documents/pagehide-on-history-forward.html
@@ -5317,7 +5318,14 @@ html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unfo
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_blank-001.html
+html/browsers/windows/browsing-context-names/choose-_parent-001.html
+html/browsers/windows/browsing-context-names/choose-_parent-002.html
+html/browsers/windows/browsing-context-names/choose-_parent-003.html
+html/browsers/windows/browsing-context-names/choose-_parent-004.html
+html/browsers/windows/browsing-context-names/choose-_self-001.html
+html/browsers/windows/browsing-context-names/choose-_self-002.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
+html/browsers/windows/browsing-context-names/choose-existing-001.html
 html/browsers/windows/browsing-context-window.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
@@ -5452,6 +5460,7 @@ html/infrastructure/safe-passing-of-structured-data/cross-origin-transfer-resiza
 html/infrastructure/safe-passing-of-structured-data/structured-cloning-error-extra.html
 html/infrastructure/safe-passing-of-structured-data/structuredclone_0.html
 html/infrastructure/urls/base-url/document-base-uri-synthetic-document.html
+html/infrastructure/urls/terminology-0/document-base-url.html
 html/interaction/focus/document-level-focus-apis/document-level-apis.html
 html/interaction/focus/focus-file-input.html
 html/interaction/focus/focus-management/focus-event-targets-simple.html
@@ -5499,10 +5508,12 @@ html/semantics/disabled-elements/disabledElement.html
 html/semantics/document-metadata/styling/LinkStyle.html
 html/semantics/document-metadata/the-base-element/base-data.html
 html/semantics/document-metadata/the-base-element/base-javascript.html
+html/semantics/document-metadata/the-base-element/base_about_blank.html
 html/semantics/document-metadata/the-base-element/base_href_empty.html
 html/semantics/document-metadata/the-base-element/base_href_invalid.html
 html/semantics/document-metadata/the-base-element/base_href_specified.html
 html/semantics/document-metadata/the-base-element/base_href_unspecified.html
+html/semantics/document-metadata/the-base-element/base_srcdoc.html
 html/semantics/document-metadata/the-base-element/base_target_does_not_affect_iframe_src_navigation.html
 html/semantics/document-metadata/the-base-element/base_target_does_not_affect_location_assignment.html
 html/semantics/document-metadata/the-link-element/attr-link-fetchpriority.html
@@ -5811,7 +5822,6 @@ html/semantics/forms/the-input-element/input-stepdown.html
 html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
 html/semantics/forms/the-input-element/input-type-button.html
-html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
 html/semantics/forms/the-input-element/input-untrusted-key-event.html
 html/semantics/forms/the-input-element/input-validationmessage.html
@@ -5966,7 +5976,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
+html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/popovers/hide-other-popover-side-effects.html
 html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
@@ -5987,6 +5997,7 @@ html/semantics/scripting-1/the-script-element/css-module/charset-bom.html
 html/semantics/scripting-1/the-script-element/css-module/css-module-parse-error.html
 html/semantics/scripting-1/the-script-element/css-module/import-css-module-basic.html
 html/semantics/scripting-1/the-script-element/css-module/import-css-module-dynamic.html
+html/semantics/scripting-1/the-script-element/css-module/integrity.html
 html/semantics/scripting-1/the-script-element/css-module/relative-urls.html
 html/semantics/scripting-1/the-script-element/css-module/script-element-css-src.html
 html/semantics/scripting-1/the-script-element/data-url.html
@@ -6112,6 +6123,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/121.html
 html/semantics/scripting-1/the-script-element/execution-timing/122.html
 html/semantics/scripting-1/the-script-element/execution-timing/123.html
 html/semantics/scripting-1/the-script-element/execution-timing/124.html
+html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/126.html
 html/semantics/scripting-1/the-script-element/execution-timing/127.html
 html/semantics/scripting-1/the-script-element/execution-timing/129.html
@@ -6145,7 +6157,9 @@ html/semantics/scripting-1/the-script-element/fetch-src/failure.html
 html/semantics/scripting-1/the-script-element/historical.html
 html/semantics/scripting-1/the-script-element/import-attributes/empty-attributes-clause.html
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-import-errors-order.html
+html/semantics/scripting-1/the-script-element/import-attributes/invalid-type-attribute-error.html
 html/semantics/scripting-1/the-script-element/import-attributes/unsupported-attribute.html
+html/semantics/scripting-1/the-script-element/json-module/integrity.html
 html/semantics/scripting-1/the-script-element/json-module/module.html
 html/semantics/scripting-1/the-script-element/json-module/parse-error.html
 html/semantics/scripting-1/the-script-element/json-module/script-element-json-src.html
@@ -6193,6 +6207,7 @@ html/semantics/scripting-1/the-script-element/module/instantiation-error-2.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-4.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-5.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-8.html
+html/semantics/scripting-1/the-script-element/module/integrity.html
 html/semantics/scripting-1/the-script-element/module/late-namespace-request.html
 html/semantics/scripting-1/the-script-element/module/late-star-export-request.html
 html/semantics/scripting-1/the-script-element/module/load-error-events-inline.html
@@ -6559,7 +6574,6 @@ html/webappapis/dynamic-markup-insertion/document-write/013.html
 html/webappapis/dynamic-markup-insertion/document-write/014.html
 html/webappapis/dynamic-markup-insertion/document-write/015.html
 html/webappapis/dynamic-markup-insertion/document-write/016.html
-html/webappapis/dynamic-markup-insertion/document-write/017.html
 html/webappapis/dynamic-markup-insertion/document-write/018.html
 html/webappapis/dynamic-markup-insertion/document-write/019.html
 html/webappapis/dynamic-markup-insertion/document-write/020.html
@@ -6684,6 +6698,7 @@ html/webappapis/scripting/processing-model-2/compile-error-in-setTimeout.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin-with-hash.html
 html/webappapis/scripting/processing-model-2/compile-error-same-origin.html
 html/webappapis/scripting/processing-model-2/compile-error.html
+html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setInterval.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setTimeout.html
@@ -6733,6 +6748,7 @@ import-maps/csp/hash.html
 import-maps/csp/nonce-failure.html
 import-maps/csp/nonce.html
 import-maps/csp/unsafe-inline.html
+import-maps/dynamic-integrity.html
 import-maps/dynamic-module-map-key.html
 import-maps/external-import-map-errors.html
 import-maps/module-map-key.html
@@ -6745,6 +6761,8 @@ import-maps/multiple-import-maps/scope-ordering.html
 import-maps/multiple-import-maps/url-resolution-conflict.html
 import-maps/multiple-import-maps/with-errors.html
 import-maps/no-referencing-script-integrity-valid.html
+import-maps/no-referencing-script-integrity.html
+import-maps/nonimport-integrity.html
 import-maps/not-as-classic-script.html
 import-maps/not-overridden/dynamic.html
 import-maps/not-overridden/external-script-bare-descendent.html
@@ -6756,6 +6774,7 @@ import-maps/not-overridden/script-descendent.html
 import-maps/not-overridden/url-resolution-conflict.html
 import-maps/script-supports-importmap.html
 import-maps/static-after-innerText.html
+import-maps/static-integrity.html
 inert/inert-and-contenteditable.html
 inert/inert-does-not-match-disabled-selector.html
 inert/inert-inlines-around-selection-range-in-contenteditable.html
@@ -7223,6 +7242,8 @@ preload/avoid-delaying-onload-link-modulepreload-exec.html
 preload/avoid-delaying-onload-link-modulepreload.html
 preload/modulepreload-as.html
 preload/modulepreload-json.html
+preload/modulepreload-multiple.html
+preload/modulepreload-sri-importmap.html
 preload/modulepreload-style.html
 preload/modulepreload-text.html
 preload/preconnect-onerror-event.html
@@ -7467,6 +7488,7 @@ shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadopteds
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-invalid-specifier.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-async.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-basic.html
+shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-failure.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-identity.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-nested.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-ordering.html
@@ -7668,8 +7690,12 @@ streams/transform-streams/backpressure.any.js?moli-wpt-any=dedicatedworker
 streams/transform-streams/backpressure.any.js?moli-wpt-any=window
 streams/transform-streams/cancel.any.js?moli-wpt-any=dedicatedworker
 streams/transform-streams/cancel.any.js?moli-wpt-any=window
+streams/transform-streams/errors.any.js?moli-wpt-any=dedicatedworker
+streams/transform-streams/errors.any.js?moli-wpt-any=window
 streams/transform-streams/flush.any.js?moli-wpt-any=dedicatedworker
 streams/transform-streams/flush.any.js?moli-wpt-any=window
+streams/transform-streams/general.any.js?moli-wpt-any=dedicatedworker
+streams/transform-streams/general.any.js?moli-wpt-any=window
 streams/transform-streams/lipfuzz.any.js?moli-wpt-any=dedicatedworker
 streams/transform-streams/lipfuzz.any.js?moli-wpt-any=window
 streams/transform-streams/patched-global.any.js?moli-wpt-any=dedicatedworker
@@ -7915,6 +7941,7 @@ uievents/textInput/api.html
 uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
 url/data-uri-fragment.html
+url/failure.html
 user-timing/clearMarks.html
 user-timing/clearMeasures.html
 user-timing/invoke_with_timing_attributes.html
@@ -8189,6 +8216,7 @@ wasm/core/utf8-custom-section-id.wast.js.html
 wasm/core/utf8-import-field.wast.js.html
 wasm/core/utf8-import-module.wast.js.html
 wasm/core/utf8-invalid-encoding.wast.js.html
+wasm/jsapi/functions/entry-different-function-realm.html
 wasm/jsapi/functions/entry.html
 wasm/jsapi/functions/incumbent.html
 wasm/serialization/module/broadcastchannel-success-and-failure.html
@@ -8518,7 +8546,7 @@ xhr/xmlhttprequest-timeout-worker-overrides.html?timeout disabled after initiall
 xhr/xmlhttprequest-timeout-worker-overrides.html?timeout enabled after initially disabled
 xhr/xmlhttprequest-timeout-worker-overrides.html?timeout overrides load after a delay
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expired value before load fires
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expiring value after load fires
+xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-worker-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?timeout hit before load
