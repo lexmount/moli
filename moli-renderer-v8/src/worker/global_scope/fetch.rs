@@ -523,6 +523,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     body: Option<Vec<u8>>,
     headers: moli_fetch::RequestHeaders,
     credentials_mode: RequestCredentialsMode,
+    use_cors_preflight: bool,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
@@ -544,7 +545,8 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                 .with_initiator_url(&document_url)
                 .with_credentials_mode(credentials_mode)
                 .with_network_partition_key(network_partition_key.clone())
-                .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+                .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+                .with_use_cors_preflight(use_cors_preflight);
             if let Some(referrer_policy) = referrer_policy {
                 request =
                     request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
@@ -991,6 +993,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         document_url,
         network_partition_key,
         credentials_mode,
+        use_cors_preflight,
         xhr_id,
         resolved_url,
         method,
@@ -1034,6 +1037,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
             pending.document_url.clone(),
             network_partition_key,
             pending.credentials_mode,
+            pending.use_cors_preflight,
             request.xhr_id,
             request.url,
             request.method,
@@ -1056,6 +1060,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         body.map(|body| body.into_bytes()),
         headers,
         credentials_mode,
+        use_cors_preflight,
         auth,
         redirect_headers,
         redirect_chain,
@@ -1964,6 +1969,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
+            use_cors_preflight: false,
         };
         (
             url,
@@ -2008,6 +2014,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or_default(),
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
+            use_cors_preflight: false,
         };
         (
             url,

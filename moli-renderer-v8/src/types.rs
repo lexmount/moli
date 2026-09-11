@@ -104,7 +104,10 @@ pub(super) enum PendingSubresourceContinuation {
         web_font: Option<crate::css_resource_urls::StylesheetWebFont>,
         css_image: Option<crate::native_bridge::CssImageResourceRequestIdentity>,
     },
-    Xhr(v8::Global<v8::Object>),
+    Xhr {
+        xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
+    },
     WebSocket(PendingWebSocketConnection),
     WorkerFetch {
         worker_id: DedicatedWorkerId,
@@ -194,7 +197,17 @@ impl PendingSubresourceContinuation {
     }
 
     pub(super) fn is_window_xhr(&self) -> bool {
-        matches!(self, Self::Xhr(_))
+        matches!(self, Self::Xhr { .. })
+    }
+
+    pub(super) fn use_cors_preflight(&self) -> bool {
+        matches!(
+            self,
+            Self::Xhr {
+                use_cors_preflight: true,
+                ..
+            }
+        )
     }
 
     pub(super) fn is_window_fetch(&self) -> bool {
