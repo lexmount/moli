@@ -100,6 +100,14 @@ pub(crate) fn request_constructor_callback<'s>(
         return;
     }
 
+    // Fresh URL entry lookup follows RequestInit conversion. Inherited URL
+    // entries, including unavailable entries, survive getters that revoke it.
+    let blob_url_entry = state.blob_url_entry.or_else(|| {
+        url::Url::parse(&state.url_resolved)
+            .ok()
+            .and_then(|url| CapturedBlobUrl::capture(&url))
+    });
+    set_blob_url_entry(scope, obj, blob_url_entry);
     append_default_body_content_type(&mut state.headers, state.body_content_type.as_deref());
     let headers_obj = build_headers_object_with_state(
         scope,
@@ -224,6 +232,7 @@ pub(crate) fn build_service_worker_request_object<'s>(
         source.method.clone(),
         source.url.to_string(),
         headers,
+        source.destination.as_str().to_owned(),
         source.metadata.referrer.clone(),
         source.metadata.referrer_policy.clone(),
         mode.to_owned(),
@@ -235,6 +244,8 @@ pub(crate) fn build_service_worker_request_object<'s>(
         priority.to_owned(),
         signal,
         "half".to_owned(),
+        false,
+        source.is_reload,
         v8::null(scope).into(),
     )
     .bind(scope)

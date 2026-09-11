@@ -39,6 +39,7 @@ enum ResourceResponsePolicy {
 
 pub(crate) struct ControlledResourceLoad {
     response_policy: ResourceResponsePolicy,
+    blob_url_entry: Option<super::CapturedBlobUrl>,
     service_worker: Option<service_worker::WorkerServiceWorkerFetch>,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     request: Request,
@@ -93,6 +94,11 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
+    pub(crate) fn with_blob_url_entry(mut self, entry: Option<super::CapturedBlobUrl>) -> Self {
+        self.blob_url_entry = entry;
+        self
+    }
+
     pub(crate) fn with_fetch_policy(
         mut self,
         policy: crate::types::SubresourcePolicyContext,
@@ -111,6 +117,7 @@ impl ControlledResourceLoad {
     ) -> Self {
         Self {
             response_policy: ResourceResponsePolicy::Xhr,
+            blob_url_entry: super::CapturedBlobUrl::capture(&request.url),
             service_worker: None,
             response_filter: None,
             request,
@@ -262,6 +269,9 @@ impl ControlledResourceLoad {
             || overrides.headers.is_some();
         let headers_changed = overrides.headers.is_some();
         overrides.apply(&mut self.request);
+        if !self.blob_url_entry.as_ref().is_some_and(|entry| entry.matches(&self.request.url)) {
+            self.blob_url_entry = super::CapturedBlobUrl::capture(&self.request.url);
+        }
         if headers_changed {
             self.preflight_headers = self.request.request_headers.to_byte_strings();
         }
@@ -488,9 +498,10 @@ impl ControlledResourceLoad {
             self.check_request()?;
             if synthetic.is_none() && matches!(self.request.url.scheme(), "blob" | "data") {
                 synthetic = Some(
-                    crate::network_host::local_url_response_result(
+                    crate::network_host::local_url_response_with_blob_entry(
                         &self.request.url,
                         &self.request.method,
+                        self.blob_url_entry.as_ref(),
                     )
                     .expect("local resource routing")
                     .map_err(|error| error.to_string())?,

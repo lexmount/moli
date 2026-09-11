@@ -558,6 +558,7 @@ pub(crate) fn response_static_redirect_callback<'s>(
         rv.set_undefined();
         return;
     };
+    mark_response_headers_immutable(scope, response);
     rv.set(response.into());
 }
 
@@ -669,6 +670,7 @@ fn request_clone_callback<'s>(
         .bind(scope)
         .expect("Request clone shell declaration should bind");
     for slot in [
+        BLOB_URL_ENTRY_SLOT,
         REQUEST_METHOD_SLOT,
         REQUEST_URL_SLOT,
         REQUEST_DESTINATION_SLOT,
