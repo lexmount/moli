@@ -83,7 +83,6 @@ pub(super) fn xhr_open_callback<'s>(
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_HEADERS_SLOT, "[]");
     set_xhr_state_string(scope, xhr, XHR_PENDING_KIND_SLOT, "");
     set_xhr_state_string(scope, xhr, XHR_PENDING_URL_SLOT, "");
-    set_xhr_state_string(scope, xhr, XHR_PENDING_BODY_SLOT, "");
     set_xhr_state_value(
         scope,
         xhr,
