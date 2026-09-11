@@ -31,6 +31,12 @@ const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
 
+#[derive(Clone, Copy)]
+pub(super) enum XmlParseErrorBehavior {
+    ParserErrorDocument,
+    ReturnNone,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DetachedDocumentKind {
     Document,
@@ -242,7 +248,7 @@ pub(crate) fn install_dom_parser_template_bindings<'s>(
     );
 }
 
-pub(super) fn parse_detached_document_from_string_with_url<'s>(
+fn parse_detached_document_from_string_with_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: Url,
     source: &str,
@@ -258,12 +264,33 @@ pub(super) fn parse_detached_document_from_string_with_url<'s>(
         return parse_detached_html_document_from_source(scope, document_url, source);
     }
 
+    parse_detached_xml_document_from_source(
+        scope,
+        document_url,
+        source,
+        mime,
+        XmlParseErrorBehavior::ParserErrorDocument,
+    )
+}
+
+pub(super) fn parse_detached_xml_document_from_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
+    source: &str,
+    mime: &str,
+    error_behavior: XmlParseErrorBehavior,
+) -> Option<v8::Local<'s, v8::Object>> {
     let parser = XmlParser;
     let parsed = parser.parse(document_url, source.to_owned());
     let parsed = if parsed.parse_errors().is_empty() && native_document_has_element_child(&parsed) {
         parsed
     } else {
-        materialize_xml_parser_error_document(parsed)
+        match error_behavior {
+            XmlParseErrorBehavior::ParserErrorDocument => {
+                materialize_xml_parser_error_document(parsed)
+            }
+            XmlParseErrorBehavior::ReturnNone => return None,
+        }
     };
     build_detached_document_with_content_type(
         scope,
