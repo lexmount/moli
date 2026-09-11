@@ -1,3 +1,4 @@
+use super::{XHR_RESPONSE_TYPE_SLOT, xhr_state_string_property};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
@@ -20,6 +21,16 @@ impl XmlHttpRequestResponseType {
     pub(super) fn label(self) -> &'static str {
         self.into()
     }
+}
+
+pub(super) fn xhr_response_type(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> XmlHttpRequestResponseType {
+    xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
+        .as_deref()
+        .and_then(XmlHttpRequestResponseType::parse)
+        .unwrap_or(XmlHttpRequestResponseType::Default)
 }
 
 #[cfg(test)]

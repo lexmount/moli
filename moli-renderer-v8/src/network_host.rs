@@ -195,6 +195,7 @@ pub(crate) use self::xhr::{
     progress_event_constructor_callback, reset_xhr_response_for_request_error, set_xhr_state_bool,
     set_xhr_state_number, throw_synchronous_xhr_failure, xhr_author_request_headers,
     xhr_constructor_callback, xhr_dispatch_progress_event, xhr_ensure_send_allowed,
+    xhr_response_text_decoder,
     xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
 };
 pub(in crate::network_host) const NETWORK_BODY_SLOT: &str = "__lmBody";
