@@ -316,6 +316,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: report_url.clone(),
             status: 204,
             headers: Vec::new(),

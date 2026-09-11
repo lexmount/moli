@@ -1808,13 +1808,14 @@ impl RuntimeOwner {
 
         let final_url = job.current_url.clone();
         let negotiated_http_version = negotiated_http_version_from_easy(&easy);
-        let (status, headers, cookie_set_reports, collector_http_version) = {
+        let (status, status_text, headers, cookie_set_reports, collector_http_version) = {
             let streaming = easy
                 .get_mut()
                 .streaming_mut()
                 .expect("streaming request should use streaming collector");
             (
                 streaming.status(),
+                streaming.status_text().map(str::to_owned),
                 streaming.headers().to_vec(),
                 streaming.take_cookie_set_reports(),
                 streaming.negotiated_http_version(),
@@ -1859,6 +1860,7 @@ impl RuntimeOwner {
                     request_cookie_header.as_deref(),
                     &final_url,
                     status,
+                    status_text.as_deref(),
                     &headers,
                     false,
                     cache_body_writer,
@@ -1921,6 +1923,7 @@ impl RuntimeOwner {
                 request_cookie_header.as_deref(),
                 &final_url,
                 status,
+                status_text.as_deref(),
                 &headers,
                 false,
                 cache_body_writer,
@@ -2120,13 +2123,14 @@ impl RuntimeOwner {
 
         let final_url = job.current_url.clone();
         let negotiated_http_version = negotiated_http_version_from_easy(&easy);
-        let (status, headers, cookie_set_reports, collector_http_version) = {
+        let (status, status_text, headers, cookie_set_reports, collector_http_version) = {
             let streaming = easy
                 .get_mut()
                 .raw_streaming_mut()
                 .expect("raw streaming request should use raw streaming collector");
             (
                 streaming.status(),
+                streaming.status_text().map(str::to_owned),
                 streaming.headers().to_vec(),
                 streaming.take_cookie_set_reports(),
                 streaming.negotiated_http_version(),
@@ -2242,6 +2246,7 @@ impl RuntimeOwner {
                         request_cookie_header.as_deref(),
                         &final_url,
                         status,
+                        status_text.as_deref(),
                         &headers,
                         false,
                         cache_body_writer,
@@ -2309,6 +2314,7 @@ impl RuntimeOwner {
                     request_cookie_header.as_deref(),
                     &final_url,
                     status,
+                    status_text.as_deref(),
                     &headers,
                     false,
                     cache_body_writer,
@@ -2318,6 +2324,7 @@ impl RuntimeOwner {
             }
             if let Some(started_tx) = started_tx {
                 let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+                    status_text: status_text.clone(),
                     final_url,
                     status,
                     headers,
@@ -2352,6 +2359,7 @@ impl RuntimeOwner {
                 request_cookie_header.as_deref(),
                 &final_url,
                 status,
+                status_text.as_deref(),
                 &headers,
                 false,
                 cache_body_writer,
@@ -2876,6 +2884,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
     let (head, body) = response.into_text_parts();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: head.status_text,
             final_url: head.final_url,
             status: head.status,
             headers: head.headers,
@@ -2904,6 +2913,7 @@ fn complete_cached_streaming_html_job(
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
+        metadata,
         final_url,
         status,
         headers,
@@ -2927,6 +2937,7 @@ fn complete_cached_streaming_html_job(
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: metadata.status_text,
             final_url,
             status,
             headers,
@@ -3024,6 +3035,7 @@ fn complete_cached_streaming_raw_job(
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
+        metadata,
         final_url,
         status,
         headers,
@@ -3047,6 +3059,7 @@ fn complete_cached_streaming_raw_job(
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: metadata.status_text,
             final_url,
             status,
             headers,
@@ -3490,6 +3503,7 @@ fn proxy_connect_response_start(
     StreamingHtmlResponseStart {
         final_url: current_url.clone(),
         status: response.status,
+        status_text: Some(response.status_text),
         headers: response.headers,
         request_cookie_report,
         cookie_set_reports: Vec::new(),
@@ -3582,6 +3596,7 @@ fn collect_buffered_response(
         .get_ref()
         .buffered()
         .ok_or_else(|| anyhow!("curl runtime returned non-buffered easy for buffered request"))?;
+    let status_text = collector.status_text().map(str::to_owned);
     let headers = collector.headers().to_vec();
     let body = collector.body().to_vec();
     let transfer_metrics = transfer_metrics_from_easy(easy, &headers);
@@ -3589,6 +3604,7 @@ fn collect_buffered_response(
     Ok((
         RawResponse::from_head_and_body(
             ResponseHead {
+                status_text,
                 final_url,
                 status,
                 headers,
@@ -4248,6 +4264,7 @@ mod tests {
             job,
             Response::from_head_and_text_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: final_url.clone(),
                     status: 200,
                     headers: vec![("content-type".to_owned(), b"text/html".to_vec())],

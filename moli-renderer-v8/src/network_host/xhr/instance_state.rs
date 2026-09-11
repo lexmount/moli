@@ -87,6 +87,8 @@ struct XmlHttpRequestStateDeclaration {
     active_internal_id: (),
     #[webapi(slot = XHR_PENDING_STATUS_SLOT, init = 0)]
     pending_status: (),
+    #[webapi(slot = XHR_PENDING_STATUS_TEXT_SLOT, init = "")]
+    pending_status_text: (),
     #[webapi(slot = XHR_TIMEOUT_SLOT, init = 0)]
     timeout: (),
     #[webapi(slot = XHR_TIMEOUT_START_MS_SLOT, init = 0)]
