@@ -1317,7 +1317,7 @@ mod tests {
         let request_origin = moli_url::WebOrigin::from_url(&job.network_context.document_url);
         let request_url = url("https://other.test/upload");
         let preflight_headers = crate::network_host::cors_preflight_request_headers(
-            !request_origin.same_origin(&moli_url::WebOrigin::from_url(&request_url)),
+            !request_origin.same_origin_url(&request_url),
             &request_url,
             "POST",
             &[],

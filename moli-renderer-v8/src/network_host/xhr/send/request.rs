@@ -108,7 +108,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         cors_preflight_request_headers,
         send_body: prepared_body.body,
         credentials_mode,
-        use_cors_preflight: super::xhr_has_upload_listeners(scope, xhr),
+        use_cors_preflight: super::capture_xhr_upload_listener_flag(scope, xhr),
     })
 }
 

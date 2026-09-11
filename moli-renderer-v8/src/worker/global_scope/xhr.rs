@@ -1,7 +1,7 @@
 use super::*;
 use crate::network_host::{
     CapturedBlobUrl, ResolveContextUrlError, blob_url_entry,
-    fetch_browser_subresource_with_preflight_headers, local_url_response_with_blob_entry,
+    local_url_response_with_blob_entry,
 };
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
@@ -629,12 +629,16 @@ fn send_synchronous_worker_xhr(
                 .build()
                 .map_err(|error| format!("failed to build worker sync XHR fetch runtime: {error}"))
                 .and_then(|runtime| {
-                    runtime.block_on(fetch_browser_subresource_with_preflight_headers(
-                        loader.request_client().clone(),
-                        request,
-                        Some(worker_cancel_handle),
-                        preflight_headers,
-                    ))
+                    runtime
+                        .block_on(
+                            fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+                                loader.request_client().clone(),
+                                request,
+                                Some(worker_cancel_handle),
+                                preflight_headers,
+                            ),
+                        )
+                        .map(moli_fetch::NetworkFetchResult::into_response)
                 });
             let _ = response_tx.send(result);
         });
@@ -1179,7 +1183,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         };
 
     Ok(PreparedWorkerXhrSendRequest {
-        use_cors_preflight: xhr_has_upload_listeners(scope, xhr),
+        use_cors_preflight: capture_xhr_upload_listener_flag(scope, xhr),
         document_url,
         resolved_url,
         blob_url_entry: blob_url_entry(scope, xhr),
