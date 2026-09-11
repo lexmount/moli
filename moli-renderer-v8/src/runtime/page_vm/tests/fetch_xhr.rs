@@ -4356,6 +4356,168 @@ async fn blob_fetch_and_xhr_reject_non_get_methods_in_window_and_worker() {
 }
 
 #[tokio::test]
+async fn blob_url_entries_survive_request_cloning_and_xhr_open_in_window_and_worker() {
+    run_page_vm_async_test(async move {
+        for worker in [false, true] {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            let probe = r#"(async () => {
+                const check = (value, message) => { if (!value) throw new Error(message); };
+                const make = () => URL.createObjectURL(new Blob(['payload'], {type: 'text/plain'}));
+                const read = async (request) => {
+                    const response = await fetch(request);
+                    check(response.status === 200 && !response.url.includes('#'), 'response metadata');
+                    check(await response.text() === 'payload', 'captured payload');
+                };
+                const rejects = async input => {
+                    let failure;
+                    try { await fetch(input); } catch (error) { failure = error; }
+                    check(failure instanceof TypeError, 'fresh revoked URL must reject');
+                };
+                for (const fragment of ['', '#fragment']) {
+                    const url = make();
+                    const request = new Request(url + fragment);
+                    const before = request.clone();
+                    URL.revokeObjectURL(url);
+                    for (const copy of [request, before, request.clone(), new Request(request)]) await read(copy);
+                    await rejects(url + fragment);
+                    await rejects(new Request(url + fragment));
+
+                    for (const inherited of [false, true]) {
+                        for (const member of ['method', 'headers', 'signal']) {
+                            const getterUrl = make();
+                            const input = inherited ? new Request(getterUrl + fragment) : getterUrl + fragment;
+                            const init = {};
+                            Object.defineProperty(init, member, {get() {
+                                URL.revokeObjectURL(getterUrl);
+                                return member === 'method' ? 'GET' : member === 'headers' ? [] : null;
+                            }});
+                            const copy = new Request(input, init);
+                            if (inherited) await read(copy); else await rejects(copy);
+                        }
+                    }
+                    const immediateUrl = make();
+                    const pending = fetch(immediateUrl + fragment);
+                    URL.revokeObjectURL(immediateUrl);
+                    check(await (await pending).text() === 'payload', 'fetch must capture before returning');
+
+                    for (const async of [false, true]) {
+                        for (const reopen of [false, true]) {
+                            const xhrUrl = make();
+                            const xhr = new XMLHttpRequest();
+                            xhr.open('GET', xhrUrl + fragment, async);
+                            URL.revokeObjectURL(xhrUrl);
+                            try { xhr.open('GET', 'http://['); } catch (error) {
+                                check(error.name === 'SyntaxError', 'failed open must preserve previous request');
+                            }
+                            if (reopen) xhr.open('GET', xhrUrl + fragment, async);
+                            if (async) {
+                                await new Promise(resolve => { xhr.onloadend = resolve; xhr.send(); });
+                            } else {
+                                let failure;
+                                try { xhr.send(); } catch (error) { failure = error; }
+                                check(reopen ? failure?.name === 'NetworkError' : !failure, 'synchronous outcome');
+                            }
+                            check(xhr.status === (reopen ? 0 : 200), 'XHR reopened entry status');
+                            check(xhr.responseText === (reopen ? '' : 'payload'), 'XHR captured body');
+                        }
+                    }
+                }
+                return 'ok';
+            })()"#;
+            let script = if worker {
+                let source = serde_json::to_string(&format!(
+                    "{probe}.then(postMessage, error => postMessage(String(error)))"
+                )).unwrap();
+                format!(r#"globalThis.__snapshotResult = 'pending';
+                    const source = URL.createObjectURL(new Blob([{source}]));
+                    const worker = new Worker(source);
+                    worker.onmessage = e => {{ globalThis.__snapshotResult = e.data; worker.terminate(); URL.revokeObjectURL(source); }};
+                    worker.onerror = e => {{ globalThis.__snapshotResult = e.message; }};"#)
+            } else {
+                format!("globalThis.__snapshotResult = 'pending'; {probe}.then(value => {{ globalThis.__snapshotResult = value; }}, error => {{ globalThis.__snapshotResult = String(error); }})")
+            };
+            let result = local_executor.run(async move {
+                page_vm.vm_mut().eval(&script)?;
+                drive_websocket_until_done(&mut page_vm, "String(globalThis.__snapshotResult !== 'pending')", "blob entry lifetime checks should finish").await?;
+                page_vm.vm_mut().eval("globalThis.__snapshotResult")
+            }).await.expect("blob entry probe should run on owner lane");
+            assert_eq!(result, "ok", "worker={worker}");
+        }
+    }).await;
+}
+
+#[tokio::test]
+async fn intercepted_blob_url_requests_keep_their_entry_and_respect_url_and_method_overrides() {
+    run_page_vm_async_test(async move {
+        for (worker, xhr) in [(false, false), (false, true), (true, false)] {
+            for change in ["none", "fragment", "url", "method"] {
+                let mut page_vm = test_page_vm();
+                let local_executor = page_vm.local_executor.clone();
+                let result = local_executor.run(async move {
+                    page_vm.vm_mut().set_fetch_subresource_interception(true, Some(if xhr {
+                        SubresourceResourceType::Xhr
+                    } else {
+                        SubresourceResourceType::Fetch
+                    }));
+                    let probe = format!(r#"(() => {{
+                        const original = URL.createObjectURL(new Blob(['payload']));
+                        const other = URL.createObjectURL(new Blob(['replacement']));
+                        const finish = value => {{
+                            URL.revokeObjectURL(other);
+                            {finish}
+                        }};
+                        if ({xhr}) {{
+                            const xhr = new XMLHttpRequest();
+                            xhr.open('GET', original + '#original');
+                            URL.revokeObjectURL(original);
+                            xhr.onload = () => finish(xhr.responseText);
+                            xhr.onerror = () => finish('error');
+                            xhr.send();
+                        }} else {{
+                            const request = new Request(original + '#original');
+                            URL.revokeObjectURL(original);
+                            fetch(request).then(r => r.text()).then(finish, () => finish('error'));
+                        }}
+                        {ready}
+                    }})()"#,
+                        finish = if worker { "postMessage({value});" } else { "globalThis.__snapshotResult = value;" },
+                        ready = if worker { "postMessage({ready: true, other});" } else { "globalThis.__snapshotReady = true; globalThis.__snapshotOther = other;" },
+                    );
+                    let script = if worker {
+                        let source = serde_json::to_string(&probe).unwrap();
+                        format!(r#"globalThis.__snapshotResult = 'pending';
+                            const source = URL.createObjectURL(new Blob([{source}]));
+                            const worker = new Worker(source);
+                            worker.onmessage = e => {{
+                                if (e.data.ready) {{ globalThis.__snapshotReady = true; globalThis.__snapshotOther = e.data.other; }}
+                                else {{ globalThis.__snapshotResult = e.data.value; worker.terminate(); URL.revokeObjectURL(source); }}
+                            }};"#)
+                    } else {
+                        format!("globalThis.__snapshotResult = 'pending'; {probe}")
+                    };
+                    page_vm.vm_mut().eval(&script)?;
+                    drive_websocket_until_done(&mut page_vm, "String(globalThis.__snapshotReady === true)", "blob request should reach interception").await?;
+                    let pending = page_vm.vm_mut().take_pending_subresource_fetch_infos();
+                    assert_eq!(pending.len(), 1, "worker={worker}, xhr={xhr}, change={change}");
+                    let pending = &pending[0];
+                    let url = match change {
+                        "fragment" => { let mut url = pending.url.clone(); url.set_fragment(Some("new")); Some(url) }
+                        "url" => Some(Url::parse(&page_vm.vm_mut().eval("globalThis.__snapshotOther")?)?),
+                        _ => None,
+                    };
+                    let method = (change == "method").then(|| "POST".to_owned());
+                    page_vm.continue_pending_subresource_fetch(pending.internal_id, url, method, None, None, false, false)?;
+                    drive_websocket_until_done(&mut page_vm, "String(globalThis.__snapshotResult !== 'pending')", "continued blob request should complete").await?;
+                    page_vm.vm_mut().eval("globalThis.__snapshotResult")
+                }).await.expect("intercepted blob request should run on owner lane");
+                assert_eq!(result, match change { "url" => "replacement", "method" => "error", _ => "payload" }, "worker={worker}, xhr={xhr}, change={change}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn window_fetch_revoked_blob_url_records_file_not_found_failure() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
