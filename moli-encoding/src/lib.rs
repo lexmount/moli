@@ -7,6 +7,7 @@ mod legacy_text;
 mod percent;
 mod query;
 mod script;
+mod xhr;
 
 pub use document::{
     HtmlDocumentStreamingDecoder, LegacyEncodingDetector, decode_html_document,
@@ -23,6 +24,7 @@ pub use labels::{
 pub use legacy_text::decode_text_for_legacy_web;
 pub use query::encode_url_query_for_legacy_web;
 pub use script::{decode_classic_script_source, decode_utf8};
+pub use xhr::{XhrResponseDecoder, XhrResponseTextKind};
 
 #[cfg(test)]
 mod tests;
