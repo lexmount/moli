@@ -1236,6 +1236,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 
 #[test]
 fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     for child_realm in [false, true] {
         for (mime, response_type) in [
             ("application/xml", ""),
@@ -1246,8 +1247,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 "https://requester.example/page/index.html",
                 "<!doctype html><html><body></body></html>",
             );
-            vm.set_timezone_override_and_sync_surface(Some("UTC"))
-                .unwrap();
+            environment.set_timezone(Some("UTC")).unwrap();
             vm.eval(&format!(
                 r#"(() => {{
                     const frame = document.createElement('iframe');
@@ -1391,6 +1391,8 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                             request_method: "GET".to_owned(),
                             request_headers: Vec::new(),
                             request_body: None,
+                            skip_fetch_security_validation: false,
+                            response_filter: None,
                             body_source_id,
                             head,
                             network_request_headers: None,
@@ -1462,6 +1464,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
 
 #[test]
 fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     for (mime, response_type) in [
         ("application/xml", ""),
         ("application/xml", "document"),
@@ -1470,8 +1473,7 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
         let mut vm = new_storage_test_vm("https://xhr-document-modified.test/");
         vm.document_runtime
             .set_document_source_last_modified(Some(5_025_000.0));
-        vm.set_timezone_override_and_sync_surface(Some("UTC"))
-            .unwrap();
+        environment.set_timezone(Some("UTC")).unwrap();
         vm.set_fetch_subresource_interception(
             true,
             Some(crate::types::SubresourceResourceType::Xhr),
@@ -1519,6 +1521,8 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
                     request_body: None,
+                    skip_fetch_security_validation: false,
+                    response_filter: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
                         final_url: request.url.clone(),
@@ -1581,8 +1585,7 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
             .unwrap(),
             r#"["11/06/1994 08:49:37","01/01/1970 00:00:00","01/01/1970 01:23:45",true]"#
         );
-        vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-            .unwrap();
+        environment.set_timezone(Some("Asia/Shanghai")).unwrap();
         assert_eq!(
             vm.eval("__responseDocuments[0].lastModified").unwrap(),
             "11/06/1994 16:49:37"
@@ -1656,6 +1659,8 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
                         request_body: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
                         body_source_id,
                         head,
                         network_request_headers: None,
