@@ -6,6 +6,15 @@ The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent brows
 
 ## Chromium Behavior Evidence
 
+The `dom-input` text-editing checks were calibrated on 2026-09-12 against
+Debian `/usr/bin/chromium` 145.0.7632.116 under xvfb and run unchanged against
+Moli. `Input.insertText` on input, textarea and contenteditable elements emits
+trusted `InputEvent` instances with `data`, `inputType` and `isComposing`;
+textarea Enter and text-control Backspace/Delete have null data and distinct
+operation types. `beforeinput` is cancelable; `input` is not. Both bubble and
+are composed. This does not claim coverage of IME composition or rich-text
+transfer/target-range semantics.
+
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
 specification, Chromium source code, an existing Moli test, or intuition.
