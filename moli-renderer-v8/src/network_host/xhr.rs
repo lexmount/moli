@@ -60,7 +60,6 @@ pub(crate) use self::delivery::{
     finish_xhr_abort, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
-pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_REQUEST_HEADERS_SLOT,
@@ -80,8 +79,7 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
     PreparedXhrSendBody, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
-    convert_xhr_send_body_from_args,
-    xhr_author_request_headers,
+    convert_xhr_send_body_from_args, xhr_author_request_headers,
 };
 
 pub(crate) fn install_progress_event_template_bindings<'s>(

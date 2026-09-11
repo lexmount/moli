@@ -79,8 +79,8 @@ use crate::network_host::{
     throw_synchronous_xhr_failure, validate_fetch_response_headers,
     validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
-    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
+    xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
