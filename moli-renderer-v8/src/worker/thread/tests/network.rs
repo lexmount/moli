@@ -3611,6 +3611,7 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
             const payload = "upload=alpha&count=2";
             const uploadEvents = [];
             const uploadOrder = [];
+            xhr.onloadstart = () => uploadOrder.push("xhr:loadstart");
             ["loadstart", "progress", "load", "loadend"].forEach((type) => {
                 xhr.upload.addEventListener(type, (event) => {
                     uploadOrder.push(`listener-before:${event.type}`);
@@ -3655,7 +3656,7 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:20:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
+        r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:0:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["xhr:loadstart","listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
     );
     server
         .await

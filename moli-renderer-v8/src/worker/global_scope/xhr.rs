@@ -302,13 +302,10 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let request_url = prepared.resolved_url.to_string();
 
     if async_request {
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
-        if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
-            || worker_xhr_open_generation_changed(scope, xhr, open_generation)
-        {
+        if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
             return true;
         }
-        xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
+        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
         if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
             || worker_xhr_open_generation_changed(scope, xhr, open_generation)
         {

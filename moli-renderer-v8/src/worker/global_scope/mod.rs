@@ -76,7 +76,7 @@ use crate::network_host::{
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
-    close_pending_network_body_stream, cors_request_origin_after_redirects,
+    close_pending_network_body_stream, cors_request_origin_after_redirects, dispatch_xhr_loadstart,
     dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
@@ -88,8 +88,8 @@ use crate::network_host::{
     validate_cors_response_for_origin, validate_fetch_response_headers_for_origin,
     validate_fetch_response_security_policy_for_origin,
     validate_fetch_response_security_policy_with_body_classified_for_origin,
-    xhr_author_request_headers, xhr_dispatch_progress_event, xhr_ensure_send_allowed,
-    xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
+    xhr_author_request_headers, xhr_ensure_send_allowed, xhr_state_bool_property,
+    xhr_state_number_property, xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{

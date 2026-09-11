@@ -36,6 +36,7 @@ pub(crate) const XHR_ABORTED_SLOT: &str = "__lmXhrAborted";
 pub(crate) const XHR_ASYNC_SLOT: &str = "__lmXhrAsync";
 pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
 pub(crate) const XHR_UPLOAD_IN_PROGRESS_SLOT: &str = "__lmXhrUploadInProgress";
+const XHR_UPLOAD_LISTENER_SLOT: &str = "__lmXhrUploadListener";
 const XHR_PENDING_KIND_SLOT: &str = "__lmXhrPendingKind";
 const XHR_PENDING_STATUS_SLOT: &str = "__lmXhrPendingStatus";
 const XHR_PENDING_STATUS_TEXT_SLOT: &str = "__lmXhrPendingStatusText";
@@ -59,7 +60,6 @@ pub(crate) use self::delivery::{
     finish_xhr_abort, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
-pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_REQUEST_HEADERS_SLOT,
     XHR_RESPONSE_URL_SLOT, XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT,
@@ -77,8 +77,8 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 #[cfg(test)]
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
-    PreparedXhrSendBody, dispatch_xhr_upload_complete, prepare_xhr_send_body_from_args,
-    xhr_author_request_headers,
+    PreparedXhrSendBody, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
+    prepare_xhr_send_body_from_args, xhr_author_request_headers,
 };
 
 pub(crate) fn install_progress_event_template_bindings<'s>(

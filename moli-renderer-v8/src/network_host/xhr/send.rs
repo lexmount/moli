@@ -98,11 +98,10 @@ pub(super) fn xhr_send_callback<'s>(
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     if async_request {
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
-        if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
+        if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
             return;
         }
-        xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
+        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
         if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
             return;
         }
@@ -263,6 +262,33 @@ fn xhr_open_generation_changed(
         .is_some_and(|current| current != expected)
 }
 
+pub(crate) fn dispatch_xhr_loadstart(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    send_body: Option<&[u8]>,
+) -> bool {
+    let open_generation =
+        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
+    // The XHR loadstart listener can abort before upload.loadstart runs.
+    let has_upload_listeners = xhr_upload_object(scope, xhr).is_some_and(|upload| {
+        crate::context_bootstrap::simple_object_has_event_listeners(
+            scope,
+            upload,
+            XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+        )
+    });
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, has_upload_listeners);
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
+    xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
+    if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
+        return false;
+    }
+    if let Some(send_body) = send_body {
+        xhr_dispatch_upload_progress_event(scope, xhr, "loadstart", 0.0, send_body.len() as f64);
+    }
+    !xhr_is_aborted(scope, xhr) && !xhr_open_generation_changed(scope, xhr, open_generation)
+}
+
 pub(crate) fn dispatch_xhr_upload_complete(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -272,8 +298,7 @@ pub(crate) fn dispatch_xhr_upload_complete(
         return;
     };
     let total = send_body.len() as f64;
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, true);
-    for event_type in ["loadstart", "progress", "load", "loadend"] {
+    for event_type in ["progress", "load", "loadend"] {
         if xhr_is_aborted(scope, xhr) {
             set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
             return;

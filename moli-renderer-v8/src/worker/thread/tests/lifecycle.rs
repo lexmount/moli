@@ -7597,6 +7597,66 @@ async fn worker_fetch_body_consumption_after_stream_abort_preserves_abort_reason
 }
 
 #[tokio::test]
+async fn worker_xmlhttprequest_loadstart_handles_upload_abort_and_reopen() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (() => {
+            const aborted = ["xhr", "upload", "empty"].map(abortAt => {
+                const xhr = new XMLHttpRequest();
+                const events = [];
+                xhr.onloadstart = event => {
+                    events.push(`xhr-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+                    if (abortAt === "xhr") xhr.abort();
+                };
+                xhr.upload.onloadstart = event => {
+                    events.push(`upload-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+                    if (abortAt !== "xhr") xhr.abort();
+                };
+                for (const type of ["progress", "load", "abort", "loadend"]) {
+                    xhr.upload.addEventListener(type, event => events.push(
+                        `upload-${type}:${xhr.readyState}:${event.loaded}:${event.total}:${event.lengthComputable}`));
+                }
+                xhr.onabort = () => events.push(`xhr-abort:${xhr.readyState}`);
+                xhr.onloadend = () => events.push(`xhr-loadend:${xhr.readyState}`);
+                xhr.open("POST", "/unused");
+                xhr.send(abortAt === "empty" ? "" : "é");
+                events.push(`after-send:${xhr.readyState}:${xhr.status}`);
+                return events;
+            });
+
+            const xhr = new XMLHttpRequest();
+            const reopened = [];
+            xhr.onloadstart = () => reopened.push(`xhr-start:${xhr.readyState}`);
+            xhr.upload.onloadstart = event => {
+                reopened.push(`upload-start:${event.loaded}:${event.total}`);
+                xhr.open("GET", "data:text/plain,replacement");
+                xhr.send();
+                reopened.push(`after-reopen:${xhr.readyState}`);
+            };
+            for (const type of ["progress", "load", "abort", "loadend"]) {
+                xhr.upload.addEventListener(type, () => reopened.push(`unexpected-upload-${type}`));
+            }
+            xhr.onload = () => reopened.push(`load:${xhr.responseText}`);
+            xhr.onloadend = () => {
+                reopened.push(`loadend:${xhr.readyState}`);
+                postMessage({ aborted, reopened });
+                close();
+            };
+            xhr.open("POST", "/unused");
+            xhr.send("é");
+        })();
+        "#
+        .into(),
+        "https://worker-xhr-upload-start.test/main.js".into(),
+    );
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"aborted":[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]],"reopened":["xhr-start:1","upload-start:0:2","xhr-start:1","after-reopen:1","load:replacement","loadend:4"]}"#
+    );
+}
+
+#[tokio::test]
 async fn worker_xmlhttprequest_abort_uses_internal_state_and_preserves_reopened_request() {
     ensure_v8();
     let mut handle = spawn_worker(
