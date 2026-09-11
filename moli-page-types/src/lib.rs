@@ -308,6 +308,7 @@ impl From<NavigationRedirect> for RedirectInfo {
 pub struct NavigationResponse {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -324,6 +325,7 @@ impl Clone for NavigationResponse {
         Self {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             body: self
                 .body
@@ -369,6 +371,7 @@ impl NavigationResponse {
         ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
@@ -413,6 +416,7 @@ impl NavigationResponse {
         Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
@@ -437,6 +441,7 @@ impl NavigationResponse {
     ) -> Self {
         Self::from_head_and_text_body(
             ResponseHead {
+                status_text: None,
                 final_url,
                 status,
                 headers,
@@ -457,6 +462,9 @@ impl NavigationResponse {
         headers: Vec<(String, String)>,
     ) -> Self {
         let mut head = source.head();
+        if head.status != status {
+            head.status_text = None;
+        }
         head.status = status;
         head.headers = headers;
         Self::from_head_and_materialized_body(head, source.materialized_body())
@@ -467,6 +475,7 @@ impl NavigationResponse {
         let head = ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -503,6 +512,7 @@ impl NavigationResponse {
         let head = ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -3427,6 +3437,36 @@ mod tests {
     }
 
     #[test]
+    fn navigation_status_message_survives_conversion_and_header_overrides() {
+        for status_text in [None, Some("Original message"), Some("")] {
+            let mut response = NavigationResponse::from_text_body(
+                test_url("/response"),
+                200,
+                Vec::new(),
+                "body".to_owned(),
+            );
+            response.status_text = status_text.map(str::to_owned);
+            let headers = vec![("x-overridden".to_owned(), "true".to_owned())];
+            let overridden =
+                NavigationResponse::with_status_headers_from(&response, 200, headers.clone());
+            assert_eq!(overridden.headers, headers);
+            assert_eq!(overridden.status_text, response.status_text);
+            assert_eq!(
+                overridden.clone().into_parts().0.status_text,
+                response.status_text
+            );
+            let text = Response::from(overridden);
+            assert_eq!(text.head().status_text, response.status_text);
+            let round_trip = NavigationResponse::from(text);
+            assert_eq!(round_trip.into_body().0.status_text, response.status_text);
+
+            let changed = NavigationResponse::with_status_headers_from(&response, 201, Vec::new());
+            assert_eq!(changed.head().status_text(), "Created");
+            assert_eq!(changed.body_text(), "body");
+        }
+    }
+
+    #[test]
     fn navigation_response_byte_parts_transfer_exact_storage() {
         let template =
             NavigationResponse::from_text_body(test_url("/module"), 200, Vec::new(), String::new());
@@ -3896,6 +3936,7 @@ mod tests {
     fn subresource_response_body_stores_only_exact_response_bytes() {
         let response = Response::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: test_url("/utf8.txt"),
                 status: 200,
                 headers: Vec::new(),
@@ -3922,6 +3963,7 @@ mod tests {
     fn subresource_response_body_preserves_non_utf8_response_bytes() {
         let response = Response::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: test_url("/legacy.txt"),
                 status: 200,
                 headers: Vec::new(),

@@ -3354,6 +3354,7 @@ fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
         redirected: head.redirected,
@@ -3545,6 +3546,7 @@ fn start_service_worker_navigation_preload_response_in_context(
     };
 
     let head = moli_fetch::ResponseHead {
+        status_text: Some(started.response_head.status_text.clone()),
         final_url: started
             .response_head
             .final_url

@@ -143,9 +143,9 @@ fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
 fn filtered_response_status_text(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
-) -> &'static str {
+) -> &str {
     if filter == FetchResponseFilter::None {
-        http_status_text(head.status)
+        head.status_text()
     } else {
         ""
     }
@@ -331,7 +331,7 @@ fn build_fetch_response_object_head<'s>(
             scope,
             obj,
             RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-            http_status_text(head.status),
+            head.status_text(),
         );
         let internal_headers = filter_headers_for_guard(&head.headers, HeadersGuard::Response);
         let internal_headers_obj =

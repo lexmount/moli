@@ -672,6 +672,7 @@ fn missing_body_file_is_treated_as_incomplete_entry() -> Result<()> {
         request_url: "http://example.test/cache".to_owned(),
         final_url: "http://example.test/cache".to_owned(),
         status: 200,
+        status_text: None,
         headers: Vec::new(),
         stored_at_unix_ms: 1,
         last_used_at_unix_ms: 1,
@@ -720,29 +721,31 @@ fn unsupported_metadata_version_is_ignored_and_removed() -> Result<()> {
     let store = HttpCacheStore::new(&root);
     let key = HttpCacheStore::key_for_url("http://example.test/cache");
     let entry_dir = store.entry_dir(&key);
-    fs::create_dir_all(&entry_dir)?;
-    let meta_path = entry_dir.join(META_FILE);
-    fs::write(
-        &meta_path,
-        serde_json::to_vec(&serde_json::json!({
-            "version": 99,
-            "request_url": "http://example.test/cache",
-            "final_url": "http://example.test/cache",
-            "status": 200,
-            "headers": [],
-            "stored_at_unix_ms": 1,
-            "last_used_at_unix_ms": 1,
-            "expires_at_unix_ms": 2,
-            "vary_headers": [],
-            "body_file": "body.unsupported.bin"
-        }))?,
-    )?;
+    for version in [3, 99] {
+        fs::create_dir_all(&entry_dir)?;
+        let meta_path = entry_dir.join(META_FILE);
+        fs::write(
+            &meta_path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": version,
+                "request_url": "http://example.test/cache",
+                "final_url": "http://example.test/cache",
+                "status": 200,
+                "headers": [],
+                "stored_at_unix_ms": 1,
+                "last_used_at_unix_ms": 1,
+                "expires_at_unix_ms": 2,
+                "vary_headers": [],
+                "body_file": "body.unsupported.bin"
+            }))?,
+        )?;
 
-    assert!(load_test_entry(&store, &key)?.is_none());
-    assert!(
-        !meta_path.exists(),
-        "unsupported cache metadata version should be removed"
-    );
+        assert!(load_test_entry(&store, &key)?.is_none());
+        assert!(
+            !meta_path.exists(),
+            "unsupported cache metadata version should be removed"
+        );
+    }
 
     let _ = fs::remove_dir_all(root);
     Ok(())
@@ -794,6 +797,7 @@ fn metadata_body_file_must_not_escape_entry_directory() -> Result<()> {
         request_url: "http://example.test/cache".to_owned(),
         final_url: "http://example.test/cache".to_owned(),
         status: 200,
+        status_text: None,
         headers: Vec::new(),
         stored_at_unix_ms: 1,
         last_used_at_unix_ms: 1,

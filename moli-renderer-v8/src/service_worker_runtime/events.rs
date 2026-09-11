@@ -698,6 +698,7 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
+    pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, String)>,
 }
 

@@ -951,6 +951,7 @@ mod tests {
         let transition = redirects
             .advance(
                 ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://origin.test/start")?,
                     status: 303,
                     headers: vec![(

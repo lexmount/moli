@@ -378,6 +378,7 @@ mod tests {
             request_headers: Vec::new(),
             response: RawResponse::from_head_and_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: url.clone(),
                     status: 200,
                     headers: vec![("content-type".to_owned(), "text/html".to_owned())],

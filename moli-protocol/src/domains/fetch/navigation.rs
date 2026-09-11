@@ -650,6 +650,7 @@ fn pause_data_url_response_stage_navigation_into_buffer(
         };
     let response = RawResponse::from_head_and_body(
         ResponseHead {
+            status_text: None,
             final_url: pending.navigation.requested_url.clone(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), content_type)],

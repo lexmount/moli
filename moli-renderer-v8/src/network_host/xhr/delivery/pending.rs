@@ -15,6 +15,7 @@ pub(in crate::network_host::xhr) fn queue_xhr_response_delivery(
         .unwrap_or(XmlHttpRequestResponseType::Default);
     set_xhr_state_string(scope, xhr, XHR_PENDING_KIND_SLOT, "response");
     set_xhr_state_number(scope, xhr, XHR_PENDING_STATUS_SLOT, head.status as f64);
+    set_xhr_state_string(scope, xhr, XHR_PENDING_STATUS_TEXT_SLOT, head.status_text());
     set_xhr_state_string(scope, xhr, XHR_PENDING_URL_SLOT, head.final_url.as_str());
     match response_type {
         XmlHttpRequestResponseType::ArrayBuffer | XmlHttpRequestResponseType::Blob => {
@@ -96,6 +97,8 @@ fn xhr_complete_callback(
     let kind = xhr_state_string_property(scope, xhr, XHR_PENDING_KIND_SLOT).unwrap_or_default();
     let pending_status =
         xhr_state_number_property(scope, xhr, XHR_PENDING_STATUS_SLOT).unwrap_or(0.0) as u16;
+    let pending_status_text =
+        xhr_state_string_property(scope, xhr, XHR_PENDING_STATUS_TEXT_SLOT).unwrap_or_default();
     let pending_url =
         xhr_state_string_property(scope, xhr, XHR_PENDING_URL_SLOT).unwrap_or_default();
     let pending_body_value = xhr_state_value(scope, xhr, XHR_PENDING_BODY_BYTES_SLOT)
@@ -131,6 +134,7 @@ fn xhr_complete_callback(
                 scope,
                 xhr,
                 moli_fetch::ResponseHead {
+                    status_text: Some(pending_status_text),
                     final_url,
                     status: pending_status,
                     headers,
@@ -154,6 +158,7 @@ fn xhr_complete_callback(
 fn xhr_clear_pending(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
     set_xhr_state_string(scope, xhr, XHR_PENDING_KIND_SLOT, "");
     set_xhr_state_number(scope, xhr, XHR_PENDING_STATUS_SLOT, 0.0);
+    set_xhr_state_string(scope, xhr, XHR_PENDING_STATUS_TEXT_SLOT, "");
     set_xhr_state_string(scope, xhr, XHR_PENDING_URL_SLOT, "");
     set_xhr_state_string(scope, xhr, XHR_PENDING_BODY_SLOT, "");
     set_xhr_state_number(scope, xhr, XHR_PENDING_BODY_LENGTH_SLOT, 0.0);

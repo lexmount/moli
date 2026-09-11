@@ -810,6 +810,7 @@ mod tests {
     fn response(url: &str, body: &str) -> Response {
         Response::from_head_and_text_body(
             ResponseHead {
+                status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -827,6 +828,7 @@ mod tests {
     fn raw_response(url: &str, body: &[u8]) -> RawResponse {
         RawResponse::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -989,6 +991,7 @@ mod tests {
         };
         let response = Response::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: request.url.clone(),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],

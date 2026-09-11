@@ -480,6 +480,7 @@ fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
     }
     Some(moli_fetch::Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers: vec![(

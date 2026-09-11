@@ -263,6 +263,7 @@ impl DetachedParserScriptFetchContinuation {
         let text = String::from_utf8_lossy(&response_body).into_owned();
         let response = crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
             ResponseHead {
+                status_text: None,
                 final_url: inner.script.url.clone(),
                 status: response_code,
                 headers: response_headers,

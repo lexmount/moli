@@ -77,6 +77,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
     let (mut fetch_completion_tx, fetch_completion_rx) = oneshot::channel();
     let response = StreamingRawResponse::new_with_head(
         ResponseHead {
+            status_text: None,
             final_url: Url::parse("https://bridge.test/document")?,
             status: 200,
             headers: vec![("content-type".to_owned(), "text/html".to_owned())],

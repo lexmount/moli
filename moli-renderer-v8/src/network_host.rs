@@ -22,7 +22,6 @@ mod text_track;
 mod url_helpers;
 mod xhr;
 
-use http::StatusCode;
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use moli_webapi_declare::WebApiObject;
 
@@ -67,7 +66,6 @@ pub(crate) use self::body_source::{
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
     pending_network_body_stream, release_pending_opaque_response_body,
 };
-pub(in crate::network_host) use self::browser_response::http_status_text;
 pub(crate) use self::browser_response::{
     local_url_response, local_url_response_result, local_url_response_with_blob_entry,
 };

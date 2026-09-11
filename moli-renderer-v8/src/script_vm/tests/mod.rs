@@ -357,6 +357,7 @@ fn register_pending_window_fetch_for_test(
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: url.clone(),
                             status: 200,
                             headers: Vec::new(),
@@ -3357,6 +3358,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 204,
             headers: Vec::new(),
@@ -3598,6 +3600,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: report_url.clone(),
             status: 204,
             headers: Vec::new(),
@@ -3797,6 +3800,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 200,
             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

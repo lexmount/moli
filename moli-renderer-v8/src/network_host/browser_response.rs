@@ -1,13 +1,6 @@
 use super::*;
 use moli_web_mime::data_url_body_and_mime_type;
 
-pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
-    StatusCode::from_u16(status)
-        .ok()
-        .and_then(|status| status.canonical_reason())
-        .unwrap_or("")
-}
-
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
     Some(blob_response(url, body_bytes, mime_type))
@@ -20,6 +13,7 @@ pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: Stri
     }
     Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers,
@@ -38,6 +32,7 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = data_url_body_and_mime_type(url.as_str())?;
     Some(Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), mime_type)],
