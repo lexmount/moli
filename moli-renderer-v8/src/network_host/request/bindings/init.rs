@@ -12,6 +12,7 @@ use moli_fetch::RequestRedirectMode;
 
 pub(super) struct RequestConstructionState {
     pub(super) url_resolved: String,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) mode: String,
     pub(super) cache: String,
@@ -121,10 +122,14 @@ pub(super) fn request_initial_state<'s>(
         .as_ref()
         .map(|snapshot| snapshot.headers.clone())
         .unwrap_or_default();
+    let blob_url_entry = inherited
+        .as_ref()
+        .and_then(|snapshot| snapshot.blob_url_entry.clone());
     let signal = inherited.and_then(|snapshot| snapshot.signal);
 
     Ok(RequestConstructionState {
         url_resolved,
+        blob_url_entry,
         method,
         mode,
         cache,

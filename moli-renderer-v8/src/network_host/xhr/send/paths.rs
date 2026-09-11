@@ -28,6 +28,7 @@ pub(super) fn record_intercepted_xhr(
         prepared.credentials_mode,
         prepared.network_partition_key,
         prepared.policy_context,
+        prepared.blob_url_entry,
         PendingSubresourceFetchInfo {
             internal_id: 0,
             network_request_handle: None,

@@ -72,6 +72,7 @@ pub(super) fn xhr_open_callback<'s>(
     set_xhr_state_number(scope, xhr, XHR_OPEN_GENERATION_SLOT, open_generation + 1.0);
     set_xhr_state_string(scope, xhr, XHR_METHOD_SLOT, &method);
     set_xhr_state_string(scope, xhr, XHR_URL_SLOT, request_url.as_str());
+    set_blob_url_entry(scope, xhr, CapturedBlobUrl::capture(&request_url));
     set_xhr_state_string(scope, xhr, XHR_REQUEST_HEADERS_SLOT, "[]");
     set_xhr_state_bool(scope, xhr, XHR_ASYNC_SLOT, parsed.async_request);
     set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 1.0);

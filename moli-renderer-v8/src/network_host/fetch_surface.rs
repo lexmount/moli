@@ -817,6 +817,7 @@ fn request_clone_callback<'s>(
             .bind(scope)
             .expect("Request clone shell declaration should bind");
         for slot in [
+            BLOB_URL_ENTRY_SLOT,
             REQUEST_METHOD_SLOT,
             REQUEST_URL_SLOT,
             REQUEST_DESTINATION_SLOT,

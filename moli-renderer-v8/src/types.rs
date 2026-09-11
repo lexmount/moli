@@ -538,6 +538,7 @@ pub(super) struct PendingSubresourceFetchState {
     // Window fetches that need CORS preflight emit the actual request-start
     // after the preflight record, not when the pending fetch is registered.
     pub(super) deferred_request_started: bool,
+    pub(super) blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
 }
 
 impl PendingSubresourceFetchState {

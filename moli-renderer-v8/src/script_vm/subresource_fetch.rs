@@ -1121,6 +1121,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -1183,6 +1184,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -1237,6 +1239,7 @@ impl ScriptVm {
                                     policy_context,
                                     continuation: target.continuation(),
                                     deferred_request_started,
+                                    blob_url_entry,
                                 },
                                 request_url,
                                 request_method,
@@ -1300,6 +1303,7 @@ impl ScriptVm {
                     policy_context,
                     continuation: PendingSubresourceContinuation::CspReport { client_id },
                     deferred_request_started,
+                    blob_url_entry,
                 };
                 if !self._context_host.borrow().network_offline() {
                     let maybe_pending = self.continue_csp_report_via_service_worker(
@@ -1346,6 +1350,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let request_url = url.unwrap_or_else(|| pending.info.url.clone());
@@ -1934,6 +1939,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -2085,6 +2091,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
@@ -2125,6 +2132,7 @@ impl ScriptVm {
             policy_context,
             continuation,
             deferred_request_started,
+            blob_url_entry,
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
@@ -2437,6 +2445,7 @@ impl ScriptVm {
                 policy_context,
                 continuation,
                 deferred_request_started,
+                blob_url_entry,
             },
         };
         let info = pending.info.clone();
@@ -4009,13 +4018,20 @@ impl ScriptVm {
         let request_headers = state.request_headers.clone();
         let request_body = state.request_body.clone();
         let completion_tx = self._context_host.borrow().resource_completion_sender();
+        let local_response = crate::network_host::local_url_response_with_blob_entry(
+            &request.url,
+            &request.method,
+            state.pending.blob_url_entry.as_ref(),
+        );
         {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
         }
         task_runner.spawn(async move {
-            let result =
+            let result = if let Some(result) = local_response {
+                result.map(crate::protocol_types::NavigationResponse::from)
+            } else {
                 crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
                     request_client,
                     request,
@@ -4028,7 +4044,8 @@ impl ScriptVm {
                         .with_network_request_headers(
                             request_observation.map(|observation| observation.into_headers()),
                         )
-                });
+                })
+            };
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id,
                 request_url,

@@ -65,6 +65,7 @@ pub(super) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
 
 pub(crate) struct RequestInputSnapshot {
     pub(crate) url: String,
+    pub(crate) blob_url_entry: Option<CapturedBlobUrl>,
     pub(crate) method: String,
     pub(crate) mode: String,
     pub(crate) cache: String,
@@ -176,6 +177,7 @@ fn request_input_snapshot_inner<'s>(
     let signal = request_signal_snapshot_from_property(scope, object)?;
     Ok(Some(RequestInputSnapshot {
         url,
+        blob_url_entry: None,
         method,
         mode,
         cache,
@@ -252,6 +254,7 @@ fn request_input_snapshot_from_private_slots<'s>(
         .flatten();
     Ok(RequestInputSnapshot {
         url,
+        blob_url_entry: blob_url_entry(scope, object),
         method,
         mode,
         cache,

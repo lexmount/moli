@@ -207,15 +207,19 @@ where
 
     /// Return object URL bytes and MIME type, excluding its fragment.
     pub fn object_url_bytes_and_type(&self, url: &str) -> Option<(Vec<u8>, String)> {
+        let (bytes, mime_type) = self.object_url_shared_bytes_and_type(url)?;
+        Some((bytes.to_vec(), mime_type))
+    }
+
+    /// Capture an object URL entry without copying its immutable body. The
+    /// captured entry remains usable after revocation or creator teardown.
+    pub fn object_url_shared_bytes_and_type(&self, url: &str) -> Option<(Arc<[u8]>, String)> {
         let url = url.split_once('#').map_or(url, |(url, _)| url);
-        let blob_id = self
-            .object_urls
-            .lock()
-            .get(url)
-            .map(|state| state.blob_id)?;
-        let bytes = self.blob_bytes(blob_id)?;
-        let mime_type = self.blob_mime_type(blob_id).unwrap_or_default();
-        Some((bytes, mime_type))
+        let object_urls = self.object_urls.lock();
+        let blob_id = object_urls.get(url)?.blob_id;
+        let blobs = self.blobs.lock();
+        let blob = blobs.by_id.get(&blob_id)?;
+        Some((blob.bytes.clone(), blob.mime_type.clone()))
     }
 
     /// Return object URL body decoded lossily as text plus MIME type.
@@ -347,6 +351,47 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_object_url_entries_outlive_revocation_and_creator_cleanup() {
+        for cleanup in ["revoke", "owner", "lifetime"] {
+            let store = BlobStore::<u64, u64>::default();
+            let blob = store.create_blob(
+                Some(1),
+                Some(10),
+                vec![0, 128, 255],
+                "application/example".to_owned(),
+            );
+            let url = store
+                .create_object_url_with_lifetime(Some(1), Some(101), blob, "https://example.test")
+                .unwrap();
+            let entry = store
+                .object_url_shared_bytes_and_type(&format!("{url}#fragment"))
+                .unwrap();
+            let clone = store.object_url_shared_bytes_and_type(&url).unwrap();
+            assert!(Arc::ptr_eq(&entry.0, &clone.0));
+            let weak = Arc::downgrade(&entry.0);
+            store.release_blob_wrapper_ref(blob);
+            match cleanup {
+                "revoke" => {
+                    assert!(store.revoke_object_url(&url));
+                }
+                "owner" => store.cleanup_owner_resources(1),
+                "lifetime" => {
+                    assert_eq!(store.cleanup_object_url_lifetime(1, 101), 1);
+                }
+                _ => unreachable!(),
+            }
+            assert!(store.object_url_shared_bytes_and_type(&url).is_none());
+            assert!(store.blob_bytes(blob).is_none());
+            assert_eq!(&*entry.0, &[0, 128, 255]);
+            assert_eq!(entry.1, "application/example");
+            drop(entry);
+            assert!(weak.upgrade().is_some());
+            drop(clone);
+            assert!(weak.upgrade().is_none());
+        }
+    }
 
     #[test]
     fn object_url_retains_blob_until_revoked() {
