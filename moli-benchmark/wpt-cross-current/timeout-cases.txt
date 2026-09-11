@@ -116,6 +116,7 @@ html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
+html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
 html/browsers/history/the-session-history-of-browsing-contexts/navigation-in-onload.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
@@ -169,7 +170,6 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersec
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/scrolling-below-viewport-image-lazy-loading-in-iframe.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
@@ -211,6 +211,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigate-history-back-noop.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
@@ -260,7 +261,6 @@ service-workers/service-worker/clients-matchall-frozen.https.html
 service-workers/service-worker/clients-matchall-include-uncontrolled.https.html
 service-workers/service-worker/clients-matchall-on-evaluation.https.html
 service-workers/service-worker/embed-and-object-are-not-intercepted.https.html
-service-workers/service-worker/fetch-cors-xhr.https.html
 service-workers/service-worker/fetch-event-add-async.https.html
 service-workers/service-worker/fetch-event-is-reload-iframe-navigation-manual.https.html
 service-workers/service-worker/fetch-request-css-base-url.https.html

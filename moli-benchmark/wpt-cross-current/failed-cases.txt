@@ -9,7 +9,6 @@ compat/webkit-box-item-shrink-001.html
 compat/webkit-box-item-shrink-002.html
 compat/webkit-box-vertically-centered.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-star-allow.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/generic/image-document-applies-csp.html
@@ -21,7 +20,6 @@ content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
@@ -35,8 +33,6 @@ content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/nonce-enforce-blocked.html
 content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/securitypolicyviolation/blockeduri-inline.html
-content-security-policy/securitypolicyviolation/source-file-blob-scheme.html
-content-security-policy/securitypolicyviolation/source-file-data-scheme.html
 content-security-policy/unsafe-eval/eval-blocked-in-about-blank-iframe.html
 content-security-policy/webrtc/webrtc-allowed-default-src-none.html
 content-security-policy/webrtc/webrtc-allowed-explicit.html
@@ -142,19 +138,9 @@ css/css-flexbox/abspos/abspos-autopos-vlr-ltr.html
 css/css-flexbox/abspos/abspos-autopos-vlr-rtl.html
 css/css-flexbox/abspos/abspos-autopos-vrl-ltr.html
 css/css-flexbox/abspos/abspos-autopos-vrl-rtl.html
-css/css-flexbox/abspos/flex-abspos-staticpos-fallback-justify-content-001.html
 css/css-flexbox/abspos/flex-abspos-staticpos-justify-content-vertWM-002.html
-css/css-flexbox/abspos/flex-abspos-staticpos-justify-self-001.html
-css/css-flexbox/abspos/flex-abspos-staticpos-margin-001.html
-css/css-flexbox/abspos/flex-abspos-staticpos-margin-002.html
-css/css-flexbox/abspos/flex-abspos-staticpos-margin-003.html
-css/css-flexbox/abspos/position-absolute-002.html
 css/css-flexbox/abspos/position-absolute-004.html
 css/css-flexbox/abspos/position-absolute-005.html
-css/css-flexbox/abspos/position-absolute-007.html
-css/css-flexbox/abspos/position-absolute-010.html
-css/css-flexbox/abspos/position-absolute-012.html
-css/css-flexbox/abspos/position-absolute-013.html
 css/css-flexbox/align-baseline.html
 css/css-flexbox/align-content-007.htm
 css/css-flexbox/align-content-horiz-001b.html
@@ -304,8 +290,6 @@ css/css-flexbox/flexbox-baseline-align-self-baseline-horiz-001.html
 css/css-flexbox/flexbox-baseline-multi-item-horiz-001a.html
 css/css-flexbox/flexbox-baseline-multi-item-horiz-001b.html
 css/css-flexbox/flexbox-baseline-multi-line-horiz-004.html
-css/css-flexbox/flexbox-baseline-single-item-001a.html
-css/css-flexbox/flexbox-baseline-single-item-001b.html
 css/css-flexbox/flexbox-basic-block-horiz-001v.xhtml
 css/css-flexbox/flexbox-basic-block-vert-001v.xhtml
 css/css-flexbox/flexbox-basic-textarea-vert-001.xhtml
@@ -315,6 +299,7 @@ css/css-flexbox/flexbox-collapsed-item-horiz-002.html
 css/css-flexbox/flexbox-collapsed-item-horiz-003.html
 css/css-flexbox/flexbox-column-row-gap-004.html
 css/css-flexbox/flexbox-flex-wrap-horiz-002.html
+css/css-flexbox/flexbox-items-as-stacking-contexts-002.html
 css/css-flexbox/flexbox-justify-content-horiz-004.xhtml
 css/css-flexbox/flexbox-justify-content-horiz-006.xhtml
 css/css-flexbox/flexbox-justify-content-wmvert-002.html
@@ -325,7 +310,6 @@ css/css-flexbox/flexbox-overflow-horiz-002.html
 css/css-flexbox/flexbox-overflow-padding-001.html
 css/css-flexbox/flexbox-overflow-padding-002.html
 css/css-flexbox/flexbox-overflow-vert-002.html
-css/css-flexbox/flexbox-paint-ordering-003.html
 css/css-flexbox/flexbox-safe-overflow-position-006.html
 css/css-flexbox/flexbox-vert-lr-with-img.html
 css/css-flexbox/flexbox-writing-mode-010.html
@@ -369,8 +353,6 @@ css/css-flexbox/gap-007-rl.html
 css/css-flexbox/getcomputedstyle/flexbox_computedstyle_min-auto-size.html
 css/css-flexbox/grid-flex-item-001.html
 css/css-flexbox/height-percentage-with-dynamic-container-size.html
-css/css-flexbox/hittest-overlapping-margin.html
-css/css-flexbox/hittest-overlapping-order.html
 css/css-flexbox/image-as-flexitem-size-005.html
 css/css-flexbox/image-as-flexitem-size-005v.html
 css/css-flexbox/image-as-flexitem-size-006.html
@@ -415,6 +397,7 @@ css/css-flexbox/parsing/flex-computed.html
 css/css-flexbox/percent-height-flex-items-cross-sizes-with-mutations.html
 css/css-flexbox/percentage-heights-001.html
 css/css-flexbox/percentage-heights-003.html
+css/css-flexbox/percentage-heights-004.html
 css/css-flexbox/percentage-heights-008.html
 css/css-flexbox/percentage-heights-011.html
 css/css-flexbox/percentage-heights-013.html
@@ -534,9 +517,9 @@ css/css-grid/abspos/orthogonal-positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
+css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
+css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -614,6 +597,7 @@ css/css-grid/alignment/grid-alignment-style-changes-005.html
 css/css-grid/alignment/grid-alignment-style-changes-006.html
 css/css-grid/alignment/grid-alignment-style-changes-007.html
 css/css-grid/alignment/grid-alignment-style-changes-008.html
+css/css-grid/alignment/grid-baseline-001.html
 css/css-grid/alignment/grid-baseline-align-001.html
 css/css-grid/alignment/grid-baseline-align-cycles-001.html
 css/css-grid/alignment/grid-baseline-justify-001.html
@@ -857,7 +841,6 @@ css/css-grid/grid-item-non-auto-height-stretch-001.html
 css/css-grid/grid-item-non-auto-height-stretch-003.html
 css/css-grid/grid-items/grid-auto-margin-and-replaced-item-001.html
 css/css-grid/grid-items/grid-automatic-minimum-intrinsic-aspect-ratio-001.html
-css/css-grid/grid-items/grid-inline-items-inline-blocks-001.html
 css/css-grid/grid-items/grid-intrinsic-maximums.html
 css/css-grid/grid-items/grid-item-dynamic-min-contribution-001.html
 css/css-grid/grid-items/grid-item-flex-container-001.html
@@ -869,7 +852,6 @@ css/css-grid/grid-items/grid-item-overflow-auto-max-height-percentage.html
 css/css-grid/grid-items/grid-item-percentage-sizes-001.html
 css/css-grid/grid-items/grid-item-percentage-sizes-002.html
 css/css-grid/grid-items/grid-item-percentage-sizes-003.html
-css/css-grid/grid-items/grid-items-inline-blocks-001.html
 css/css-grid/grid-items/grid-items-minimum-height-orthogonal-001.html
 css/css-grid/grid-items/grid-items-minimum-width-001.html
 css/css-grid/grid-items/grid-items-minimum-width-002.html
@@ -1501,7 +1483,6 @@ css/css-grid/grid-model/grid-inline-first-letter-003.html
 css/css-grid/grid-model/grid-inline-first-line-003.html
 css/css-grid/grid-model/grid-item-accepts-first-letter-001.html
 css/css-grid/grid-model/grid-item-accepts-first-line-001.html
-css/css-grid/grid-model/grid-item-hit-test.html
 css/css-grid/grid-model/grid-overflow-padding-001.html
 css/css-grid/grid-model/grid-overflow-padding-002.html
 css/css-grid/grid-with-orthogonal-child-within-flexbox.html
@@ -1695,10 +1676,8 @@ css/css-shadow/font-face-002.html
 css/css-shadow/font-face-003.html
 css/css-shadow/font-face-004.html
 css/css-shadow/font-face-005.html
-css/css-shadow/font-face-006.html
 css/css-shadow/font-face-007.html
 css/css-shadow/font-face-008.html
-css/css-shadow/font-face-009.html
 css/css-shadow/has-slotted-manual-assignment.html
 css/css-shadow/has-slotted-query-selector.html
 css/css-shadow/keyframes-001.html
@@ -2522,11 +2501,7 @@ css/geometry/DOMPoint-002.html
 css/geometry/DOMQuad-001.html
 css/geometry/DOMQuad-002.html
 css/geometry/DOMQuad-nan.html
-css/geometry/DOMRect-001.html
-css/geometry/DOMRect-002.html
-css/geometry/DOMRect-nan.html
 css/geometry/DOMRectList.html
-css/geometry/WebKitCSSMatrix.html
 css/geometry/historical.html
 css/geometry/spec-examples.html
 css/geometry/structured-serialization.html
@@ -2606,7 +2581,6 @@ domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-url.html
 domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
-domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
 domparsing/insert_adjacent_html.html
@@ -2802,8 +2776,8 @@ fullscreen/api/document-onfullscreenerror.html
 fullscreen/api/element-request-fullscreen-active-document.html
 fullscreen/api/element-request-fullscreen-not-allowed.html
 fullscreen/api/promises-reject.html
-geolocation/non-secure-contexts.http.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
+hr-time/test_cross_frame_start.html
 html/browsers/browsing-the-web/history-traversal/001.html
 html/browsers/browsing-the-web/history-traversal/PopStateEvent.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name.html
@@ -2856,6 +2830,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-docu
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-traversal.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-same-document-traversal.html
@@ -2893,7 +2868,6 @@ html/browsers/history/the-location-interface/location-ancestor-origins-new-objec
 html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
 html/browsers/history/the-location-interface/location-protocol-setter.html
-html/browsers/history/the-location-interface/location-prototype-setting-same-origin.html
 html/browsers/history/the-location-interface/location_assign_about_blank.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/location_search.html
@@ -2907,7 +2881,6 @@ html/browsers/origin/relaxing-the-same-origin-restriction/document_domain.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain_setter.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-01.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
-html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-03.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_1.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_2.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_3.html
@@ -3094,6 +3067,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_histo
 html/semantics/embedded-content/the-iframe-element/move-node-local-root.html
 html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitive.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -3118,6 +3092,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
@@ -3130,9 +3105,7 @@ html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-l
 html/semantics/embedded-content/the-img-element/update-the-source-set.html
 html/semantics/embedded-content/the-img-element/usemap-casing.html
 html/semantics/embedded-content/the-object-element/document-getters-return-null-for-cross-origin.html
-html/semantics/embedded-content/the-object-element/historical.html
 html/semantics/embedded-content/the-object-element/object-attributes.html
-html/semantics/embedded-content/the-object-element/object-handler.html
 html/semantics/embedded-content/the-object-element/object-in-display-none-load-event.html
 html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.html
 html/semantics/embedded-content/the-object-element/object-javascript-url.html
@@ -3191,6 +3164,7 @@ html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.h
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
+html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3210,11 +3184,11 @@ html/semantics/popovers/popover-stacking.html
 html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/popovers/popovertarget-reflection.html
-html/semantics/scripting-1/the-script-element/css-module/charset-bom.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/css-module/integrity.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
+html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-type-attribute-error.html
@@ -3289,7 +3263,6 @@ html/semantics/the-button-element/command-and-commandfor/toggleevent-source-attr
 html/syntax/charset/xhr.html
 html/syntax/parsing/DOMContentLoaded-defer.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
-html/syntax/parsing/doctype-system-identifier-distinction.html
 html/syntax/parsing/html5lib_webkit02.html?run_type=uri
 html/syntax/parsing/html5lib_webkit02.html?run_type=write
 html/syntax/parsing/html5lib_webkit02.html?run_type=write_single
@@ -3331,14 +3304,11 @@ html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
-html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-attached-in-event.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-resolution-order.html
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-5.html
 html/webappapis/scripting/reporterror-cross-realm-method.html
 html/webappapis/structured-clone/structured-clone-cross-realm-method.html
-import-maps/csp/hash-failure.html
-import-maps/csp/nonce-failure.html
 import-maps/dynamic-integrity.html
 import-maps/no-referencing-script-integrity.html
 import-maps/static-integrity.html
@@ -3410,22 +3380,18 @@ navigation-api/ordering-and-transition/reload-no-popstate.html
 navigation-api/precommit-handler/precommitHandler-push.html
 navigation-api/precommit-handler/precommitHandler-replace.html
 navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
+navigation-timing/dom-interactive-image-document.html
+navigation-timing/dom-interactive-media-document.html
 navigation-timing/nav2-test-attributes-values.html
 navigation-timing/nav2-test-navigation-type-reload.html
 navigation-timing/navigation-type-post-backforward.html
 navigation-timing/test-document-onload.html
-navigation-timing/test-navigation-redirectCount-none.html
-navigation-timing/test-no-previous-document.html
-navigation-timing/test-performance-attributes-exist-in-object.html
 navigation-timing/test-timing-attributes-order.html
-navigation-timing/test-timing-client-redirect.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
 page-lifecycle/idlharness.html
 page-visibility/iframe-session-history.html
-page-visibility/test_default_view.html
 performance-timeline/get-invalid-entries.html
 performance-timeline/navigation-id-worker-created-entries.html
-performance-timeline/not-clonable.html
 performance-timeline/worker-with-performance-observer.html
 permissions-policy/experimental-features/focus-without-user-activation-disabled.html
 permissions-policy/experimental-features/focus-without-user-activation-focused-frame-descendant.html
@@ -3449,6 +3415,7 @@ quirks/table-cell-width-calculation.html
 quirks/unitless-length/excluded-properties-001.html
 referrer-policy/generic/inheritance/popup-inheritance-form-submission.html
 reporting/crashReport-test.html
+requestidlecallback/callback-idle-periods.html
 requestidlecallback/deadline-max-rAF-dynamic.html
 requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
@@ -3506,11 +3473,11 @@ secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
 service-workers/cache-storage/cache-keys-attributes-for-service-worker.https.html
-service-workers/cache-storage/credentials.https.html
 service-workers/cache-storage/sandboxed-iframes.https.html
 service-workers/service-worker/active.https.html
 service-workers/service-worker/add-routes.https.html
 service-workers/service-worker/claim-affect-other-registration.https.html
+service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-using-registration.https.html
 service-workers/service-worker/claim-worker-fetch.https.html
 service-workers/service-worker/client-navigate.https.html
@@ -3524,8 +3491,8 @@ service-workers/service-worker/controlled-iframe-postMessage.https.html
 service-workers/service-worker/dedicated-worker-service-worker-interception.https.html
 service-workers/service-worker/detached-context.https.html
 service-workers/service-worker/fetch-audio-tainting.https.html
+service-workers/service-worker/fetch-cors-xhr.https.html
 service-workers/service-worker/fetch-event-referrer-policy.https.html
-service-workers/service-worker/fetch-event-respond-with-body-loaded-in-chunk.https.html
 service-workers/service-worker/fetch-event-respond-with-custom-response.https.html
 service-workers/service-worker/fetch-event-respond-with-readable-stream.https.html
 service-workers/service-worker/fetch-event-within-sw.https.html
@@ -3589,7 +3556,6 @@ service-workers/service-worker/xsl-base-url.https.html
 shadow-dom/DocumentOrShadowRoot-prototype-elementFromPoint.html
 shadow-dom/HighlightRegistry-highlightsFromPoint.html
 shadow-dom/MouseEvent-prototype-offsetX-offsetY.html
-shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-async-fetch-disconnect-iframe.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-async-fetch-disconnect.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-async-fetch-duplicate-bare-specifier.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-async-fetch-duplicate.html
@@ -3660,18 +3626,14 @@ svg/linking/scripted/href-script-element.html
 svg/linking/scripted/xlink-href-compat.html
 svg/path/parsing/error-handling.html
 svg/path/parsing/number-error-trailing-decimal.html
-svg/path/parsing/whitespace-basic.html
 svg/path/property/test_style_flush_on_dom_api_with_d_property.html
 svg/scripted/attr-script-fetchpriority.html
 svg/struct/SVGSVGElement-deselectAll.html
 svg/struct/systemLanguage-parsing.html
-svg/struct/use-getComputedStyle.html
 svg/styling/css-var-dom-interface.html
 svg/styling/presentation-attributes-irrelevant.html
 svg/styling/presentation-attributes-relevant.html
-svg/styling/presentation-attributes-special-cases.html
 svg/styling/presentation-attributes-unknown.html
-svg/styling/symbol-g-graphics-element.html
 svg/types/SVGElement.ownerSVGElement-01.html
 svg/types/SVGElement.ownerSVGElement-02.html
 svg/types/scripted/SVGAnimatedAngle-initial-values.html
@@ -3720,7 +3682,6 @@ svg/types/scripted/SVGLengthList-basics.html
 svg/types/scripted/SVGList-parse-invalid-clears-items.html
 svg/types/scripted/SVGMatrix-tentative.html
 svg/types/scripted/SVGPoint.html
-svg/types/scripted/SVGRect.html
 trusted-types/Document-write-appending-line-feed.html
 trusted-types/Document-write.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
@@ -3740,7 +3701,6 @@ trusted-types/TrustedTypePolicyFactory-getAttributeType-svg.html
 trusted-types/TrustedTypePolicyFactory-getAttributeType.html
 trusted-types/Window-TrustedTypes.html
 trusted-types/block-Document-execCommand.html
-trusted-types/block-string-assignment-to-DOMParser-parseFromString.html
 trusted-types/block-string-assignment-to-Document-write.html
 trusted-types/block-string-assignment-to-Element-outerHTML.html
 trusted-types/block-string-assignment-to-Element-setAttribute.html
@@ -3768,6 +3728,7 @@ trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-002.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-003.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-004-worker.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-005.html
+trusted-types/trusted-types-createHTMLDocument.html
 trusted-types/trusted-types-duplicate-names-list.html
 trusted-types/trusted-types-duplicate-names-without-enforcement.html
 trusted-types/trusted-types-duplicate-names.html
@@ -3778,7 +3739,6 @@ trusted-types/trusted-types-report-only.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-create-policy.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-sink-mismatch.html
 trusted-types/trusted-types-reporting-clipping-of-sample.html
-trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-Document-execCommand.html
 trusted-types/trusted-types-reporting-for-Document-write.html
@@ -3795,13 +3755,6 @@ url/a-element.html?include=file
 url/a-element.html?include=javascript
 url/a-element.html?include=mailto
 url/failure.html
-user-timing/invoke_with_timing_attributes.html
-user-timing/mark_exceptions.html
-user-timing/measure-exceptions.html
-user-timing/measure_associated_with_navigation_timing.html
-user-timing/measure_exception.html
-user-timing/measure_exceptions_navigation_timing.html
-user-timing/measure_navigation_timing.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
 wasm/jsapi/functions/entry-different-function-realm.html
@@ -3817,7 +3770,6 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
-workers/constructors/Worker/constructor-utf16-bom.html
 workers/modules/dedicated-worker-import-csp.html
 workers/semantics/encodings/003.html
 workers/semantics/encodings/004.html
@@ -3827,5 +3779,5 @@ worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
-xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
+xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xml/xml-prolog-accepted-versions.html
