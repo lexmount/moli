@@ -94,6 +94,7 @@ pub(super) fn xhr_open_callback<'s>(
     set_xhr_state_number(scope, xhr, XHR_PENDING_STATUS_SLOT, 0.0);
     set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, false);
     set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, false);
     let empty_response: v8::Local<'_, v8::Value> = v8_string(scope, "")
         .map(|s| s.into())
         .unwrap_or_else(|| v8::undefined(scope).into());

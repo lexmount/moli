@@ -23,5 +23,5 @@ pub(crate) use simple_event_target::{
     simple_object_event_listener_is_registered, simple_object_event_listeners_snapshot,
     simple_object_event_remove_listener_value_for_type, simple_object_event_set_ordered_handler,
     simple_object_event_target_add_listener, simple_object_event_target_register_webidl_listener,
-    simple_object_event_target_remove_listener,
+    simple_object_event_target_remove_listener, simple_object_has_event_listeners,
 };
