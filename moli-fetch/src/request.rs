@@ -9,11 +9,11 @@ use moli_cookie_jar::{
     NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata, redirect_types_for_request,
     site_context_downgrade_type,
 };
-use moli_url::{origin_ascii_serialization, same_origin};
+use moli_url::same_origin;
 use url::Url;
 
 use crate::{
-    FetchConfig, RedirectInfo, RedirectSource, network_fetch_result::NetworkObservationRecorder,
+    FetchConfig, FetchUrlList, RedirectInfo, network_fetch_result::NetworkObservationRecorder,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +55,7 @@ pub enum BrowserRequestMetadata {
     JsonModule,
     Manifest,
     Ping,
+    Script,
     Style,
     StyleModule,
     TextTrack,
@@ -659,10 +660,11 @@ impl Request {
     }
 
     pub fn redirect_count(&self) -> usize {
-        self.redirect_chain
-            .iter()
-            .filter(|redirect| redirect.source != RedirectSource::Internal)
-            .count()
+        self.url_list(&self.url).redirect_count()
+    }
+
+    pub fn url_list<'a>(&'a self, request_url: &'a Url) -> FetchUrlList<'a> {
+        FetchUrlList::new(request_url, &self.redirect_chain)
     }
 
     /// Whether the URL list has left the initiating origin. For subresource
@@ -672,12 +674,8 @@ impl Request {
             .initiator_url
             .as_ref()
             .is_some_and(|initiator| {
-                !same_origin(initiator, request_url)
-                    || !same_origin(initiator, &self.url)
-                    || self.redirect_chain.iter().any(|redirect| {
-                        !same_origin(initiator, &redirect.from_url)
-                            || !same_origin(initiator, &redirect.to_url)
-                    })
+                !same_origin(initiator, &self.url)
+                    || self.url_list(request_url).has_cross_origin_url(initiator)
             })
     }
 
@@ -688,14 +686,7 @@ impl Request {
         let Some(initiator) = self.cookie_context.initiator_url.as_ref() else {
             return "null".to_owned();
         };
-        if self.redirect_chain.iter().any(|redirect| {
-            !same_origin(&redirect.from_url, &redirect.to_url)
-                && !same_origin(initiator, &redirect.from_url)
-        }) {
-            "null".to_owned()
-        } else {
-            origin_ascii_serialization(initiator)
-        }
+        self.url_list(&self.url).serialized_origin(initiator)
     }
 
     pub fn with_network_partition_key(mut self, key: Option<String>) -> Self {

@@ -363,7 +363,7 @@ impl NativeModuleGraphFetchRequest {
                 request.with_browser_request_metadata(BrowserRequestMetadata::JsonModule)
             }
             ModuleKind::JavaScript | ModuleKind::ModulePreloadText | ModuleKind::WebAssembly => {
-                request
+                request.with_browser_request_metadata(BrowserRequestMetadata::Script)
             }
         })
     }
@@ -468,15 +468,16 @@ impl NativeModuleGraphFetchRequest {
                             &response.headers,
                         );
                     let (head, _, body_bytes) = response.into_parts();
+                    crate::network_host::validate_cors_response_chain(
+                        &initiator_url,
+                        &head,
+                        credentials_mode,
+                    ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
                     let response_is_eligible = crate::network_host::network_response_filter(
                         &initiator_url,
                         &head,
                         request_mode,
-                    ).is_none() && crate::network_host::validate_cors_response_chain(
-                        &initiator_url,
-                        &head,
-                        credentials_mode,
-                    ).is_ok();
+                    ).is_none();
                     if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
                         integrity.as_deref(),

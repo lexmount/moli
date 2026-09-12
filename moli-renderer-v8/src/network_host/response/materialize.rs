@@ -97,23 +97,12 @@ pub(crate) fn network_response_filter(
     if is_redirect_status(head.status) {
         Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
     } else if request_mode == RequestMode::NoCors
-        && response_has_cross_origin_url(document_url, head)
+        && head.url_list().has_cross_origin_url(document_url)
     {
         Some(AsyncSubresourceFetchResponseFilter::Opaque)
     } else {
         None
     }
-}
-
-pub(super) fn response_has_cross_origin_url(
-    document_url: &url::Url,
-    head: &moli_fetch::ResponseHead,
-) -> bool {
-    !moli_url::same_origin(document_url, &head.final_url)
-        || head.redirect_chain.iter().any(|redirect| {
-            !moli_url::same_origin(document_url, &redirect.from_url)
-                || !moli_url::same_origin(document_url, &redirect.to_url)
-        })
 }
 
 fn compute_fetch_response_type(
@@ -127,7 +116,7 @@ fn compute_fetch_response_type(
         FetchResponseFilter::Cors => "cors",
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if response_has_cross_origin_url(document_url, head) => "cors",
+        FetchResponseFilter::None if head.url_list().has_cross_origin_url(document_url) => "cors",
         FetchResponseFilter::None => "basic",
     }
 }
@@ -165,14 +154,6 @@ fn filtered_response_status_text(
         http_status_text(head.status)
     } else {
         ""
-    }
-}
-
-fn legacy_fetch_response_type(document_url: &url::Url, response_url: &url::Url) -> &'static str {
-    if moli_url::same_origin(document_url, response_url) {
-        "basic"
-    } else {
-        "cors"
     }
 }
 
@@ -385,7 +366,7 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     body_stream: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     let response_type = response_slot_string(scope, obj, RESPONSE_TYPE_SLOT)
-        .unwrap_or_else(|| legacy_fetch_response_type(&head.final_url, &head.final_url).to_owned());
+        .expect("fetch response head has a response type");
     let filter = match response_type.as_str() {
         "opaque" => FetchResponseFilter::Opaque,
         "opaqueredirect" => FetchResponseFilter::OpaqueRedirect,

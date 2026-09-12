@@ -14,7 +14,7 @@ use moli_cookie_jar::{
     NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookieQueryReport,
     StoredCookieSetReport, same_site_urls,
 };
-use moli_url::{is_potentially_trustworthy_url, same_origin, tuple_origin_url};
+use moli_url::{is_potentially_trustworthy_url, tuple_origin_url};
 use moli_url_policy::ensure_http_network_transport_url;
 use tracing::debug;
 use url::Url;
@@ -192,6 +192,10 @@ pub(crate) fn outgoing_request_headers_for_url(
     append_browser_subresource_headers(&mut outgoing, config, request, request_url);
     append_browser_storage_access_header(&mut outgoing, request, request_url);
 
+    if let Some(origin) = request_origin_header_value(request, request_url) {
+        append_header_if_missing(&mut outgoing, "Origin", origin);
+    }
+
     if !header_present(&outgoing, "referer")
         && let Some(referer) = referrer_header_value_for_request(request, request_url)
     {
@@ -312,10 +316,6 @@ fn append_browser_navigation_headers(
         append_header_if_missing(outgoing, "Cache-Control", "max-age=0".to_owned());
     }
 
-    if let Some(origin) = request_origin_header_value(request, request_url) {
-        append_header_if_missing(outgoing, "Origin", origin);
-    }
-
     append_browser_client_hints(outgoing, config);
 }
 
@@ -343,6 +343,7 @@ fn append_browser_subresource_headers(
         | BrowserRequestMetadata::JsonModule
         | BrowserRequestMetadata::Manifest
         | BrowserRequestMetadata::Ping
+        | BrowserRequestMetadata::Script
         | BrowserRequestMetadata::Style
         | BrowserRequestMetadata::StyleModule
         | BrowserRequestMetadata::TextTrack
@@ -380,6 +381,7 @@ fn append_browser_subresource_headers(
                 BrowserRequestMetadata::Image => "image",
                 BrowserRequestMetadata::JsonModule => "json",
                 BrowserRequestMetadata::Manifest => "manifest",
+                BrowserRequestMetadata::Script => "script",
                 BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
                 BrowserRequestMetadata::TextTrack => "track",
                 BrowserRequestMetadata::Video => "video",
@@ -390,16 +392,6 @@ fn append_browser_subresource_headers(
                 | BrowserRequestMetadata::Xhr => "empty",
             };
             append_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
-            let origin = if matches!(metadata, BrowserRequestMetadata::Style)
-                && !matches!(request.request_mode, crate::RequestMode::Cors)
-            {
-                None
-            } else {
-                request_origin_header_value(request, request_url)
-            };
-            if let Some(origin) = origin {
-                append_header_if_missing(outgoing, "Origin", origin);
-            }
             append_browser_client_hints(outgoing, config);
         }
     }
@@ -473,12 +465,13 @@ fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
     };
     let initiator_url =
         tuple_origin_url(initiator_url).unwrap_or(std::borrow::Cow::Borrowed(initiator_url));
-    if same_origin(initiator_url.as_ref(), request_url) {
+    let urls = request.url_list(request_url);
+    if !urls.has_cross_origin_url(initiator_url.as_ref()) {
         "same-origin".to_owned()
-    } else if same_site_urls(initiator_url.as_ref(), request_url, true) {
-        "same-site".to_owned()
-    } else {
+    } else if urls.has_cross_site_url(initiator_url.as_ref()) {
         "cross-site".to_owned()
+    } else {
+        "same-site".to_owned()
     }
 }
 
@@ -1370,7 +1363,7 @@ mod tests {
         assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
         assert_eq!(
             header_value(&headers, "sec-fetch-site"),
-            Some("same-origin".to_owned())
+            Some("cross-site".to_owned())
         );
     }
 
@@ -1396,7 +1389,7 @@ mod tests {
         assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
         assert_eq!(
             header_value(&headers, "sec-fetch-site"),
-            Some("same-origin".to_owned())
+            Some("same-site".to_owned())
         );
     }
 
@@ -1423,7 +1416,7 @@ mod tests {
         assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
         assert_eq!(
             header_value(&headers, "sec-fetch-site"),
-            Some("same-origin".to_owned())
+            Some("cross-site".to_owned())
         );
     }
 
@@ -1452,6 +1445,51 @@ mod tests {
             header_value(&headers, "sec-fetch-site"),
             Some("cross-site".to_owned())
         );
+    }
+
+    #[test]
+    fn origin_header_does_not_require_browser_metadata() {
+        let config = FetchConfig::default();
+        let initiator = url("https://app.test/page");
+        for (method, target, mode, expected) in [
+            (
+                "GET",
+                "https://cdn.test/script.js",
+                RequestMode::Cors,
+                Some("https://app.test"),
+            ),
+            (
+                "HEAD",
+                "https://cdn.test/script.js",
+                RequestMode::Cors,
+                Some("https://app.test"),
+            ),
+            ("GET", "https://app.test/script.js", RequestMode::Cors, None),
+            (
+                "GET",
+                "https://cdn.test/script.js",
+                RequestMode::NoCors,
+                None,
+            ),
+            (
+                "POST",
+                "https://app.test/data",
+                RequestMode::NoCors,
+                Some("https://app.test"),
+            ),
+        ] {
+            let request = Request::new(method, target, None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator)
+                .with_request_mode(mode);
+            assert_eq!(request.browser_request_metadata(), None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
+            assert_eq!(
+                header_value(&headers, "origin").as_deref(),
+                expected,
+                "{method} {target} {mode:?}"
+            );
+        }
     }
 
     #[test]

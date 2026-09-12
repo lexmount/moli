@@ -15,7 +15,7 @@ pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,
     filter_cors_exposed_response_headers, is_cors_policy_failure_message,
-    validate_cors_preflight_response, validate_cors_response, validate_cors_response_chain,
+    validate_cors_preflight_response, validate_cors_response_chain,
     validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_security_policy,

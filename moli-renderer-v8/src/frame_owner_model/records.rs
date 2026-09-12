@@ -1356,6 +1356,19 @@ pub(crate) struct FrameSettingsObject {
     pub(crate) module_map_owner: ModuleMapOwner,
 }
 
+impl FrameSettingsObject {
+    pub(crate) fn request_initiator_url(&self, base_url: &Url) -> Url {
+        // URL resolution uses the document base, but fetch security uses the
+        // Window's origin, including inherited and sandboxed opaque origins.
+        if moli_url::origin_ascii_serialization(base_url) == self.origin {
+            base_url.clone()
+        } else {
+            Url::parse(&self.origin)
+                .unwrap_or_else(|_| Url::parse("about:blank").expect("valid opaque initiator URL"))
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModuleMapOwner {
     Document(DocumentId),

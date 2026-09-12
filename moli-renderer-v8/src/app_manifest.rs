@@ -266,10 +266,9 @@ impl RendererPreparedAppManifestLoad {
             RendererNetworkResourceLoadOutcome::Response(response) => {
                 let response = *response;
                 let security_error = response.completion_error.clone().or_else(|| {
-                    crate::network_host::validate_cors_response(
+                    crate::network_host::validate_cors_response_chain(
                         &document_url,
-                        &response.final_url,
-                        &response.headers,
+                        &response.head(),
                         credentials_mode,
                     )
                     .err()

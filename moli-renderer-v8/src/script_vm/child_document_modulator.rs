@@ -490,7 +490,11 @@ impl ScriptVm {
                 snapshot.local_window_id == document_owner.local_window_id
                     && snapshot.document_id == document_owner.document_id
             })
-            .map(|snapshot| snapshot.document_base_url)
+            .map(|snapshot| {
+                snapshot
+                    .settings
+                    .request_initiator_url(&snapshot.document_base_url)
+            })
             .unwrap_or_else(|| fallback_url.clone())
     }
 

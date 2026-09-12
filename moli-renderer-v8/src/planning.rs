@@ -345,6 +345,7 @@ pub(crate) fn external_script_request(
         .expect("prepared script url should already be parsed")
         .with_page_network_policy()
         .with_initiator_url(&script.initiator_url)
+        .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Script)
         .with_credentials_mode(external_script_credentials_mode(
             script.kind,
             &script.fetch_metadata,
@@ -393,9 +394,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             *response.response,
             document_character_set,
             response.response_filter,
-            response
-                .response_filter
-                .is_none_or(|filter| filter.is_readable()),
+            None,
         ),
         Ok(None) => {
             load_prepared_script_source_outcome_with_document_character_set(
@@ -508,20 +507,22 @@ pub(crate) fn external_script_source_load_outcome_from_response(
     let head = response.head();
     let response_filter =
         crate::network_host::network_response_filter(&script.initiator_url, &head, request_mode);
-    let response_is_eligible = response_filter.is_none_or(|filter| filter.is_readable())
-        && (request_mode == RequestMode::NoCors
-            || crate::network_host::validate_cors_response_chain(
-                &script.initiator_url,
-                &head,
-                external_script_credentials_mode(script.kind, &script.fetch_metadata),
-            )
-            .is_ok());
+    let cors_error = if request_mode == RequestMode::Cors {
+        crate::network_host::validate_cors_response_chain(
+            &script.initiator_url,
+            &head,
+            external_script_credentials_mode(script.kind, &script.fetch_metadata),
+        )
+        .err()
+    } else {
+        None
+    };
     external_script_source_load_outcome_from_response_inner(
         script,
         response,
         document_character_set,
         response_filter,
-        response_is_eligible,
+        cors_error,
     )
 }
 
@@ -545,13 +546,15 @@ fn external_script_source_load_outcome_from_response_inner(
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
-    response_is_eligible: bool,
+    cors_error: Option<String>,
 ) -> PreparedScriptSourceLoadOutcome {
     let response_bytes = response.body_bytes().to_vec();
     let opaque_status_zero = response_filter
         == Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque)
         && response.status == 0;
-    let source_result = if !(opaque_status_zero || (200..=299).contains(&response.status)) {
+    let source_result = if let Some(error) = cors_error {
+        Err(format!("script request `{}` failed: {error}", script.url))
+    } else if !(opaque_status_zero || (200..=299).contains(&response.status)) {
         Err(format!(
             "script request `{}` returned HTTP {}",
             script.url, response.status
@@ -564,7 +567,7 @@ fn external_script_source_load_outcome_from_response_inner(
     } else if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
         &response_bytes,
         script.fetch_metadata.integrity.as_deref(),
-        response_is_eligible && response_filter.is_none_or(|filter| filter.is_readable()),
+        response_filter.is_none_or(|filter| filter.is_readable()),
     ) {
         Err(format!(
             "script request `{}` failed its integrity check",
@@ -1312,7 +1315,7 @@ mod tests {
             response,
             None,
             Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
-            false,
+            None,
         );
 
         assert_eq!(outcome.source_result.expect("opaque script source"), source);

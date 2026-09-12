@@ -36,23 +36,6 @@ pub(crate) fn is_cors_policy_failure_message(message: &str) -> bool {
     message.contains("CORS check failed:") || message.contains("CORS preflight failed:")
 }
 
-pub(crate) fn validate_cors_response(
-    document_url: &url::Url,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
-    credentials_mode: RequestCredentialsMode,
-) -> Result<(), String> {
-    if same_origin(document_url, response_url) {
-        return Ok(());
-    }
-    if !matches!(response_url.scheme(), "http" | "https") {
-        return Ok(());
-    }
-
-    let origin = origin_ascii_serialization(document_url);
-    validate_cors_response_for_origin(&origin, response_headers, credentials_mode)
-}
-
 /// Validates an already fetched network response and its network redirects.
 /// Service worker and browser-generated redirects still contribute to taint,
 /// but their synthetic response headers are not subject to the CORS check.
@@ -63,23 +46,27 @@ pub(crate) fn validate_cors_response_chain(
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
-    let mut origin = origin_ascii_serialization(document_url);
-    let mut cors_tainted = false;
-    for redirect in &head.redirect_chain {
-        cors_tainted |= !same_origin(document_url, &redirect.from_url);
-        if cors_tainted {
-            if redirect.source == RedirectSource::Network {
-                validate_cors_response_for_origin(&origin, &redirect.headers, credentials_mode)?;
-            }
-            if !same_origin(&redirect.from_url, &redirect.to_url) {
-                origin = "null".to_owned();
-            }
+    for (index, redirect) in head.redirect_chain.iter().enumerate() {
+        // This response precedes the redirect: only earlier hops contribute to
+        // the Origin that was sent for it.
+        let urls = moli_fetch::FetchUrlList::new(&redirect.from_url, &head.redirect_chain[..index]);
+        if redirect.source == RedirectSource::Network && urls.has_cross_origin_url(document_url) {
+            validate_cors_response_for_origin(
+                &urls.serialized_origin(document_url),
+                &redirect.headers,
+                credentials_mode,
+            )?;
         }
     }
+    let urls = head.url_list();
     if matches!(head.final_url.scheme(), "http" | "https")
-        && (cors_tainted || !same_origin(document_url, &head.final_url))
+        && urls.has_cross_origin_url(document_url)
     {
-        validate_cors_response_for_origin(&origin, &head.headers, credentials_mode)?;
+        validate_cors_response_for_origin(
+            &urls.serialized_origin(document_url),
+            &head.headers,
+            credentials_mode,
+        )?;
     }
     Ok(())
 }
@@ -484,7 +471,7 @@ pub(crate) fn filter_cors_exposed_response_headers(
     credentials_mode: RequestCredentialsMode,
 ) -> Vec<(String, String)> {
     let response_headers = &head.headers;
-    if !super::materialize::response_has_cross_origin_url(document_url, head) {
+    if !head.url_list().has_cross_origin_url(document_url) {
         return response_headers.to_vec();
     }
     if !matches!(head.final_url.scheme(), "http" | "https") {

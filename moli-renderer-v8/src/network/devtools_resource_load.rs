@@ -93,3 +93,24 @@ pub struct RendererNetworkResourceLoadResponse {
     pub negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     pub network_request_headers: Option<Vec<(String, String)>>,
 }
+
+impl RendererNetworkResourceLoadResponse {
+    pub fn head(&self) -> moli_fetch::ResponseHead {
+        moli_fetch::ResponseHead {
+            final_url: self.final_url.clone(),
+            status: self.status,
+            headers: self.headers.clone(),
+            request_cookie_report: self.request_cookie_report.clone(),
+            cookie_set_reports: self.cookie_set_reports.clone(),
+            redirected: !self.redirect_chain.is_empty(),
+            redirect_chain: self
+                .redirect_chain
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect(),
+            from_cache: self.from_cache,
+            negotiated_http_version: self.negotiated_http_version,
+        }
+    }
+}

@@ -590,7 +590,7 @@ impl JsContextHost {
         &mut self,
         child_handle: DomHandle,
         document_handle: DomHandle,
-        handoff: ParserScriptHandoff,
+        mut handoff: ParserScriptHandoff,
     ) -> ScriptDisposition {
         let (script_handle, start_line, start_column) = handoff.start_position();
         self.note_parser_script_start_position(script_handle, start_line, start_column);
@@ -601,6 +601,18 @@ impl JsContextHost {
                 &handoff,
             );
             return ScriptDisposition::Continue;
+        }
+
+        if let Some(initiator_url) = self.child_browsing_context_request_initiator_url(child_handle)
+        {
+            match &mut handoff {
+                ParserScriptHandoff::BlockingClassic { script, .. }
+                | ParserScriptHandoff::AsyncPostParse { script, .. }
+                | ParserScriptHandoff::NonAsyncPostParse { script, .. } => {
+                    script.initiator_url = initiator_url;
+                }
+                _ => {}
+            }
         }
 
         match handoff {
@@ -971,7 +983,11 @@ impl JsContextHost {
             let Some(raw_href) = modulepreload_href(element) else {
                 continue;
             };
-            let document_url = self.document_url_for_handle(document_handle);
+            let Some(initiator_url) =
+                self.child_browsing_context_request_initiator_url(child_handle)
+            else {
+                continue;
+            };
             let document_base_url = self.document_base_url_for_handle(document_handle);
             let Some(request_url) =
                 resolve_parser_network_resource_url(&document_base_url, raw_href)
@@ -979,7 +995,7 @@ impl JsContextHost {
                 continue;
             };
             let Some(candidate) =
-                modulepreload_fetch_candidate(element, request_url, &document_url, None)
+                modulepreload_fetch_candidate(element, request_url, &initiator_url, None)
             else {
                 continue;
             };

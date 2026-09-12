@@ -2169,6 +2169,7 @@ fn connected_link_readiness_request(
         request = request.with_resource_type(resource_type);
     }
     if let Some(metadata) = options.script_fetch_metadata.as_ref() {
+        request = request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Script);
         request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
             cross_origin: metadata.cross_origin.clone(),
             referrer_policy: metadata.referrer_policy.clone(),

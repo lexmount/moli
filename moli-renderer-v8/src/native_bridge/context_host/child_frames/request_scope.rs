@@ -262,6 +262,19 @@ impl JsContextHost {
         self.child_browsing_context_window_origin(handle)
     }
 
+    pub(crate) fn child_browsing_context_request_initiator_url(
+        &self,
+        handle: DomHandle,
+    ) -> Option<Url> {
+        let owner = self
+            .frame_owner_store
+            .current_child_owner_snapshot(handle)?;
+        let base_url = self
+            .child_browsing_context_base_url(handle)
+            .unwrap_or(owner.document_base_url);
+        Some(owner.settings.request_initiator_url(&base_url))
+    }
+
     pub(crate) fn child_browsing_context_web_storage_scope(
         &mut self,
         handle: DomHandle,

@@ -263,9 +263,9 @@ enum StylesheetResponseProvenance {
 }
 
 impl StylesheetResponseProvenance {
-    fn is_cors_same_origin(self, document_url: &Url, response_url: &Url) -> bool {
+    fn is_cors_same_origin(self, document_url: &Url, head: &moli_fetch::ResponseHead) -> bool {
         match self {
-            Self::Network => moli_url::same_origin(document_url, response_url),
+            Self::Network => !head.url_list().has_cross_origin_url(document_url),
             Self::ServiceWorker { filter } => !matches!(
                 filter,
                 Some(
@@ -285,6 +285,7 @@ fn stylesheet_terminal_from_response(
     response_provenance: StylesheetResponseProvenance,
 ) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
+    let head = response.head();
     let cors_usability =
         (request_mode == moli_fetch::RequestMode::Cors).then(|| match response_provenance {
             StylesheetResponseProvenance::ServiceWorker {
@@ -297,16 +298,17 @@ fn stylesheet_terminal_from_response(
                 "failed to fetch stylesheet `{request_url}`: CORS response is opaque"
             )),
             StylesheetResponseProvenance::ServiceWorker { .. } => Ok(()),
-            StylesheetResponseProvenance::Network => crate::network_host::validate_cors_response(
-                document_url,
-                &response.final_url,
-                &response.headers,
-                credentials_mode,
-            )
-            .map_err(|error| format!("failed to fetch stylesheet `{request_url}`: {error}")),
+            StylesheetResponseProvenance::Network => {
+                crate::network_host::validate_cors_response_chain(
+                    document_url,
+                    &head,
+                    credentials_mode,
+                )
+                .map_err(|error| format!("failed to fetch stylesheet `{request_url}`: {error}"))
+            }
         });
     let origin_clean = cors_usability.as_ref().map_or_else(
-        || response_provenance.is_cors_same_origin(document_url, &response.final_url),
+        || response_provenance.is_cors_same_origin(document_url, &head),
         Result::is_ok,
     );
     let usability = if !(200..=299).contains(&response.status) {

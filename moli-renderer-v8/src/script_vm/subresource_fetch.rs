@@ -2122,6 +2122,19 @@ impl ScriptVm {
             continuation,
             deferred_request_started,
         } = pending;
+        // Request-stage fulfillment has no followed redirects yet. Reuse this
+        // complete head for validation and response materialization.
+        let head = moli_fetch::ResponseHead {
+            final_url: info.url.clone(),
+            status: response_code,
+            headers: response_headers.clone(),
+            request_cookie_report: info.request_cookie_report.clone(),
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        };
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
                 if response_code != 101 {
@@ -2162,10 +2175,9 @@ impl ScriptVm {
                 let validation = if request_mode == moli_fetch::RequestMode::NoCors {
                     Ok(())
                 } else {
-                    crate::network_host::validate_cors_response(
+                    crate::network_host::validate_cors_response_chain(
                         &info.document_url,
-                        &info.url,
-                        &response_headers,
+                        &head,
                         credentials_mode,
                     )
                 };
@@ -2269,10 +2281,9 @@ impl ScriptVm {
                 let request_method = info.method.clone();
                 let request_headers = info.request_headers.clone();
                 let request_body = info.request_body.clone();
-                let validation = crate::network_host::validate_cors_response(
+                let validation = crate::network_host::validate_cors_response_chain(
                     &info.document_url,
-                    &info.url,
-                    &response_headers,
+                    &head,
                     credentials_mode,
                 );
                 match validation {
@@ -2446,19 +2457,7 @@ impl ScriptVm {
             false,
             None,
             None,
-            Ok(
-                response_body.into_navigation_response(moli_fetch::ResponseHead {
-                    final_url: info.url,
-                    status: response_code,
-                    headers: response_headers,
-                    request_cookie_report: info.request_cookie_report,
-                    cookie_set_reports: Vec::new(),
-                    redirected: false,
-                    redirect_chain: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
-                }),
-            ),
+            Ok(response_body.into_navigation_response(head)),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
     }

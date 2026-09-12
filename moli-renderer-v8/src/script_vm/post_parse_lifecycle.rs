@@ -115,6 +115,53 @@ impl ScriptVm {
         task_runner: crate::network::RendererResourceTaskRunner,
         admission: RuntimeScriptAdmission,
     ) {
+        // Check CSP before starting the source fetch. A CORS or network failure
+        // must not bypass CSP reporting by skipping the execution boundary.
+        let (payload, binding) = admission.into_parts();
+        let payload = match payload {
+            crate::host::RuntimeScriptAdmissionPayload::Script(script)
+                if script.source_kind == crate::types::ScriptSourceKind::External =>
+            {
+                let request = self.content_security_policy_script_element_request(&script);
+                if let Some(violation) = self
+                    .document_runtime
+                    .script_element_request_csp_violation_with_request(&script.url, request)
+                {
+                    if let Some(report_only) = self
+                        .document_runtime
+                        .script_element_request_csp_report_only_violation_with_request(
+                            &script.url,
+                            request,
+                        )
+                    {
+                        self.queue_content_security_policy_violation_event_best_effort(
+                            &report_only,
+                        );
+                    }
+                    self.queue_content_security_policy_violation_event_best_effort(&violation);
+                    let message = format!(
+                        "Refused to load script `{}` because it violates the document Content Security Policy directive `{}`",
+                        script.url, violation.effective_directive,
+                    );
+                    let failure_kind = if script.kind == crate::types::ScriptKind::Module {
+                        crate::host::QueuedScriptFailureKind::ModuleTopLevelLoad
+                    } else {
+                        crate::host::QueuedScriptFailureKind::Immediate
+                    };
+                    crate::host::RuntimeScriptAdmissionPayload::Failed(
+                        crate::host::FailedDynamicScript {
+                            script,
+                            message,
+                            failure_kind,
+                        },
+                    )
+                } else {
+                    crate::host::RuntimeScriptAdmissionPayload::Script(script)
+                }
+            }
+            payload => payload,
+        };
+        let admission = RuntimeScriptAdmission::from_boxed_payload(Box::new(payload), binding);
         let document_character_set = self.document_runtime.document_character_set().to_owned();
         let service_worker_context = {
             let host = self._context_host.borrow();

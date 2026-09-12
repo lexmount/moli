@@ -3062,6 +3062,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::Font
                 | crate::BrowserRequestMetadata::Image
                 | crate::BrowserRequestMetadata::Ping
+                | crate::BrowserRequestMetadata::Script
                 | crate::BrowserRequestMetadata::Style
                 | crate::BrowserRequestMetadata::TextTrack
                 | crate::BrowserRequestMetadata::Video,

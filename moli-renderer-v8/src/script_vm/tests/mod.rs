@@ -9027,7 +9027,8 @@ async fn child_dynamic_import_root_fetch_uses_child_import_map_and_initiator_url
         .expect("child dynamic import must bind its current execution context");
     assert_eq!(
         child_initiator_url.as_str(),
-        "https://child-dynamic-owner.test/nested/frame.html"
+        "https://parent-dynamic-owner.test/",
+        "srcdoc inherits its parent's origin even when <base> changes module URL resolution"
     );
 
     let (_child_handle, task_owner, realm_id) = dynamic_import_owner
@@ -9913,7 +9914,7 @@ async fn spawn_child_external_parser_module_ready_lane_server() -> (
         let body = r#"parent.__childExternalParserModuleEvents.push("module:" + (globalThis === self));
 globalThis.__childExternalParserModuleValue = 188;"#;
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );

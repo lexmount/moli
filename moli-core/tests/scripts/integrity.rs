@@ -23,6 +23,9 @@ struct IntegrityRequest {
     path: String,
     origin: Option<String>,
     cookie: Option<String>,
+    sec_fetch_dest: Option<String>,
+    sec_fetch_mode: Option<String>,
+    sec_fetch_site: Option<String>,
 }
 
 impl Drop for IntegrityServers {
@@ -69,6 +72,9 @@ impl IntegrityServers {
                                     let incoming = IntegrityRequest {
                                         method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
                                         path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
+                                        sec_fetch_dest: header("Sec-Fetch-Dest"),
+                                        sec_fetch_mode: header("Sec-Fetch-Mode"),
+                                        sec_fetch_site: header("Sec-Fetch-Site"),
                                     };
                                     let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
                                     requests.lock().push(incoming);
@@ -100,6 +106,9 @@ fn network_cases(origin: &str, cross: &str) -> serde_json::Value {
         {"name": "cross-no-cors", "src": format!("{cross}/script.js"), "integrity": INTEGRITY, "expected": "error"},
         {"name": "cross-anonymous", "src": format!("{cross}/cors.js"), "integrity": INTEGRITY, "crossOrigin": "anonymous", "expected": "load"},
         {"name": "cross-no-acao", "src": format!("{cross}/script.js"), "integrity": INTEGRITY, "crossOrigin": "anonymous", "expected": "error"},
+        {"name": "cors-without-integrity", "src": format!("{cross}/script.js"), "crossOrigin": "anonymous", "expected": "error"},
+        {"name": "cors-empty-integrity", "src": format!("{cross}/script.js"), "integrity": "", "crossOrigin": "anonymous", "expected": "error"},
+        {"name": "cors-unsupported-integrity", "src": format!("{cross}/script.js"), "integrity": "sha1-ignored", "crossOrigin": "anonymous", "expected": "error"},
         {"name": "redirect-cross", "src": format!("{origin}/redirect.js"), "integrity": INTEGRITY, "expected": "error"},
         {"name": "redirect-home", "src": format!("{origin}/roundtrip.js"), "integrity": INTEGRITY, "expected": "error"},
         {"name": "cors-redirect", "src": format!("{origin}/cors-redirect.js"), "integrity": INTEGRITY, "crossOrigin": "anonymous", "expected": "load"},
@@ -121,7 +130,11 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
-        "/echo-origin.js" | "/echo-origin-redirect.js" => {
+        "/echo-origin.js"
+        | "/echo-origin-redirect.js"
+        | "/echo-origin-home.js"
+        | "/echo-origin-roundtrip.js"
+        | "/module-graph.js" => {
             // Echo the actual request Origin: a missing header must not silently
             // receive ACAO: null and hide a broken redirect handoff.
             let mut headers = format!(
@@ -134,13 +147,87 @@ fn fixture_response(
                 headers.push_str("Access-Control-Allow-Methods: GET, PUT\r\nAccess-Control-Allow-Headers: x-sri-test\r\n");
                 return ("204 No Content", headers, String::new());
             }
-            if path == "/echo-origin-redirect.js" {
-                headers.push_str(&format!("Location: {cross}/echo-origin.js?{query}\r\n"));
+            let target = match path {
+                "/echo-origin-redirect.js" => Some(format!("{cross}/echo-origin.js?{query}")),
+                "/echo-origin-home.js" => Some(format!("{origin}/echo-origin.js?{query}")),
+                "/echo-origin-roundtrip.js" => Some(format!("{cross}/echo-origin-home.js?{query}")),
+                _ => None,
+            };
+            if let Some(target) = target {
+                headers.push_str(&format!("Location: {target}\r\n"));
                 ("302 Found", headers, String::new())
+            } else if path == "/module-graph.js" {
+                (
+                    "200 OK",
+                    headers,
+                    format!(
+                        "import '{cross}/{}';",
+                        if query == "graph-blocked" {
+                            "script.js?blocked-static"
+                        } else {
+                            "echo-origin.js?static-dependency"
+                        }
+                    ),
+                )
             } else {
                 ("200 OK", headers, SCRIPT.to_owned())
             }
         }
+        "/style.css"
+        | "/style-roundtrip.css"
+        | "/style-home.css"
+        | "/app.webmanifest"
+        | "/manifest-roundtrip.webmanifest"
+        | "/manifest-home.webmanifest" => {
+            let mut headers = "Cache-Control: no-store\r\nVary: Origin\r\n".to_owned();
+            if let Some(incoming_origin) = &request.origin
+                && !(query == "bad-hop" && path.contains("-home."))
+            {
+                let allowed_origin = if query == "bad-final" && !path.contains('-') {
+                    origin
+                } else {
+                    incoming_origin
+                };
+                headers.push_str(&format!(
+                    "Access-Control-Allow-Origin: {allowed_origin}\r\n"
+                ));
+            }
+            let target = match path {
+                "/style-roundtrip.css" => Some(format!("{cross}/style-home.css?{query}")),
+                "/style-home.css" => Some(format!("{origin}/style.css?{query}")),
+                "/manifest-roundtrip.webmanifest" => {
+                    Some(format!("{cross}/manifest-home.webmanifest?{query}"))
+                }
+                "/manifest-home.webmanifest" => Some(format!("{origin}/app.webmanifest?{query}")),
+                _ => None,
+            };
+            if let Some(target) = target {
+                headers.push_str(&format!("Location: {target}\r\n"));
+                ("302 Found", headers, String::new())
+            } else if path.ends_with(".css") {
+                headers.push_str("Content-Type: text/css\r\n");
+                ("200 OK", headers, "body { color: green; }".to_owned())
+            } else {
+                headers.push_str("Content-Type: application/manifest+json\r\n");
+                (
+                    "200 OK",
+                    headers,
+                    r#"{"name":"Redirected manifest"}"#.to_owned(),
+                )
+            }
+        }
+        "/manifest-page.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            format!(
+                "<!doctype html><link rel=manifest href='/{}?{query}'>",
+                if query == "same-origin" {
+                    "app.webmanifest"
+                } else {
+                    "manifest-roundtrip.webmanifest"
+                }
+            ),
+        ),
         "/script.js" => ("200 OK", javascript.to_owned(), SCRIPT.to_owned()),
         "/cacheable.js" => (
             "200 OK",
@@ -240,8 +327,11 @@ fn fixture_response(
             );
             ("200 OK", javascript.to_owned(), body)
         }
-        "/page.html" | "/parser.html" | "/cookie-page.html" => {
+        "/page.html" | "/parser.html" | "/cookie-page.html" | "/csp-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
+            if path == "/csp-page.html" {
+                html.insert_str(15, "<meta http-equiv='Content-Security-Policy' content=\"script-src 'self' 'unsafe-inline'\">");
+            }
             if path == "/parser.html" {
                 for case in network_cases(origin, cross).as_array().unwrap() {
                     let name = case["name"].as_str().unwrap();
@@ -354,12 +444,343 @@ async fn module_script_integrity_requires_readable_response() -> Result<()> {
     let cases = serde_json::json!([
         {"name": "same-origin", "src": "/script.js", "type": "module", "integrity": INTEGRITY, "expected": "load"},
         {"name": "cors", "src": format!("{}/cors.js", servers.cross_origin), "type": "module", "integrity": INTEGRITY, "expected": "load"},
-        {"name": "no-acao", "src": format!("{}/script.js", servers.cross_origin), "type": "module", "integrity": INTEGRITY, "expected": "error"}
+        {"name": "no-acao", "src": format!("{}/script.js", servers.cross_origin), "type": "module", "integrity": INTEGRITY, "expected": "error"},
+        {"name": "without-integrity", "src": format!("{}/script.js?absent", servers.cross_origin), "type": "module", "expected": "error"},
+        {"name": "empty-integrity", "src": format!("{}/script.js?empty", servers.cross_origin), "type": "module", "integrity": "", "expected": "error"},
+        {"name": "unsupported-integrity", "src": format!("{}/script.js?unsupported", servers.cross_origin), "type": "module", "integrity": "sha1-ignored", "expected": "error"}
     ]);
     let result = page
         .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, false), true)
         .await?;
     assert_integrity_results(result, &cases);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_scripts_send_origin_and_fetch_metadata() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/cookie-page.html", servers.origin))
+        .await?;
+    let origin = &servers.origin;
+    let cross = &servers.cross_origin;
+    let cases = serde_json::json!([
+        {"name": "control", "src": "/echo-origin.js?control", "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "classic", "src": format!("{cross}/echo-origin.js?classic"), "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module", "src": format!("{cross}/echo-origin.js?module"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "include", "src": format!("{cross}/echo-origin.js?include"), "type": "module", "crossOrigin": "use-credentials", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "home", "src": format!("{cross}/echo-origin-home.js?home"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "roundtrip", "src": "/echo-origin-roundtrip.js?roundtrip", "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "no-cors", "src": format!("{cross}/echo-origin.js?no-cors"), "expected": "load"},
+        {"name": "graph", "src": "/module-graph.js?graph", "type": "module", "expected": "load"},
+        {"name": "graph-blocked", "src": "/module-graph.js?graph-blocked", "type": "module", "expected": "error"}
+    ]);
+    let result = page
+        .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, false), true)
+        .await?;
+    assert_integrity_results(result, &cases);
+    let imported = page
+        .evaluate_runtime_expression_with_await_async(
+            &format!("import('{cross}/echo-origin.js?dynamic-import').then(() => 'loaded')"),
+            true,
+        )
+        .await?;
+    assert_eq!(imported["value"], "loaded");
+    let rejected = page
+        .evaluate_runtime_expression_with_await_async(
+            &format!(
+                "import('{cross}/script.js?blocked-dynamic').then(() => 'loaded', () => 'rejected')"
+            ),
+            true,
+        )
+        .await?;
+    assert_eq!(rejected["value"], "rejected");
+    let executions = page
+        .evaluate_runtime_expression_async("sriExecutions")
+        .await?;
+    assert_eq!(
+        executions["value"], 9,
+        "CORS-rejected dependencies must not execute"
+    );
+
+    let requests = servers.requests.lock();
+    for name in [
+        "control",
+        "classic",
+        "module",
+        "include",
+        "home",
+        "roundtrip",
+        "no-cors",
+        "graph",
+        "graph-blocked",
+        "static-dependency",
+        "dynamic-import",
+        "blocked-static",
+        "blocked-dynamic",
+    ] {
+        let actual: Vec<_> = requests
+            .iter()
+            .filter(|request| request.path.ends_with(&format!("?{name}")))
+            .collect();
+        let expected_origins = match name {
+            "home" => vec![Some(origin.as_str()), Some("null")],
+            "roundtrip" => vec![None, Some(origin.as_str()), Some("null")],
+            "control" | "graph" | "graph-blocked" | "no-cors" => vec![None],
+            _ => vec![Some(origin.as_str())],
+        };
+        assert_eq!(actual.len(), expected_origins.len(), "{name}: {actual:?}");
+        for (index, (request, expected_origin)) in actual.iter().zip(expected_origins).enumerate() {
+            assert_eq!(
+                request.origin.as_deref(),
+                expected_origin,
+                "{name}: {request:?}"
+            );
+            assert_eq!(
+                request.sec_fetch_dest.as_deref(),
+                Some("script"),
+                "{name}: {request:?}"
+            );
+            assert_eq!(
+                request.sec_fetch_mode.as_deref(),
+                Some(if name == "no-cors" { "no-cors" } else { "cors" }),
+                "{name}: {request:?}"
+            );
+            let same_origin = matches!(name, "control" | "graph" | "graph-blocked")
+                || (name == "roundtrip" && index == 0);
+            assert_eq!(
+                request.sec_fetch_site.as_deref(),
+                Some(if same_origin {
+                    "same-origin"
+                } else {
+                    "same-site"
+                }),
+                "{name}: {request:?}"
+            );
+            assert_eq!(
+                request.cookie.as_deref(),
+                if same_origin || matches!(name, "include" | "no-cors") {
+                    Some("sriSession=present")
+                } else {
+                    None
+                },
+                "{name}: {request:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn srcdoc_module_requests_use_window_origin_instead_of_base_url() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/cookie-page.html", servers.origin))
+        .await?;
+    let result = page.evaluate_runtime_expression_with_await_async(&format!(r#"(async () => {{
+        const results = [];
+        for (const kind of ['module', 'classic', 'preload', 'dynamic']) {{
+        for (const originKind of ['same-origin', 'inherited', 'sandboxed']) {{
+            const name = originKind + '-' + kind;
+            const frame = document.createElement('iframe');
+            if (originKind === 'sandboxed') frame.setAttribute('sandbox', 'allow-scripts');
+            const terminal = new Promise(resolve => {{
+                const handler = event => {{
+                    if (event.source !== frame.contentWindow || !String(event.data).startsWith(name + ':')) return;
+                    removeEventListener('message', handler);
+                    resolve(event.data);
+                }};
+                addEventListener('message', handler);
+            }});
+            const terminalAttributes = `onload="parent.postMessage('${{name}}:load', '*')" onerror="parent.postMessage('${{name}}:error', '*')"`;
+            const source = './echo-origin.js?' + name;
+            const resource = kind === 'preload'
+                ? `<link rel='modulepreload' href='${{source}}' integrity='{INTEGRITY}' ${{terminalAttributes}}>`
+                : kind === 'dynamic'
+                    ? `<script>import('${{source}}').then(() => parent.postMessage('${{name}}:load', '*'), () => parent.postMessage('${{name}}:error', '*'));<\/script>`
+                    : `<script type='${{kind === 'module' ? 'module' : 'text/javascript'}}' crossorigin='anonymous' src='${{source}}' integrity='{INTEGRITY}' ${{terminalAttributes}}><\/script>`;
+            frame.srcdoc = `<base href='${{originKind === 'same-origin' ? location.origin : '{cross}'}}/'>` + resource;
+            document.body.append(frame);
+            results.push(await terminal);
+            frame.remove();
+        }}
+        }}
+        return JSON.stringify(results);
+    }})()"#, cross = servers.cross_origin), true).await?;
+    let result: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    let mut expected = Vec::new();
+    let requests = servers.requests.lock();
+    for kind in ["module", "classic", "preload", "dynamic"] {
+        for (origin_kind, origin) in [
+            ("same-origin", None),
+            ("inherited", Some(servers.origin.as_str())),
+            ("sandboxed", Some("null")),
+        ] {
+            let name = format!("{origin_kind}-{kind}");
+            expected.push(format!("{name}:load"));
+            let request = requests
+                .iter()
+                .find(|request| request.path == format!("/echo-origin.js?{name}"))
+                .expect("child script request");
+            assert_eq!(request.origin.as_deref(), origin, "{request:?}");
+            assert_eq!(request.sec_fetch_dest.as_deref(), Some("script"));
+            assert_eq!(request.sec_fetch_mode.as_deref(), Some("cors"));
+            assert_eq!(
+                request.cookie.as_deref(),
+                if origin_kind == "same-origin" {
+                    Some("sriSession=present")
+                } else {
+                    None
+                },
+                "{request:?}"
+            );
+        }
+    }
+    assert_eq!(result, serde_json::json!(expected));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn csp_blocks_dynamic_scripts_before_cors_fetch_and_reports_violation() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/csp-page.html", servers.origin))
+        .await?;
+    let result = page.evaluate_runtime_expression_with_await_async(&format!(r#"(async () => {{
+        const results = [];
+        for (const type of ['', 'module']) {{
+            const script = document.createElement('script');
+            script.type = type;
+            script.crossOrigin = 'anonymous';
+            script.src = '{cross}/script.js?csp-blocked-' + type;
+            const violation = new Promise(resolve => {{
+                document.addEventListener('securitypolicyviolation', event => resolve(event.effectiveDirective), {{once: true}});
+            }});
+            const terminal = new Promise(resolve => {{
+                script.onload = () => resolve('load');
+                script.onerror = () => resolve('error');
+            }});
+            document.body.append(script);
+            results.push(await Promise.all([terminal, violation]));
+        }}
+        return JSON.stringify(results);
+    }})()"#, cross = servers.cross_origin), true).await?;
+    let result: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    assert_eq!(
+        result,
+        serde_json::json!([["error", "script-src-elem"], ["error", "script-src-elem"]])
+    );
+    assert!(
+        !servers
+            .requests
+            .lock()
+            .iter()
+            .any(|request| request.path.contains("csp-blocked")),
+        "CSP must reject before sending a request"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_roundtrip_preserves_cors_validation_and_cssom_origin_clean() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let result = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+        const results = {};
+        for (const name of ['same-origin', 'no-cors', 'allow', 'bad-hop', 'bad-final']) {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = (name === 'same-origin' ? '/style.css?' : '/style-roundtrip.css?') + name;
+            if (!['same-origin', 'no-cors'].includes(name)) link.crossOrigin = 'anonymous';
+            const event = await new Promise(resolve => {
+                link.onload = () => resolve('load');
+                link.onerror = () => resolve('error');
+                document.head.append(link);
+            });
+            let rules;
+            try { rules = link.sheet ? link.sheet.cssRules.length : null; }
+            catch (error) { rules = error.name; }
+            results[name] = {event, rules};
+            link.remove();
+        }
+        return JSON.stringify(results);
+    })()"#,
+            true,
+        )
+        .await?;
+    let result: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "same-origin": {"event": "load", "rules": 1},
+            "no-cors": {"event": "load", "rules": "SecurityError"},
+            "allow": {"event": "load", "rules": 1},
+            // Chromium keeps an unreadable empty sheet after a failed load.
+            "bad-hop": {"event": "error", "rules": "SecurityError"},
+            "bad-final": {"event": "error", "rules": "SecurityError"}
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manifest_roundtrip_checks_intermediate_and_final_cors_responses() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    for name in ["same-origin", "allow", "bad-hop", "bad-final"] {
+        let mut page = browser
+            .fetch(&format!("{}/manifest-page.html?{name}", servers.origin))
+            .await?;
+        let completion = page.start_prepare_app_manifest_load()?.wait().await?;
+        let moli_renderer_v8::RendererAppManifestLoadPreparation::Ready(load) =
+            page.finish_prepare_app_manifest_load(completion)?
+        else {
+            anyhow::bail!("{name}: expected a network manifest load");
+        };
+        let (result, publication) = load.execute().await.into_parts();
+        let completion = page
+            .start_publish_app_manifest_load(publication)?
+            .wait()
+            .await?;
+        page.finish_publish_app_manifest_load(completion)?;
+        let allowed = matches!(name, "same-origin" | "allow");
+        assert_eq!(
+            result.data.as_deref(),
+            Some(if allowed {
+                r#"{"name":"Redirected manifest"}"#
+            } else {
+                ""
+            }),
+            "{name}: {result:?}",
+        );
+        assert_eq!(
+            result.manifest.name.as_deref(),
+            allowed.then_some("Redirected manifest"),
+            "{name}: {result:?}"
+        );
+    }
+    let requests = servers.requests.lock();
+    let roundtrip: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path.ends_with(".webmanifest?allow"))
+        .collect();
+    assert_eq!(roundtrip.len(), 3, "{roundtrip:?}");
+    for (request, expected_origin) in
+        roundtrip
+            .iter()
+            .zip([None, Some(servers.origin.as_str()), Some("null")])
+    {
+        assert_eq!(request.origin.as_deref(), expected_origin, "{request:?}");
+        assert_eq!(request.sec_fetch_dest.as_deref(), Some("manifest"));
+    }
     Ok(())
 }
 
@@ -447,6 +868,16 @@ async fn service_worker_script_redirect_preserves_origin_and_credentials() -> Re
                 "{name}: {requests:?}"
             );
             for request in requests {
+                assert_eq!(
+                    request.sec_fetch_dest.as_deref(),
+                    Some("script"),
+                    "{name}: {request:?}"
+                );
+                assert_eq!(
+                    request.sec_fetch_mode.as_deref(),
+                    Some("cors"),
+                    "{name}: {request:?}"
+                );
                 assert_eq!(
                     request.origin.as_deref(),
                     if name == "control" {

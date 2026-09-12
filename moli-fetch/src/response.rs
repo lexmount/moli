@@ -50,6 +50,12 @@ pub struct ResponseHead {
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
+impl ResponseHead {
+    pub fn url_list(&self) -> crate::FetchUrlList<'_> {
+        crate::FetchUrlList::new(&self.final_url, &self.redirect_chain)
+    }
+}
+
 #[derive(Debug)]
 pub enum ResponseBody {
     MaterializedText {

@@ -3468,9 +3468,9 @@ impl ScriptVm {
         &self,
         child_handle: crate::document_runtime::DomHandle,
     ) -> Option<Url> {
-        let host = self._context_host.borrow();
-        host.child_browsing_context_base_url(child_handle)
-            .or_else(|| host.child_browsing_context_current_url(child_handle))
+        self._context_host
+            .borrow()
+            .child_browsing_context_request_initiator_url(child_handle)
     }
 
     fn isolated_world_runtime_realm_info(

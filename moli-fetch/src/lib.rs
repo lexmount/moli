@@ -11,6 +11,7 @@ mod client_hints;
 mod config;
 mod dns;
 mod error;
+mod fetch_url_list;
 mod headers;
 mod network_fetch_result;
 mod proxy_connect;
@@ -37,6 +38,7 @@ pub use cancellation::FetchCancelHandle;
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
 pub use error::{NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success};
+pub use fetch_url_list::FetchUrlList;
 pub use headers::{
     cors_unsafe_request_header_names, is_cors_safelisted_method,
     is_cors_safelisted_request_content_type, is_cors_safelisted_request_header,
