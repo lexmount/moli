@@ -63,7 +63,7 @@ pub(in crate::network_host) fn new_response_with_init<'s>(
     Some(response)
 }
 
-pub(in crate::network_host) fn new_error_response<'s>(
+pub(crate) fn build_error_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let response = new_intrinsic_interface_instance(scope, "Response")?;

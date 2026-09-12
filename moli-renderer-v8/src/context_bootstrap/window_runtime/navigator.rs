@@ -10,7 +10,7 @@ use moli_webapi::storage_values::new_storage_estimate;
 use moli_webapi::window_values::{
     PERMISSION_STATUS_NAME_SLOT, PERMISSION_STATUS_STATE_SLOT, new_permission_status,
 };
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
     STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
@@ -2566,34 +2566,13 @@ fn storage_bucket_cached_response_from_value<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) -> Option<StorageBucketCachedResponseMaterialization<'s>> {
     let (head, response) =
-        match crate::network_host::materialize_response_object_head(scope, value, "Cache.put") {
+        match crate::network_host::materialize_cache_response_object_head(scope, value) {
             Ok(result) => result,
             Err(error) => {
                 reject_type_error(scope, resolver, &error);
                 return None;
             }
         };
-    if head.status == 206 {
-        reject_type_error(
-            scope,
-            resolver,
-            "Cache.put rejected a Response with status 206.",
-        );
-        return None;
-    }
-    if head.headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("vary")
-            && value
-                .split(|byte| *byte == b',')
-                .any(|field| field.trim_ascii() == b"*")
-    }) {
-        reject_type_error(
-            scope,
-            resolver,
-            "Cache.put rejected a Response with Vary: *.",
-        );
-        return None;
-    }
     let body = match crate::network_host::materialize_response_object_body_preserving_error(
         scope,
         response,
@@ -2701,35 +2680,23 @@ fn build_storage_bucket_cached_response_object<'s>(
     response: StorageBucketCachedResponse,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let moli_fetch_types::FetchResponse { head, body } = response;
+    if head.metadata.response_type == moli_fetch_types::FetchResponseType::Error {
+        return crate::network_host::build_error_response_object(scope);
+    }
     if !head.metadata.response_type.is_readable() {
-        return crate::network_host::build_filtered_cached_response_object(
-            scope,
-            head.metadata,
-            body,
-        );
+        return crate::network_host::build_filtered_cached_response_object(scope, head, body);
     }
     let body: v8::Local<'s, v8::Value> = if matches!(head.status, 204 | 205 | 304) {
         v8::null(scope).into()
     } else {
         crate::blob::array_buffer_from_bytes(scope, body)?.into()
     };
-    let init = ObjectLiteralDeclaration::bind(scope);
-    init.set_string_property(
-        scope,
-        "status",
-        v8::Integer::new(scope, head.status as i32).into(),
-    );
-    let status_text = v8_string(scope, &head.status_text)?;
-    init.set_string_property(scope, "statusText", status_text.into());
-    let headers =
-        headers_entries_to_init_array(scope, &moli_fetch::headers_to_byte_strings(&head.headers));
-    init.set_string_property(scope, "headers", headers.into());
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "Response").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
-    crate::network_host::set_response_metadata(scope, response_obj, &head.metadata);
+    let init = cache_results::response_init(scope, head.status, &head.status_text)?;
+    let constructor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Response").ok()?;
+    let response_obj =
+        crate::script_execution::construct(scope, constructor, &[body, init.into()])?;
+    crate::network_host::set_cached_response_head(scope, response_obj, &head);
     Some(response_obj)
 }
 
