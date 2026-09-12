@@ -522,21 +522,13 @@ pub(crate) fn build_dom_exception_object<'s>(
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
-    if let Some(prototype) =
-        crate::context_bootstrap::exposed_interfaces::materialized_intrinsic_interface_prototype(
+    // Retained native methods can throw after their WindowProxy is detached,
+    // before DOMException was first exposed in that realm.
+    if let Ok(prototype) =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
             scope,
             "DOMException",
         )
-        .or_else(|| {
-            // A native exception must materialize its own realm's intrinsic.
-            // Reading the public Window property can run author code or enter
-            // an access check again after navigation detaches its global.
-            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-                scope,
-                "DOMException",
-            )
-            .ok()
-        })
     {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
