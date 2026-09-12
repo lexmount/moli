@@ -633,178 +633,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
     handle.terminate_and_join();
 }
 
-#[tokio::test]
-async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_body() {
-    ensure_v8();
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind service worker opaque body server");
-    let addr = listener
-        .local_addr()
-        .expect("service worker opaque body server addr");
-    let fetch_url = format!("http://{addr}/app/respond-with-body-accessed-response.jsonp");
-    let fetch_url_literal =
-        serde_json::to_string(&fetch_url).expect("serialize opaque body fetch URL");
-    let server = tokio::spawn(async move {
-        for _ in 0..6 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept service worker opaque body request");
-            let request = read_http_request_head(&mut stream)
-                .await
-                .expect("read service worker opaque body request");
-            assert!(
-                request
-                    .starts_with("GET /app/respond-with-body-accessed-response.jsonp HTTP/1.1\r\n")
-            );
-            assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
-                )
-                .await
-                .expect("write service worker opaque body response");
-        }
-    });
-    let loader =
-        ResourceRequestClient::new(&FetchConfig::default()).expect("service worker fetch loader");
-    let mut handle = spawn_test_worker_with_options(
-        WorkerSpawnOptions::new(
-            format!(
-                r#"
-                function assertOpaqueResponse(response, label) {{
-                  response.body;
-                  if (response.type !== "opaque" || response.status !== 0 ||
-                      response.body !== null || response.bodyUsed) {{
-                    throw new Error(label + ":" + [
-                      response.type,
-                      response.status,
-                      response.body === null,
-                      response.bodyUsed
-                    ].join("/"));
-                  }}
-                }}
 
-                function maybeClone(response, cloneMode) {{
-                  if (cloneMode === "clone-response") {{
-                    const clone = response.clone();
-                    assertOpaqueResponse(clone, "clone-response");
-                    return clone;
-                  }}
-                  if (cloneMode === "clone-unused") {{
-                    const unused = response.clone();
-                    assertOpaqueResponse(unused, "clone-unused");
-                  }}
-                  return response;
-                }}
-
-                async function passThroughCacheIfNeeded(event, response, cacheMode) {{
-                  if (cacheMode !== "pass-through") {{
-                    return response;
-                  }}
-                  const cacheName = event.request.url;
-                  await self.caches.delete(cacheName);
-                  const cache = await self.caches.open(cacheName);
-                  await cache.put(event.request, response);
-                  const cached = await cache.match(event.request.url);
-                  assertOpaqueResponse(cached, "cached");
-                  await self.caches.delete(cacheName);
-                  return cached;
-                }}
-
-                self.addEventListener("fetch", event => {{
-                  const url = new URL(event.request.url);
-                  const cloneMode = url.searchParams.get("clone");
-                  const cacheMode = url.searchParams.get("cache");
-                  event.respondWith(fetch({fetch_url_literal}, {{ mode: "no-cors" }})
-                    .then(async response => {{
-                      assertOpaqueResponse(response, "original");
-                      const selected = maybeClone(response, cloneMode);
-                      assertOpaqueResponse(selected, "selected");
-                      const finalResponse =
-                        await passThroughCacheIfNeeded(event, selected, cacheMode);
-                      assertOpaqueResponse(finalResponse, "final");
-                      return finalResponse;
-                    }}));
-                }});
-                "#
-            ),
-            "https://example.test/app/sw.js".to_owned(),
-        )
-        .with_request_client(loader)
-        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
-            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
-            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
-        }),
-    );
-
-    for (index, (clone_mode, cache_mode)) in [
-        ("none", "none"),
-        ("clone-response", "none"),
-        ("clone-unused", "none"),
-        ("none", "pass-through"),
-        ("clone-response", "pass-through"),
-        ("clone-unused", "pass-through"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut request = service_worker_fetch_request_for_test();
-        request.url = url::Url::parse(&format!(
-            "https://example.test/app/TestRequest?clone={clone_mode}&cache={cache_mode}"
-        ))
-        .unwrap();
-        request.headers = vec![("accept".to_owned(), "application/javascript".to_owned())];
-        request.destination = ServiceWorkerRequestDestination::Script;
-        request.request_mode = moli_fetch::RequestMode::NoCors;
-        request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
-
-        let completion = dispatch_service_worker_fetch_event_with_request_for_test(
-            &mut handle,
-            30 + index as u64,
-            request,
-        )
-        .await;
-
-        let response = match completion.result {
-            ServiceWorkerFetchResult::Response(response) => response,
-            other => {
-                panic!(
-                    "expected opaque service worker response for {clone_mode}/{cache_mode}, got {other:?}"
-                );
-            }
-        };
-        assert_eq!(
-            response.response_type, "opaque",
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
-        assert_eq!(
-            response.status, 0,
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
-        assert_eq!(
-            response.final_url.as_ref().map(url::Url::as_str),
-            Some(fetch_url.as_str()),
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
-        assert!(
-            response.headers.is_empty(),
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
-        assert_eq!(
-            response.body,
-            b"callback('OK');".to_vec(),
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
-    }
-
-    server
-        .await
-        .expect("service worker opaque body server should finish");
-    handle.terminate_and_join();
-}
 
 #[tokio::test]
 async fn service_worker_fetch_event_exposes_resulting_client_metadata() {
@@ -1828,4 +1657,192 @@ async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserve
         server.await.unwrap();
         handle.terminate_and_join();
     }
+}
+
+#[tokio::test]
+async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_head_and_body()
+ {
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind service worker opaque body server");
+    let addr = listener
+        .local_addr()
+        .expect("service worker opaque body server addr");
+    let fetch_url = format!("http://{addr}/app/respond-with-body-accessed-response.jsonp");
+    let fetch_url_literal =
+        serde_json::to_string(&fetch_url).expect("serialize opaque body fetch URL");
+    let server = tokio::spawn(async move {
+        for _ in 0..6 {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept service worker opaque body request");
+            let request = read_http_request_head(&mut stream)
+                .await
+                .expect("read service worker opaque body request");
+            assert!(
+                request
+                    .starts_with("GET /app/respond-with-body-accessed-response.jsonp HTTP/1.1\r\n")
+            );
+            assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCross-Origin-Resource-Policy: cross-origin\r\nVary: *\r\nSet-Cookie: hidden=secret\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
+                )
+                .await
+                .expect("write service worker opaque body response");
+        }
+    });
+    let loader =
+        ResourceRequestClient::new(&FetchConfig::default()).expect("service worker fetch loader");
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            format!(
+                r#"
+                function assertOpaqueResponse(response, label) {{
+                  response.body;
+                  if (response.type !== "opaque" || response.status !== 0 ||
+                      response.body !== null || response.bodyUsed ||
+                      response.statusText !== "" || response.url !== "" ||
+                      [...response.headers].length !== 0) {{
+                    throw new Error(label + ":" + [
+                      response.type,
+                      response.status,
+                      response.body === null,
+                      response.bodyUsed
+                    ].join("/"));
+                  }}
+                }}
+
+                function maybeClone(response, cloneMode) {{
+                  if (cloneMode === "clone-response") {{
+                    const clone = response.clone();
+                    assertOpaqueResponse(clone, "clone-response");
+                    return clone;
+                  }}
+                  if (cloneMode === "clone-unused") {{
+                    const unused = response.clone();
+                    assertOpaqueResponse(unused, "clone-unused");
+                  }}
+                  return response;
+                }}
+
+                async function passThroughCacheIfNeeded(event, response, cacheMode) {{
+                  if (cacheMode !== "pass-through") {{
+                    return response;
+                  }}
+                  const cacheName = event.request.url;
+                  await self.caches.delete(cacheName);
+                  const cache = await self.caches.open(cacheName);
+                  await cache.put(event.request, response);
+                  const cached = await cache.match(event.request.url);
+                  assertOpaqueResponse(cached, "cached");
+                  await self.caches.delete(cacheName);
+                  return cached;
+                }}
+
+                self.addEventListener("fetch", event => {{
+                  const url = new URL(event.request.url);
+                  const cloneMode = url.searchParams.get("clone");
+                  const cacheMode = url.searchParams.get("cache");
+                  event.respondWith(fetch({fetch_url_literal}, {{ mode: "no-cors" }})
+                    .then(async response => {{
+                      assertOpaqueResponse(response, "original");
+                      const selected = maybeClone(response, cloneMode);
+                      assertOpaqueResponse(selected, "selected");
+                      const finalResponse =
+                        await passThroughCacheIfNeeded(event, selected, cacheMode);
+                      assertOpaqueResponse(finalResponse, "final");
+                      return finalResponse;
+                    }}));
+                }});
+                "#
+            ),
+            "https://example.test/app/sw.js".to_owned(),
+        )
+        .with_request_client(loader)
+        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+        }),
+    );
+
+    for (index, (clone_mode, cache_mode)) in [
+        ("none", "none"),
+        ("clone-response", "none"),
+        ("clone-unused", "none"),
+        ("none", "pass-through"),
+        ("clone-response", "pass-through"),
+        ("clone-unused", "pass-through"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = service_worker_fetch_request_for_test();
+        request.url = url::Url::parse(&format!(
+            "https://example.test/app/TestRequest?clone={clone_mode}&cache={cache_mode}"
+        ))
+        .unwrap();
+        request.headers = vec![("accept".to_owned(), "application/javascript".to_owned())];
+        request.destination = ServiceWorkerRequestDestination::Script;
+        request.request_mode = moli_fetch::RequestMode::NoCors;
+        request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
+
+        let completion = dispatch_service_worker_fetch_event_with_request_for_test(
+            &mut handle,
+            30 + index as u64,
+            request,
+        )
+        .await;
+
+        let response = match completion.result {
+            ServiceWorkerFetchResult::Response(response) => response,
+            other => {
+                panic!(
+                    "expected opaque service worker response for {clone_mode}/{cache_mode}, got {other:?}"
+                );
+            }
+        };
+        assert_eq!(
+            response.response_type, "opaque",
+            "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+        assert_eq!(
+            response.status, 200,
+            "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+        assert_eq!(
+            response.final_url.as_ref().map(url::Url::as_str),
+            Some(fetch_url.as_str()),
+            "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+        assert_eq!(response.status_text, "OK");
+        for (name, value) in [
+            ("content-type", "application/javascript"),
+            ("cross-origin-resource-policy", "cross-origin"),
+            ("vary", "*"),
+            ("set-cookie", "hidden=secret"),
+        ] {
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|(key, entry)| key.eq_ignore_ascii_case(name) && entry == value),
+                "missing internal {name} for {clone_mode}/{cache_mode}: {:?}",
+                response.headers,
+            );
+        }
+        assert_eq!(
+            response.body,
+            b"callback('OK');".to_vec(),
+            "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+    }
+
+    server
+        .await
+        .expect("service worker opaque body server should finish");
+    handle.terminate_and_join();
 }
