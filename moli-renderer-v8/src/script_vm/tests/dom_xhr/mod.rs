@@ -8,6 +8,7 @@ mod forms;
 mod misc;
 mod open_validation;
 mod query_realms;
+mod response_type;
 mod shadow_dom;
 mod streaming_failure;
 mod style_invalidation;

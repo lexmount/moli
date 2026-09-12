@@ -1,17 +1,7 @@
 use super::{XHR_RESPONSE_TYPE_SLOT, xhr_state_string_property};
 use std::str::FromStr;
 
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    crate::webidl::WebIdlEnum,
-)]
-#[webidl(name = "XMLHttpRequestResponseType", parse_with = Self::parse)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
 #[strum(serialize_all = "lowercase")]
 pub(super) enum XmlHttpRequestResponseType {
     #[strum(serialize = "")]
@@ -25,12 +15,6 @@ pub(super) enum XmlHttpRequestResponseType {
 
 impl XmlHttpRequestResponseType {
     pub(super) fn parse(value: &str) -> Option<Self> {
-        if matches!(
-            value,
-            "moz-blob" | "moz-chunked-text" | "moz-chunked-arraybuffer"
-        ) {
-            return Some(Self::Default);
-        }
         Self::from_str(value).ok()
     }
 
@@ -78,12 +62,9 @@ mod tests {
     }
 
     #[test]
-    fn xhr_response_type_maps_historical_moz_tokens_to_default() {
+    fn xhr_response_type_rejects_historical_moz_tokens() {
         for raw in ["moz-blob", "moz-chunked-text", "moz-chunked-arraybuffer"] {
-            let parsed = XmlHttpRequestResponseType::parse(raw)
-                .expect("historical XHR responseType token should parse");
-            assert_eq!(parsed, XmlHttpRequestResponseType::Default);
-            assert_eq!(parsed.label(), "");
+            assert!(XmlHttpRequestResponseType::parse(raw).is_none());
         }
     }
 }

@@ -108,7 +108,7 @@ promise_test(async function () {
 promise_test(async function () {
   const result = await run_mode("invalid-response-type");
 
-  assert_equals(result.errorName, "TypeError", "invalid responseType should throw in a worker");
+  assert_equals(result.errorName, null, "invalid responseType should be ignored in a worker");
   assert_equals(result.responseType, "arraybuffer", "invalid responseType should not overwrite the previous value in a worker");
-}, "Dedicated workers enforce XMLHttpRequest responseType enum conversion");
+}, "Dedicated workers ignore invalid XMLHttpRequest responseType values");
 </script>
