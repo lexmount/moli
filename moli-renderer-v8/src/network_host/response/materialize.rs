@@ -359,10 +359,44 @@ pub(crate) fn materialize_response_object<'s>(
     Ok(head.with_body(body))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResponseMaterializationPurpose {
+    RespondWith,
+    CachePut,
+}
+
 pub(crate) fn materialize_response_object_head<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: &str,
+) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
+    materialize_response_head_for_purpose(
+        scope,
+        value,
+        context,
+        ResponseMaterializationPurpose::RespondWith,
+    )
+}
+
+pub(crate) fn materialize_cache_response_object_head<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
+    let (mut head, response) = materialize_response_head_for_purpose(
+        scope,
+        value,
+        "Cache.put",
+        ResponseMaterializationPurpose::CachePut,
+    )?;
+    capture_response_internal_head(scope, response, &mut head);
+    Ok((head, response))
+}
+
+fn materialize_response_head_for_purpose<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    context: &str,
+    purpose: ResponseMaterializationPurpose,
 ) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
     let response = v8::Local::<v8::Object>::try_from(value)
         .map_err(|_| format!("{context} requires a Response."))?;
@@ -371,18 +405,10 @@ pub(crate) fn materialize_response_object_head<'s>(
     }
     let metadata = response_metadata(scope, response)
         .ok_or_else(|| format!("{context} requires a Response with native metadata."))?;
-    if metadata.response_type == FetchResponseFilter::Error {
+    if metadata.response_type == FetchResponseFilter::Error
+        && purpose == ResponseMaterializationPurpose::RespondWith
+    {
         return Err(format!("{context} rejected an error Response."));
-    }
-    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT) {
-        return Err(format!(
-            "{context} rejected a Response whose body is already used."
-        ));
-    }
-    if response_body_locked(scope, response) {
-        return Err(format!(
-            "{context} rejected a Response whose body is locked."
-        ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)
         .and_then(|value| value.number_value(scope))
@@ -391,8 +417,9 @@ pub(crate) fn materialize_response_object_head<'s>(
         metadata.response_type,
         FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect
     );
-    let status_allowed =
-        (200.0..=599.0).contains(&status) || filtered_response_type && status == 0.0;
+    let status_allowed = (200.0..=599.0).contains(&status)
+        || (filtered_response_type || metadata.response_type == FetchResponseFilter::Error)
+            && status == 0.0;
     if !status_allowed {
         return Err(format!(
             "{context} requires a Response with status 200-599."
@@ -406,6 +433,30 @@ pub(crate) fn materialize_response_object_head<'s>(
                 .expect("Headers contain ByteStrings")
         })
         .unwrap_or_default();
+
+    if purpose == ResponseMaterializationPurpose::CachePut {
+        if status == 206.0 {
+            return Err(format!("{context} rejected a Response with status 206."));
+        }
+        if headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("vary")
+                && value
+                    .split(|byte| *byte == b',')
+                    .any(|field| field.trim_ascii() == b"*")
+        }) {
+            return Err(format!("{context} rejected a Response with Vary: *."));
+        }
+    }
+    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT) {
+        return Err(format!(
+            "{context} rejected a Response whose body is already used."
+        ));
+    }
+    if response_body_locked(scope, response) {
+        return Err(format!(
+            "{context} rejected a Response whose body is locked."
+        ));
+    }
 
     Ok((
         MaterializedResponseHead {
@@ -463,6 +514,19 @@ pub(crate) fn materialize_response_object_body_preserving_error<'s>(
     response: v8::Local<'s, v8::Object>,
     context: &str,
 ) -> Result<MaterializedResponseBody<'s>, v8::Local<'s, v8::Value>> {
+    if response_metadata(scope, response)
+        .is_some_and(|metadata| metadata.response_type == FetchResponseFilter::Error)
+    {
+        return Ok(MaterializedResponseBody::Ready(Vec::new()));
+    }
+    if body_stream_object(scope, response).is_none()
+        && crate::network_host::body_source::filtered_response_internal_body_source_from_object(
+            scope, response,
+        )
+        .is_none()
+    {
+        return Ok(MaterializedResponseBody::Ready(Vec::new()));
+    }
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     let consumption = consume_filtered_response_internal_body_value_from_object(
         scope,
