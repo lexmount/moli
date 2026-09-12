@@ -6119,6 +6119,120 @@ fn webidl_sequence_conversion_uses_iterator_without_mutable_array_from() {
 }
 
 #[test]
+fn webidl_sequences_propagate_abrupt_completion_without_closing_iterators() {
+    let mut vm = new_storage_test_vm("https://sequence-abrupt.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const consumers = [
+    ['USVString', input => new URLSearchParams([input])],
+    ['DOMString', input => new PerformanceObserver(() => {}).observe({entryTypes: input})]
+  ];
+  if (typeof IntersectionObserver === 'function') consumers.push(
+    ['double', input => new IntersectionObserver(() => {}, {threshold: input})]);
+  for (const [name, consume] of consumers) {
+    for (const stage of ['next', 'done', 'value', 'convert', 'symbol']) {
+      const marker = {};
+      const log = [];
+      const fail = () => { log.push(stage); throw marker; };
+      const input = {[Symbol.iterator]() {
+        let finished = false;
+        return {
+          next() {
+            if (finished) return {done: true};
+            finished = true;
+            if (stage === 'next') fail();
+            return {
+              get done() { if (stage === 'done') fail(); return false; },
+              get value() {
+                if (stage === 'value') fail();
+                return stage === 'symbol' ? Symbol() : {[Symbol.toPrimitive]: fail};
+              }
+            };
+          },
+          get return() { log.push('get:return'); throw new Error('return must not be read'); }
+        };
+      }};
+      let caught;
+      try { consume(input); } catch (error) { caught = error; }
+      check(stage === 'symbol' ? caught instanceof TypeError : caught === marker, name + ' ' + stage + ' exception');
+      const expected = stage === 'symbol' ? [] : [stage];
+      check(JSON.stringify(log) === JSON.stringify(expected), name + ' ' + stage + ': ' + JSON.stringify(log));
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_nested_and_interface_sequences_do_not_read_iterator_return_on_errors() {
+    let mut vm = new_storage_test_vm("https://nested-sequence-abrupt.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const stage of ['iterator', 'next', 'value', 'convert']) {
+    const marker = {};
+    let returnReads = 0;
+    const fail = () => { throw marker; };
+    const wrap = value => ({[Symbol.iterator]() {
+      let finished = false;
+      return {
+        next() {
+          if (finished) return {done: true};
+          finished = true;
+          return {done: false, value};
+        },
+        get return() { returnReads++; throw new Error('outer return'); }
+      };
+    }});
+    const pair = {get [Symbol.iterator]() {
+      if (stage === 'iterator') fail();
+      return function() {
+        let finished = false;
+        return {
+          next() {
+            if (finished) return {done: true};
+            finished = true;
+            if (stage === 'next') fail();
+            return {done: false, get value() {
+              if (stage === 'value') fail();
+              return {[Symbol.toPrimitive]: fail};
+            }};
+          },
+          get return() { returnReads++; throw new Error('inner return'); }
+        };
+      };
+    }};
+    let caught;
+    try { new URLSearchParams(wrap(pair)); } catch (error) { caught = error; }
+    check(caught === marker && returnReads === 0, stage + ' must propagate without closing either iterator');
+  }
+  for (const member of ['coalescedEvents', 'predictedEvents']) {
+    let returnReads = 0;
+    const events = {[Symbol.iterator]() {
+      let finished = false;
+      return {
+        next() {
+          if (finished) return {done: true};
+          finished = true;
+          return {done: false, value: new Event('invalid')};
+        },
+        get return() { returnReads++; throw new Error('interface sequence return'); }
+      };
+    }};
+    let caught;
+    try { new PointerEvent('pointermove', {[member]: events}); } catch (error) { caught = error; }
+    check(caught instanceof TypeError && returnReads === 0, member + ' must reject the interface without closing');
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn url_search_params_sequence_discrimination_reads_iterator_once() {
     let mut vm = new_storage_test_vm("https://url-search-params-sequence.test/");
 
