@@ -45,7 +45,7 @@ from html import escape as html_escape
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 from .pipes import WptPipeError, parse_pipe_commands
 
@@ -151,6 +151,7 @@ FETCH_PREFLIGHT_RESOURCE_PATHS = {
     "/fetch/api/resources/preflight.py",
     "/fetch/api/resources/clean-stash.py",
 }
+FETCH_REDIRECT_RESOURCE_PATH = "/fetch/api/resources/redirect.py"
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
@@ -1340,6 +1341,40 @@ def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     return status, location
 
 
+def _fetch_redirect_form_status(method: str, content_type: str | None, body: bytes) -> str | None:
+    """Read the first redirect_status field like wptserve's CGI form parser."""
+    if content_type is None:
+        content_type = "application/x-www-form-urlencoded" if method == "POST" else "text/plain"
+    media_type = content_type.partition(";")[0].strip()
+    if media_type == "application/x-www-form-urlencoded":
+        params = parse_qs(body.decode("latin-1"), keep_blank_values=True, encoding="latin-1")
+        return params.get("redirect_status", [None])[0]
+    if media_type.startswith("multipart/"):
+        message = BytesParser(policy=policy.HTTP).parsebytes(
+            f"Content-Type: {content_type}\r\n\r\n".encode("latin-1") + body
+        )
+        boundary = message.get_boundary()
+        if boundary is None or re.fullmatch(r"[ -~]{0,200}[!-~]", boundary) is None:
+            raise ValueError("Invalid multipart boundary")
+        for part in message.iter_parts():
+            if part.get_param("name", header="content-disposition") == "redirect_status":
+                if part.get_filename():
+                    raise ValueError("A file is not a redirect status")
+                # CGI leaves transfer encodings untouched and treats form
+                # values as isomorphic bytes, regardless of part charset.
+                del part["Content-Transfer-Encoding"]
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    raise ValueError("A multipart value is not a redirect status")
+                return payload.decode("latin-1")
+        return None
+    if body:
+        # Upstream FieldStorage's non-form binary read raises TypeError when
+        # writing a nonempty upload into its text buffer.
+        raise ValueError("Unsupported non-form upload")
+    return None
+
+
 def _content_security_policy_resource_response() -> tuple[bytes, list[tuple[str, str]]]:
     """Return the minimal CSP resource.py fixture used by worker CSP WPT."""
 
@@ -1954,7 +1989,7 @@ def _make_handler(
                     return self._serve_fetch_resource_method
                 if path in XHR_RESOURCE_PATHS:
                     return self._serve_xhr_method
-                if path in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                if path in FETCH_PREFLIGHT_RESOURCE_PATHS or path == FETCH_REDIRECT_RESOURCE_PATH:
                     return self._serve_fetch_resource_method
             raise AttributeError(name)
 
@@ -1986,7 +2021,7 @@ def _make_handler(
                 self._serve_navigation_second_visit()
                 return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2023,7 +2058,7 @@ def _make_handler(
                 self._serve_navigation_second_visit()
                 return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2103,6 +2138,9 @@ def _make_handler(
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=self.command != "HEAD")
                 return
+            if unquote(parsed.path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(parsed.query, emit_body=self.command != "HEAD")
+                return
             if unquote(parsed.path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
                 self._serve_fetch_preflight_resource(
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD"
@@ -2143,7 +2181,7 @@ def _make_handler(
                 self._serve_navigation_second_visit()
                 return
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2374,6 +2412,9 @@ def _make_handler(
             if path == LINK_STYLESHEET_COUNTER_PATH:
                 self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
                 return
+            if path == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(parsed.query, emit_body=emit_body)
+                return
             if path in FETCH_PREFLIGHT_RESOURCE_PATHS:
                 self._serve_fetch_preflight_resource(path, parsed.query, emit_body=emit_body)
                 return
@@ -2512,7 +2553,6 @@ def _make_handler(
                 )
                 return
             if path in {
-                "/fetch/api/resources/redirect.py",
                 "/common/redirect.py",
                 "/common/redirect-opt-in.py",
             }:
@@ -2827,8 +2867,8 @@ def _make_handler(
                 return self._reject_request_body(413)
             return self._discard_request_body_bytes(length)
 
-        def _read_content_length_request_body(self) -> bytes | None:
-            if self.headers.get("Transfer-Encoding") is not None:
+        def _read_content_length_request_body(self, *, ignore_transfer_encoding: bool = False) -> bytes | None:
+            if not ignore_transfer_encoding and self.headers.get("Transfer-Encoding") is not None:
                 self._reject_request_body(400)
                 return None
             length_str = self.headers.get("Content-Length")
@@ -3412,6 +3452,79 @@ def _make_handler(
                         break
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
+
+        def _serve_fetch_redirect_resource(self, query: str, *, emit_body: bool) -> None:
+            connection_headers = []
+            if (self.headers.get("Transfer-Encoding") is not None
+                    or self.headers.get("Content-Length", "0").strip() not in {"", "0"}):
+                # A query status or an ordinary OPTIONS response never reads
+                # the upload in upstream redirect.py. Do not wait for EOF.
+                self.close_connection = True
+                connection_headers.append(("Connection", "close"))
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            stash_path = urlsplit(self.path).path
+            headers = [*connection_headers, ("Content-Type", "text/plain"), ("Pragma", "no-cache")]
+            if "Origin" in self.headers:
+                headers.extend([
+                    ("Access-Control-Allow-Origin", self.headers.get("Origin", "")),
+                    ("Access-Control-Allow-Credentials", "true"),
+                ])
+            else:
+                headers.append(("Access-Control-Allow-Origin", "*"))
+            token = params.get("token", [None])[0]
+            data = {"count": 0, "preflight": "0"}
+            try:
+                if "token" in params:
+                    data = fetch_stash.take(token, path=stash_path) or data
+                if self.command == "OPTIONS":
+                    if "allow_headers" in params:
+                        headers.append(("Access-Control-Allow-Headers", params["allow_headers"][0]))
+                    data["preflight"] = "1"
+                    if "redirect_preflight" not in params:
+                        if token:
+                            fetch_stash.put(token, data, path=stash_path)
+                        self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers,
+                                         cache_control="no-cache")
+                        return
+
+                status = 302
+                if "redirect_status" in params:
+                    status = int(params["redirect_status"][0].encode("latin-1"))
+                elif self.command not in {"GET", "HEAD"}:
+                    # wptserve's CGI input is bounded by Content-Length even
+                    # when Transfer-Encoding is also present.
+                    body = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if body is None:
+                        return
+                    form_status = _fetch_redirect_form_status(
+                        self.command, self.headers.get("Content-Type"), body
+                    )
+                    if form_status is not None:
+                        status = int(form_status.encode("latin-1"))
+                data["count"] += 1
+                if "location" in params:
+                    location = params["location"][0]
+                    if "simple" not in params and urlparse(location).scheme in {"", "http", "https"}:
+                        location += "&" if "?" in location else "?"
+                        location += urlencode({name: values[0] for name, values in params.items()})
+                        location += "&count=" + str(data["count"])
+                    headers.append(("Location", location))
+                if "redirect_referrerpolicy" in params:
+                    headers.append(("Referrer-Policy", params["redirect_referrerpolicy"][0]))
+                if "delay" in params:
+                    time.sleep(float(params["delay"][0].encode("latin-1")) / 1000)
+                if token:
+                    fetch_stash.put(token, data, path=stash_path)
+                    if "max_count" in params and data["count"] > int(params["max_count"][0].encode("latin-1")):
+                        # Upstream returns a plain body instead of its tuple;
+                        # none of the redirect/CORS headers survive that return.
+                        self._send_bytes(None, str(data["count"] - 1).encode(), emit_body=emit_body,
+                                         extra_headers=connection_headers, cache_control=None)
+                        return
+                self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers,
+                                 status_code=status, cache_control="no-cache")
+            except (KeyError, ValueError, TypeError, OverflowError):
+                self.send_error(500)
 
         def _serve_fetch_preflight_resource(
             self, path: str, query: str, *, emit_body: bool
