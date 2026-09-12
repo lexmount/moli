@@ -179,8 +179,7 @@ mod tests {
         assert_eq!(service.drain_service_lane(), 1);
 
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "startup close must retire the exact worker output stream"
         );
         assert!(test_support::matching_is_empty(&service));

@@ -107,7 +107,7 @@ async fn worker_importscripts_symbol_throws_type_error() {
         "test://importscripts_symbol".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -137,7 +137,7 @@ async fn worker_importscripts_invalid_url_throws_syntax_error_before_running_any
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -184,7 +184,7 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -234,7 +234,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -293,7 +293,7 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
         .send(crate::worker::WorkerMessage::SharedWorkerConnect(0))
         .expect("connect shared worker");
     loop {
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -335,7 +335,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         .with_content_security_report_only_policies(vec!["script-src 'none'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -391,7 +391,7 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
         .send(crate::worker::WorkerMessage::SharedWorkerConnect(0))
         .expect("connect shared worker");
     loop {
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -427,7 +427,7 @@ async fn worker_importscripts_syntax_error_preserves_prior_side_effects_and_stop
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -462,7 +462,7 @@ async fn worker_importscripts_runtime_throw_preserves_thrown_value_and_stops_lat
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -493,7 +493,7 @@ async fn worker_importscripts_revoked_blob_url_throws_network_error() {
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -522,7 +522,7 @@ async fn worker_importscripts_prepared_blob_url_survives_revoke_in_earlier_scrip
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -573,7 +573,7 @@ async fn worker_importscripts_stringifies_undefined_null_and_number_arguments() 
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -621,7 +621,7 @@ async fn worker_trusted_types_importscripts_enforces_script_url_sink() {
         .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -664,7 +664,7 @@ async fn worker_trusted_types_rejects_forged_named_properties() {
         .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -718,7 +718,7 @@ async fn worker_trusted_types_policy_create_survives_global_constructor_override
         .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -792,7 +792,7 @@ async fn worker_trusted_types_policy_callbacks_follow_webidl_contract() {
         "https://app.test/worker/main.js".to_owned(),
     ));
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -844,7 +844,7 @@ async fn worker_trusted_types_timers_and_eval_use_script_sink() {
         .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -877,7 +877,7 @@ async fn worker_trusted_script_eval_is_unwrapped_with_trusted_types_eval_keyword
         ]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -951,7 +951,7 @@ async fn worker_module_static_imports_resolve_http_dependencies_against_module_u
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1041,7 +1041,7 @@ async fn worker_module_static_sibling_dependencies_fetch_in_parallel() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1166,7 +1166,7 @@ async fn worker_module_fetches_completed_sibling_descendants_before_slow_sibling
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1199,7 +1199,7 @@ async fn worker_module_importscripts_is_exposed_but_throws_type_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1272,7 +1272,7 @@ async fn worker_module_same_origin_dependency_fetch_sends_cookies() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1340,7 +1340,7 @@ async fn worker_module_redirected_http_dependency_uses_final_response_url_as_bas
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1398,7 +1398,7 @@ async fn worker_module_redirected_http_dependency_final_url_obeys_script_src() {
         .with_module_static_import_content_security_policies(vec!["script-src 'self'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1447,7 +1447,7 @@ async fn worker_module_redirected_request_url_remains_module_key() {
         .with_script_kind(WorkerScriptKind::Module),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for worker redirected key result")
         .expect("channel closed");
@@ -1576,7 +1576,7 @@ async fn worker_module_static_import_uses_outside_csp_not_worker_response_csp() 
         .with_content_security_policies(vec!["script-src 'self'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -1609,7 +1609,7 @@ async fn worker_module_response_referrer_policy_controls_descendant_fetch() {
         .with_referrer_policy(Some("origin".to_owned())),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for worker module referrer result")
         .expect("channel closed");
@@ -1718,7 +1718,7 @@ async fn classic_worker_dynamic_import_uses_worker_referrer_policy() {
         .with_referrer_policy(Some("no-referrer".to_owned())),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for classic dynamic referrer result")
         .expect("channel closed");
@@ -1807,7 +1807,7 @@ async fn worker_dynamic_import_root_joins_inflight_fetch() {
         .with_request_client(loader),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for worker dynamic root join result")
         .expect("channel closed");
@@ -1852,7 +1852,7 @@ async fn worker_dynamic_import_root_join_waits_for_descendant_graph() {
         .with_request_client(loader),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for worker dynamic descendant join result")
         .expect("channel closed");
@@ -1901,7 +1901,7 @@ async fn worker_dynamic_import_root_failure_fans_out_to_joined_import() {
         .with_request_client(loader),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for worker dynamic root failure result")
         .expect("channel closed");
@@ -2103,7 +2103,7 @@ async fn worker_dynamic_import_uses_worker_response_csp_not_outside_static_csp()
         .with_content_security_policies(vec!["script-src-elem 'self'; script-src *".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2179,7 +2179,7 @@ async fn shared_worker_data_module_dynamic_import_allows_cors_dependency() {
         .send(crate::worker::WorkerMessage::SharedWorkerConnect(0))
         .expect("connect shared worker");
     loop {
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -2236,7 +2236,7 @@ async fn shared_worker_data_module_dynamic_import_allows_data_dependency() {
         .send(crate::worker::WorkerMessage::SharedWorkerConnect(0))
         .expect("connect shared worker");
     loop {
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -2300,7 +2300,7 @@ async fn shared_worker_dynamic_import_csp_block_dispatches_securitypolicyviolati
         .send(crate::worker::WorkerMessage::SharedWorkerConnect(0))
         .expect("connect shared worker");
     loop {
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -2354,7 +2354,7 @@ async fn worker_module_named_imports_read_live_exports() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2393,7 +2393,7 @@ async fn worker_module_no_import_source_runs_in_strict_mode() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2417,7 +2417,11 @@ fn service_worker_module_options(source: String, script_url: String) -> WorkerSp
 
 async fn expect_service_worker_async_module_error(handle: &mut WorkerHandle) {
     loop {
-        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+        match timeout(TIMEOUT, recv_behavior_message(handle))
+            .await
+            .unwrap()
+            .unwrap()
+        {
             WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
             WorkerToParentMessage::Error {
                 message,
@@ -2527,7 +2531,11 @@ async fn service_worker_module_checks_only_wasm_evaluation_dependencies() {
                 .unwrap();
             assert!(bootstrap.result.is_ok(), "{:?}", bootstrap.result);
             loop {
-                match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                match timeout(TIMEOUT, recv_behavior_message(&mut handle))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                {
                     WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
                     WorkerToParentMessage::Console(message) => {
                         assert_eq!(message.message, "log: true");
@@ -2565,7 +2573,11 @@ async fn service_worker_module_allows_await_inside_async_functions() {
             .unwrap()
             .unwrap();
         assert!(bootstrap.result.is_ok(), "{:?}", bootstrap.result);
-        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+        match timeout(TIMEOUT, recv_behavior_message(&mut handle))
+            .await
+            .unwrap()
+            .unwrap()
+        {
             WorkerToParentMessage::Console(message) => assert_eq!(message.message, "log: ready"),
             other => panic!("expected successful module execution, got {other:?}"),
         }
@@ -2587,7 +2599,7 @@ async fn worker_module_top_level_await_fulfillment_completes_startup() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2608,7 +2620,7 @@ async fn worker_module_top_level_await_rejection_reports_parent_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2647,7 +2659,7 @@ async fn worker_module_dynamic_import_data_url_resolves_namespace() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2702,7 +2714,7 @@ async fn worker_dynamic_import_report_only_csp_dispatches_without_blocking() {
         .with_content_security_report_only_policies(vec!["script-src 'none'".to_owned()]),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2830,7 +2842,7 @@ async fn worker_dynamic_import_sibling_dependencies_fetch_in_parallel() {
         WorkerScriptKind::Classic,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2988,7 +3000,7 @@ async fn worker_dynamic_import_fetches_completed_sibling_descendants_before_slow
         WorkerScriptKind::Classic,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3036,7 +3048,7 @@ async fn worker_classic_dynamic_wasm_import_fetches_namespace() {
         WorkerScriptKind::Classic,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3090,7 +3102,7 @@ async fn worker_classic_dynamic_import_preserves_instantiate_exception() {
         WorkerScriptKind::Classic,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3125,7 +3137,7 @@ async fn worker_module_dynamic_import_rejection_can_be_caught() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3158,7 +3170,7 @@ async fn worker_module_dynamic_import_rejects_invalid_attribute_key() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3191,7 +3203,7 @@ async fn worker_module_dynamic_import_source_rejects_without_hanging() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3233,7 +3245,7 @@ async fn worker_module_static_wasm_import_executes_start_function() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3280,7 +3292,7 @@ async fn worker_module_static_wasm_import_preserves_helper_postmessage_payload()
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3314,7 +3326,7 @@ async fn worker_module_static_wasm_import_preserves_v8_compile_exception() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3372,7 +3384,7 @@ async fn worker_module_wasm_js_cycle_is_rejected_without_recursive_evaluate() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3468,7 +3480,7 @@ async fn worker_module_root_wasm_executes_start_function() {
         WorkerNetworkPolicy::default(),
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3540,7 +3552,7 @@ async fn worker_module_source_phase_wasm_import_reuses_module_record_without_eva
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3624,7 +3636,7 @@ async fn worker_module_wasm_namespace_instance_returns_cached_instance() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3669,7 +3681,7 @@ async fn worker_module_static_and_dynamic_wasm_import_share_namespace() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3716,7 +3728,7 @@ async fn worker_module_mutable_wasm_global_initial_value_is_unwrapped() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3774,7 +3786,7 @@ async fn worker_module_wasm_global_unwrap_uses_original_value_getter() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3850,7 +3862,7 @@ async fn worker_module_static_wasm_global_unwrap_uses_original_value_getter() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3908,7 +3920,7 @@ async fn worker_module_mutable_wasm_global_export_is_live_binding() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -3975,7 +3987,7 @@ async fn worker_module_mutable_wasm_global_dep_reexport_is_live_binding() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4020,7 +4032,7 @@ async fn worker_module_dynamic_import_fetches_http_dependency_against_module_url
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4064,7 +4076,7 @@ async fn worker_module_dynamic_import_fetches_json_with_import_attributes() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4122,7 +4134,7 @@ async fn worker_module_json_import_uses_json_fetch_destination() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4164,7 +4176,7 @@ async fn worker_module_dynamic_css_import_rejects_invalid_module_type() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4197,7 +4209,7 @@ async fn worker_module_dynamic_text_import_rejects_invalid_module_type() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4221,7 +4233,7 @@ async fn worker_module_static_text_import_rejects_invalid_module_type() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4250,7 +4262,7 @@ async fn worker_module_static_css_import_rejects_invalid_module_type() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4297,7 +4309,7 @@ async fn worker_module_namespace_import_source_runs_in_strict_mode() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4367,7 +4379,7 @@ async fn worker_module_named_import_source_runs_in_strict_mode() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4391,7 +4403,7 @@ async fn worker_module_top_level_return_reports_syntax_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4421,7 +4433,7 @@ async fn worker_module_with_statement_reports_syntax_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4464,7 +4476,7 @@ async fn worker_module_dependency_parse_error_reports_syntax_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4496,7 +4508,7 @@ async fn worker_module_missing_named_import_reports_link_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4533,7 +4545,7 @@ async fn worker_module_missing_reexport_reports_link_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4572,7 +4584,7 @@ async fn worker_module_http_dependency_404_reports_load_error() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4612,7 +4624,7 @@ async fn worker_module_http_dependency_rejects_non_script_mime() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4656,7 +4668,7 @@ async fn worker_module_http_dependency_accepts_json_suffix_mime_with_attribute()
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4690,7 +4702,7 @@ async fn worker_module_http_dependency_reports_json_attribute_mismatch_before_sc
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4720,7 +4732,7 @@ async fn worker_module_invalid_static_import_specifier_reports_resolution_error(
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4746,7 +4758,7 @@ async fn worker_module_static_import_rejects_invalid_attribute_key() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4795,7 +4807,7 @@ async fn worker_module_http_dependency_cycle_evaluates_once() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4869,7 +4881,7 @@ async fn worker_module_http_export_cycles_evaluate_once() {
             WorkerScriptKind::Module,
         );
 
-        let msg = timeout(TIMEOUT, handle.recv())
+        let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for {label} cycle"))
             .expect("channel closed");
@@ -4930,7 +4942,7 @@ async fn worker_module_side_effect_imports_evaluate_dependencies_once_in_order()
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4980,7 +4992,7 @@ async fn worker_module_imported_bindings_reject_assignment() {
         WorkerScriptKind::Module,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5045,7 +5057,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5103,7 +5115,7 @@ async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_er
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5154,7 +5166,7 @@ async fn worker_importscripts_same_origin_syntax_error_reports_imported_script_l
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5209,7 +5221,7 @@ async fn service_worker_importscripts_reports_imported_script_resource() {
     let mut imported_resource = None;
     let mut saw_skip_waiting = false;
     while imported_resource.is_none() || !saw_skip_waiting {
-        let message = timeout(TIMEOUT, handle.recv())
+        let message = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out waiting for importScripts resource")
             .expect("channel closed");
@@ -5302,7 +5314,7 @@ async fn service_worker_module_static_import_reports_imported_script_resource() 
     let mut imported_resource = None;
     let mut saw_skip_waiting = false;
     while imported_resource.is_none() || !saw_skip_waiting {
-        let message = timeout(TIMEOUT, handle.recv())
+        let message = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out waiting for service worker module resource")
             .expect("channel closed");
@@ -5394,7 +5406,7 @@ async fn service_worker_module_static_json_import_reports_json_resource_kind() {
     let mut imported_resource = None;
     let mut saw_skip_waiting = false;
     while imported_resource.is_none() || !saw_skip_waiting {
-        let message = timeout(TIMEOUT, handle.recv())
+        let message = timeout(TIMEOUT, recv_behavior_message(&mut handle))
             .await
             .expect("timed out waiting for service worker module JSON resource")
             .expect("channel closed");
@@ -5467,7 +5479,7 @@ async fn service_worker_module_static_css_import_rejects_invalid_module_type() {
         }),
     );
 
-    let message = timeout(TIMEOUT, handle.recv())
+    let message = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for service worker module CSS error")
         .expect("channel closed");
@@ -5504,7 +5516,7 @@ async fn service_worker_module_static_text_import_rejects_invalid_module_type() 
         }),
     );
 
-    let message = timeout(TIMEOUT, handle.recv())
+    let message = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out waiting for service worker module text error")
         .expect("channel closed");
@@ -5567,7 +5579,7 @@ async fn worker_importscripts_nested_rethrow_preserves_imported_script_location(
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5617,7 +5629,7 @@ async fn worker_importscripts_same_origin_runtime_error_reports_imported_script_
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -5657,7 +5669,7 @@ async fn worker_importscripts_cross_origin_failure_reports_helper_callsite_from_
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");

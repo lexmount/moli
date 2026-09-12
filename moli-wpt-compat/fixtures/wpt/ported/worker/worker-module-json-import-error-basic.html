@@ -58,6 +58,10 @@ async function assert_json_module_failure(source, expectedFragments, description
 }
 
 promise_test(async function () {
+  // Chromium 145.0.7632.116 rejects all three cases with an error event
+  // (three runs on 2026-09-13); it does not expose a diagnostic message.
+  // The fragments below check Moli's own diagnostics: MIME rejection must
+  // precede parsing, while malformed JSON with the right MIME reaches parsing.
   const jsonUrl = "data:application/json,%7B%22name%22%3A%22json%22%7D";
   const invalidJsonUrl = "data:application/json,%7B%22name%22%3A";
   const jsUrl = worker_url("export default 'js';");
@@ -76,7 +80,7 @@ promise_test(async function () {
       "import value from " + JSON.stringify(jsUrl) + " with { type: 'json' };",
       "postMessage(value);",
     ].join("\n"),
-    ["syntax"],
+    ["non-JSON module", "JSON import attribute", "text/javascript"],
     "static non-JSON import with JSON type",
   );
 

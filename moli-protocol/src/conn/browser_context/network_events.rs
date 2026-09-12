@@ -85,15 +85,18 @@ impl CdpConnection {
             return Vec::new();
         };
         let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
-        let delivery = self.network_agent_for_owner_mut(owner).map(|agent| {
-            agent.ingest_renderer_output_item_and_prepare_live_delivery(
+        let delivery = self.network_agent_for_owner_mut(owner).and_then(|agent| {
+            if agent.has_observed_network_phase(item) {
+                return None;
+            }
+            Some(agent.ingest_renderer_output_item_and_prepare_live_delivery(
                 item,
                 "",
                 None,
                 None,
                 None,
                 &mut allocator,
-            )
+            ))
         });
         self.network_request_id_allocator = allocator;
         let Some(mut delivery) = delivery else {
@@ -495,7 +498,8 @@ mod tests {
         let terminal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if let BrowserEvent::NetworkRequestCompleted(occurrence) = native.recv().await.unwrap().event
-                    && matches!(&occurrence.renderer.item, moli_core::page::RendererNetworkOutputItem::Resource(item) if matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.request_handle() == Some(pause.pause.handle()))) { break occurrence; }
+                    && occurrence.renderer.source == moli_core::page::RendererNetworkSource::Worker(pause.pause.worker().clone())
+                    && matches!(&occurrence.renderer.item, moli_core::page::RendererNetworkOutputItem::Resource(item) if matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceBodyFinished(body) if body.handle() == pause.pause.handle())) { break occurrence; }
             }
         }).await.expect("released native request must finish");
         // A snapshot-only observer has no live FIFO consumer to retire this

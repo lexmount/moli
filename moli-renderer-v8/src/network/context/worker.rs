@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -41,6 +41,33 @@ struct WorkerResourceLoaderAuthority {
     owner: WorkerResourceOwner,
     state: Mutex<WorkerResourceLoaderState>,
     loads: ResourceLoadRegistry,
+}
+
+impl WorkerResourceLoaderAuthority {
+    fn begin_detach(&self) -> bool {
+        let mut state = self.state.lock();
+        if *state != WorkerResourceLoaderState::Active {
+            return false;
+        }
+        *state = WorkerResourceLoaderState::Detaching;
+        drop(state);
+        self.loads.begin_detach();
+        true
+    }
+}
+
+/// Termination can cancel the exact Worker's ordinary loads while its VM is
+/// blocked in synchronous IO. It neither retains the VM nor cancels keepalive.
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(Default))]
+pub(crate) struct WorkerResourceCancellation(Weak<WorkerResourceLoaderAuthority>);
+
+impl WorkerResourceCancellation {
+    pub(crate) fn begin_detach(&self) {
+        if let Some(authority) = self.0.upgrade() {
+            authority.begin_detach();
+        }
+    }
 }
 
 impl Drop for WorkerResourceLoaderAuthority {
@@ -112,14 +139,11 @@ impl WorkerResourceLoader {
     }
 
     pub(crate) fn begin_detach(&self) -> bool {
-        let mut state = self.authority.state.lock();
-        if *state != WorkerResourceLoaderState::Active {
-            return false;
-        }
-        *state = WorkerResourceLoaderState::Detaching;
-        drop(state);
-        self.authority.loads.begin_detach();
-        true
+        self.authority.begin_detach()
+    }
+
+    pub(crate) fn cancellation(&self) -> WorkerResourceCancellation {
+        WorkerResourceCancellation(Arc::downgrade(&self.authority))
     }
 
     pub(crate) fn finish_detach(&self) {

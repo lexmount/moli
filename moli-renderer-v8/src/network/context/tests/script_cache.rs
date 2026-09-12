@@ -10,6 +10,196 @@ use tokio::{
 };
 
 use crate::network::{BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRoot};
+use crate::network::{ResourceResponseHead, ResourceResponseObserver, ResourceResponseResult};
+
+#[derive(Debug)]
+enum ScriptProgress {
+    Head(std::sync::Arc<ResourceResponseHead>),
+    Data(usize),
+}
+
+struct ScriptProgressObserver(tokio::sync::mpsc::UnboundedSender<ScriptProgress>);
+
+impl ResourceResponseObserver for ScriptProgressObserver {
+    fn response_started(&self, response: std::sync::Arc<ResourceResponseHead>) {
+        let _ = self.0.send(ScriptProgress::Head(response));
+    }
+
+    fn data_received(&self, bytes: usize) {
+        let _ = self.0.send(ScriptProgress::Data(bytes));
+    }
+}
+
+fn start_observed_script(
+    load: crate::network::loads::ResourceLoadLease,
+    url: &str,
+) -> Result<(
+    tokio::sync::mpsc::UnboundedReceiver<ScriptProgress>,
+    oneshot::Receiver<ResourceResponseResult>,
+)> {
+    let request = Request::get(url)?
+        .with_request_origin(moli_url::WebOrigin::from_url(&url::Url::parse(url)?))
+        .with_page_network_policy()
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let (progress_send, progress) = tokio::sync::mpsc::unbounded_channel();
+    let (send, receive) = oneshot::channel();
+    load.request_client()
+        .fetch_cacheable_script_text_callback_with_load(
+            request,
+            load,
+            Some(std::sync::Arc::new(ScriptProgressObserver(progress_send))),
+            move |result| {
+                let _ = send.send(result);
+            },
+        )?;
+    Ok((progress, receive))
+}
+
+#[tokio::test]
+async fn observed_shared_script_late_waiter_survives_owner_cancellation() -> Result<()> {
+    check_observed_shared_script(false).await
+}
+
+#[tokio::test]
+async fn observed_shared_script_partial_failure_retains_head_and_bytes() -> Result<()> {
+    check_observed_shared_script(true).await
+}
+
+async fn check_observed_shared_script(partial_failure: bool) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/observed.js", listener.local_addr()?);
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document = document_loader((*owner).clone(), 1, &url);
+    let first_load = document
+        .register_load(
+            ResourceLoadKind::Script,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .unwrap();
+    let (mut first_progress, first) = start_observed_script(first_load.clone(), &url)?;
+    let (mut stream, _) = timeout(Duration::from_secs(3), listener.accept()).await??;
+    read_request(&mut stream).await?;
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCache-Control: max-age=60\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").await?;
+    let Some(ScriptProgress::Head(first_head)) =
+        timeout(Duration::from_secs(3), first_progress.recv()).await?
+    else {
+        panic!("headers must precede body while the server holds every byte")
+    };
+    assert_eq!(first_head.head.final_url.as_str(), url);
+    assert_eq!(first_head.head.status, 200);
+    assert!(first_head.network_request_headers.is_some());
+    stream.write_all(b"//").await?;
+    assert!(matches!(
+        timeout(Duration::from_secs(3), first_progress.recv()).await?,
+        Some(ScriptProgress::Data(2))
+    ));
+
+    let second_load = document
+        .register_load(
+            ResourceLoadKind::Script,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .unwrap();
+    let (mut second_progress, second) = start_observed_script(second_load, &url)?;
+    let Some(ScriptProgress::Head(second_head)) =
+        timeout(Duration::from_secs(3), second_progress.recv()).await?
+    else {
+        panic!("late admission must replay its existing physical response head")
+    };
+    assert!(std::sync::Arc::ptr_eq(&first_head, &second_head));
+    assert!(matches!(
+        timeout(Duration::from_secs(3), second_progress.recv()).await?,
+        Some(ScriptProgress::Data(2))
+    ));
+
+    first_load.cancel();
+    assert!(timeout(Duration::from_secs(3), first).await?.is_err());
+    assert!(
+        timeout(Duration::from_secs(3), first_progress.recv())
+            .await?
+            .is_none()
+    );
+    if partial_failure {
+        drop(stream);
+        let result = timeout(Duration::from_secs(3), second).await??;
+        let crate::network::ResourceResponseFailure::PartialBody {
+            response,
+            body,
+            message,
+        } = result.expect_err("truncated transport must not become a successful cache entry")
+        else {
+            panic!("a failed stream must retain its physical response")
+        };
+        assert!(std::sync::Arc::ptr_eq(&first_head, &response));
+        assert_eq!(body.clone_body_bytes(), b"//");
+        assert!(!message.is_empty());
+    } else {
+        stream.write_all(b"ok").await?;
+        assert!(matches!(
+            timeout(Duration::from_secs(3), second_progress.recv()).await?,
+            Some(ScriptProgress::Data(2))
+        ));
+        let response = timeout(Duration::from_secs(3), second).await???;
+        assert_eq!(response.body_bytes(), b"//ok");
+        assert!(!response.from_cache);
+        let hit = start_script(
+            document
+                .register_load(
+                    ResourceLoadKind::Script,
+                    ResourceLoadDisposition::Ordinary,
+                    None,
+                )
+                .unwrap(),
+            &url,
+        )?;
+        let response = timeout(Duration::from_secs(3), hit).await???;
+        assert!(response.from_cache);
+        assert_eq!(response.body_bytes(), b"//ok");
+    }
+    assert!(
+        timeout(Duration::from_secs(3), second_progress.recv())
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn observed_shared_script_last_consumer_cancels_held_body() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/observed.js", listener.local_addr()?);
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document = document_loader((*owner).clone(), 1, &url);
+    let load = document
+        .register_load(
+            ResourceLoadKind::Script,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .unwrap();
+    let (mut progress, completed) = start_observed_script(load.clone(), &url)?;
+    let (mut stream, _) = timeout(Duration::from_secs(3), listener.accept()).await??;
+    read_request(&mut stream).await?;
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").await?;
+    assert!(matches!(
+        timeout(Duration::from_secs(3), progress.recv()).await?,
+        Some(ScriptProgress::Head(_))
+    ));
+    load.cancel();
+    assert!(timeout(Duration::from_secs(3), completed).await?.is_err());
+    assert!(
+        timeout(Duration::from_secs(3), progress.recv())
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        timeout(Duration::from_secs(3), stream.read(&mut [0])).await??,
+        0
+    );
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum ContextChange {
@@ -52,8 +242,8 @@ fn start_script(
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
     let (send, receive) = oneshot::channel();
     load.request_client()
-        .fetch_cacheable_script_text_callback_with_load(request, load, move |result| {
-            let _ = send.send(result);
+        .fetch_cacheable_script_text_callback_with_load(request, load, None, move |result| {
+            let _ = send.send(result.map_err(anyhow::Error::new));
         })?;
     Ok(receive)
 }

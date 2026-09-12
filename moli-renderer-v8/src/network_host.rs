@@ -28,7 +28,7 @@ use moli_webapi_declare::WebApiObject;
 use crate::network::ResourceRequestClient;
 
 pub(crate) use self::async_fetch::{
-    browser_request_needs_manual_preflight_redirects, collect_image_response_into_parkable,
+    collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,

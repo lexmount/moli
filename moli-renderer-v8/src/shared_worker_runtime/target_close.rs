@@ -89,8 +89,7 @@ mod tests {
         assert!(host.is_closed());
         assert!(test_support::matching_is_empty(&service));
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "explicit close must retire the worker stream after one native destruction"
         );
         let task = message_port_owner

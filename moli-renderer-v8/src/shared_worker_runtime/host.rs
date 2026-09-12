@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use moli_shared_worker::{SharedWorkerClientId, SharedWorkerInstanceId};
 use parking_lot::Mutex;
@@ -14,7 +11,7 @@ use super::{
     service::WeakSharedWorkerRuntimeService,
 };
 
-pub(super) enum SharedWorkerRuntimeResponsePublicationState {
+pub(super) enum SharedWorkerOutputPublicationState {
     Active,
     Closing(Vec<crate::runtime::RendererRuntimeInspectorResponsePublication>),
     Retired {
@@ -32,8 +29,7 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
     pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
-    target_output_retired: AtomicBool,
-    pub(super) runtime_response_publications: Mutex<SharedWorkerRuntimeResponsePublicationState>,
+    pub(super) output_publications: Mutex<SharedWorkerOutputPublicationState>,
 }
 
 pub(super) enum RendererSharedWorkerHostState {
@@ -70,10 +66,7 @@ impl RendererSharedWorkerHost {
             clients: Mutex::new(HashMap::new()),
             target_output,
             worker_lifecycle,
-            target_output_retired: AtomicBool::new(false),
-            runtime_response_publications: Mutex::new(
-                SharedWorkerRuntimeResponsePublicationState::Active,
-            ),
+            output_publications: Mutex::new(SharedWorkerOutputPublicationState::Active),
         }
     }
 
@@ -105,7 +98,11 @@ impl RendererSharedWorkerHost {
         &self.target_output
     }
 
-    pub(super) fn target_output_retired(&self) -> &AtomicBool {
-        &self.target_output_retired
+    #[cfg(test)]
+    pub(super) fn target_output_retired(&self) -> bool {
+        matches!(
+            *self.output_publications.lock(),
+            SharedWorkerOutputPublicationState::Retired { .. }
+        )
     }
 }

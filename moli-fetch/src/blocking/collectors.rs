@@ -251,6 +251,7 @@ pub struct RawStreamingResponseCollector {
     cancel_handle: FetchCancelHandle,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
+    follow_redirects: bool,
 }
 
 impl StreamingResponseCollector {
@@ -614,9 +615,11 @@ impl RawStreamingResponseCollector {
         start_tx: oneshot::Sender<Result<StreamingHtmlResponseStart>>,
         body_tx: mpsc::UnboundedSender<Vec<u8>>,
         cancel_handle: FetchCancelHandle,
+        follow_redirects: bool,
     ) -> Self {
         Self {
             cookie_store,
+            follow_redirects,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -839,10 +842,11 @@ impl RawStreamingResponseCollector {
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-            .ok()
-            .flatten()
-            .is_some()
+        if self.follow_redirects
+            && next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+                .ok()
+                .flatten()
+                .is_some()
         {
             return;
         }
@@ -1175,6 +1179,7 @@ mod tests {
             start_tx,
             body_tx,
             cancel_handle,
+            true,
         );
         collector.begin_request(
             None,

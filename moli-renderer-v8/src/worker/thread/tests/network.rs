@@ -2737,7 +2737,7 @@ async fn worker_blob_surface_supports_response_blob_and_blob_url_import_scripts(
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let first = timeout(TIMEOUT, handle.recv())
+    let first = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2746,7 +2746,7 @@ async fn worker_blob_surface_supports_response_blob_and_blob_url_import_scripts(
         r#"{"blobCtor":"function","blobTag":"[object Blob]","size":22,"type":"text/plain;charset=utf-8","text":"hello from worker blob","blobUrlPrefix":true}"#
     );
 
-    let second = timeout(TIMEOUT, handle.recv())
+    let second = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -2945,6 +2945,7 @@ async fn worker_xmlhttprequest_uses_worker_script_base_url_and_event_target_list
 
 #[tokio::test]
 async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_network_policy(
         r#"
@@ -2974,13 +2975,7 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker xhr pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     assert!(
         worker_request_info(&pending)
             .network_request_handle
@@ -3021,6 +3016,7 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
 
 #[tokio::test]
 async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client(
         r#"
@@ -3061,14 +3057,15 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("worker channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             WorkerToParentMessage::FetchInterception(pending) => {
@@ -3100,6 +3097,7 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
 
 #[tokio::test]
 async fn worker_xhr_response_stage_interception_pauses_before_done() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(
         "/worker/xhr.txt",
@@ -3136,22 +3134,10 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker xhr pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, true, false).await;
 
-    let response_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for response-stage worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
-        panic!("expected worker xhr response-stage pause, got {response_pause:?}");
-    };
+    let response_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
         panic!("expected response stage");
     };
@@ -3187,6 +3173,7 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
 
 #[tokio::test]
 async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_events() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -3246,14 +3233,15 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("worker channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
@@ -3384,6 +3372,7 @@ async fn worker_sync_xhr_allows_response_types_and_omits_progress_events() {
 
 #[tokio::test]
 async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let body = "x".repeat(1024 * 1024 + 17);
     let expected_len = body.len();
@@ -3420,22 +3409,10 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage large worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected large worker xhr pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, true, false).await;
 
-    let response_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for response-stage large worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
-        panic!("expected large worker xhr response-stage pause, got {response_pause:?}");
-    };
+    let response_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
         panic!("expected response stage");
     };
@@ -3460,6 +3437,7 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
 
 #[tokio::test]
 async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) =
         spawn_basic_auth_http_server("/worker/xhr-auth.txt", "worker-xhr-area", "xhr-secret", 2)
@@ -3490,22 +3468,10 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker xhr auth pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker xhr auth request pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, false, true).await;
 
-    let auth_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr auth challenge")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
-        panic!("expected worker xhr auth challenge, got {auth_pause:?}");
-    };
+    let auth_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
         panic!("expected auth stage");
     };
@@ -3523,11 +3489,7 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
     )
     .await;
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr auth-success network record")
-        .expect("worker channel closed");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
     assert_initial_worker_auth_network_headers(record.network_request_headers());
     assert!(matches!(
@@ -3544,6 +3506,7 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
 
 #[tokio::test]
 async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_body() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) =
         spawn_basic_auth_http_server("/worker/xhr-auth.txt", "worker-xhr-area", "xhr-secret", 1)
@@ -3577,22 +3540,10 @@ async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_bo
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker xhr auth pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker xhr auth request pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, false, true).await;
 
-    let auth_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr auth challenge")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
-        panic!("expected worker xhr auth challenge, got {auth_pause:?}");
-    };
+    let auth_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
         panic!("expected auth stage");
     };
@@ -3822,12 +3773,8 @@ async fn worker_fetch_resolves_response_before_delayed_body() {
         loader,
     );
 
-    let headers = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for headers-first worker fetch")
-        .expect("worker channel closed");
     assert_eq!(
-        expect_post_json(headers),
+        recv_post_json(&mut handle).await,
         r#"{"phase":"headers","status":200}"#
     );
     release_body_tx
@@ -3957,6 +3904,7 @@ async fn worker_fetch_applies_network_policy_extra_http_headers() {
 
 #[tokio::test]
 async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_network_policy(
         r#"
@@ -3985,13 +3933,7 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker fetch pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     assert!(
         worker_request_info(&pending)
             .network_request_handle
@@ -4025,6 +3967,7 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
 
 #[tokio::test]
 async fn worker_subresource_request_handles_are_owner_unique() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
 
     fn spawn_intercepted_fetch_worker() -> WorkerTestHandle {
@@ -4057,20 +4000,8 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     first.post_message(serialize_test_string("go"));
     second.post_message(serialize_test_string("go"));
 
-    let first_pending = timeout(TIMEOUT, first.recv())
-        .await
-        .expect("timed out waiting for first worker fetch pause")
-        .expect("first worker channel closed");
-    let second_pending = timeout(TIMEOUT, second.recv())
-        .await
-        .expect("timed out waiting for second worker fetch pause")
-        .expect("second worker channel closed");
-    let WorkerToParentMessage::FetchInterception(first_pending) = first_pending else {
-        panic!("expected first worker fetch pause, got {first_pending:?}");
-    };
-    let WorkerToParentMessage::FetchInterception(second_pending) = second_pending else {
-        panic!("expected second worker fetch pause, got {second_pending:?}");
-    };
+    let first_pending = network_records.recv_pause(&mut first).await;
+    let second_pending = network_records.recv_pause(&mut second).await;
 
     assert!(
         worker_request_info(&first_pending)
@@ -4115,18 +4046,10 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     )
     .await;
 
-    let first_network = timeout(TIMEOUT, first.recv())
-        .await
-        .expect("timed out waiting for first worker network record")
-        .expect("first worker channel closed");
-    let first_record = expect_subresource_network_record(first_network);
+    let first_record = network_records.recv_record(&mut first).await;
     assert_eq!(first_record.request_handle(), Some(first_handle));
 
-    let second_network = timeout(TIMEOUT, second.recv())
-        .await
-        .expect("timed out waiting for second worker network record")
-        .expect("second worker channel closed");
-    let second_record = expect_subresource_network_record(second_network);
+    let second_record = network_records.recv_record(&mut second).await;
     assert_eq!(second_record.request_handle(), Some(second_handle));
 
     assert_eq!(recv_post_json(&mut first).await, r#""done""#);
@@ -4195,11 +4118,9 @@ async fn assert_native_worker_continue_partition(resource_type: SubresourceResou
         );
         worker.set_fetch_subresource_interception(true, Some(resource_type));
         worker.post_message(serialize_test_string("go"));
-        let WorkerToParentMessage::FetchInterception(pause) =
-            timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap()
-        else {
-            panic!("real Worker request must pause");
-        };
+        let pause = WorkerNetworkRecords::default()
+            .recv_pause(&mut worker)
+            .await;
         continue_worker_request(&pause, false, false).await;
         assert_eq!(
             recv_post_json(&mut worker).await,
@@ -4220,6 +4141,7 @@ async fn assert_native_worker_continue_partition(resource_type: SubresourceResou
 
 #[tokio::test]
 async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -4276,13 +4198,7 @@ async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for continued worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected continued worker fetch pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, false, false).await;
 
     assert_eq!(
@@ -4303,6 +4219,7 @@ async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
 
 #[tokio::test]
 async fn worker_fetch_response_stage_interception_pauses_before_resolving_response() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(
         "/worker/api.txt",
@@ -4336,22 +4253,10 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker fetch pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, true, false).await;
 
-    let response_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for response-stage worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
-        panic!("expected worker response-stage pause, got {response_pause:?}");
-    };
+    let response_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
         panic!("expected response stage");
     };
@@ -4383,6 +4288,7 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
 
 #[tokio::test]
 async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_stream() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let body = "x".repeat(1024 * 1024 + 17);
     let expected_len = body.len();
@@ -4423,22 +4329,10 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage large worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected large worker fetch pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, true, false).await;
 
-    let response_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for response-stage large worker fetch pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
-        panic!("expected large worker fetch response-stage pause, got {response_pause:?}");
-    };
+    let response_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
         panic!("expected response stage");
     };
@@ -4463,6 +4357,7 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
 
 #[tokio::test]
 async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_basic_auth_http_server(
         "/worker/fetch-auth.txt",
@@ -4491,22 +4386,10 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker fetch auth pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker fetch auth request pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, false, true).await;
 
-    let auth_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker fetch auth challenge")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
-        panic!("expected worker fetch auth challenge, got {auth_pause:?}");
-    };
+    let auth_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
         panic!("expected auth stage");
     };
@@ -4525,11 +4408,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     )
     .await;
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker fetch auth-success network record")
-        .expect("worker channel closed");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.request_handle(), expected_request_handle);
     assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
     assert_initial_worker_auth_network_headers(record.network_request_headers());
@@ -4549,6 +4428,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
 
 #[tokio::test]
 async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge_body() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_basic_auth_http_server(
         "/worker/fetch-auth.txt",
@@ -4577,22 +4457,10 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
     handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
     handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for request-stage worker fetch auth pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(pending) = pending else {
-        panic!("expected worker fetch auth request pause, got {pending:?}");
-    };
+    let pending = network_records.recv_pause(&mut handle).await;
     continue_worker_request(&pending, false, true).await;
 
-    let auth_pause = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker fetch auth challenge")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
-        panic!("expected worker fetch auth challenge, got {auth_pause:?}");
-    };
+    let auth_pause = network_records.recv_pause(&mut handle).await;
     let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
         panic!("expected auth stage");
     };
@@ -4606,11 +4474,7 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
     )
     .await;
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker fetch auth-fail network record")
-        .expect("worker channel closed");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.request_handle(), expected_request_handle);
     assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
     assert!(matches!(
@@ -4683,7 +4547,7 @@ async fn worker_importscripts_applies_loader_network_policy_extra_http_headers()
         },
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4751,7 +4615,7 @@ async fn module_worker_dependency_applies_loader_network_policy_extra_http_heade
         },
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let msg = timeout(TIMEOUT, recv_behavior_message(&mut handle))
         .await
         .expect("timed out")
         .expect("channel closed");
@@ -4845,6 +4709,7 @@ async fn worker_fetch_bad_port_rejects_before_transport() {
 
 #[tokio::test]
 async fn worker_fetch_file_url_rejects_before_interception_or_transport() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client(
         r#"
@@ -4871,14 +4736,15 @@ async fn worker_fetch_file_url_rejects_before_interception_or_transport() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        match timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        match tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out waiting for worker file fetch rejection")
             .expect("worker channel closed")
         {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported worker fetch must not reach interception: {other:?}"),
@@ -5008,6 +4874,7 @@ async fn worker_fetch_blocked_url_rejects_and_reports_subresource_failure() {
 
 #[tokio::test]
 async fn worker_fetch_connection_refused_rejects_and_reports_subresource_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) =
         spawn_connection_drop_http_server("/worker-fetch-connection-refused").await;
@@ -5039,8 +4906,9 @@ async fn worker_fetch_connection_refused_rejects_and_reports_subresource_failure
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .unwrap_or_else(|_| {
                 panic!(
@@ -5052,7 +4920,7 @@ async fn worker_fetch_connection_refused_rejects_and_reports_subresource_failure
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -5082,6 +4950,7 @@ async fn worker_fetch_connection_refused_rejects_and_reports_subresource_failure
 
 #[tokio::test]
 async fn worker_fetch_dns_failure_rejects_and_reports_subresource_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let url = "http://moli-dns-failure.invalid./worker-fetch-dns-failure";
     let url_literal = serde_json::to_string(url).expect("serialize worker fetch url");
@@ -5112,14 +4981,15 @@ async fn worker_fetch_dns_failure_rejects_and_reports_subresource_failure() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -5152,6 +5022,7 @@ async fn worker_fetch_dns_failure_rejects_and_reports_subresource_failure() {
 
 #[tokio::test]
 async fn worker_fetch_redirect_error_rejects_before_following_redirect() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) =
         spawn_single_redirect_http_server("/worker-fetch-redirect-error", "/target").await;
@@ -5182,14 +5053,15 @@ async fn worker_fetch_redirect_error_rejects_before_following_redirect() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -5356,6 +5228,7 @@ async fn worker_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
 
 #[tokio::test]
 async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_response() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -5414,14 +5287,15 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
@@ -5454,6 +5328,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
 
 #[tokio::test]
 async fn worker_fetch_no_cors_image_rejects_when_worker_policy_requires_coep_corp() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -5512,14 +5387,15 @@ async fn worker_fetch_no_cors_image_rejects_when_worker_policy_requires_coep_cor
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
@@ -5623,6 +5499,7 @@ async fn worker_fetch_no_cors_orb_allows_mislabeled_png_body() {
 
 #[tokio::test]
 async fn worker_fetch_no_cors_cross_origin_resource_policy_blocks_response() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -5674,14 +5551,15 @@ async fn worker_fetch_no_cors_cross_origin_resource_policy_blocks_response() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
@@ -5714,6 +5592,7 @@ async fn worker_fetch_no_cors_cross_origin_resource_policy_blocks_response() {
 
 #[tokio::test]
 async fn worker_fetch_redirect_loop_rejects_and_reports_subresource_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_redirect_loop_http_server("/worker-fetch-loop").await;
     let url = format!("{base_url}/worker-fetch-loop");
@@ -5743,14 +5622,15 @@ async fn worker_fetch_redirect_loop_rejects_and_reports_subresource_failure() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -5781,6 +5661,7 @@ async fn worker_fetch_redirect_loop_rejects_and_reports_subresource_failure() {
 
 #[tokio::test]
 async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (source_base_url, _, source_server, target_server) =
         spawn_cross_origin_redirect_without_cors_http_servers(
@@ -5815,14 +5696,15 @@ async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_fai
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -5855,6 +5737,7 @@ async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_fai
 
 #[tokio::test]
 async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (source_base_url, _, source_server, target_server) =
         spawn_cross_origin_redirect_with_cors_http_servers(
@@ -5902,14 +5785,15 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -6263,6 +6147,7 @@ async fn worker_classic_websocket_handshake_set_cookie_updates_cookie_store() {
 
 #[tokio::test]
 async fn worker_classic_websocket_blocked_url_reports_network_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_blocked_url_patterns(
         r#"
@@ -6283,11 +6168,7 @@ async fn worker_classic_websocket_blocked_url_reports_network_failure() {
         vec!["ws://127.0.0.1/blocked/*".to_owned()],
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), "ws://127.0.0.1/blocked/worker-ws");
     assert_eq!(record.resource_type(), SubresourceResourceType::WebSocket);
     assert!(record.websocket_socket_id().is_some());
@@ -6305,6 +6186,7 @@ async fn worker_classic_websocket_blocked_url_reports_network_failure() {
 
 #[tokio::test]
 async fn worker_classic_websocket_offline_reports_network_failure() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client_and_network_policy(
         r#"
@@ -6328,11 +6210,7 @@ async fn worker_classic_websocket_offline_reports_network_failure() {
         },
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), "ws://127.0.0.1/offline/worker-ws");
     assert_eq!(record.resource_type(), SubresourceResourceType::WebSocket);
     assert!(record.websocket_socket_id().is_some());
@@ -6350,6 +6228,7 @@ async fn worker_classic_websocket_offline_reports_network_failure() {
 
 #[tokio::test]
 async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let imported_script = r#"
         const events = [];
@@ -6385,11 +6264,18 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
         vec![format!("{websocket_base_url}/worker/imported/blocked/*")],
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    let record = expect_subresource_network_record(network);
+    let script = network_records.recv_record(&mut handle).await;
+    assert_eq!(
+        script.url().as_str(),
+        format!("{base_url}/worker/imported/ws.js")
+    );
+    assert_eq!(script.resource_type(), SubresourceResourceType::Script);
+    assert!(matches!(
+        script.outcome(),
+        SubresourceNetworkOutcome::Success { .. }
+    ));
+
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), expected_url);
     assert_eq!(record.resource_type(), SubresourceResourceType::WebSocket);
     assert!(record.websocket_socket_id().is_some());
@@ -6606,6 +6492,7 @@ async fn worker_xmlhttprequest_offline_reports_error_after_loadstart() {
 
 #[tokio::test]
 async fn worker_xmlhttprequest_connection_refused_reports_error_after_loadstart() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) =
         spawn_connection_drop_http_server("/worker-xhr-connection-refused").await;
@@ -6647,14 +6534,15 @@ async fn worker_xmlhttprequest_connection_refused_reports_error_after_loadstart(
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -6683,6 +6571,7 @@ async fn worker_xmlhttprequest_connection_refused_reports_error_after_loadstart(
 
 #[tokio::test]
 async fn worker_xmlhttprequest_file_url_rejects_before_interception_or_transport() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client(
         r#"
@@ -6717,14 +6606,15 @@ async fn worker_xmlhttprequest_file_url_rejects_before_interception_or_transport
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        match timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        match tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out waiting for worker file XHR rejection")
             .expect("worker channel closed")
         {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported worker XHR must not reach interception: {other:?}"),
@@ -6747,6 +6637,7 @@ async fn worker_xmlhttprequest_file_url_rejects_before_interception_or_transport
 
 #[tokio::test]
 async fn synchronous_worker_xhr_file_url_throws_network_error_without_progress_events() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let mut handle = spawn_worker_with_request_client(
         r#"
@@ -6786,14 +6677,15 @@ async fn synchronous_worker_xhr_file_url_throws_network_error_without_progress_e
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        match timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        match tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out waiting for synchronous worker file XHR rejection")
             .expect("worker channel closed")
         {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported synchronous worker XHR reached interception: {other:?}"),
@@ -6816,6 +6708,7 @@ async fn synchronous_worker_xhr_file_url_throws_network_error_without_progress_e
 
 #[tokio::test]
 async fn worker_xmlhttprequest_dns_failure_reports_error_after_loadstart() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let url = "http://moli-dns-failure.invalid./worker-xhr-dns-failure";
     let url_literal = serde_json::to_string(url).expect("serialize worker xhr url");
@@ -6856,8 +6749,9 @@ async fn worker_xmlhttprequest_dns_failure_reports_error_after_loadstart() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .unwrap_or_else(|_| {
                 panic!(
@@ -6869,7 +6763,7 @@ async fn worker_xmlhttprequest_dns_failure_reports_error_after_loadstart() {
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -6901,6 +6795,7 @@ async fn worker_xmlhttprequest_dns_failure_reports_error_after_loadstart() {
 
 #[tokio::test]
 async fn worker_xmlhttprequest_redirect_loop_reports_error_after_loadstart() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_redirect_loop_http_server("/worker-xhr-loop").await;
     let url = format!("{base_url}/worker-xhr-loop");
@@ -6941,14 +6836,15 @@ async fn worker_xmlhttprequest_redirect_loop_reports_error_after_loadstart() {
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -6979,6 +6875,7 @@ async fn worker_xmlhttprequest_redirect_loop_reports_error_after_loadstart() {
 
 #[tokio::test]
 async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_after_loadstart() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (source_base_url, _, source_server, target_server) =
         spawn_cross_origin_redirect_without_cors_http_servers(
@@ -7024,14 +6921,15 @@ async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
@@ -7065,6 +6963,7 @@ async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_
 
 #[tokio::test]
 async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (source_base_url, _, source_server, target_server) =
         spawn_cross_origin_redirect_with_cors_http_servers(
@@ -7123,14 +7022,15 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
 
     let mut post = None;
     let mut network = None;
-    for _ in 0..2 {
-        let message = timeout(TIMEOUT, handle.recv())
+    let network_deadline = tokio::time::Instant::now() + TIMEOUT;
+    while post.is_none() || network.is_none() {
+        let message = tokio::time::timeout_at(network_deadline, handle.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Network(observation) => {
-                network = Some(observation.worker_record_for_test().clone())
+                network = network_records.observe(observation).or(network)
             }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));

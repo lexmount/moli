@@ -49,7 +49,9 @@ pub use network_observation::{
     RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
     RendererWorkerIdentity,
 };
-pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
+pub(crate) use network_observation::{
+    RendererNetworkReporter, RendererWorkerNetworkReporter, RendererWorkerNetworkRequest,
+};
 mod worker_fetch;
 pub use worker_fetch::{
     PendingWorkerFetchDecision, RendererWorkerFetchPause, RendererWorkerFetchStage,
@@ -280,7 +282,8 @@ use self::access::{
 pub(crate) use self::browser_context_runtime::ServiceWorkerControlState;
 pub(crate) use self::browser_context_runtime::{
     ClipboardPresentationStyle, ClipboardSnapshot, RendererDedicatedWorkerHost,
-    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
+    RendererDedicatedWorkerNetworkObserver, RendererStoragePartitionIdentity,
+    RendererWorkerContextRuntime,
 };
 pub use self::browser_context_runtime::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,

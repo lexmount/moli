@@ -71,6 +71,7 @@ impl RendererBrowserContextRuntime {
         request: &Request,
         navigation_loader: &NavigationResourceLoader,
     ) -> Result<RendererServiceWorkerMainResourceFetch> {
+        self.bind_worker_resource_task_runner(navigation_loader.task_runner());
         let bypass_service_worker = navigation_loader.request_client().bypass_service_worker();
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(RendererServiceWorkerMainResourceFetch {

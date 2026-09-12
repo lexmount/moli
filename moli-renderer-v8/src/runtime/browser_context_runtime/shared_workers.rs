@@ -216,7 +216,7 @@ mod owner_wake_retirement_tests {
 
     #[test]
     fn deferred_worker_routes_are_bounded_without_service_initialization() {
-        let context = RendererBrowserContextRuntime::new();
+        let context = RendererBrowserContextRuntime::new_for_test();
         let (peer_tx, _peer_rx) = crate::shared_worker_runtime::shared_worker_owner_wake_channel();
         context.add_shared_worker_owner_wake_sender(peer_tx);
         for _ in 0..64 {

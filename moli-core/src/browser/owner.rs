@@ -363,12 +363,12 @@ impl BrowserHandle {
         http_cache_max_bytes: Option<u64>,
     ) -> Result<BrowserContextHandle, String> {
         let id = self.execute(move |browser| {
-            browser.insert_context(BrowserContext::new(
-                handles,
-                kind,
-                http_cache_root,
-                http_cache_max_bytes,
-            ))
+            let context = BrowserContext::new(handles, kind, http_cache_root, http_cache_max_bytes);
+            context.renderer_runtime().bind_worker_resource_task_runner(
+                moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()
+                    .expect("Browser owner runs on its resource executor"),
+            );
+            browser.insert_context(context)
         })?;
         Ok(BrowserContextHandle {
             browser: self.clone(),

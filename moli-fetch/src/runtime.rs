@@ -1277,6 +1277,7 @@ impl RuntimeOwner {
                         .take()
                         .expect("initial raw streaming job should have body sender"),
                     job.cancel_handle.clone(),
+                    job.request.follow_redirects,
                 ),
             ))
         });

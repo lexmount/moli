@@ -1083,40 +1083,24 @@ fn advance_worker_dynamic_module_import(
     let existing_root_entry = graph.borrow().entry_for_key(&module_key);
     let root_entry = match existing_root_entry {
         Some(entry) => entry,
-        None => match load_worker_static_module_dependency(&job.base_url, &job.specifier)? {
-            WorkerModuleDependencyLoad::Source { url, source } => {
-                let key =
-                    worker_module_key_for_attributes(&url, &job.attributes).map_err(|message| {
-                        format!("{message} for dynamic import `{}`", job.specifier)
-                    })?;
-                ensure_worker_module_entry(
-                    scope,
-                    &graph,
-                    &source,
-                    key,
-                    url,
-                    inherited_referrer_policy.clone(),
-                )
-                .map_err(|error| error.0.summary)?
-            }
-            WorkerModuleDependencyLoad::NeedFetch(_) => {
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
-                return Ok(WorkerDynamicModuleImportAdvance::NeedFetches(
-                    WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
-                        fetch_id,
-                        module_key,
-                        job.fetch_initiator_url.clone(),
-                        WorkerModuleGraphFetchCspSource::DynamicImportGraph,
-                        None,
-                        job.specifier.clone(),
-                        job.attributes.clone(),
-                        graph.borrow().credentials_mode(),
-                        inherited_referrer_policy,
-                        job.browser_request_metadata(),
-                    )),
-                ));
-            }
-        },
+        None => {
+            resolve_worker_module_dependency_url(&job.base_url, &job.specifier)?;
+            let fetch_id = reserve_worker_module_graph_fetch_id(scope);
+            return Ok(WorkerDynamicModuleImportAdvance::NeedFetches(
+                WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
+                    fetch_id,
+                    module_key,
+                    job.fetch_initiator_url.clone(),
+                    WorkerModuleGraphFetchCspSource::DynamicImportGraph,
+                    None,
+                    job.specifier.clone(),
+                    job.attributes.clone(),
+                    graph.borrow().credentials_mode(),
+                    inherited_referrer_policy,
+                    job.browser_request_metadata(),
+                )),
+            ));
+        }
     };
     job.resolved_entry = Some(root_entry);
     match continue_worker_module_graph(
@@ -2233,82 +2217,53 @@ fn resolve_worker_module_dependency(
             )));
         }
     }
-    let (dependency_key, dependency_source) =
-        match load_worker_static_module_dependency(url, &request.specifier).map_err(|message| {
+    let dependency_url =
+        resolve_worker_module_dependency_url(url, &request.specifier).map_err(|message| {
             Box::new(worker_bootstrap_error(
                 scope,
                 url.as_str(),
                 &message,
                 WorkerParentErrorEventKind::Event,
             ))
-        })? {
-            WorkerModuleDependencyLoad::Source { url, source } => {
-                let dependency_key = worker_module_key_for_attributes(&url, &request.attributes)
-                    .map_err(|message| {
-                        Box::new(worker_bootstrap_error(
-                            scope,
-                            url.as_str(),
-                            &format!("{message} for import `{}`", request.specifier),
-                            WorkerParentErrorEventKind::Event,
-                        ))
-                    })?;
-                (dependency_key, source)
-            }
-            WorkerModuleDependencyLoad::NeedFetch(dependency_url) => {
-                let dependency_key =
-                    worker_module_key_for_attributes(&dependency_url, &request.attributes)
-                        .map_err(|message| {
-                            Box::new(worker_bootstrap_error(
-                                scope,
-                                url.as_str(),
-                                &format!("{message} for import `{}`", request.specifier),
-                                WorkerParentErrorEventKind::Event,
-                            ))
-                        })?;
-                let existing_entry = graph.borrow().entry_for_key(&dependency_key);
-                if let Some(target_entry) = existing_entry {
-                    graph.borrow_mut().add_dependency(
-                        entry,
-                        request.specifier,
-                        request.attributes,
-                        target_entry,
-                    );
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                if !pending_keys.insert(dependency_key.clone()) {
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
-                let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
-                return Ok(WorkerModuleGraphBuild::NeedFetches(
-                    WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
-                        fetch_id,
-                        dependency_key,
-                        fetch_initiator_url.clone(),
-                        csp_source,
-                        Some(entry),
-                        request.specifier,
-                        request.attributes,
-                        graph.borrow().credentials_mode(),
-                        referrer_policy,
-                        browser_request_metadata,
-                    )),
-                ));
-            }
-        };
+        })?;
+    let dependency_key = worker_module_key_for_attributes(&dependency_url, &request.attributes)
+        .map_err(|message| {
+            Box::new(worker_bootstrap_error(
+                scope,
+                url.as_str(),
+                &format!("{message} for import `{}`", request.specifier),
+                WorkerParentErrorEventKind::Event,
+            ))
+        })?;
+    let existing_entry = graph.borrow().entry_for_key(&dependency_key);
+    if let Some(target_entry) = existing_entry {
+        graph.borrow_mut().add_dependency(
+            entry,
+            request.specifier,
+            request.attributes,
+            target_entry,
+        );
+        return Ok(WorkerModuleGraphBuild::Ready);
+    }
+    if !pending_keys.insert(dependency_key.clone()) {
+        return Ok(WorkerModuleGraphBuild::Ready);
+    }
+    let fetch_id = reserve_worker_module_graph_fetch_id(scope);
     let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
-    let target_entry = ensure_worker_module_entry(
-        scope,
-        graph,
-        &dependency_source,
-        dependency_key.clone(),
-        dependency_key.url.clone(),
-        referrer_policy,
-    )?;
-    graph
-        .borrow_mut()
-        .add_dependency(entry, request.specifier, request.attributes, target_entry);
-    Ok(WorkerModuleGraphBuild::Ready)
+    Ok(WorkerModuleGraphBuild::NeedFetches(
+        WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
+            fetch_id,
+            dependency_key,
+            fetch_initiator_url.clone(),
+            csp_source,
+            Some(entry),
+            request.specifier,
+            request.attributes,
+            graph.borrow().credentials_mode(),
+            referrer_policy,
+            browser_request_metadata,
+        )),
+    ))
 }
 
 fn reserve_worker_module_graph_fetch_id(
@@ -2627,10 +2582,7 @@ fn worker_module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase
     }
 }
 
-fn load_worker_static_module_dependency(
-    base_url: &Url,
-    specifier: &str,
-) -> Result<WorkerModuleDependencyLoad, String> {
+fn resolve_worker_module_dependency_url(base_url: &Url, specifier: &str) -> Result<Url, String> {
     let dependency_url = base_url
         .join(specifier)
         .or_else(|_| Url::parse(specifier))
@@ -2638,17 +2590,7 @@ fn load_worker_static_module_dependency(
             format!("Failed to resolve module worker dependency `{specifier}`: {error}")
         })?;
     match dependency_url.scheme() {
-        "data" => {
-            let source = super::decode_data_url_script_source(
-                &dependency_url,
-                "Failed to load module worker dependency",
-            )?;
-            Ok(WorkerModuleDependencyLoad::Source {
-                url: dependency_url,
-                source: WorkerModuleSource::text(source),
-            })
-        }
-        "http" | "https" => Ok(WorkerModuleDependencyLoad::NeedFetch(dependency_url)),
+        "http" | "https" | "data" => Ok(dependency_url),
         scheme => Err(format!(
             "Module worker dependency scheme `{scheme}` is not allowed"
         )),
@@ -2669,14 +2611,6 @@ fn worker_module_key_for_attributes(
         "json" => Ok(WorkerModuleKey::json(url.clone(), attributes.clone())),
         other => Err(format!("module type `{other}` is not a valid module type")),
     }
-}
-
-enum WorkerModuleDependencyLoad {
-    Source {
-        url: Url,
-        source: WorkerModuleSource,
-    },
-    NeedFetch(Url),
 }
 
 struct WorkerModuleRuntimeFetchIdSlot {

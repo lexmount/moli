@@ -121,8 +121,7 @@ mod tests {
         assert!(test_support::matching_is_empty(&service));
         assert!(test_support::owner_lifecycle_is_empty(&service));
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "context shutdown must retire the running worker's concrete output stream"
         );
     }

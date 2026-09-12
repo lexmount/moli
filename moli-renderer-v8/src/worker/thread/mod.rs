@@ -26,7 +26,7 @@ use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exceptio
 #[cfg(test)]
 use crate::network::ResourceRequestClientOwner;
 use crate::network::{
-    ResourceRequestClient,
+    ResourceRequestClient, ResourceResponseFailure, ResourceResponseResult,
     context::{WorkerResourceLoader, WorkerResourceOwner},
     loads::{ResourceLoadDisposition, ResourceLoadKind},
 };
@@ -70,10 +70,10 @@ use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
     close_worker_owned_message_ports, dispatch_nested_worker_event,
-    dispatch_worker_csp_violation_event, dispatch_worker_websocket_event,
-    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
-    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
-    drain_service_worker_get_notifications_result,
+    dispatch_worker_content_security_policy_violation_event_for_state,
+    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
+    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
+    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -105,6 +105,7 @@ use super::module_runtime::{
     worker_dynamic_module_import_waits_for_fetch, worker_has_pending_dynamic_module_imports,
     worker_has_runnable_dynamic_module_imports,
 };
+use super::network_transfer::WorkerResourceTransfer;
 
 pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
 
@@ -644,15 +645,31 @@ fn module_graph_csp_violation_message(violation: &ContentSecurityPolicyUrlViolat
 
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
-    loader: WorkerResourceLoader,
-    network_partition_key: Option<String>,
-    module_static_import_content_security_policies: Vec<String>,
-    worker_global_content_security_policies: Vec<String>,
-    worker_global_content_security_report_only_policies: Vec<String>,
-    worker_global_content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    state: &WorkerGlobalState,
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
+    let Some(network) = WorkerResourceTransfer::start(
+        state.global_kind.network(),
+        state.parent_tx.network_observer(),
+        |network| {
+            super::global_scope::worker_request_started(
+                network,
+                request.initiator_url(),
+                request.url(),
+                "GET",
+                &moli_fetch::RequestHeaders::default(),
+                &None,
+                crate::types::SubresourceResourceType::Script,
+            )
+        },
+    ) else {
+        let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
+            fetch_id,
+            Err("worker module dependency fetch rejected during shutdown".to_owned()),
+        ));
+        return;
+    };
     let (
         content_security_policies,
         content_security_report_only_policies,
@@ -661,15 +678,15 @@ fn start_worker_module_graph_fetch(
     ) =
         match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
-            module_static_import_content_security_policies,
+            state.module_static_import_content_security_policies.clone(),
             Vec::new(),
             ContentSecurityPolicyReportingEndpoints::default(),
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
         ),
         WorkerModuleGraphFetchCspSource::DynamicImportGraph => (
-            worker_global_content_security_policies,
-            worker_global_content_security_report_only_policies,
-            worker_global_content_security_reporting_endpoints,
+            state.content_security_policies.clone(),
+            state.content_security_report_only_policies.clone(),
+            state.content_security_reporting_endpoints.clone(),
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
@@ -693,6 +710,7 @@ fn start_worker_module_graph_fetch(
         &content_security_reporting_endpoints,
     ) {
         let message = module_graph_csp_violation_message(&violation);
+        network.failed(&ResourceResponseFailure::Request(message.clone()));
         let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
             .with_csp_violation(violation);
         if let Some(report_only_violation) = initial_csp_report_only_violation {
@@ -701,14 +719,28 @@ fn start_worker_module_graph_fetch(
         let _ = completion_tx.send(completion);
         return;
     }
+    if request.url().scheme() == "data"
+        && let Err(message) = super::decode_data_url_script_source(
+            request.url(),
+            "Failed to load module worker dependency",
+        )
+    {
+        network.failed(&ResourceResponseFailure::Request(message.clone()));
+        let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
+            fetch_id,
+            Err(message),
+        ));
+        return;
+    }
     let browser_request_metadata = request.browser_request_metadata();
     let mut fetch_request =
         match moli_fetch::Request::new("GET", request.url().as_str(), None, vec![]) {
             Ok(request) => request
                 .with_page_network_policy()
-                .with_network_partition_key(network_partition_key.clone())
+                .with_network_partition_key(state.network_partition_key.clone())
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
+                network.failed(&ResourceResponseFailure::Request(error.to_string()));
                 let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
                     fetch_id,
                     Err(error.to_string()),
@@ -740,10 +772,12 @@ fn start_worker_module_graph_fetch(
     let response_resource_kind = resource_kind;
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
-    let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
+    let callback_network = network.clone();
+    let send_completion = move |result: ResourceResponseResult| {
         let mut csp_violation = None;
         let mut csp_report_only_violation = initial_csp_report_only_violation;
         let result = result
+            .inspect_err(|error| callback_network.failed(error))
             .map_err(|error| {
                 format!("failed to fetch module worker dependency `{requested_url}`: {error}")
             })
@@ -815,6 +849,7 @@ fn start_worker_module_graph_fetch(
                     .elapsed()
                     .as_millis()
                     .min(u64::MAX as u128) as u64;
+                callback_network.response_completed(&response);
                 let (head, body_bytes) = response.into_byte_parts();
                 let response_referrer_policy =
                     crate::referrer_policy::response_referrer_policy_from_headers(&head.headers);
@@ -834,6 +869,9 @@ fn start_worker_module_graph_fetch(
                 Ok(WorkerModuleFetchedSource::new(final_url, source)
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
+            })
+            .inspect_err(|message| {
+                callback_network.failed(&ResourceResponseFailure::Request(message.clone()));
             });
         let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result);
         if let Some(violation) = csp_report_only_violation {
@@ -844,21 +882,30 @@ fn start_worker_module_graph_fetch(
         }
         let _ = completion_tx_for_callback.send(completion);
     };
-    let Some(load) = loader.register_load(
+    let Some(load) = state.loader.register_load(
         ResourceLoadKind::Script,
         ResourceLoadDisposition::Ordinary,
         None,
     ) else {
+        network.failed(&ResourceResponseFailure::Request(
+            "worker module dependency fetch rejected during shutdown".to_owned(),
+        ));
         let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
             fetch_id,
             Err("worker module dependency fetch rejected during shutdown".to_owned()),
         ));
         return;
     };
-    if let Err(error) = loader
+    if let Err(error) = load
         .request_client()
-        .fetch_cacheable_script_text_callback_with_load(fetch_request, load, send_completion)
+        .fetch_cacheable_script_text_callback_with_load(
+            fetch_request,
+            load,
+            Some(network.clone()),
+            send_completion,
+        )
     {
+        network.failed(&ResourceResponseFailure::Request(error.to_string()));
         let mut completion = WorkerModuleGraphFetchCompletion::new(
             fetch_id,
             Err(format!(
@@ -889,19 +936,7 @@ fn start_worker_module_graph_fetch_batch(
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     for request in requests.iter().cloned() {
-        start_worker_module_graph_fetch(
-            request,
-            state.borrow().loader.clone(),
-            state.borrow().network_partition_key.clone(),
-            state
-                .borrow()
-                .module_static_import_content_security_policies
-                .clone(),
-            state.borrow().content_security_policies.clone(),
-            state.borrow().content_security_report_only_policies.clone(),
-            state.borrow().content_security_reporting_endpoints.clone(),
-            module_graph_fetch_tx.clone(),
-        );
+        start_worker_module_graph_fetch(request, &state.borrow(), module_graph_fetch_tx.clone());
     }
 }
 
@@ -1452,8 +1487,22 @@ fn spawn_worker_after_binding(
     let worker_wake_tx = parent_to_worker_tx.clone();
     let isolate_handle = Arc::new(Mutex::new(None));
     let worker_isolate_handle = Arc::clone(&isolate_handle);
-    let devtools =
-        WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
+    let resource_task_runner = worker_context_runtime
+        .resource_task_runner()
+        .expect("BrowserContext must select a resource executor before starting a Worker");
+    let loader = resource_loader_for_worker_context(
+        request_client,
+        &network_policy,
+        &global_kind,
+        resource_task_runner,
+    );
+    let termination_requested = Arc::new(AtomicBool::new(false));
+    let devtools = WorkerDevToolsHandle::new(
+        parent_to_worker_tx.clone(),
+        Arc::clone(&isolate_handle),
+        Arc::clone(&termination_requested),
+        loader.cancellation(),
+    );
     if let WorkerGlobalKind::Dedicated(host) = &global_kind {
         host.bind_execution(devtools.clone());
     }
@@ -1461,10 +1510,9 @@ fn spawn_worker_after_binding(
     // is published before execution can emit Console/Network or retire.
     after_binding();
     let worker_inspector_tasks = devtools.inspector_tasks().clone();
-    let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
-    let thread = super::handle::WorkerThread::new(isolate_handle, termination_requested, devtools);
+    let thread = super::handle::WorkerThread::new(devtools);
     let registrar = worker_context_runtime.worker_threads.clone();
     registrar.spawn(&thread, move || {
         std::thread::Builder::new()
@@ -1483,7 +1531,7 @@ fn spawn_worker_after_binding(
                 runtime.block_on(worker_main(
                     script_source,
                     script_url,
-                    request_client,
+                    loader,
                     script_kind,
                     module_static_import_initiator_url,
                     module_credentials_mode,
@@ -1612,7 +1660,7 @@ fn resource_loader_for_worker_context(
 async fn worker_main(
     script_source: WorkerScriptSource,
     script_url: String,
-    request_client: ResourceRequestClient,
+    loader: WorkerResourceLoader,
     script_kind: WorkerScriptKind,
     module_static_import_initiator_url: Option<url::Url>,
     module_credentials_mode: RequestCredentialsMode,
@@ -1654,15 +1702,6 @@ async fn worker_main(
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion =
         WorkerBootstrapCompletionReporter::new(bootstrap_completion_target);
-    let resource_task_runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
-        .expect("Worker owner loop must expose its resource task runner");
-    let loader = resource_loader_for_worker_context(
-        request_client,
-        &network_policy,
-        &global_kind,
-        resource_task_runner,
-    );
-
     // ── Create worker-level V8 isolate ─────────────────────────────────────
     let worker_indexed_db_manager = indexed_db_manager.clone();
     let storage_bucket_store = storage_bucket_store.unwrap_or_else(|| {
@@ -3050,12 +3089,14 @@ async fn worker_main(
                 let global = ctx.global(scope);
                 if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
                     if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
+                        dispatch_worker_content_security_policy_violation_event_for_state(
+                            scope, &state, violation,
+                        );
                     }
                     if let Some(violation) = completion.csp_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
+                        dispatch_worker_content_security_policy_violation_event_for_state(
+                            scope, &state, violation,
+                        );
                     }
                     if let Some(advance) = resume_worker_dynamic_module_fetch(scope, *completion) {
                         handle_worker_dynamic_module_import_advance(
@@ -3067,12 +3108,14 @@ async fn worker_main(
                     }
                 } else if pending_module_bootstrap.is_some() {
                     if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
+                        dispatch_worker_content_security_policy_violation_event_for_state(
+                            scope, &state, violation,
+                        );
                     }
                     if let Some(violation) = completion.csp_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
+                        dispatch_worker_content_security_policy_violation_event_for_state(
+                            scope, &state, violation,
+                        );
                     }
                     let bootstrap_fetch_matches = pending_module_bootstrap
                         .as_ref()

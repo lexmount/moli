@@ -105,8 +105,13 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (_, parent_rx) = tokio::sync::mpsc::unbounded_channel();
         let isolate = Arc::new(Mutex::new(None));
-        let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate));
-        let thread = WorkerThread::new(isolate, Arc::new(AtomicBool::new(false)), devtools);
+        let devtools = WorkerDevToolsHandle::new(
+            tx.clone(),
+            isolate,
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+        );
+        let thread = WorkerThread::new(devtools);
         let handle = WorkerHandle::from_thread(tx, parent_rx, Arc::clone(&thread));
         (thread, handle, rx)
     }
@@ -199,8 +204,8 @@ mod tests {
         };
 
         crate::ensure_v8_for_test();
-        let mut owner = RendererBrowserContextRuntime::new();
-        let peer = RendererBrowserContextRuntime::new();
+        let mut owner = RendererBrowserContextRuntime::new_for_test();
+        let peer = RendererBrowserContextRuntime::new_for_test();
         let context = owner.worker_context_runtime();
         let client =
             ResourceRequestClient::from_browser_resource_runtime(owner.browser_resource_runtime());
@@ -330,7 +335,7 @@ mod tests {
         let (retire_tx, retire_rx) = mpsc::channel();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         let owner_thread = std::thread::spawn(move || {
-            let mut owner = RendererBrowserContextRuntime::new();
+            let mut owner = RendererBrowserContextRuntime::new_for_test();
             let context = owner.worker_context_runtime();
             let client = ResourceRequestClient::from_browser_resource_runtime(
                 owner.browser_resource_runtime(),

@@ -547,6 +547,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         } else {
             options
         };
+        let crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(response) =
+            &script.outcome
+        else {
+            unreachable!("nested Worker startup requires an admitted script response")
+        };
+        let options = options
+            .with_content_security_policies(crate::content_security_policy::content_security_policy_headers(&response.headers))
+            .with_content_security_report_only_policies(crate::content_security_policy::content_security_policy_report_only_headers(&response.headers))
+            .with_content_security_reporting_endpoints(crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(&response.headers, &response.final_url));
         let mut worker_handle = crate::worker::spawn_dedicated_worker(options, script);
         if let Some(mut rx) = worker_handle.take_receiver() {
             let wake_tx = nested_context.wake_tx.clone();

@@ -434,7 +434,7 @@ impl NativeModuleGraphFetchRequest {
         let request = self.request(&request_origin)?;
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
-        let completion = move |response: anyhow::Result<moli_fetch::Response>| {
+        let completion = move |response: crate::network::ResourceResponseResult| {
             let mut network_result: Option<SharedNavigationResponseResult> = None;
             let result = response
                 .map_err(|error| {
@@ -524,7 +524,7 @@ impl NativeModuleGraphFetchRequest {
             }
             callback(result, network_result);
         };
-        loader.fetch_cacheable_script_text_callback_with_load(request, load, completion)
+        loader.fetch_cacheable_script_text_callback_with_load(request, load, None, completion)
     }
 }
 

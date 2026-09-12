@@ -137,11 +137,10 @@ impl FetchClientHandle {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport() {
             // Auth retries still need the buffered libcurl path so
             // intermediate 401/407 challenge bodies are not exposed as final
-            // streaming responses. Manual redirect callers also need the
-            // intermediate 3xx response before any raw streaming body starts.
+            // streaming responses.
             return self
                 .runtime
                 .submit_with_cancel(request, cancel_handle)?

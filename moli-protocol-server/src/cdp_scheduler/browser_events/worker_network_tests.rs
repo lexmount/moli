@@ -128,12 +128,26 @@ async fn assert_worker_network_fifo(recover: bool, dedicated: bool) {
         }
     }).to_string()).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut request = None;
         loop {
-            if let BrowserEvent::NetworkRequestCompleted(occurrence) = native.recv().await.unwrap().event
-                && matches!(occurrence.owner, moli_core::browser::NetworkOwner::Worker(_))
-                && matches!(&occurrence.renderer.item, moli_core::page::RendererNetworkOutputItem::Resource(item)
-                    if matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                        if record.url().as_str() == "data:text/plain,worker-fifo-body")) { break; }
+            let event = native.recv().await.unwrap().event;
+            let (BrowserEvent::NetworkRequestStarted(occurrence) | BrowserEvent::NetworkRequestCompleted(occurrence)) = &event else { continue };
+            if !matches!(occurrence.owner, moli_core::browser::NetworkOwner::Worker(_)) { continue; }
+            let moli_core::page::RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item else { continue };
+            match item.as_ref() {
+                moli_core::page::ScriptNetworkOutputItem::SubresourceRequestStarted(start)
+                    if start.url().as_str() == "data:text/plain,worker-fifo-body" => {
+                    assert!(matches!(event, BrowserEvent::NetworkRequestStarted(_)));
+                    assert!(request.replace((occurrence.owner, occurrence.renderer.source.identity(), start.handle())).is_none(), "one native admission");
+                }
+                moli_core::page::ScriptNetworkOutputItem::SubresourceBodyFinished(body)
+                    if request.as_ref().is_some_and(|(owner, source, handle)|
+                        *owner == occurrence.owner && *source == occurrence.renderer.source.identity() && *handle == body.handle()) => {
+                    assert!(matches!(event, BrowserEvent::NetworkRequestCompleted(_)));
+                    break;
+                }
+                _ => {}
+            }
         }
     }).await.unwrap_or_else(|error| panic!(
         "native Worker response must complete before Protocol consumes its FIFO: {error:?}; dedicated={dedicated}, recover={recover}; outcome={outcome:#?}; snapshot={:#?}",

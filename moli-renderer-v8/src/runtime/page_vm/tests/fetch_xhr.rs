@@ -4351,12 +4351,27 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                 };
                 network_output.push_item(item.as_ref().clone());
             }
-            let (records, _, _) = split_network_output_items(network_output);
-            let failures = records
-                .iter()
-                .filter(|record| {
-                    matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text.contains("blob URL fetch requires GET"))
+            let failures = network_output
+                .into_items()
+                .filter(|item| {
+                    let error_text = match item {
+                        ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
+                            match record.outcome() {
+                                SubresourceNetworkOutcome::Failure { error_text } => error_text,
+                                _ => return false,
+                            }
+                        }
+                        ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                            match body.result() {
+                                moli_page_types::SubresourceBodyFinishedResult::Failed(
+                                    error_text,
+                                ) => error_text,
+                                _ => return false,
+                            }
+                        }
+                        _ => return false,
+                    };
+                    error_text.contains("blob URL fetch requires GET")
                 })
                 .count();
             assert_eq!(

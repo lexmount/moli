@@ -106,7 +106,7 @@ impl RendererDedicatedWorkerRegistry {
                 DedicatedWorkerExecution::Loading | DedicatedWorkerExecution::Retired(_) => None,
             };
             if let Some(worker) = worker {
-                let _ = worker.terminate_for_devtools();
+                let _ = worker.request_termination();
             } else {
                 host.retire();
             }
@@ -180,6 +180,18 @@ impl Drop for RendererDedicatedWorkerHostInner {
 #[derive(Clone, Debug)]
 pub(crate) struct RendererDedicatedWorkerHost(Arc<RendererDedicatedWorkerHostInner>);
 
+#[derive(Clone, Debug)]
+pub(crate) struct RendererDedicatedWorkerNetworkObserver(Weak<RendererDedicatedWorkerHostInner>);
+
+impl RendererDedicatedWorkerNetworkObserver {
+    pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
+        if let Some(host) = self.0.upgrade() {
+            RendererDedicatedWorkerHost(host)
+                .publish(RendererProtocolObservation::Network(observation));
+        }
+    }
+}
+
 impl PartialEq for RendererDedicatedWorkerHost {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -188,6 +200,10 @@ impl PartialEq for RendererDedicatedWorkerHost {
 impl Eq for RendererDedicatedWorkerHost {}
 
 impl RendererDedicatedWorkerHost {
+    pub(crate) fn network_observer(&self) -> RendererDedicatedWorkerNetworkObserver {
+        RendererDedicatedWorkerNetworkObserver(Arc::downgrade(&self.0))
+    }
+
     pub(crate) fn instance_id(&self) -> u64 {
         self.0.info.instance_id
     }
@@ -208,7 +224,7 @@ impl RendererDedicatedWorkerHost {
                 *execution = DedicatedWorkerExecution::Running(worker)
             }
             DedicatedWorkerExecution::Retired(_) => {
-                let _ = worker.terminate_for_devtools();
+                let _ = worker.request_termination();
             }
             DedicatedWorkerExecution::Running(_) => panic!("one physical Worker binds once"),
         }
@@ -304,7 +320,7 @@ impl RendererBrowserContextRuntime {
     pub fn close_dedicated_worker_for_devtools(&self, instance: u64) -> bool {
         self.inner.dedicated_workers.host(instance).is_some_and(|host| {
             let execution = host.0.execution.lock();
-            matches!(&*execution, DedicatedWorkerExecution::Running(worker) if worker.terminate_for_devtools())
+            matches!(&*execution, DedicatedWorkerExecution::Running(worker) if worker.request_termination())
         })
     }
 }

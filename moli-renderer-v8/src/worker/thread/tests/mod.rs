@@ -257,6 +257,18 @@ fn inspect_payload_with_image_data(payload: &V8StructuredClonePayload, expressio
     result.to_rust_string_lossy(scope)
 }
 
+// Script receipts now share the parent FIFO with behavior messages. Keep the
+// caller's original timeout and payload/error assertions; native stage, owner
+// and retirement ordering are checked separately by Browser's gated tests.
+async fn recv_behavior_message(handle: &mut WorkerHandle) -> Option<WorkerToParentMessage> {
+    loop {
+        let message = handle.recv().await?;
+        if !matches!(message, WorkerToParentMessage::Network(_)) {
+            return Some(message);
+        }
+    }
+}
+
 fn expect_post_json(message: WorkerToParentMessage) -> String {
     match message {
         WorkerToParentMessage::Post(payload) => stringify_payload(&payload),
@@ -282,11 +294,71 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
     }
 }
 
-fn expect_subresource_network_record(message: WorkerToParentMessage) -> SubresourceNetworkRecord {
-    match message {
-        WorkerToParentMessage::Network(observation) => observation.worker_record_for_test().clone(),
-        WorkerToParentMessage::WebSocketSubresource(record) => record,
-        other => panic!("expected worker subresource network record, got {other:?}"),
+/// Explicitly reconstruct the terminal view used by metadata/body assertions.
+/// Raw transport-stage timing is tested separately at the native Browser gates.
+#[derive(Default)]
+struct WorkerNetworkRecords(moli_page_types::ScriptExecutionReport);
+
+impl WorkerNetworkRecords {
+    fn observe(
+        &mut self,
+        observation: crate::runtime::RendererNetworkObservation,
+    ) -> Option<SubresourceNetworkRecord> {
+        let crate::runtime::RendererNetworkOutputItem::Resource(item) = observation.item() else {
+            panic!("expected Worker resource output")
+        };
+        let before = self.0.subresource_network_records().len();
+        self.0
+            .extend_network_output(moli_page_types::ScriptNetworkOutput::from_items([item
+                .as_ref()
+                .clone()]));
+        self.0.subresource_network_records().get(before).cloned()
+    }
+
+    async fn recv_pause(
+        &mut self,
+        handle: &mut WorkerHandle,
+    ) -> crate::runtime::RendererWorkerFetchPause {
+        timeout(TIMEOUT, async {
+            loop {
+                match handle
+                    .recv()
+                    .await
+                    .expect("Worker channel closed before its pause")
+                {
+                    WorkerToParentMessage::FetchInterception(pause) => return pause,
+                    WorkerToParentMessage::Network(observation) => assert!(
+                        self.observe(observation).is_none(),
+                        "request must not finish before its decision"
+                    ),
+                    other => panic!("expected Worker pause, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Worker must publish its pause after request admission")
+    }
+
+    async fn recv_record(&mut self, handle: &mut WorkerHandle) -> SubresourceNetworkRecord {
+        timeout(TIMEOUT, async {
+            loop {
+                match handle
+                    .recv()
+                    .await
+                    .expect("Worker channel closed before its terminal network output")
+                {
+                    WorkerToParentMessage::Network(observation) => {
+                        if let Some(record) = self.observe(observation) {
+                            return record;
+                        }
+                    }
+                    WorkerToParentMessage::WebSocketSubresource(record) => return record,
+                    other => panic!("expected Worker network output, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Worker must complete its admitted request")
     }
 }
 

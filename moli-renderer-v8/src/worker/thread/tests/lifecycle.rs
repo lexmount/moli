@@ -729,7 +729,7 @@ async fn real_workers_register_service_worker_clients_until_thread_exit() {
     ensure_v8();
 
     async fn assert_worker_client_lifetime(global_kind: WorkerGlobalKind, script_url: &str) {
-        let browser_context_runtime = RendererBrowserContextRuntime::new();
+        let browser_context_runtime = RendererBrowserContextRuntime::new_for_test();
         let service = browser_context_runtime.service_worker_runtime();
         let (bootstrap_tx, mut bootstrap_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
@@ -7653,6 +7653,7 @@ async fn worker_fetch_body_consumption_after_stream_abort_preserves_abort_reason
 
 #[tokio::test]
 async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_completion() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(
         "/assets/data.txt",
@@ -7694,11 +7695,7 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
         loader,
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("native cancellation result")
-        .expect("Worker channel");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
     assert!(record.request_handle().is_some());
     assert!(
@@ -7714,6 +7711,7 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
 
 #[tokio::test]
 async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late_completion() {
+    let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(
         "/assets/data.txt",
@@ -7761,11 +7759,7 @@ async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late
         loader,
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("native cancellation result")
-        .expect("Worker channel");
-    let record = expect_subresource_network_record(network);
+    let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
     assert!(record.request_handle().is_some());
     assert!(

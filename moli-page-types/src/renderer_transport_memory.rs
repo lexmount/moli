@@ -101,7 +101,9 @@ impl ScriptNetworkOutputItem {
     pub fn renderer_transport_charge_bytes(&self) -> usize {
         match self {
             Self::SubresourceNetworkRecord(record) => network_record_charge(record),
-            Self::SubresourceRequestStarted(request) => request_started_charge(request),
+            Self::SubresourceRequestStarted(request) | Self::SubresourceRequestUpdated(request) => {
+                request_started_charge(request)
+            }
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [

@@ -14,6 +14,8 @@ use moli_http_cache::{HttpCacheVaryHeader, cacheable_response_parts_policy, unix
 use parking_lot::Mutex;
 use url::Url;
 
+use crate::network::{ResourceResponseHead, ResourceResponseObserver, ResourceResponseResult};
+
 /// Strong-reference budget for renderer subresources.
 ///
 /// Chromium's Linux MemoryCache currently keeps at most 15 MiB of strong
@@ -37,7 +39,7 @@ pub struct SharedMemoryResourceCacheDiagnostics {
 }
 
 pub(in crate::network) type SharedScriptTextLoad = Arc<ScriptTextLoad>;
-type ScriptTextLoadResult = std::result::Result<Response, String>;
+type ScriptTextLoadResult = ResourceResponseResult;
 type ScriptTextLoadCallback = Box<dyn FnOnce(ScriptTextLoadResult) + Send + 'static>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -166,13 +168,29 @@ pub(in crate::network) struct ScriptTextLoad {
 
 #[derive(Default)]
 struct ScriptTextLoadState {
-    result: Option<ScriptTextLoadResult>,
+    phase: ScriptTextLoadPhase,
     next_consumer_id: u64,
     // Preserve the callback order of the former Vec implementation. Different
     // consumers may enqueue observable parser tasks when the shared load
     // completes, so cancellation must not make the survivors unordered.
-    callbacks: IndexMap<u64, ScriptTextLoadCallback>,
+    consumers: IndexMap<u64, ScriptTextConsumer>,
     transport_cancel: Option<moli_fetch::FetchCancelHandle>,
+}
+
+#[derive(Default)]
+enum ScriptTextLoadPhase {
+    #[default]
+    Pending,
+    Responding {
+        response: Arc<ResourceResponseHead>,
+        received: usize,
+    },
+    Finished(Box<ScriptTextLoadResult>),
+}
+
+struct ScriptTextConsumer {
+    observer: Option<Arc<dyn ResourceResponseObserver>>,
+    callback: ScriptTextLoadCallback,
 }
 
 /// Cancellable registration for one context waiting on a shared script load.
@@ -208,25 +226,40 @@ impl ScriptTextLoad {
     }
 
     fn try_result(&self) -> Option<ScriptTextLoadResult> {
-        self.state.lock().result.clone()
+        match &self.state.lock().phase {
+            ScriptTextLoadPhase::Finished(result) => Some((**result).clone()),
+            ScriptTextLoadPhase::Pending | ScriptTextLoadPhase::Responding { .. } => None,
+        }
     }
 
     pub(in crate::network) fn wait_callback(
         self: &Arc<Self>,
+        observer: Option<Arc<dyn ResourceResponseObserver>>,
         callback: ScriptTextLoadCallback,
     ) -> Option<ScriptTextConsumerLease> {
         let mut state = self.state.lock();
-        if let Some(result) = state.result.clone() {
+        if let ScriptTextLoadPhase::Finished(result) = &state.phase {
+            let result = (**result).clone();
             drop(state);
             callback(result);
             return None;
+        }
+        if let (Some(observer), ScriptTextLoadPhase::Responding { response, received }) =
+            (&observer, &state.phase)
+        {
+            observer.response_started(response.clone());
+            if *received != 0 {
+                observer.data_received(*received);
+            }
         }
         state.next_consumer_id = state
             .next_consumer_id
             .checked_add(1)
             .expect("script text consumer id exhausted");
         let consumer_id = state.next_consumer_id;
-        let previous = state.callbacks.insert(consumer_id, callback);
+        let previous = state
+            .consumers
+            .insert(consumer_id, ScriptTextConsumer { observer, callback });
         debug_assert!(previous.is_none());
         Some(ScriptTextConsumerLease {
             load: Arc::downgrade(self),
@@ -240,7 +273,8 @@ impl ScriptTextLoad {
     ) {
         let cancel_immediately = {
             let mut state = self.state.lock();
-            if state.result.is_some() || state.callbacks.is_empty() {
+            if matches!(state.phase, ScriptTextLoadPhase::Finished(_)) || state.consumers.is_empty()
+            {
                 true
             } else {
                 debug_assert!(
@@ -257,37 +291,76 @@ impl ScriptTextLoad {
     }
 
     fn cancel_consumer(&self, consumer_id: u64) {
-        let transport_cancel = {
+        let (consumer, transport_cancel) = {
             let mut state = self.state.lock();
-            if state.callbacks.shift_remove(&consumer_id).is_none()
-                || state.result.is_some()
-                || !state.callbacks.is_empty()
+            let consumer = state.consumers.shift_remove(&consumer_id);
+            let cancel = if consumer.is_some()
+                && !matches!(state.phase, ScriptTextLoadPhase::Finished(_))
+                && state.consumers.is_empty()
             {
-                None
-            } else {
                 state.transport_cancel.take()
-            }
+            } else {
+                None
+            };
+            (consumer, cancel)
         };
+        // Completion closures can release their own load lease. Never destroy
+        // one while holding the shared cache's consumer mutex.
+        drop(consumer);
         if let Some(transport_cancel) = transport_cancel {
             transport_cancel.cancel();
         }
     }
 
     pub(in crate::network) fn finish(&self, result: ScriptTextLoadResult) {
-        let callbacks = {
+        let consumers = {
             let mut state = self.state.lock();
-            if state.result.is_none() {
-                state.result = Some(result.clone());
+            if !matches!(state.phase, ScriptTextLoadPhase::Finished(_)) {
+                state.phase = ScriptTextLoadPhase::Finished(Box::new(result.clone()));
                 state.transport_cancel.take();
-                std::mem::take(&mut state.callbacks)
+                std::mem::take(&mut state.consumers)
                     .into_values()
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()
             }
         };
-        for callback in callbacks {
-            callback(result.clone());
+        for consumer in consumers {
+            (consumer.callback)(result.clone());
+        }
+    }
+}
+
+impl ResourceResponseObserver for ScriptTextLoad {
+    fn response_started(&self, response: Arc<ResourceResponseHead>) {
+        let mut state = self.state.lock();
+        assert!(
+            matches!(state.phase, ScriptTextLoadPhase::Pending),
+            "one script transport response head"
+        );
+        state.phase = ScriptTextLoadPhase::Responding {
+            response: response.clone(),
+            received: 0,
+        };
+        for consumer in state.consumers.values() {
+            if let Some(observer) = &consumer.observer {
+                observer.response_started(response.clone());
+            }
+        }
+    }
+
+    fn data_received(&self, bytes: usize) {
+        let mut state = self.state.lock();
+        let ScriptTextLoadPhase::Responding { received, .. } = &mut state.phase else {
+            panic!("script data must follow its response head");
+        };
+        *received = received
+            .checked_add(bytes)
+            .expect("script response length exhausted");
+        for consumer in state.consumers.values() {
+            if let Some(observer) = &consumer.observer {
+                observer.data_received(bytes);
+            }
         }
     }
 }
@@ -963,35 +1036,78 @@ mod tests {
         let delivered = Arc::new(AtomicUsize::new(0));
         let first_delivered = Arc::clone(&delivered);
         let first = load
-            .wait_callback(Box::new(move |_| {
-                first_delivered.fetch_add(1, Ordering::Relaxed);
-            }))
+            .wait_callback(
+                None,
+                Box::new(move |_| {
+                    first_delivered.fetch_add(1, Ordering::Relaxed);
+                }),
+            )
             .expect("first pending consumer");
         let second_delivered = Arc::clone(&delivered);
         let second = load
-            .wait_callback(Box::new(move |_| {
-                second_delivered.fetch_add(1, Ordering::Relaxed);
-            }))
+            .wait_callback(
+                None,
+                Box::new(move |_| {
+                    second_delivered.fetch_add(1, Ordering::Relaxed);
+                }),
+            )
             .expect("second pending consumer");
         let transport_cancel = moli_fetch::FetchCancelHandle::new();
         load.attach_transport_cancel(transport_cancel.clone());
 
         first.cancel();
         assert!(!transport_cancel.is_cancelled());
-        load.finish(Err("terminal".to_owned()));
+        load.finish(Err("terminal".to_owned().into()));
 
         assert_eq!(delivered.load(Ordering::Relaxed), 1);
         drop(second);
     }
 
     #[test]
+    fn completed_failed_script_load_retains_response_for_admitted_waiter() {
+        let load = ScriptTextLoad::pending(SCOPE);
+        let response = Arc::new(ResourceResponseHead {
+            head: response("https://cache.test/failed.js", "//").head(),
+            network_request_headers: Some(vec![("x-request".into(), "original".into())]),
+        });
+        load.finish(Err(crate::network::ResourceResponseFailure::PartialBody {
+            message: "truncated".into(),
+            response: response.clone(),
+            body: moli_page_types::SubresourceResponseBody::from_bytes(b"//".to_vec()),
+        }));
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let lease = load.wait_callback(
+            None,
+            Box::new(move |result| {
+                send.send(result).unwrap();
+            }),
+        );
+        assert!(lease.is_none());
+        let crate::network::ResourceResponseFailure::PartialBody {
+            response: received,
+            body,
+            message,
+        } = receive
+            .recv()
+            .unwrap()
+            .expect_err("an admitted waiter must retain the actual error")
+        else {
+            panic!("failure must retain its physical response")
+        };
+        assert!(Arc::ptr_eq(&response, &received));
+        assert_eq!(body.clone_body_bytes(), b"//");
+        assert_eq!(message, "truncated");
+        assert!(receive.recv().is_err(), "completion is single-use");
+    }
+
+    #[test]
     fn cancelling_last_shared_script_consumer_cancels_transport() {
         let load = ScriptTextLoad::pending(SCOPE);
         let first = load
-            .wait_callback(Box::new(|_| {}))
+            .wait_callback(None, Box::new(|_| {}))
             .expect("first pending consumer");
         let second = load
-            .wait_callback(Box::new(|_| {}))
+            .wait_callback(None, Box::new(|_| {}))
             .expect("second pending consumer");
         let transport_cancel = moli_fetch::FetchCancelHandle::new();
         load.attach_transport_cancel(transport_cancel.clone());

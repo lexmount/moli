@@ -501,14 +501,15 @@ mod tests {
         assert!(test_support::stored_loading_host(&runtime_service, instance_id).is_none());
         assert!(test_support::matching_is_empty(&runtime_service));
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "a load completion for a worker with no live client must close its uncreated target stream"
         );
     }
 
     #[test]
     fn worker_start_failure_after_registry_ready_removes_instance() {
+        // Startup spawns a real Worker before rejecting the already-closed host.
+        crate::ensure_v8_for_test();
         let runtime_service = test_support::runtime_service();
         let mut service_wake_rx = test_support::install_owner_wake_sender(&runtime_service);
         let message_port_registry = new_message_port_registry();
@@ -575,8 +576,7 @@ mod tests {
         assert!(test_support::stored_loading_host(&runtime_service, instance_id).is_none());
         assert!(test_support::matching_is_empty(&runtime_service));
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "a stale startup completion must close its uncreated target stream"
         );
 

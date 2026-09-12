@@ -94,7 +94,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     fetch_once_with_network_metadata(&loader, request, cancel_handle).await
 }
 
-pub(crate) fn browser_request_needs_manual_preflight_redirects(
+fn browser_request_needs_manual_preflight_redirects(
     request: &Request,
     preflight_request_headers: &[(String, String)],
 ) -> bool {
@@ -117,7 +117,7 @@ pub(crate) fn browser_request_needs_manual_preflight_redirects(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ManualCorsRedirectTransition {
     FinalResponse,
-    ManualResponse { response_url: url::Url },
+    ManualResponse,
     FollowedRedirect,
 }
 
@@ -189,9 +189,7 @@ impl ManualCorsRedirectState {
         };
 
         if self.request.redirect_mode == RequestRedirectMode::Manual {
-            return Ok(ManualCorsRedirectTransition::ManualResponse {
-                response_url: head.final_url,
-            });
+            return Ok(ManualCorsRedirectTransition::ManualResponse);
         }
 
         match self.request.redirect_mode {
@@ -255,7 +253,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
                 observed.response_mut().redirect_chain = redirect_chain;
                 return Ok(observed);
             }
-            ManualCorsRedirectTransition::ManualResponse { .. } => return Ok(observed),
+            ManualCorsRedirectTransition::ManualResponse => return Ok(observed),
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
     }
@@ -291,12 +289,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
                 observed.response_mut().redirect_chain = redirect_chain;
                 return Ok(observed);
             }
-            ManualCorsRedirectTransition::ManualResponse { response_url } => {
-                return Err(format!(
-                    "manual redirect unexpectedly entered follow-mode streaming from {}",
-                    response_url
-                ));
-            }
+            ManualCorsRedirectTransition::ManualResponse => return Ok(observed),
             ManualCorsRedirectTransition::FollowedRedirect => {}
         }
 
@@ -371,6 +364,16 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
     // Borrow the loader so its fetch runtime stays alive until the caller drains
     // and finishes the returned StreamingRawResponse.
+    if browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers) {
+        return fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+            loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            preflight_observer,
+        )
+        .await;
+    }
     run_cors_preflight_if_needed(
         loader,
         &request,
@@ -704,27 +707,14 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     request_body: Option<String>,
 ) -> Result<(), String> {
     let body_source_id = new_network_body_source_id();
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-    let observed = if requires_manual_preflight_redirects {
-        fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
-            &loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    } else {
-        fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-            &loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    };
+    let observed = fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+        &loader,
+        request,
+        cancel_handle,
+        preflight_request_headers,
+        preflight_observer,
+    )
+    .await?;
     let (mut response, request_observation) = observed.into_parts();
     let head = response.head();
     let _ = completion_tx.send_async_subresource_event(
