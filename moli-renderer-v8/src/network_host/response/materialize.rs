@@ -22,7 +22,7 @@ pub(crate) struct FetchResponseRequest<'a> {
 }
 
 fn has_null_body(method: &str, status: u16) -> bool {
-    matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+    crate::network_host::response_has_null_body(method, status)
 }
 
 /// Classifies a network response using the whole redirect chain. A no-cors
