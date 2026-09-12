@@ -373,8 +373,10 @@ fn eval_aspect_ratio(context: &Context) -> Ratio {
     Ratio::new(size.width.0 as f32, size.height.0 as f32)
 }
 
-/// A list with all the media features that Servo supports.
-pub static MEDIA_FEATURES: [QueryFeatureDescription; 31] = [
+/// Media features exposed by Moli's Servo backend. Gecko-only DPR queries
+/// intentionally remain unknown; standard resolution and WebKit DPR aliases
+/// provide the Chromium-compatible surface.
+pub static MEDIA_FEATURES: [QueryFeatureDescription; 30] = [
     feature!(
         atom!("width"),
         AllowsRanges::Yes,
@@ -494,12 +496,6 @@ pub static MEDIA_FEATURES: [QueryFeatureDescription; 31] = [
         AllowsRanges::Yes,
         Evaluator::Float(eval_device_pixel_ratio),
         FeatureFlags::WEBKIT_PREFIX,
-    ),
-    feature!(
-        atom!("-moz-device-pixel-ratio"),
-        AllowsRanges::Yes,
-        Evaluator::Float(eval_device_pixel_ratio),
-        FeatureFlags::empty(),
     ),
     feature!(
         atom!("prefers-reduced-motion"),
