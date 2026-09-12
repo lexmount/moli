@@ -25,14 +25,23 @@ async fn check_data_response_modes(worker: bool) {
             assert(response instanceof Response,'Response');
             assert(response.type === 'basic','type='+response.type);
             assert(response.status === 200 && response.statusText === 'OK' && response.ok,'status');
-            assert(response.url.split('#')[0] === url.split('#')[0] && !response.redirected,'resource URL and redirected');
+            assert(response.url === url.split('#')[0] && !response.redirected,'URL and redirected');
             assert(response.headers.get('Content-Type') === mime,'Content-Type='+response.headers.get('Content-Type'));
             assert(response.headers.get('Content-Length') === null,'no synthesized Content-Length');
-            // Basic tainting exposes the data URL's original body bytes.
-            if (method !== 'HEAD') {
-              const actual = Array.from(new Uint8Array(await response.arrayBuffer()));
-              assert(JSON.stringify(actual) === JSON.stringify(bytes),'body bytes '+actual);
-            }
+            assert(!response.bodyUsed,'body initially unused');
+            assert((response.body === null) === (method === 'HEAD'),'null body for HEAD');
+            let headerError;
+            try { response.headers.set('X-Author','changed'); } catch(error) { headerError = error; }
+            assert(headerError instanceof TypeError,'immutable fetch headers');
+            const clone = response.clone();
+            assert(clone.type === 'basic' && clone.status === 200 && clone.url === response.url,'clone surface');
+            assert(clone.headers.get('Content-Type') === mime,'clone Content-Type');
+            const expected = method === 'HEAD' ? [] : bytes;
+            const actual = Array.from(new Uint8Array(await response.arrayBuffer()));
+            const cloned = Array.from(new Uint8Array(await clone.arrayBuffer()));
+            assert(JSON.stringify(actual) === JSON.stringify(expected),'body bytes '+actual);
+            assert(JSON.stringify(cloned) === JSON.stringify(expected),'clone bytes '+cloned);
+            assert(response.bodyUsed === (method !== 'HEAD') && clone.bodyUsed === (method !== 'HEAD'),'bodyUsed');
             count++;
           }
         }
