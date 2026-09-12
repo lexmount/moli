@@ -37,6 +37,7 @@ struct XmlHttpRequestPrototypeAccessorsDeclaration {
         accessor_property,
         getter = xhr_string_getter,
         setter = xhr_response_type_setter,
+        receiver = web_api_interfaces::XMLHttpRequest::is_instance,
         data = callback_data_index_value(scope, 4)
     )]
     response_type: (),
@@ -105,8 +106,8 @@ struct XhrTimeoutArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XMLHttpRequest.responseType")]
 struct XhrResponseTypeArgs {
-    #[webidl(required, converter = "enum")]
-    value: XmlHttpRequestResponseType,
+    #[webidl(default = "undefined", converter = "dom_string")]
+    value: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -356,6 +357,19 @@ fn xhr_response_type_setter<'s>(
     let Some(xhr) = args.this().to_object(scope) else {
         return;
     };
+    let Some(parsed) = webidl::parse_args::<XhrResponseTypeArgs>(scope, &args) else {
+        return;
+    };
+    // WebIDL enum attribute setters ignore unknown tokens after ToString,
+    // before running the attribute's state checks.
+    let Some(response_type) = XmlHttpRequestResponseType::parse(&parsed.value) else {
+        return;
+    };
+    if response_type == XmlHttpRequestResponseType::Document
+        && xhr_current_context_is_worker_global(scope)
+    {
+        return;
+    }
     let ready_state = xhr_state_number_property(scope, xhr, XHR_READY_STATE_SLOT).unwrap_or(0.0);
     if matches!(ready_state as u32, 3 | 4) {
         xhr_throw_invalid_state(
@@ -364,21 +378,12 @@ fn xhr_response_type_setter<'s>(
         );
         return;
     }
-    let Some(parsed) = webidl::parse_args::<XhrResponseTypeArgs>(scope, &args) else {
-        return;
-    };
-    let response_type = parsed.value;
     let async_request = xhr_state_bool_property(scope, xhr, XHR_ASYNC_SLOT).unwrap_or(true);
     if xhr_is_synchronous_document_request(scope, async_request) {
         xhr_throw_invalid_access(
             scope,
             "Failed to set the 'responseType' property on 'XMLHttpRequest': The response type cannot be changed for synchronous requests made from a document.",
         );
-        return;
-    }
-    if response_type == XmlHttpRequestResponseType::Document
-        && xhr_current_context_is_worker_global(scope)
-    {
         return;
     }
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_TYPE_SLOT, response_type.label());
