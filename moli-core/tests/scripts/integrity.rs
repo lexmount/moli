@@ -1061,20 +1061,18 @@ async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()
         }})()"#, cross = servers.cross_origin), true,
     ).await?;
     let results: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    // A synthesized Response has an empty URL list and remains basic after
+    // the intercepted redirect, including its ordinary response headers.
     for kind in ["basic", "basic-buffered", "cors", "default"] {
         assert_eq!(results[kind]["body"], SCRIPT, "{kind}: {results}");
         assert_eq!(
             results[kind]["type"],
-            if kind.starts_with("basic") {
-                "basic"
-            } else {
-                "cors"
-            },
+            if kind != "cors" { "basic" } else { "cors" },
             "{kind}: {results}"
         );
         assert_eq!(
             results[kind]["privateHeader"],
-            if kind.starts_with("basic") {
+            if kind != "cors" {
                 serde_json::json!("yes")
             } else {
                 serde_json::Value::Null
