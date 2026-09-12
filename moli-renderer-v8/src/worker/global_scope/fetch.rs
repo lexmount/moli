@@ -321,6 +321,8 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         };
         let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
             WorkerFetchCompletion {
+                response_filter: None,
+                skip_fetch_security_validation: false,
                 fetch_id,
                 network_request_headers,
                 result,
@@ -428,6 +430,8 @@ fn spawn_worker_fetch_service_worker(
     if !runtime.dispatch_controlled_fetch(dispatch) {
         let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
             WorkerFetchCompletion {
+                response_filter: None,
+                skip_fetch_security_validation: false,
                 fetch_id,
                 network_request_headers: None,
                 result: Err("service worker fetch dispatch failed".to_owned()),
@@ -462,6 +466,8 @@ fn spawn_worker_fetch_service_worker(
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        response_filter: response.response_filter,
+                        skip_fetch_security_validation: !response.from_network_fallback,
                         fetch_id,
                         network_request_headers: None,
                         result: Ok(WorkerFetchResponse::Materialized(Box::new(
@@ -473,6 +479,8 @@ fn spawn_worker_fetch_service_worker(
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         fetch_id,
                         network_request_headers: None,
                         result: Err(message),
@@ -482,6 +490,8 @@ fn spawn_worker_fetch_service_worker(
             Err(_) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         fetch_id,
                         network_request_headers: None,
                         result: Err("service worker fetch completion channel closed".to_owned()),
@@ -726,6 +736,8 @@ pub(in crate::worker) fn fail_pending_worker_fetch(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -751,6 +763,8 @@ pub(in crate::worker) fn fail_pending_worker_fetch_auth(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -791,6 +805,8 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Materialized(Box::new(completion.1))),
@@ -832,6 +848,8 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: completion.1.response_filter,
+            skip_fetch_security_validation: completion.1.skip_fetch_security_validation,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Streamed {
@@ -864,6 +882,8 @@ pub(in crate::worker) fn fail_pending_worker_fetch_response(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -897,6 +917,8 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch_response(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Materialized(Box::new(completion.1))),
@@ -2630,13 +2652,13 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                     &started.head.headers,
                     pending.request_mode,
                 );
-            let mut observable_head = started.head.clone();
-            observable_head.headers = crate::network_host::FetchResponseRequest {
+            let observable_head = started.head.clone();
+            let response_filter = crate::network_host::FetchResponseRequest {
                 method: &pending.request_method,
                 mode: pending.request_mode,
                 redirect_mode: pending.redirect_mode,
             }
-            .filter_response_headers(
+            .network_response_filter(
                 &request_origin,
                 &observable_head,
                 pending.credentials_mode,
@@ -2649,6 +2671,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 pending.request_method.clone(),
                 pending.redirect_mode,
                 observable_head,
+                response_filter,
             ))
         }
     };
@@ -2670,9 +2693,10 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         request_method,
         redirect_mode,
         observable_head,
+        response_filter,
     )) = response_input
     {
-        let response_obj = build_fetch_response_object_from_stream_for_request_mode(
+        let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
             scope,
             &document_url,
             crate::network_host::FetchResponseRequest {
@@ -2682,6 +2706,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             },
             observable_head,
             started.body_source_id,
+            Some(response_filter),
         );
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, response_obj.into());
@@ -2896,6 +2921,8 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 {
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
+                        response_filter: completion.response_filter.clone(),
+                        skip_fetch_security_validation: completion.skip_fetch_security_validation,
                         head: response_head.clone(),
                         body: response_body.clone(),
                     });
@@ -2951,6 +2978,8 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         from_cache: response_head.from_cache,
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
+                        response_filter: completion.response_filter.clone(),
+                        skip_fetch_security_validation: completion.skip_fetch_security_validation,
                         head: response_head,
                         body: response_body,
                     });
@@ -2978,34 +3007,39 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            let security_validation = match &response {
-                WorkerFetchResponse::Materialized(response) => {
-                    validate_fetch_response_security_policy_with_body_classified(
-                        &pending.document_url,
-                        &response_head,
-                        response.body_bytes(),
-                        pending.request_mode,
-                        pending.credentials_mode,
-                        pending.policy_context,
-                    )
-                }
-                WorkerFetchResponse::Streamed { body, .. } => body
-                    .try_bytes()
-                    .map_err(|error| {
-                        FetchResponseSecurityViolation::Rejected(format!(
-                            "fetch: failed to read response body: {error}"
-                        ))
-                    })
-                    .and_then(|body_bytes| {
+            let request_origin = moli_url::WebOrigin::from_url(&pending.document_url);
+            let security_validation = if completion.skip_fetch_security_validation {
+                Ok(())
+            } else {
+                match &response {
+                    WorkerFetchResponse::Materialized(response) => {
                         validate_fetch_response_security_policy_with_body_classified(
-                            &pending.document_url,
+                            &request_origin,
                             &response_head,
-                            &body_bytes,
+                            response.body_bytes(),
                             pending.request_mode,
                             pending.credentials_mode,
                             pending.policy_context,
                         )
-                    }),
+                    }
+                    WorkerFetchResponse::Streamed { body, .. } => body
+                        .try_bytes()
+                        .map_err(|error| {
+                            FetchResponseSecurityViolation::Rejected(format!(
+                                "fetch: failed to read response body: {error}"
+                            ))
+                        })
+                        .and_then(|body_bytes| {
+                            validate_fetch_response_security_policy_with_body_classified(
+                                &request_origin,
+                                &response_head,
+                                &body_bytes,
+                                pending.request_mode,
+                                pending.credentials_mode,
+                                pending.policy_context,
+                            )
+                        }),
+                }
             };
             let opaque_response_blocked = match security_validation {
                 Ok(()) => false,
@@ -3049,46 +3083,47 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            let request_origin = moli_url::WebOrigin::from_url(&pending.document_url);
             let response_request = crate::network_host::FetchResponseRequest {
                 method: &pending.request_method,
                 mode: pending.request_mode,
                 redirect_mode: pending.redirect_mode,
             };
-            let filtered_headers = response_request.filter_response_headers(
-                &request_origin,
-                &response_head,
-                pending.credentials_mode,
-            );
+            let response_filter = completion.response_filter.or_else(|| {
+                Some(response_request.network_response_filter(
+                    &request_origin,
+                    &response_head,
+                    pending.credentials_mode,
+                ))
+            });
             let response_obj = match response.into_fetch_parts() {
-                WorkerFetchResponseParts::Materialized { mut head, body } => {
-                    head.headers = filtered_headers;
+                WorkerFetchResponseParts::Materialized { head, body } => {
                     let body = if opaque_response_blocked {
                         ResponseBody::materialized_bytes(Vec::new())
                     } else {
                         *body
                     };
-                    build_fetch_response_object_from_body_source_for_request_mode(
+                    crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                         scope,
                         &pending.document_url,
                         response_request,
                         head,
                         body,
+                        response_filter,
                     )
                 }
-                WorkerFetchResponseParts::Subresource { mut head, body } => {
-                    head.headers = filtered_headers;
+                WorkerFetchResponseParts::Subresource { head, body } => {
                     let body = if opaque_response_blocked {
                         SubresourceResponseBody::from_bytes(Vec::new())
                     } else {
                         body
                     };
-                    build_fetch_response_object_from_subresource_body_for_request_mode(
+                    crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode_with_filter(
                         scope,
                         &pending.document_url,
                         response_request,
                         head,
                         body,
+                        response_filter,
                     )
                 }
             };
