@@ -2494,6 +2494,56 @@ async fn indexed_db_child_reply_does_not_leak_child_scope_to_top_continuation() 
 }
 
 #[test]
+fn global_cache_storage_rejects_uncacheable_responses_before_consuming_body() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-admission.test/");
+    vm.eval(
+        r#"
+globalThis.cacheAdmissionResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const name = 'response-admission';
+  await caches.delete(name);
+  const cache = await caches.open(name);
+  await cache.put('/key', new Response('original'));
+  for (const streaming of [false, true]) {
+    for (const init of [
+      {status: 206},
+      {headers: {VARY: '*'}},
+      {headers: [['vary', 'Accept-Language'], ['Vary', ' \t* ']]}
+    ]) {
+      const body = streaming ? new ReadableStream({start(controller) {
+        controller.enqueue(new TextEncoder().encode('replacement'));
+        controller.close();
+      }}) : 'replacement';
+      const response = new Response(body, init);
+      // Admission reads the associated response, even if author properties mask it.
+      Object.defineProperty(response, 'status', {get() { throw new Error('status getter'); }});
+      Object.defineProperty(response, 'headers', {get() { throw new Error('headers getter'); }});
+      let error;
+      try { await cache.put('/key', response); } catch (value) { error = value; }
+      check(error instanceof TypeError, 'uncacheable response must reject');
+      check(!response.bodyUsed && !response.body.locked, 'rejection consumed or locked body');
+      check(await response.text() === 'replacement', 'rejected body is readable');
+      check(await (await cache.match('/key')).text() === 'original', 'rejection replaced entry');
+    }
+  }
+  const accepted = new Response('allowed', {headers: {Vary: 'Accept-Language, star*'}});
+  await cache.put('/key', accepted);
+  check(accepted.bodyUsed && await (await cache.match('/key')).text() === 'allowed', 'valid Vary');
+  await caches.delete(name);
+  cacheAdmissionResult = 'ok';
+})().catch(error => cacheAdmissionResult = String(error.stack || error));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheAdmissionResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
 fn global_cache_storage_normalizes_request_info_urls() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://cache-request-info.test/app/index.html");

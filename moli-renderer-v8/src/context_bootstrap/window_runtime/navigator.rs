@@ -2619,6 +2619,27 @@ fn storage_bucket_cached_response_from_value<'s>(
                 return None;
             }
         };
+    if head.status == 206 {
+        reject_type_error(
+            scope,
+            resolver,
+            "Cache.put rejected a Response with status 206.",
+        );
+        return None;
+    }
+    if head.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("vary")
+            && value
+                .split(|byte| *byte == b',')
+                .any(|field| field.trim_ascii() == b"*")
+    }) {
+        reject_type_error(
+            scope,
+            resolver,
+            "Cache.put rejected a Response with Vary: *.",
+        );
+        return None;
+    }
     let body = match crate::network_host::materialize_response_object_body_preserving_error(
         scope,
         response,
