@@ -189,6 +189,7 @@ const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerNavigationPreloadManagerScope";
 const SERVICE_WORKER_CLIENT_ID_SLOT: &str = "__lmServiceWorkerClientId";
 const WORKER_ORIGINAL_CONSOLE_SLOT: &str = "__moliWorkerOriginalConsole";
+const WORKER_GLOBAL_ORIGIN_SLOT: &str = "__moliWorkerGlobalOrigin";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -215,8 +216,19 @@ struct WorkerGlobalNameDeclaration {
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct WorkerGlobalOriginDeclaration {
-    #[webapi(data_property, readonly)]
+    #[webapi(slot = WORKER_GLOBAL_ORIGIN_SLOT)]
     origin: String,
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
+struct WorkerGlobalOriginPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = worker_global_origin_getter,
+        setter = worker_global_origin_setter
+    )]
+    origin: (),
 }
 
 #[derive(WebApiObject)]
@@ -3106,11 +3118,20 @@ pub(super) fn install_worker_global_scope<'s>(
     crate::context_bootstrap::install_worker_base64_runtime_state(scope, global)?;
     install_simple_event_target_methods(scope, global, WORKER_GLOBAL_LISTENERS_SLOT, false);
     install_simple_event_target_ordered_handlers(scope, global);
-    if let Some(script_url) = state.borrow().current_script_url.clone() {
-        let origin = moli_url::origin_ascii_serialization(&script_url);
-        WorkerGlobalOriginDeclaration::new(origin)
-            .initialize(scope, global)
-            .map_err(|error| anyhow!("failed to initialize worker global origin: {error}"))?;
+    let script_url = state.borrow().current_script_url.clone();
+    let origin = script_url
+        .as_ref()
+        .map(moli_url::origin_ascii_serialization)
+        .unwrap_or_else(|| "null".to_owned());
+    WorkerGlobalOriginDeclaration::new(origin)
+        .initialize(scope, global)
+        .map_err(|error| anyhow!("failed to initialize worker global origin: {error}"))?;
+    let worker_prototype = global_constructor_prototype(scope, "WorkerGlobalScope")
+        .ok_or_else(|| anyhow!("WorkerGlobalScope prototype missing"))?;
+    WorkerGlobalOriginPrototypeDeclaration::default()
+        .initialize(scope, worker_prototype)
+        .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope origin: {error}"))?;
+    if let Some(script_url) = script_url {
         crate::context_bootstrap::install_worker_location_runtime_state(
             scope,
             global,
@@ -3166,6 +3187,45 @@ pub(super) fn install_worker_global_scope<'s>(
         scope, global, realm_kind,
     )?;
     Ok(())
+}
+
+fn worker_global_origin_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let origin = get_private_value(scope, global, WORKER_GLOBAL_ORIGIN_SLOT)
+        .unwrap_or_else(|| v8str(scope, "null").into());
+    rv.set(origin);
+}
+
+fn worker_global_origin_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    // [Replaceable] creates an own data property without converting the value
+    // or changing the origin returned by the original getter.
+    match global.define_own_property(
+        scope,
+        v8str(scope, "origin").into(),
+        args.get(0),
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => throw_type_error(scope, "Cannot redefine WorkerGlobalScope.origin"),
+        None => {}
+    }
 }
 
 fn set_worker_global_name_prop<'s>(

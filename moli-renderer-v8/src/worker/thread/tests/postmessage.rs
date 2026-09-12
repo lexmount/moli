@@ -1933,6 +1933,117 @@ async fn worker_error_propagation() {
 }
 
 #[tokio::test]
+async fn worker_origin_is_replaceable_across_worker_global_kinds() {
+    ensure_v8();
+    let storage_key = moli_storage_key::MoliStorageKey::new(
+        "https://origin.test".to_owned(),
+        "https://origin.test".to_owned(),
+        None,
+        moli_storage_key::StoragePartitionRelation::FirstParty,
+    );
+    let dedicated = super::super::WorkerGlobalKind::Dedicated {
+        name: String::new(),
+    };
+    let cases = [
+        (
+            dedicated.clone(),
+            "https://origin.test/worker.js",
+            "https://origin.test",
+        ),
+        (dedicated, "data:text/javascript,", "null"),
+        (
+            super::super::WorkerGlobalKind::Shared {
+                name: "origin".to_owned(),
+                storage_key,
+            },
+            "https://origin.test/shared.js",
+            "https://origin.test",
+        ),
+        (
+            super::super::WorkerGlobalKind::Service {
+                registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                scope_url: url::Url::parse("https://origin.test/").unwrap(),
+            },
+            "https://origin.test/sw.js",
+            "https://origin.test",
+        ),
+    ];
+    let probe = r#"
+        function check(value, message) {
+            if (!value) throw new Error(message);
+        }
+        function throwsTypeError(callback) {
+            try { callback(); } catch (error) { return error instanceof TypeError; }
+            return false;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, 'origin');
+        check(typeof descriptor?.get === 'function' && typeof descriptor.set === 'function', 'prototype accessor');
+        check(descriptor.enumerable && descriptor.configurable, 'accessor flags');
+        check(descriptor.get.length === 0 && descriptor.set.length === 1, 'accessor lengths');
+        check(descriptor.get.name === 'get origin' && descriptor.set.name === 'set origin', 'accessor names');
+        check(!Object.hasOwn(self, 'origin'), 'no initial own origin');
+        check(self.origin === expectedOrigin && location.origin === expectedOrigin, 'initial origin');
+        check(descriptor.get.call(null) === expectedOrigin && descriptor.get.call(undefined) === expectedOrigin, 'default getter receiver');
+
+        const replacement = { [Symbol.toPrimitive]() { throw new Error('must not convert'); } };
+        check(Reflect.set(WorkerGlobalScope.prototype, 'origin', replacement, self), 'replace through prototype');
+        const own = Object.getOwnPropertyDescriptor(self, 'origin');
+        check(own.value === replacement && own.writable && own.enumerable && own.configurable, 'replacement descriptor');
+        check(descriptor.get.call(self) === expectedOrigin && location.origin === expectedOrigin, 'internal origin survives replacement');
+        const symbol = Symbol('replacement');
+        (() => { 'use strict'; self.origin = symbol; })();
+        check(self.origin === symbol, 'strict assignment preserves value');
+        check(delete self.origin, 'delete replacement');
+        check(self.origin === expectedOrigin, 'deletion restores internal origin');
+
+        for (const receiver of [{}, Object.create(self), WorkerGlobalScope.prototype, new Proxy(self, {})]) {
+            const before = Object.getOwnPropertyDescriptor(receiver, 'origin');
+            check(throwsTypeError(() => descriptor.get.call(receiver)), 'getter receiver check');
+            check(throwsTypeError(() => descriptor.set.call(receiver, replacement)), 'setter receiver check');
+            const after = Object.getOwnPropertyDescriptor(receiver, 'origin');
+            check(after?.get === before?.get && after?.set === before?.set && after?.value === before?.value, 'invalid receiver not mutated');
+            check(Object.hasOwn(receiver, 'origin') === (before !== undefined), 'invalid receiver own property unchanged');
+        }
+        descriptor.set.call(null, replacement);
+        check(self.origin === replacement, 'default setter receiver');
+        delete self.origin;
+        descriptor.set.call(self);
+        check(Object.hasOwn(self, 'origin') && self.origin === undefined, 'missing setter value');
+        delete self.origin;
+
+        const observed = (0, eval)("var origin; var originValues = []; for (origin of ['same-origin', 'cross-origin']) originValues.push(origin); originValues;");
+        check(observed.join('|') === 'same-origin|cross-origin', 'global var assignments');
+        delete self.origin;
+        check(self.origin === expectedOrigin, 'origin survives global var assignments');
+
+        Object.defineProperty(self, 'origin', {value: 'locked', writable: false, enumerable: true, configurable: false});
+        check(throwsTypeError(() => descriptor.set.call(self, 'new')), 'failed replacement throws');
+        check(self.origin === 'locked' && descriptor.get.call(self) === expectedOrigin, 'failed replacement preserves values');
+    "#;
+    for (kind, script_url, expected_origin) in cases {
+        let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source = format!(
+            "const expectedOrigin = {};\n{probe}",
+            serde_json::to_string(expected_origin).unwrap(),
+        );
+        let handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, script_url.to_owned())
+                .with_global_kind(kind)
+                .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+            .await
+            .expect("origin probe should finish")
+            .expect("origin probe should report completion");
+        handle.terminate_and_join();
+        bootstrap.result.unwrap_or_else(|error| {
+            panic!("Worker origin probe failed for {script_url}: {error:?}")
+        });
+    }
+}
+
+#[tokio::test]
 async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
     ensure_v8();
     let mut handle = spawn_worker(
