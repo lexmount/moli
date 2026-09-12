@@ -227,7 +227,7 @@ pub(super) fn xhr_send_callback<'s>(
     }
 }
 
-fn xhr_open_generation_changed(
+pub(super) fn xhr_open_generation_changed(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
     expected: f64,
@@ -278,16 +278,23 @@ pub(crate) fn dispatch_xhr_upload_complete(
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
 }
 
-pub(crate) fn dispatch_xhr_upload_abort_if_in_progress(
+pub(super) fn dispatch_xhr_upload_error_if_in_progress(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
+    event_type: &str,
 ) {
     if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT).unwrap_or(false) {
         return;
     }
+    let open_generation =
+        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-    xhr_dispatch_upload_progress_event(scope, xhr, "abort", 0.0, 0.0);
-    xhr_dispatch_upload_progress_event(scope, xhr, "loadend", 0.0, 0.0);
+    xhr_dispatch_upload_progress_event(scope, xhr, event_type, 0.0, 0.0);
+    if !scope.is_execution_terminating()
+        && !xhr_open_generation_changed(scope, xhr, open_generation)
+    {
+        xhr_dispatch_upload_progress_event(scope, xhr, "loadend", 0.0, 0.0);
+    }
 }
 
 fn send_synchronous_network_xhr(
