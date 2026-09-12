@@ -759,10 +759,7 @@ impl ScriptVm {
                         crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
                     let mut observable_response = response;
-                    if matches!(
-                        pending.info.resource_type,
-                        SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) && !response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
+                    if pending.info.resource_type == SubresourceResourceType::Xhr && !response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
                                 &pending.request_origin,
@@ -781,6 +778,15 @@ impl ScriptVm {
                                 .expect("detached keepalive completion is handled before V8 entry");
                             let resolver = v8::Local::new(scope, &resolver);
                             let (mut head, body) = observable_response.into_body();
+                            let response_request = crate::network_host::FetchResponseRequest {
+                                method: &response_request_method,
+                                mode: pending.request_mode,
+                                redirect_mode,
+                            };
+                            response_request.capture_cors_exposure(
+                                &pending.request_origin, &head, pending.credentials_mode,
+                                &mut metadata,
+                            );
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }

@@ -539,6 +539,14 @@ impl ServiceWorkerRuntimeService {
         response: ServiceWorkerFetchResponse,
     ) {
         job.cancel_pending_navigation_preload();
+        if let Some(message) = service_worker_fetch_response_rejection(&job, &response) {
+            self.complete_fetch_with_network_failure(
+                job,
+                message,
+                crate::network_host::FAILED_ERROR_TEXT.to_owned(),
+            );
+            return;
+        }
         if is_redirect_status(response.head.status)
             && response.head.metadata.response_type
                 == crate::types::FetchResponseType::OpaqueRedirect
