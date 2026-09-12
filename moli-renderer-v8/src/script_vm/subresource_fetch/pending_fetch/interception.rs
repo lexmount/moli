@@ -1121,6 +1121,12 @@ impl ScriptVm {
             &request.method,
             state.pending.blob_url_entry.as_ref(),
         );
+        let completion_tx = self._context_host.borrow().resource_completion_sender();
+        let request = crate::network_host::observe_async_xhr_upload(
+            request,
+            &completion_tx,
+            state.pending.info.internal_id,
+        );
         let response = async move {
             if let Some(result) = local_response {
                 return result.map(crate::protocol_types::NavigationResponse::from);

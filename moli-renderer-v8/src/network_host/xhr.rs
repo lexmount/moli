@@ -7,6 +7,7 @@ mod instance_state;
 mod request_state;
 mod response_type;
 mod send;
+mod upload;
 
 use super::*;
 use crate::native_bridge::throw_dom_exception;
@@ -28,6 +29,7 @@ pub(crate) const XHR_ABORTED_SLOT: &str = "__lmXhrAborted";
 pub(crate) const XHR_ASYNC_SLOT: &str = "__lmXhrAsync";
 pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
 pub(crate) const XHR_UPLOAD_IN_PROGRESS_SLOT: &str = "__lmXhrUploadInProgress";
+const XHR_UPLOAD_LOADED_SLOT: &str = "__lmXhrUploadLoaded";
 const XHR_UPLOAD_LISTENER_SLOT: &str = "__lmXhrUploadListener";
 pub(crate) const XHR_ACTIVE_INTERNAL_ID_SLOT: &str = "__lmXhrActiveInternalId";
 
@@ -67,8 +69,9 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
     PreparedXhrSendBody, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args,
-    dispatch_xhr_loadstart, dispatch_xhr_upload_complete, xhr_author_request_headers,
+    dispatch_xhr_loadstart, xhr_author_request_headers,
 };
+pub(crate) use self::upload::apply_xhr_upload_event;
 
 pub(crate) use moli_webapi::events::progress::install_progress_event_template_bindings;
 

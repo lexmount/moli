@@ -56,7 +56,7 @@ use crate::network_host::{
     XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
     apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, begin_xhr_send,
     capture_xhr_upload_listener_flag, close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
+    apply_xhr_upload_event, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, filter_cors_exposed_response_headers,
     filter_headers_for_guard, local_url_response_result, parse_fetch_init,
     request_object_credentials_mode, resolve_context_url, set_xhr_state_number,
@@ -186,7 +186,7 @@ pub(crate) use nested_workers::{
 };
 pub(super) use nested_workers::{close_worker_owned_nested_workers, dispatch_nested_worker_event};
 pub(super) use network_state::{
-    PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion,
+    PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
 };
 pub(crate) use network_state::{
     WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse, WorkerFetchStreamingChunk,

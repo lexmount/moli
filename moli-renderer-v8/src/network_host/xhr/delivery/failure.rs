@@ -1,7 +1,8 @@
 use super::super::events::{
     xhr_dispatch_progress_event, xhr_fire_readystatechange, xhr_is_aborted,
 };
-use super::super::send::{dispatch_xhr_upload_error_if_in_progress, xhr_open_generation_changed};
+use super::super::send::xhr_open_generation_changed;
+use super::super::upload::dispatch_xhr_upload_error_if_in_progress;
 use super::super::*;
 
 pub(crate) fn apply_xhr_streaming_failure(

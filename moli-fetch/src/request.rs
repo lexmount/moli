@@ -89,6 +89,7 @@ pub struct Request {
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
     redirect_policy: Option<RequestRedirectPolicy>,
+    upload_observer: Option<crate::UploadObserver>,
 }
 
 /// Request-owned admission check, run before following each redirect target.
@@ -640,6 +641,7 @@ impl Request {
             network_observation_recorder: None,
             browser_identity: None,
             redirect_policy: None,
+            upload_observer: None,
         })
     }
 
@@ -680,6 +682,7 @@ impl Request {
             network_observation_recorder: None,
             browser_identity: None,
             redirect_policy: None,
+            upload_observer: None,
         }
     }
 
@@ -753,6 +756,7 @@ impl Request {
             network_observation_recorder: None,
             browser_identity: None,
             redirect_policy: None,
+            upload_observer: None,
         }
     }
 
@@ -1028,6 +1032,15 @@ impl Request {
 
     pub fn uses_page_network_policy(&self) -> bool {
         self.use_page_network_policy
+    }
+
+    pub fn with_upload_observer(mut self, observer: crate::UploadObserver) -> Self {
+        self.upload_observer = Some(observer);
+        self
+    }
+
+    pub fn upload_observer(&self) -> Option<&crate::UploadObserver> {
+        self.upload_observer.as_ref()
     }
 
     pub(crate) fn with_network_observation_recorder(

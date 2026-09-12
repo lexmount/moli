@@ -78,20 +78,36 @@ pub(crate) fn xhr_dispatch_upload_progress_event(
     loaded: f64,
     total: f64,
 ) {
+    xhr_dispatch_upload_progress_events(scope, xhr, &[event_type], loaded, total);
+}
+
+pub(crate) fn xhr_dispatch_upload_progress_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    event_types: &[&str],
+    loaded: f64,
+    total: f64,
+) {
     if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false) {
         return;
     }
     let Some(upload) = xhr_upload_object(scope, xhr) else {
         return;
     };
-    xhr_dispatch_progress_event_with_length_computable(
-        scope,
-        upload,
-        event_type,
-        total > 0.0,
-        loaded,
-        total,
-    );
+    // Capture the listener flag once, including when callbacks reopen the XHR.
+    for event_type in event_types {
+        if scope.is_execution_terminating() {
+            return;
+        }
+        xhr_dispatch_progress_event_with_length_computable(
+            scope,
+            upload,
+            event_type,
+            total > 0.0,
+            loaded,
+            total,
+        );
+    }
 }
 
 fn xhr_has_event_observers<'s>(
