@@ -143,8 +143,6 @@ pub(in crate::network_host) use self::request_scope::{
     effective_subresource_referrer_policy, effective_subresource_request_scope,
     observe_subresource_request_cookie_report,
 };
-#[cfg(test)]
-pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     MaterializedResponseHead, build_fetch_response_object_for_request_mode,
@@ -158,16 +156,17 @@ pub(crate) use self::response::{
     cors_preflight_request_headers, fetch_response_needs_orb_body_validation,
     filter_cors_exposed_response_headers, is_cors_policy_failure_message,
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
-    materialize_response_object_head,
-    materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,
-    response_has_null_body, validate_cors_preflight_response, validate_cors_response_chain,
+    materialize_response_object_internal_head, materialized_body_bytes_from_value,
+    network_response_filter, response_constructor_callback, response_has_null_body,
+    validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_headers,
     validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
     validate_opaque_response_blocking_with_body, validated_opaque_response_body,
 };
+#[cfg(test)]
+pub(crate) use self::response::{materialize_response_object, materialize_response_object_head};
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
 };

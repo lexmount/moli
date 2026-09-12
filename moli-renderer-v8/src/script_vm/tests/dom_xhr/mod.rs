@@ -13,6 +13,7 @@ mod forms;
 mod misc;
 mod no_cors_redirect;
 mod null_body;
+mod opaque_response;
 mod open_validation;
 mod query_realms;
 mod redirect_filter;
