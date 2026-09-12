@@ -13,6 +13,7 @@ mod no_cors_redirect;
 mod open_validation;
 mod query_realms;
 mod response_headers;
+mod response_type;
 mod send_body;
 mod shadow_dom;
 mod streaming_failure;
