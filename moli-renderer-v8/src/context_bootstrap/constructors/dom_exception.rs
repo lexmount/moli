@@ -525,8 +525,10 @@ pub(crate) fn new_dom_exception_value<'s>(
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(prototype) =
-        crate::context_bootstrap::exposed_interfaces::materialized_intrinsic_interface_prototype(
+    // Retained native methods can throw after their WindowProxy is detached,
+    // before DOMException was first exposed in that realm.
+    if let Ok(prototype) =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
             scope,
             "DOMException",
         )
