@@ -579,9 +579,14 @@ impl RendererDocumentIsolateHolder {
         isolate.set_promise_reject_callback(promise_reject_callback);
         isolate.set_failed_access_check_callback_function(failed_access_check_callback);
 
+        let inspector_start = timing_enabled.then(std::time::Instant::now);
+        let inspector_backend = RendererInspectorIsolateBackend::new(&mut isolate);
+        let inspector_elapsed = inspector_start.map(|start| start.elapsed());
+        let environment_ingress = inspector_backend.devtools_target().io_ref().clone();
         let platform_registration = V8PlatformIsolateRegistration::register(
             &mut isolate,
             foreground_wake.into_platform_wake(),
+            move |change| environment_ingress.enqueue_environment_change(change),
         );
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let isolate_bootstrap;
@@ -621,8 +626,6 @@ impl RendererDocumentIsolateHolder {
             }
         }
 
-        let inspector_start = timing_enabled.then(std::time::Instant::now);
-        let inspector_backend = RendererInspectorIsolateBackend::new(&mut isolate);
         let devtools_target_shutdown_registration = devtools_target_shutdown_registry
             .map(|registry| registry.register(inspector_backend.devtools_target()))
             .transpose()
@@ -631,7 +634,7 @@ impl RendererDocumentIsolateHolder {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
                 stage = "inspector_backend_new",
-                elapsed_ms = inspector_start.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_ms = inspector_elapsed.unwrap().as_secs_f64() * 1000.0,
                 "RendererInspectorIsolateBackend::new"
             );
             tracing::info!(
@@ -710,7 +713,6 @@ fn with_entered_owned_isolate<T>(
         isolate.enter();
     }
     let _guard = EnteredIsolateGuard(isolate);
-    moli_v8_platform::refresh_process_environment(isolate);
     op(isolate)
 }
 

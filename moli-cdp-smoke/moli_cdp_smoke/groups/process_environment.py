@@ -51,12 +51,15 @@ async def _install_workers(page: Any) -> None:
       environmentShared.port.start();
       globalThis.environmentDate = Date;
       globalThis.environmentIntl = Intl.DateTimeFormat;
+      globalThis.environmentExistingDate = new Date('2024-01-01T00:00:00Z');
+      environmentExistingDate.getTimezoneOffset();
     }""", READ_DEFAULTS)
 
 
-async def _override_while_peer_paused(control: Any, peer: Any) -> None:
+async def _override_while_peer_paused(control: Any, peer: Any, baseline: list[Any]) -> None:
     # A paused isolate cannot drain its ordinary foreground notification. The
-    # nested Inspector command must see the new default before JS is resumed.
+    # explicit owner notification must run before the next nested Inspector
+    # command, without a generation check or resuming page JavaScript.
     await peer.send("Debugger.enable")
     paused = asyncio.get_running_loop().create_future()
 
@@ -70,16 +73,24 @@ async def _override_while_peer_paused(control: Any, peer: Any) -> None:
     }))
     try:
         event = await asyncio.wait_for(paused, timeout=10)
-        await control.send("Emulation.setLocaleOverride", {"locale": "fr_FR"})
-        await control.send("Emulation.setTimezoneOverride", {"timezoneId": "Europe/Paris"})
-        result = await peer.send("Debugger.evaluateOnCallFrame", {
-            "callFrameId": event["callFrames"][0]["callFrameId"],
-            "expression": f"({READ_DEFAULTS})()",
-            "returnByValue": True,
-        })
-        assert_equal(result.get("result", {}).get("value"),
-                     ["fr-FR", "Europe/Paris", -60, -120],
-                     "paused isolate observes process defaults without resuming")
+        transitions = [
+            ("fr_FR", "Europe/Paris", ["fr-FR", "Europe/Paris", -60, -120]),
+            ("de_DE", "Asia/Shanghai", ["de-DE", "Asia/Shanghai", -480, -480]),
+            ("", "", baseline),
+            ("fr_FR", "Europe/Paris", ["fr-FR", "Europe/Paris", -60, -120]),
+        ]
+        for locale, timezone, expected in transitions:
+            await control.send("Emulation.setLocaleOverride", {"locale": locale})
+            await control.send("Emulation.setTimezoneOverride", {"timezoneId": timezone})
+            # No sleep, retry, resume, or unrelated command to drive delivery.
+            result = await peer.send("Debugger.evaluateOnCallFrame", {
+                "callFrameId": event["callFrames"][0]["callFrameId"],
+                "expression": f"[({READ_DEFAULTS})(), environmentExistingDate.getTimezoneOffset()]",
+                "returnByValue": True,
+            })
+            assert_equal(result.get("result", {}).get("value"),
+                         [expected, expected[2]],
+                         f"paused isolate and existing Date observe {locale}/{timezone}")
     finally:
         peer.remove_listener("Debugger.paused", on_paused)
         with contextlib.suppress(Exception):
@@ -114,8 +125,8 @@ async def run_process_environment_group(
         assert_equal(await _worker_defaults(peer), [baseline, baseline], "worker baseline")
         record(results, "process_environment_workers_before_override")
 
-        await _override_while_peer_paused(control, other)
-        record(results, "process_environment_paused_inspector_refresh")
+        await _override_while_peer_paused(control, other, baseline)
+        record(results, "process_environment_paused_change_replace_restore")
         expected = ["fr-FR", "Europe/Paris", -60, -120]
         assert_equal(await peer.evaluate(READ_DEFAULTS), expected, "existing peer isolate")
         assert_equal(await _worker_defaults(peer), [expected, expected], "existing worker isolates")

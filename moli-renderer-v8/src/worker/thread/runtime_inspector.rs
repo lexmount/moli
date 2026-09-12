@@ -565,11 +565,8 @@ impl WorkerRuntimeInspector {
     }
 
     pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {
-        // This common entry also serves active-JS interrupts and nested pauses,
-        // where neither ordinary Worker entry nor foreground tasks can refresh
-        // V8's cached locale/timezone before the next Inspector observation.
-        moli_v8_platform::refresh_process_environment(isolate);
         match task {
+            WorkerInspectorTask::EnvironmentChanged(change) => change.notify_isolate(isolate),
             WorkerInspectorTask::DispatchProtocolMessage {
                 inspector_session_id,
                 raw_json,
@@ -805,12 +802,25 @@ mod tests {
         rv.set(v8::Boolean::new(scope, inspector_policy_is_scoped).into());
     }
 
-    #[test]
-    fn worker_inspector_observes_environment_without_an_owner_loop_turn() {
+    #[tokio::test]
+    async fn worker_environment_notifications_precede_inspector_work_without_an_owner_loop_turn() {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
-        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
+        let (parent_tx, _parent_rx) = mpsc::unbounded_channel();
+        let task_runner = WorkerInspectorTaskRunner::new(
+            wake_tx,
+            std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle()))),
+        );
+        let inspector =
+            WorkerRuntimeInspector::new(&mut isolate, task_runner.clone(), parent_tx, false);
+        let notifications = task_runner.clone();
+        let registration = moli_v8_platform::V8PlatformIsolateRegistration::register(
+            &mut isolate,
+            moli_v8_platform::V8ForegroundTaskWake::queued(|_| {}),
+            move |change| notifications.append_environment_change(change),
+        );
         {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
             let scope = &mut scope.init();
@@ -823,24 +833,30 @@ mod tests {
         }
         let read_defaults = |isolate: &mut v8::Isolate| {
             let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
-            // Interrupts and nested pauses enter execute_task directly, without
-            // WorkerIsolateState or a foreground task refreshing the isolate.
-            inspector.execute_task(
-                isolate,
-                WorkerInspectorTask::DispatchProtocolMessage {
-                    inspector_session_id: None,
-                    raw_json: json!({
+            assert!(task_runner.append_protocol_message(
+                None,
+                json!({
                         "id": 1,
-                        "method": "Runtime.evaluate",
+                        "method": "Runtime.callFunctionOn",
                         "params": {
-                            "expression": "[new Intl.NumberFormat().resolvedOptions().locale, new Intl.DateTimeFormat().resolvedOptions().timeZone, new Date('2024-01-01T00:00:00Z').getTimezoneOffset()]",
+                            "functionDeclaration": "function() { return [new Intl.NumberFormat().resolvedOptions().locale, new Intl.DateTimeFormat().resolvedOptions().timeZone, new Date('2024-01-01T00:00:00Z').getTimezoneOffset()]; }",
+                            "executionContextId": inspector.default_execution_context_id.get().unwrap(),
                             "returnByValue": true,
                         },
-                    }).to_string(),
-                    deferred_response: None,
-                    response_tx,
-                },
-            );
+                }).to_string(),
+                None,
+                response_tx,
+            ));
+            // Pump explicit owner notifications before the non-interrupting
+            // evaluation. No global-version check or normal Worker entry is
+            // involved, and a nested pause can consume these same notifications.
+            while let Some(task) = task_runner.claim_task(WorkerInspectorTaskMode::Interrupt) {
+                inspector.execute_task(isolate, task);
+            }
+            let task = task_runner
+                .claim_task(WorkerInspectorTaskMode::DontInterrupt)
+                .unwrap();
+            inspector.execute_task(isolate, task);
             let messages = response_rx.try_recv().unwrap().unwrap();
             let response = protocol_response(&messages, 1);
             assert!(response.get("error").is_none(), "{response:#?}");
@@ -856,6 +872,8 @@ mod tests {
         );
         owner.release();
         assert_eq!(read_defaults(&mut isolate), baseline);
+        registration.unregister();
+        task_runner.dispose("test complete");
     }
 
     #[test]

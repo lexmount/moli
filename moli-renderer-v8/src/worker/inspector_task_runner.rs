@@ -78,6 +78,7 @@ unsafe extern "C" fn dispatch_worker_inspector_interrupt(
 pub(crate) type WorkerInspectorTaskMode = CdpInspectorTaskMode;
 
 pub(crate) enum WorkerInspectorTask {
+    EnvironmentChanged(moli_v8_platform::ProcessEnvironmentChange),
     DispatchProtocolMessage {
         inspector_session_id: Option<String>,
         raw_json: String,
@@ -173,6 +174,18 @@ impl WorkerInspectorTaskRunner {
 
     pub(crate) fn route_id(&self) -> u64 {
         self.shared.interrupt_target.route_id
+    }
+
+    /// An isolate notification shares the existing owner/interrupt/pause task
+    /// route, but has no Inspector session and invokes no page script.
+    pub(crate) fn append_environment_change(
+        &self,
+        change: moli_v8_platform::ProcessEnvironmentChange,
+    ) {
+        self.append(
+            WorkerInspectorTaskMode::Interrupt,
+            WorkerInspectorTask::EnvironmentChanged(change),
+        );
     }
 
     pub(crate) fn append_protocol_message(
@@ -559,6 +572,35 @@ mod tests {
             WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
                 if raw_json.contains("Debugger.resume")
         ));
+    }
+
+    #[test]
+    fn environment_notifications_share_interrupt_fifo_and_are_discarded_on_disposal() {
+        use moli_v8_platform::ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
+
+        let (runner, _wake_rx) = runner();
+        runner.append_environment_change(LocaleChanged);
+        let _command = append_protocol(&runner, 1, "Debugger.resume");
+        runner.append_environment_change(TimezoneChanged);
+        assert!(runner.begin_pause_loop());
+        // The nested pause uses this same interrupting FIFO. No session or
+        // ordinary Worker-loop turn is required to receive a notification.
+        assert!(matches!(
+            runner.claim_task(WorkerInspectorTaskMode::Interrupt),
+            Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+        ));
+        assert!(matches!(
+            runner.claim_task(WorkerInspectorTaskMode::Interrupt),
+            Some(WorkerInspectorTask::DispatchProtocolMessage { .. })
+        ));
+        runner.dispose("worker teardown");
+        runner.append_environment_change(LocaleChanged);
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::Interrupt)
+                .is_none()
+        );
+        assert!(runner.wait_for_pause_task().is_none());
     }
 
     #[test]

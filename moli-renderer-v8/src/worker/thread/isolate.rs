@@ -47,13 +47,14 @@ impl WorkerIsolateState {
         );
         let runtime_inspector = WorkerRuntimeInspector::new(
             &mut isolate,
-            inspector_task_runner,
+            inspector_task_runner.clone(),
             parent_tx,
             shared_worker,
         );
         let platform_registration = V8PlatformIsolateRegistration::register(
             &mut isolate,
             platform_wake.into_platform_wake(),
+            move |change| inspector_task_runner.append_environment_change(change),
         );
 
         Self {
@@ -64,7 +65,6 @@ impl WorkerIsolateState {
     }
 
     pub(super) fn worker_isolate_mut(&mut self) -> &mut v8::OwnedIsolate {
-        moli_v8_platform::refresh_process_environment(&mut self.isolate);
         &mut self.isolate
     }
 
@@ -75,7 +75,6 @@ impl WorkerIsolateState {
     pub(super) fn worker_isolate_and_runtime_inspector(
         &mut self,
     ) -> (&mut v8::OwnedIsolate, Rc<WorkerRuntimeInspector>) {
-        moli_v8_platform::refresh_process_environment(&mut self.isolate);
         (&mut self.isolate, Rc::clone(&self.runtime_inspector))
     }
 

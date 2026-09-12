@@ -92,9 +92,7 @@ pub(super) unsafe extern "C" fn dispatch_inspector_interrupt(
     };
     let mut isolate_ptr = isolate;
     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
-    // Running JavaScript has not returned to the owner loop to consume the
-    // foreground notification. An Inspector interrupt is also an observation.
-    moli_v8_platform::refresh_process_environment(isolate);
+    dispatch_environment_notifications(&session_executor, isolate);
     with_scoped_inspector_microtasks(isolate, || {
         session_executor.dispatch_next_io_command_from_interrupt();
     });
@@ -118,7 +116,7 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
         isolate.enter();
     }
     let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
-    moli_v8_platform::refresh_process_environment(isolate);
+    dispatch_environment_notifications(&session_executor, isolate);
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     with_scoped_inspector_microtasks(scope, || {
@@ -129,6 +127,26 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
 pub(crate) fn dispatch_inspector_main_owner_wake(
     wake: RendererInspectorMainOwnerWake,
 ) -> Option<RendererInspectorMainOwnerDispatch> {
-    session_executor(wake.route_id())
-        .and_then(|session_executor| session_executor.claim_next_main_command_from_owner())
+    let session_executor = session_executor(wake.route_id())?;
+    // Main and IO have separate owner wake channels. Do not let selection of
+    // a Main wake overtake an environment notification already in IO ingress.
+    // Only enter V8 when there is concrete notification work to execute.
+    if let Some(change) = session_executor.target.io_ref().claim_environment_change() {
+        let isolate = unsafe { &mut *session_executor.isolate.get() };
+        let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
+        unsafe { isolate.enter() };
+        let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
+        change.notify_isolate(isolate);
+        dispatch_environment_notifications(&session_executor, isolate);
+    }
+    session_executor.claim_next_main_command_from_owner()
+}
+
+fn dispatch_environment_notifications(
+    session_executor: &RendererInspectorSessionExecutorLocal,
+    isolate: &mut v8::Isolate,
+) {
+    while let Some(change) = session_executor.target.io_ref().claim_environment_change() {
+        change.notify_isolate(isolate);
+    }
 }

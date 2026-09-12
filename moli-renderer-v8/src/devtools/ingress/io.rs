@@ -8,6 +8,7 @@ use std::{
 };
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
+use moli_v8_platform::ProcessEnvironmentChange;
 use parking_lot::Mutex;
 
 use crate::{
@@ -242,6 +243,9 @@ impl RendererInspectorIoOwnerWake {
 
 struct RendererInspectorIoState {
     commands: VecDeque<RendererInspectorIoCommand>,
+    // Isolate-owned notifications, not session commands. They remain eligible
+    // during session detach and an active command's nested debugger pause.
+    environment_changes: VecDeque<ProcessEnvironmentChange>,
     active_command_id: Option<u64>,
     // One count per lane is enough: every detach guard completes at most once,
     // and commands stay blocked until all outstanding guards have completed.
@@ -252,6 +256,10 @@ struct RendererInspectorIoState {
 
 impl RendererInspectorIoState {
     fn has_ready(&self) -> bool {
+        !self.closed && (!self.environment_changes.is_empty() || self.has_ready_command())
+    }
+
+    fn has_ready_command(&self) -> bool {
         !self.closed
             && self.active_command_id.is_none()
             && self.commands.iter().any(|command| {
@@ -373,6 +381,7 @@ impl RendererInspectorIoIngress {
             shared: Arc::new(RendererInspectorIoShared {
                 state: Mutex::new(RendererInspectorIoState {
                     commands: VecDeque::new(),
+                    environment_changes: VecDeque::new(),
                     active_command_id: None,
                     session_detaches: BTreeMap::new(),
                     closed: false,
@@ -397,6 +406,24 @@ impl RendererInspectorIoIngress {
             .interrupt_route
             .as_ref()
             .map(|route| route.target.route_id())
+    }
+
+    /// The process controller publishes before returning to its caller. Reuse
+    /// this owner's idle wake, active-JS interrupt and nested-pause wake; a
+    /// normal Page foreground task cannot run while the debugger is paused.
+    pub(crate) fn enqueue_environment_change(&self, change: ProcessEnvironmentChange) {
+        {
+            let mut state = self.shared.state.lock();
+            if state.closed {
+                return;
+            }
+            state.environment_changes.push_back(change);
+        }
+        self.notify_execution_opportunities();
+    }
+
+    pub(crate) fn claim_environment_change(&self) -> Option<ProcessEnvironmentChange> {
+        self.shared.state.lock().environment_changes.pop_front()
     }
 
     /// Breaks an active V8 call so target teardown can reach the Page owner.
@@ -509,7 +536,7 @@ impl RendererInspectorIoIngress {
         consumer: RendererInspectorIoCommandConsumer,
     ) -> Option<RendererInspectorIoCommand> {
         let mut state = self.shared.state.lock();
-        if !state.has_ready() {
+        if !state.has_ready_command() {
             return None;
         }
         let position = state
@@ -634,6 +661,7 @@ impl RendererInspectorIoIngress {
         let commands = {
             let mut state = self.shared.state.lock();
             state.closed = true;
+            state.environment_changes.clear();
             state.commands.drain(..).collect::<Vec<_>>()
         };
         self.shared.pause_wake.notify_all();
@@ -719,6 +747,10 @@ impl std::fmt::Debug for RendererInspectorIoIngress {
             .debug_struct("RendererInspectorIoIngress")
             .field("route_id", &self.route_id())
             .field("queued_tasks", &state.commands.len())
+            .field(
+                "environment_notifications",
+                &state.environment_changes.len(),
+            )
             .field("active_command_id", &state.active_command_id)
             .field(
                 "interrupt_armed",
@@ -782,6 +814,42 @@ mod tests {
             Some(session.to_owned()),
             RendererInspectorCommandRoute::Io,
         )
+    }
+
+    #[test]
+    fn environment_notifications_are_isolate_owned_and_survive_session_detach() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _route = enqueue(&ingress, agent, Some("session-a"), "active");
+        let mut command = ingress.claim_for_owner().unwrap();
+        let guard = ingress.first_dispatch_guard(&mut command);
+        ingress.begin_session_detach(agent, command.ticket().session());
+        ingress.enqueue_environment_change(ProcessEnvironmentChange::LocaleChanged);
+        ingress.enqueue_environment_change(ProcessEnvironmentChange::TimezoneChanged);
+        // A nested pause can receive these without releasing the active
+        // command slot or creating another Inspector session.
+        assert!(ingress.claim_for_pause().is_none());
+        assert_eq!(
+            ingress.claim_environment_change(),
+            Some(ProcessEnvironmentChange::LocaleChanged)
+        );
+        assert_eq!(
+            ingress.claim_environment_change(),
+            Some(ProcessEnvironmentChange::TimezoneChanged)
+        );
+        assert_eq!(ingress.claim_environment_change(), None);
+        drop(guard);
+        ingress.finish_session_detach(agent, command.ticket().session());
+    }
+
+    #[test]
+    fn closed_isolate_discards_queued_and_late_environment_notifications() {
+        let ingress = ingress();
+        ingress.enqueue_environment_change(ProcessEnvironmentChange::LocaleChanged);
+        ingress.close("isolate disposed");
+        ingress.enqueue_environment_change(ProcessEnvironmentChange::TimezoneChanged);
+        assert_eq!(ingress.claim_environment_change(), None);
+        assert!(!ingress.shared.state.lock().has_ready());
     }
 
     fn session_response_output(

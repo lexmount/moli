@@ -12,12 +12,31 @@ use std::sync::{
 
 use parking_lot::Mutex;
 
-use super::{
-    dispatch_isolate_owner_callback, registered_isolate_owners, unsafe_raw_isolate_ptr_from_addr,
-};
+use super::registered_isolate_owners;
 
-static GENERATION: AtomicU64 = AtomicU64::new(1);
 static ENVIRONMENT: OnceLock<Mutex<Environment>> = OnceLock::new();
+
+/// A committed change to the renderer-process defaults, delivered as owner
+/// work rather than checked at every V8 entry. Delivery must enqueue the
+/// notification; only the isolate's owner may apply it, including in a nested
+/// Inspector pause loop. It carries no isolate pointer or configuration lease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessEnvironmentChange {
+    LocaleChanged,
+    TimezoneChanged,
+}
+
+impl ProcessEnvironmentChange {
+    /// Notify native V8 caches on the entered isolate's owner thread. Locale
+    /// changes also invalidate cached Date locale formatters, as in Blink.
+    pub fn notify_isolate(self, isolate: &mut v8::Isolate) {
+        if self == Self::LocaleChanged {
+            isolate.locale_configuration_change_notification();
+        }
+        // Redetect would overwrite the emulated ICU timezone with the host zone.
+        isolate.date_time_configuration_change_notification(v8::TimeZoneDetection::Skip);
+    }
+}
 
 fn environment() -> &'static Mutex<Environment> {
     ENVIRONMENT.get_or_init(|| {
@@ -92,7 +111,7 @@ impl ProcessEnvironmentOwner {
             owner: self.id,
             value: value.to_owned(),
         });
-        publish_change(state);
+        publish_change(state, ProcessEnvironmentChange::LocaleChanged);
         Ok(())
     }
 
@@ -125,7 +144,7 @@ impl ProcessEnvironmentOwner {
             owner: self.id,
             value: value.to_owned(),
         });
-        publish_change(state);
+        publish_change(state, ProcessEnvironmentChange::TimezoneChanged);
         Ok(())
     }
 
@@ -198,49 +217,29 @@ fn release(owner: EnvironmentOwnerId) {
         debug_assert!(restored, "the original ICU timezone must be restorable");
         state.timezone = None;
     }
-    publish_change(state);
+    publish_change(
+        state,
+        if locale {
+            ProcessEnvironmentChange::LocaleChanged
+        } else {
+            ProcessEnvironmentChange::TimezoneChanged
+        },
+    );
 }
 
-/// Publish only a successfully committed ICU change. Advance the generation
-/// under the configuration lock, but enqueue owner work after unlocking: an
-/// isolate refresh must never run while holding the process configuration lock.
-fn publish_change(state: parking_lot::MutexGuard<'_, Environment>) {
-    GENERATION.fetch_add(1, Ordering::Release);
-    drop(state);
-    // Reuse the platform's exact-generation routes: no second isolate registry,
-    // no timer/polling, and queued work is cancelled before isolate disposal.
+/// Keep ICU updates and notification publication serialized, as in Blink's
+/// controllers. Dispatchers only enqueue owner work, never enter V8 or acquire
+/// this configuration lock. Publication finishes before the setter returns,
+/// so a subsequent command cannot be enqueued ahead of its notification.
+fn publish_change(
+    _state: parking_lot::MutexGuard<'_, Environment>,
+    change: ProcessEnvironmentChange,
+) {
     for owner in registered_isolate_owners() {
-        let address = owner.isolate_addr;
-        dispatch_isolate_owner_callback(owner, move || {
-            // SAFETY: the platform invokes this on the registered owner thread
-            // while its exact generation is live. Page owners enter the isolate
-            // before running foreground tasks; Worker isolates remain entered.
-            let mut isolate = unsafe {
-                v8::Isolate::from_raw_isolate_ptr(unsafe_raw_isolate_ptr_from_addr(address))
-            };
-            refresh_process_environment(&mut isolate);
-        });
+        if owner.registration.generation.is_active() {
+            (owner.registration.environment_changed)(change);
+        }
     }
-}
-
-#[derive(Clone, Copy)]
-struct ObservedEnvironment(u64);
-
-/// Call at isolate entry as well as on the foreground notification. The entry
-/// check prevents a command from overtaking a queued notification. No clean
-/// operation resets V8 caches; changes within a turn coalesce by generation.
-pub fn refresh_process_environment(isolate: &mut v8::Isolate) {
-    let generation = GENERATION.load(Ordering::Acquire);
-    if isolate
-        .get_slot::<ObservedEnvironment>()
-        .is_some_and(|seen| seen.0 == generation)
-    {
-        return;
-    }
-    isolate.locale_configuration_change_notification();
-    // Redetect would overwrite the emulated ICU timezone with the host zone.
-    isolate.date_time_configuration_change_notification(v8::TimeZoneDetection::Skip);
-    isolate.set_slot(ObservedEnvironment(generation));
 }
 
 #[cfg(test)]
@@ -287,55 +286,55 @@ mod tests {
     }
 
     #[test]
-    fn environment_notifications_use_exact_owner_generation_and_cancel_on_disposal() {
+    fn environment_changes_are_published_before_return_without_polling_or_redundant_work() {
         moli_v8_init::ensure_v8_initialized(crate::create_platform);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .unwrap();
         runtime.block_on(async {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, rx) = std::sync::mpsc::channel();
             let mut isolate = v8::Isolate::new(Default::default());
             let registration = crate::V8PlatformIsolateRegistration::register(
                 &mut isolate,
-                crate::V8ForegroundTaskWake::queued(move |task| {
-                    let _ = tx.send(task);
-                }),
+                crate::V8ForegroundTaskWake::queued(|_| {}),
+                move |change| tx.send(change).unwrap(),
             );
             let owner = ProcessEnvironmentOwner::default();
-            let before = isolate.get_slot::<ObservedEnvironment>().unwrap().0;
             owner.set_locale(Some("fr_FR")).unwrap();
-            let task = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-                .await
-                .expect("locale notification timed out")
-                .expect("locale update must notify the registered isolate");
-            assert_eq!(isolate.get_slot::<ObservedEnvironment>().unwrap().0, before);
-            assert!(task.run());
-            let after = isolate.get_slot::<ObservedEnvironment>().unwrap().0;
-            assert!(after > before);
-            // A clean entry and a repeated same-owner setting allocate no work.
-            refresh_process_environment(&mut isolate);
-            owner.set_locale(Some("fr_FR")).unwrap();
-            assert_eq!(GENERATION.load(Ordering::Acquire), after);
-            assert!(rx.try_recv().is_err());
-
             owner.set_timezone(Some("Europe/Paris")).unwrap();
-            let stale = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-                .await
-                .expect("timezone notification timed out")
-                .expect("timezone update must notify the isolate");
-            // A command can overtake the notification without observing old caches.
-            refresh_process_environment(&mut isolate);
+            // No runtime yield or isolate entry: publication is synchronous,
+            // ordered, and application belongs to the receiving owner.
             assert_eq!(
-                isolate.get_slot::<ObservedEnvironment>().unwrap().0,
-                GENERATION.load(Ordering::Acquire)
+                rx.try_recv().unwrap(),
+                ProcessEnvironmentChange::LocaleChanged
             );
+            assert_eq!(
+                rx.try_recv().unwrap(),
+                ProcessEnvironmentChange::TimezoneChanged
+            );
+            owner.set_locale(Some("fr_FR")).unwrap();
+            owner.set_timezone(Some("Europe/Paris")).unwrap();
+            assert!(owner.set_timezone(Some("Invalid/Zone")).is_err());
+            let peer = ProcessEnvironmentOwner::default();
+            assert!(peer.set_locale(Some("de_DE")).is_err());
+            peer.set_timezone(Some("Europe/Paris")).unwrap();
+            peer.set_timezone(None).unwrap();
+            assert!(rx.try_recv().is_err());
+            owner.release();
+            assert_eq!(
+                rx.try_recv().unwrap(),
+                ProcessEnvironmentChange::LocaleChanged
+            );
+            owner.release();
+            assert!(rx.try_recv().is_err());
             registration.unregister();
             drop(registration);
             drop(isolate);
+            owner.set_locale(Some("de_DE")).unwrap();
             assert!(
-                !stale.run(),
-                "queued notification must not touch a disposed isolate"
+                rx.try_recv().is_err(),
+                "retired owners receive no notification"
             );
         });
     }
