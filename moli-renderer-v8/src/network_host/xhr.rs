@@ -6,6 +6,7 @@ mod header_surface;
 mod instance_state;
 mod response_type;
 mod send;
+mod upload;
 
 use super::*;
 use crate::context_bootstrap::{
@@ -36,6 +37,7 @@ pub(crate) const XHR_ABORTED_SLOT: &str = "__lmXhrAborted";
 pub(crate) const XHR_ASYNC_SLOT: &str = "__lmXhrAsync";
 pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
 pub(crate) const XHR_UPLOAD_IN_PROGRESS_SLOT: &str = "__lmXhrUploadInProgress";
+const XHR_UPLOAD_LOADED_SLOT: &str = "__lmXhrUploadLoaded";
 const XHR_UPLOAD_LISTENER_SLOT: &str = "__lmXhrUploadListener";
 const XHR_PENDING_KIND_SLOT: &str = "__lmXhrPendingKind";
 const XHR_PENDING_STATUS_SLOT: &str = "__lmXhrPendingStatus";
@@ -78,8 +80,9 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
     PreparedXhrSendBody, capture_xhr_upload_listener_flag, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_complete, prepare_xhr_send_body_from_args, xhr_author_request_headers,
+    prepare_xhr_send_body_from_args, xhr_author_request_headers,
 };
+pub(crate) use self::upload::apply_xhr_upload_event;
 
 pub(crate) fn install_progress_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
