@@ -863,6 +863,9 @@ impl RuntimeOwner {
         if job.cancel_handle.is_cancelled() {
             return Err((job.response_tx, anyhow!("fetch runtime request cancelled")));
         }
+        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+            return Err((job.response_tx, error));
+        }
         let request_cookie_report = if job.request.allows_credentials_for_url(&job.current_url) {
             match cookie_access_report_for_request(
                 &self.cookie_store,
@@ -991,6 +994,9 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+            return Err((Box::new(job), None, error));
+        }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
         let request_cookie_report = if credentials_allowed {
             match cookie_access_report_for_request(
@@ -1182,6 +1188,9 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+            return Err((Box::new(job), None, error));
+        }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
         let request_cookie_report = if credentials_allowed {
             match cookie_access_report_for_request(
@@ -1516,11 +1525,11 @@ impl RuntimeOwner {
         response = response.with_network_request_extra_info(request_extra_info.clone());
 
         let next_url = match next_followed_redirect_url_from_parts(
+            &job.request,
             &response.final_url,
             response.status,
             &response.headers,
             job.redirect_count,
-            job.request.follow_redirects,
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((job.response_tx, error)),
@@ -1782,11 +1791,11 @@ impl RuntimeOwner {
         );
 
         let next_url = match next_followed_redirect_url_from_parts(
+            &job.request,
             &final_url,
             status,
             &headers,
             job.redirect_count,
-            job.request.follow_redirects,
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2165,11 +2174,11 @@ impl RuntimeOwner {
         }
 
         let next_url = match next_followed_redirect_url_from_parts(
+            &job.request,
             &final_url,
             status,
             &headers,
             job.redirect_count,
-            job.request.follow_redirects,
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2329,11 +2338,11 @@ impl RuntimeOwner {
             }
         };
         let next_url = match next_followed_redirect_url_from_parts(
+            &job.request,
             &final_url,
             cached.status,
             &cached.headers,
             job.redirect_count,
-            job.request.follow_redirects,
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),
@@ -2391,11 +2400,11 @@ impl RuntimeOwner {
             }
         };
         let next_url = match next_followed_redirect_url_from_parts(
+            &job.request,
             &final_url,
             cached.status,
             &cached.headers,
             job.redirect_count,
-            job.request.follow_redirects,
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),

@@ -141,15 +141,25 @@ pub(crate) fn next_redirect_url_from_parts(
 }
 
 pub(crate) fn next_followed_redirect_url_from_parts(
+    request: &Request,
     final_url: &Url,
     status: u16,
     headers: &[(String, String)],
     redirect_count: usize,
-    follow_redirects: bool,
 ) -> Result<Option<Url>> {
+    // HTTP fetch checks the network response before HTTP-redirect fetch. This
+    // also applies to cached redirects and manual/error redirect modes.
+    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        request
+            .validate_cors_response_for_url(final_url, headers)
+            .map_err(anyhow::Error::msg)?;
+    }
     let next_url = next_redirect_url_from_parts(final_url, status, headers, redirect_count)?;
-    if follow_redirects && let Some(next_url) = next_url.as_ref() {
+    if request.follow_redirects
+        && let Some(next_url) = next_url.as_ref()
+    {
         ensure_http_network_transport_url(next_url)?;
+        request.validate_request_mode_for_url(next_url)?;
     }
     Ok(next_url)
 }
@@ -183,14 +193,16 @@ mod tests {
             "file:///moli-policy-must-not-open".to_owned(),
         )];
 
-        let error = next_followed_redirect_url_from_parts(&current, 302, &headers, 0, true)
+        let request = Request::get_with_url(current.clone());
+        let error = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)
             .expect_err("followed file redirect must be rejected");
         assert_eq!(
             error.to_string(),
             "URL scheme \"file\" is not supported by the HTTP network transport."
         );
 
-        let manual = next_followed_redirect_url_from_parts(&current, 302, &headers, 0, false)?
+        let request = request.with_redirect_mode(crate::RequestRedirectMode::Manual);
+        let manual = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)?
             .expect("manual redirect URL should remain observable");
         assert_eq!(manual.as_str(), "file:///moli-policy-must-not-open");
         Ok(())

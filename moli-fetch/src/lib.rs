@@ -9,6 +9,7 @@ mod cancellation;
 mod client;
 mod client_hints;
 mod config;
+mod cors;
 mod dns;
 mod error;
 mod fetch_url_list;
@@ -37,6 +38,7 @@ pub use blocking::{
 pub use cancellation::FetchCancelHandle;
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
+pub use cors::validate_cors_response_for_origin;
 pub use error::{NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success};
 pub use fetch_url_list::FetchUrlList;
 pub use headers::{

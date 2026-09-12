@@ -2,7 +2,7 @@ use moli_cookie_jar::same_site_urls;
 use moli_url::{origin_ascii_serialization, same_origin};
 use url::Url;
 
-use crate::{RedirectInfo, RedirectSource};
+use crate::{RedirectInfo, RedirectSource, RequestMode};
 
 /// A borrowed view of the URLs visited by a fetch. Requests and responses use
 /// the same rules for redirect taint, including synthetic redirects.
@@ -30,6 +30,22 @@ impl<'a> FetchUrlList<'a> {
     /// Returning to the initiating origin cannot restore basic response tainting.
     pub fn has_cross_origin_url(self, origin: &Url) -> bool {
         self.urls().any(|url| !same_origin(origin, url))
+    }
+
+    /// Enforces same-origin mode before dispatch, including after redirects.
+    /// Main fetch permits data URLs regardless of mode. CORS response checks
+    /// are separate: permission from a server cannot relax same-origin mode.
+    pub fn validate_request_mode(self, mode: RequestMode, origin: &Url) -> Result<(), String> {
+        if mode == RequestMode::SameOrigin
+            && self.current_url.scheme() != "data"
+            && self.has_cross_origin_url(origin)
+        {
+            return Err(format!(
+                "same-origin request mode blocked a cross-origin URL in the fetch of {}",
+                self.current_url
+            ));
+        }
+        Ok(())
     }
 
     pub fn has_cross_site_url(self, origin: &Url) -> bool {

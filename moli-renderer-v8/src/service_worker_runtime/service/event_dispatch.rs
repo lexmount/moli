@@ -298,6 +298,16 @@ impl ServiceWorkerRuntimeService {
         mut fetch_job: ServiceWorkerFetchJob,
         request: ServiceWorkerFetchRequest,
     ) -> Result<(), Box<ServiceWorkerFetchJob>> {
+        if let Err(error) =
+            moli_fetch::FetchUrlList::new(&fetch_job.request_url, &fetch_job.redirect_chain)
+                .validate_request_mode(
+                    fetch_job.request_mode,
+                    &fetch_job.network_context.document_url,
+                )
+        {
+            self.complete_fetch_with_failure(fetch_job, error);
+            return Ok(());
+        }
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
             let (document_url, storage_key) = match state.live_clients.get(&request.client_id) {

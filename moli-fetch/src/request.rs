@@ -667,6 +667,48 @@ impl Request {
         FetchUrlList::new(request_url, &self.redirect_chain)
     }
 
+    /// Checks mode restrictions before using a cache entry or starting a hop.
+    pub fn validate_request_mode_for_url(&self, request_url: &Url) -> Result<()> {
+        if self.request_mode != RequestMode::SameOrigin || request_url.scheme() == "data" {
+            return Ok(());
+        }
+        let origin = self
+            .cookie_context
+            .initiator_url
+            .as_ref()
+            .context("same-origin request mode requires an initiating origin")?;
+        self.url_list(request_url)
+            .validate_request_mode(self.request_mode, origin)
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// Checks one network response against the request's state before that
+    /// response's redirect is recorded. Synthetic responses must not use this.
+    pub fn validate_cors_response_for_url(
+        &self,
+        response_url: &Url,
+        response_headers: &[(String, String)],
+    ) -> Result<(), String> {
+        if self.request_mode != RequestMode::Cors
+            || !matches!(response_url.scheme(), "http" | "https")
+        {
+            return Ok(());
+        }
+        let Some(origin) = self.cookie_context.initiator_url.as_ref() else {
+            // Standalone HTTP clients have no browser request origin.
+            return Ok(());
+        };
+        let urls = self.url_list(response_url);
+        if !urls.has_cross_origin_url(origin) {
+            return Ok(());
+        }
+        crate::validate_cors_response_for_origin(
+            &urls.serialized_origin(origin),
+            response_headers,
+            self.credentials_mode,
+        )
+    }
+
     /// Whether the URL list has left the initiating origin. For subresource
     /// fetches, returning to that origin cannot restore basic response tainting.
     pub fn has_cross_origin_url(&self, request_url: &Url) -> bool {

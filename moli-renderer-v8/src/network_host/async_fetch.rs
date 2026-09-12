@@ -1,4 +1,3 @@
-use super::response::validate_cors_response_for_origin;
 use super::*;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, RedirectInfo,
@@ -109,7 +108,7 @@ pub(crate) fn browser_request_needs_manual_preflight_redirects(
                 | BrowserRequestMetadata::StyleModule
                 | BrowserRequestMetadata::Xhr,
         )
-    ) && request.request_mode != RequestMode::NoCors
+    ) && request.request_mode == RequestMode::Cors
         && request.cookie_context.initiator_url.is_some()
         && (!is_cors_safelisted_method(&request.method)
             || !moli_fetch::cors_unsafe_request_header_names(preflight_request_headers).is_empty())
@@ -316,17 +315,7 @@ fn validate_actual_cors_response_head(
     request: &Request,
     response: &ResponseHead,
 ) -> Result<(), String> {
-    if request.request_mode == RequestMode::NoCors
-        || !matches!(response.final_url.scheme(), "http" | "https")
-        || !request.has_cross_origin_url(&response.final_url)
-    {
-        return Ok(());
-    }
-    validate_cors_response_for_origin(
-        &request.serialized_origin(),
-        &response.headers,
-        request.credentials_mode,
-    )
+    request.validate_cors_response_for_url(&response.final_url, &response.headers)
 }
 
 fn next_redirect_url(
@@ -412,7 +401,7 @@ async fn run_cors_preflight_if_needed(
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
     if let Some(initiator_url) = request.cookie_context.initiator_url.clone()
-        && request.request_mode != RequestMode::NoCors
+        && request.request_mode == RequestMode::Cors
         && let Some(preflight_headers) = cors_preflight_request_headers(
             request.has_cross_origin_url(&request.url),
             &request.url,
@@ -424,6 +413,9 @@ async fn run_cors_preflight_if_needed(
         let mut preflight_request =
             Request::new("OPTIONS", request.url.as_str(), None, preflight_headers)
                 .map_err(|error| format!("cors preflight: failed to build request: {error}"))?
+                // Preflight performs one HTTP exchange; a redirect is a
+                // non-ok response, never another OPTIONS request.
+                .with_redirect_mode(RequestRedirectMode::Manual)
                 .with_initiator_url(&initiator_url)
                 .with_credentials_mode(RequestCredentialsMode::SameOrigin)
                 .with_redirect_chain(request.redirect_chain().to_vec())
@@ -460,12 +452,6 @@ async fn run_cors_preflight_if_needed(
                 observable_preflight_headers,
                 &preflight_response,
             );
-        }
-        if preflight_response.redirect_chain.len() > request.redirect_chain().len() {
-            return Err(format!(
-                "CORS preflight failed: preflight request redirected to {}",
-                preflight_response.final_url
-            ));
         }
         validate_cors_preflight_response(
             &request.serialized_origin(),

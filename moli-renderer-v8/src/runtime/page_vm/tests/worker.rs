@@ -1345,6 +1345,8 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
     let final_url = format!("{source_base_url}/redirect-target.js");
     let cross_url = format!("http://{cross_addr}/redirect-middle.js");
 
+    // All network responses permit CORS: rejection must still account for
+    // the cross-origin URL in the classic worker script's redirect history.
     let cross_server = tokio::spawn(async move {
         let (mut stream, _) = cross_listener
             .accept()
@@ -1360,7 +1362,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .expect("shared worker intermediate redirect request path");
         assert_eq!(request_path, "/redirect-middle.js");
         let response = format!(
-            "HTTP/1.1 302 Found\r\nLocation: {final_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 302 Found\r\nAccess-Control-Allow-Origin: http://{source_addr}\r\nAccess-Control-Allow-Credentials: true\r\nLocation: {final_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
         stream
             .write_all(response.as_bytes())
@@ -1405,7 +1407,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
         assert_eq!(request_path, "/redirect-target.js");
         let body = r#"onconnect = (event) => event.ports[0].postMessage("executed-returned-same-origin");"#;
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: null\r\nAccess-Control-Allow-Credentials: true\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );

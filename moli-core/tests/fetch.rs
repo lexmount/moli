@@ -13,6 +13,9 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use url::Url;
 
+#[path = "fetch/security.rs"]
+mod security;
+
 async fn spawn_stalled_binary_response_server() -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

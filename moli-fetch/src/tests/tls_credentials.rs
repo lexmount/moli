@@ -155,6 +155,10 @@ impl TlsServer {
                         }
                         let head = String::from_utf8(head)?;
                         let path = head.split_whitespace().nth(1).unwrap().to_owned();
+                        let cors_headers = head.lines().filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("Origin"))
+                            .map(|(_, origin)| format!("Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Credentials: true\r\n", origin.trim()))
+                            .unwrap_or_default();
                         observed.lock().push(ObservedRequest {
                             connection_id,
                             path: path.clone(),
@@ -162,12 +166,12 @@ impl TlsServer {
                         });
                         let response = match path.as_str() {
                             "/redirect-cross" => format!(
-                                "HTTP/1.1 302 Found\r\nLocation: https://localhost:{port}/redirect-back\r\nContent-Length: 0\r\n\r\n"
+                                "HTTP/1.1 302 Found\r\n{cors_headers}Location: https://localhost:{port}/redirect-back\r\nContent-Length: 0\r\n\r\n"
                             ),
                             "/redirect-back" => format!(
-                                "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:{port}/whoami\r\nContent-Length: 0\r\n\r\n"
+                                "HTTP/1.1 302 Found\r\n{cors_headers}Location: https://127.0.0.1:{port}/whoami\r\nContent-Length: 0\r\n\r\n"
                             ),
-                            _ => "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok".to_owned(),
+                            _ => format!("HTTP/1.1 200 OK\r\n{cors_headers}Content-Type: text/plain\r\nContent-Length: 2\r\n\r\nok"),
                         };
                         // HTTP/1.1 stays open for further requests, including
                         // any incorrect reuse of an authenticated connection.

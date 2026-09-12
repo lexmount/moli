@@ -1055,9 +1055,12 @@ impl ResourceRequestClient {
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
             request = request.with_browser_site_context(browser_site_context.clone());
         }
-        self.page_network_policy
+        let request = self
+            .page_network_policy
             .snapshot()
-            .apply_to_request(request)
+            .apply_to_request(request)?;
+        request.validate_request_mode_for_url(&request.url)?;
+        Ok(request)
     }
 }
 

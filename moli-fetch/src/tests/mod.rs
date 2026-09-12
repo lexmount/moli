@@ -1,6 +1,7 @@
 mod cookie_context;
 mod cookie_store;
 mod mixed_transport;
+mod request_security;
 mod support;
 mod tls_credentials;
 mod websocket_transport;

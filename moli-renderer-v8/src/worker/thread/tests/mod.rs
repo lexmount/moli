@@ -1004,6 +1004,7 @@ async fn spawn_connection_drop_http_server(path: &'static str) -> (String, JoinH
 }
 
 async fn spawn_redirect_loop_http_server(path: &'static str) -> (String, JoinHandle<()>) {
+    // Keep each hop CORS-eligible so the test reaches the redirect limit.
     const REDIRECT_LOOP_REQUESTS: usize = 11;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1019,7 +1020,7 @@ async fn spawn_redirect_loop_http_server(path: &'static str) -> (String, JoinHan
                 .await
                 .expect("read worker redirect-loop request");
             let response = format!(
-                "HTTP/1.1 302 Found\r\nLocation: {path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 302 Found\r\nAccess-Control-Allow-Origin: *\r\nLocation: {path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
             stream
                 .write_all(response.as_bytes())
