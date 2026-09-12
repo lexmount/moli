@@ -6,6 +6,7 @@ mod dom;
 mod file_input;
 mod forms;
 mod misc;
+mod open_validation;
 mod query_realms;
 mod shadow_dom;
 mod streaming_failure;
