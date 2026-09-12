@@ -446,6 +446,7 @@ pub(crate) fn validate_cors_preflight_response(
     request_headers: &[(String, String)],
     response_status: u16,
     response_headers: &[(String, Vec<u8>)],
+    use_cors_preflight: bool,
 ) -> Result<(), String> {
     if !(200..300).contains(&response_status) {
         return Err(format!(
@@ -456,10 +457,13 @@ pub(crate) fn validate_cors_preflight_response(
 
     // Parse both complete lists before checking permissions, including for
     // safelisted methods and requests without unsafe header names.
-    let allow_methods =
+    let mut allow_methods =
         parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Methods")?;
     let allow_headers =
         parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Headers")?;
+    if allow_methods.is_none() && use_cors_preflight {
+        allow_methods = Some(vec![requested_method.to_owned()]);
+    }
     let wildcard_allowed = credentials_mode != RequestCredentialsMode::Include;
 
     if !moli_fetch::is_cors_safelisted_method(requested_method) {
@@ -837,6 +841,7 @@ mod tests {
                 &request_headers,
                 204,
                 &response_headers,
+                false,
             ),
             Ok(())
         );
@@ -861,6 +866,7 @@ mod tests {
                 &[("Content-Type".to_owned(), "custom/type".to_owned())],
                 200,
                 &response_headers,
+                false,
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -888,6 +894,7 @@ mod tests {
             &[("Content-Type".to_owned(), "custom/type".to_owned())],
             200,
             &response_headers,
+            false,
         )
         .expect_err("unsafelisted PUT preflight should require Access-Control-Allow-Methods");
         assert!(error.contains("no Access-Control-Allow-Methods for PUT"));
@@ -927,6 +934,7 @@ mod tests {
             &request_headers,
             204,
             &response_headers,
+            false,
         )
     }
 
