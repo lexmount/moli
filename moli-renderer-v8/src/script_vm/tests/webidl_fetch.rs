@@ -9217,6 +9217,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                 for opaque in [false, true] {
                     for source in ["response", "bytes", "subresource", "stream", "preload"] {
                         let request = FetchResponseRequest {
+redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                             method,
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
                         };
@@ -9296,6 +9297,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                     scope,
                     &document_url,
                     crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         method: "GET",
                         mode: moli_fetch::RequestMode::Cors,
                     },
@@ -9401,6 +9403,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                     scope,
                     &document_url,
                     crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         method: "GET",
                         mode: moli_fetch::RequestMode::Cors,
                     },
@@ -9522,6 +9525,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                 scope,
                 &document_url,
                 crate::network_host::FetchResponseRequest {
+                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                     method: "GET",
                     mode: moli_fetch::RequestMode::Cors,
                 },
@@ -9574,7 +9578,8 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                 let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                     scope,
                     &document_url,
-                    crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
+                    crate::network_host::FetchResponseRequest {
+redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
                         status_text: None,
                         final_url: final_url.clone(),

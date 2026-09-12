@@ -61,6 +61,7 @@ pub(super) fn dispatch_service_worker_fetch(
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {

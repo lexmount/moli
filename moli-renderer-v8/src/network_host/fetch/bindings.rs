@@ -313,6 +313,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
                 FetchResponseRequest {
                     method: &prepared.method,
                     mode: prepared.request_mode,
+                    redirect_mode: prepared.redirect_mode,
                 },
                 response,
             );

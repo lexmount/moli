@@ -246,6 +246,7 @@ pub(super) struct PendingWindowFetchContinuation {
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
     request_origin: moli_url::WebOrigin,
+    redirect_mode: moli_fetch::RequestRedirectMode,
 }
 
 enum PendingWindowFetchPromise {
@@ -260,6 +261,7 @@ impl PendingWindowFetchContinuation {
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         request_origin: moli_url::WebOrigin,
+        redirect_mode: moli_fetch::RequestRedirectMode,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
@@ -267,6 +269,7 @@ impl PendingWindowFetchContinuation {
             connect_policy,
             csp_report_context,
             request_origin,
+            redirect_mode,
         }
     }
 
@@ -310,6 +313,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn request_origin(&self) -> &moli_url::WebOrigin {
         &self.request_origin
+    }
+
+    pub(super) fn redirect_mode(&self) -> moli_fetch::RequestRedirectMode {
+        self.redirect_mode
     }
 }
 

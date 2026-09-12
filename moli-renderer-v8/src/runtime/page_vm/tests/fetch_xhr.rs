@@ -4795,6 +4795,51 @@ async fn window_fetch_dns_failure_rejects_and_records_network_failure() {
 }
 
 #[tokio::test]
+async fn redirect_filter_intercepted_fetch_keeps_redirect_mode_when_resumed() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..7 {
+                let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await.unwrap().unwrap();
+                let head = read_http_request_head(&mut socket).await.unwrap();
+                let path = head.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                let status = if path == "/target" { 200 } else { 302 };
+                let location = if path == "/with-location" { "Location: /target\r\n" } else { "" };
+                socket.write_all(format!("HTTP/1.1 {status} Test Response\r\n{location}Content-Type: text/plain\r\nContent-Length: 2\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nok").as_bytes()).await.unwrap();
+                requests.push(path.to_owned());
+            }
+            requests
+        });
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base}/page")).unwrap());
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+            for redirect in ["follow", "manual", "error"] {
+                for path in ["without-location", "with-location"] {
+                    page_vm.vm_mut().eval(&format!(
+                        "globalThis.__resumedRedirect = 'pending'; fetch('/{path}', {{redirect: '{redirect}'}}).then(async response => {{ __resumedRedirect = JSON.stringify([response.type, response.status, await response.text()]); }}, error => {{ __resumedRedirect = error.name; }});"
+                    ))?;
+                    let requests = page_vm.vm_mut().take_pending_subresource_fetch_infos();
+                    assert_eq!(requests.len(), 1);
+                    page_vm.continue_pending_subresource_fetch(requests[0].internal_id, None, None, None, None, false, false)?;
+                    drive_websocket_until_done(&mut page_vm, "String(__resumedRedirect !== 'pending')", "resumed fetch should settle").await?;
+                    let expected = match redirect {
+                        "error" => "TypeError".to_owned(),
+                        "manual" => serde_json::json!(["opaqueredirect", 0, ""]).to_string(),
+                        _ => serde_json::json!(["basic", if path == "with-location" { 200 } else { 302 }, "ok"]).to_string(),
+                    };
+                    assert_eq!(page_vm.vm_mut().eval("__resumedRedirect")?, expected, "{redirect}/{path}");
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }).await.unwrap();
+        assert_eq!(server.await.unwrap(), ["/without-location", "/with-location", "/target", "/without-location", "/with-location", "/without-location", "/with-location"]);
+    }).await;
+}
+
+#[tokio::test]
 async fn window_fetch_redirect_error_rejects_before_following_redirect() {
     run_page_vm_async_test(async move {
             let (base_url, server) =

@@ -310,6 +310,7 @@ fn register_pending_window_fetch_for_test(
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {
@@ -472,6 +473,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {

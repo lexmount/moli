@@ -5,13 +5,14 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use crate::types::NetworkBodySourceId;
-use moli_fetch::RequestMode;
+use moli_fetch::{RequestMode, RequestRedirectMode};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Clone, Copy)]
 pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) method: &'a str,
     pub(crate) mode: RequestMode,
+    pub(crate) redirect_mode: RequestRedirectMode,
 }
 
 fn is_redirect_status(status: u16) -> bool {
@@ -72,11 +73,11 @@ struct FetchResponseBodyDeclaration<'scope> {
 fn response_filter(
     document_url: &url::Url,
     head: &moli_fetch::ResponseHead,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
 ) -> FetchResponseFilter {
-    if is_redirect_status(head.status) {
+    if request.redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status) {
         FetchResponseFilter::OpaqueRedirect
-    } else if request_mode == RequestMode::NoCors && response_crosses_origin(document_url, head) {
+    } else if request.mode == RequestMode::NoCors && response_crosses_origin(document_url, head) {
         FetchResponseFilter::Opaque
     } else {
         FetchResponseFilter::None
@@ -195,7 +196,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
 ) -> v8::Local<'s, v8::Object> {
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(document_url, &head, request.mode));
+        .unwrap_or_else(|| response_filter(document_url, &head, request));
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
@@ -215,7 +216,7 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
     head: moli_fetch::ResponseHead,
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request.mode);
+    let filter = response_filter(document_url, &head, request);
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
@@ -270,7 +271,7 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request.mode);
+    let filter = response_filter(document_url, &head, request);
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();

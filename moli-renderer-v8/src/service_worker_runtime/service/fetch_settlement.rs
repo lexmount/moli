@@ -571,35 +571,32 @@ impl ServiceWorkerRuntimeService {
             }
         }
         if is_redirect_status(response.status)
-            && job.redirect_mode != moli_fetch::RequestRedirectMode::Manual
+            && job.redirect_mode == moli_fetch::RequestRedirectMode::Error
+        {
+            self.complete_fetch_with_network_failure(
+                job,
+                "FetchEvent.respondWith rejected a redirect Response for a request whose redirect mode is error".to_owned(),
+                crate::network_host::FAILED_ERROR_TEXT.to_owned(),
+            );
+            return;
+        }
+        if is_redirect_status(response.status)
+            && job.redirect_mode == moli_fetch::RequestRedirectMode::Follow
         {
             match service_worker_redirect_target(&job, &response) {
-                Ok(Some(next_url)) => match job.redirect_mode {
-                    moli_fetch::RequestRedirectMode::Error => {
-                        self.complete_fetch_with_network_failure(
-                            job,
-                            format!(
-                                "FetchEvent.respondWith rejected a redirect Response for a request whose redirect mode is error: {next_url}"
-                            ),
-                            crate::network_host::FAILED_ERROR_TEXT.to_owned(),
-                        );
+                Ok(Some(next_url)) => {
+                    if let Err(error) =
+                        apply_service_worker_synthetic_redirect(&mut job, response, next_url)
+                    {
+                        self.complete_fetch_with_failure(job, error);
                         return;
                     }
-                    moli_fetch::RequestRedirectMode::Manual => {}
-                    moli_fetch::RequestRedirectMode::Follow => {
-                        if let Err(error) =
-                            apply_service_worker_synthetic_redirect(&mut job, response, next_url)
-                        {
-                            self.complete_fetch_with_failure(job, error);
-                            return;
-                        }
-                        let request = fetch_request_for_job(&job);
-                        if let Err(job) = self.dispatch_controlled_fetch_job(job, request) {
-                            self.dispatch_fetch_fallback(*job);
-                        }
-                        return;
+                    let request = fetch_request_for_job(&job);
+                    if let Err(job) = self.dispatch_controlled_fetch_job(job, request) {
+                        self.dispatch_fetch_fallback(*job);
                     }
-                },
+                    return;
+                }
                 Ok(None) => {}
                 Err(error) => {
                     self.complete_fetch_with_network_failure(
@@ -629,7 +626,7 @@ impl ServiceWorkerRuntimeService {
             self.complete_fetch_with_failure(job, message);
             return;
         }
-        let response_filter = service_worker_fetch_response_filter(&response);
+        let response_filter = service_worker_fetch_response_filter(&response, job.redirect_mode);
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
             moli_fetch::ResponseHead {
                 status_text: Some(response.status_text.clone()),
@@ -907,11 +904,14 @@ fn service_worker_fetch_response_rejection(
 
 fn service_worker_fetch_response_filter(
     response: &ServiceWorkerFetchResponse,
+    redirect_mode: moli_fetch::RequestRedirectMode,
 ) -> Option<AsyncSubresourceFetchResponseFilter> {
     match response.response_type.as_str() {
         "opaque" => Some(AsyncSubresourceFetchResponseFilter::Opaque),
         "opaqueredirect" => Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
-        _ if is_redirect_status(response.status) => {
+        _ if redirect_mode == moli_fetch::RequestRedirectMode::Manual
+            && is_redirect_status(response.status) =>
+        {
             Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
         }
         _ => None,
@@ -1504,6 +1504,71 @@ mod tests {
     }
 
     #[test]
+    fn redirect_filter_service_worker_responses_without_location_preserve_request_mode() {
+        use moli_fetch::RequestRedirectMode::{Error, Follow, Manual};
+        for status in [301, 302, 303, 307, 308] {
+            for mode in [Follow, Manual, Error] {
+                let service = new_service_worker_runtime_service();
+                let event_id = ServiceWorkerEventId(1);
+                let version_id = ServiceWorkerVersionId(1);
+                let run = RendererServiceWorkerRunIdentity::fresh();
+                let mut completion_queue =
+                    crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+                let request_url = insert_active_fetch_job_with_redirect_mode(
+                    &service,
+                    event_id,
+                    version_id,
+                    &run,
+                    1,
+                    completion_queue.sender(),
+                    mode,
+                );
+                let headers = vec![("X-Visible".to_owned(), "present".to_owned())];
+                service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+                    event_id,
+                    owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                        version_id, run,
+                    ),
+                    result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        final_url: None,
+                        response_type: "default".to_owned(),
+                        redirected: false,
+                        status,
+                        status_text: "No Location".to_owned(),
+                        headers: headers.clone(),
+                        body: b"redirect body".to_vec(),
+                    }),
+                });
+                let completion = pop_async_subresource_completion(&mut completion_queue);
+                if mode == Error {
+                    assert!(
+                        completion
+                            .result
+                            .unwrap_err()
+                            .contains("redirect mode is error")
+                    );
+                    assert_eq!(
+                        completion.network_error_text.as_deref(),
+                        Some(crate::network_host::FAILED_ERROR_TEXT)
+                    );
+                } else {
+                    assert_eq!(
+                        completion.response_filter,
+                        (mode == Manual)
+                            .then_some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+                    );
+                    let response = completion.result.unwrap();
+                    assert_eq!(response.status, status);
+                    assert_eq!(response.final_url, request_url);
+                    assert_eq!(response.headers, headers);
+                    assert_eq!(response.body_text(), "redirect body");
+                    assert!(!response.redirected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn response_completion_projects_opaque_response_filter_to_subresource_queue() {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(35);
@@ -1724,7 +1789,7 @@ mod tests {
         assert_eq!(
             completion.result.err().as_deref(),
             Some(
-                "FetchEvent.respondWith rejected a redirect Response for a request whose redirect mode is error: https://example.test/redirected.txt"
+                "FetchEvent.respondWith rejected a redirect Response for a request whose redirect mode is error"
             )
         );
         assert_eq!(
