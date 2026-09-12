@@ -11,6 +11,7 @@ mod file_input;
 mod forms;
 mod misc;
 mod null_body;
+mod opaque_response;
 mod open_validation;
 mod query_realms;
 mod redirect_filter;

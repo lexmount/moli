@@ -1771,6 +1771,8 @@ fn cache_entry_matches_query(
         return false;
     }
     query.ignore_vary
+        // Opaque public headers are empty even though Cache retains the internal head.
+        || matches!(entry.response.response_type.as_str(), "opaque" | "opaqueredirect")
         || cached_response_vary_matches_request(
             &entry.response.headers,
             &entry.request.headers,
