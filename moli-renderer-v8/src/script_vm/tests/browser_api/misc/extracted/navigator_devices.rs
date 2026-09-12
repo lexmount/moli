@@ -471,6 +471,19 @@ fn navigator_media_capabilities_rejects_insecure_encrypted_queries_as_promises()
     );
 }
 #[test]
+fn navigator_media_capabilities_matches_the_software_chromium_profile() {
+    let mut vm = new_storage_test_vm("https://media-capabilities-profile.test/");
+    vm.eval(&format!("globalThis.__profile = 'pending'; ({}).then(value => {{ globalThis.__profile = value; }}, error => {{ globalThis.__profile = String(error); }});",
+        include_str!("../../../../../../tests/fixtures/media-capabilities.js")))
+        .expect("capability profile should evaluate");
+    assert_eq!(
+        vm.eval("globalThis.__profile")
+            .expect("profile queries should settle"),
+        "[3,3,3,0,3,3,3,3]"
+    );
+}
+
+#[test]
 fn navigator_media_capabilities_resolves_normalized_headless_results() {
     let mut vm = new_storage_test_vm("https://secure-media-capabilities.test/");
 
@@ -524,6 +537,6 @@ fn navigator_media_capabilities_resolves_normalized_headless_results() {
     assert_eq!(
         vm.eval("String(globalThis.__mediaCapabilitiesResults)")
             .expect("MediaCapabilities results should settle"),
-        r#"{"decoding":["boolean",false,false,null,false,"file",24],"encoding":["boolean",false,false,false,"record","audio/webm; codecs=\"opus\""]}"#
+        r#"{"decoding":["boolean",true,false,null,false,"file",24],"encoding":["boolean",false,false,false,"record","audio/webm; codecs=\"opus\""]}"#
     );
 }

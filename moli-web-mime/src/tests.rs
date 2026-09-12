@@ -295,7 +295,10 @@ fn matches_script_and_form_content_types() {
         media_mime_support("Video/MP4; codecs=\"avc1.42E01E\""),
         MediaMimeSupport::Probably
     );
-    assert_eq!(media_mime_support("audio/flac").as_can_play_type(), "maybe");
+    assert_eq!(
+        media_mime_support("audio/flac").as_can_play_type(),
+        "probably"
+    );
     assert_eq!(
         media_mime_support("application/octet-stream"),
         MediaMimeSupport::Unsupported
@@ -333,6 +336,86 @@ fn matches_script_and_form_content_types() {
     assert!(!is_media_source_type_supported(
         "notvideo/mp4; codecs=\"avc1.42E01E\""
     ));
+}
+
+#[test]
+fn media_compatibility_profile_checks_codecs_containers_and_track_kinds() {
+    let cases = [
+        ("video/mp4; codecs=av01.0.08M.08", MediaTrackKind::Video),
+        ("video/webm; codecs=vp8", MediaTrackKind::Video),
+        ("video/webm; codecs=vp09.00.10.08", MediaTrackKind::Video),
+        (
+            "video/webm; codecs=vp09.02.10.10.01.09.16.09.01",
+            MediaTrackKind::Video,
+        ),
+        (
+            "video/mp4; codecs=av01.0.08M.10.0.110.01.01.01.0",
+            MediaTrackKind::Video,
+        ),
+        ("video/mp4; codecs=avc1.640033", MediaTrackKind::Video),
+        ("audio/mp4; codecs=mp4a.40.5", MediaTrackKind::Audio),
+        ("audio/ogg; codecs=opus", MediaTrackKind::Audio),
+        ("audio/flac", MediaTrackKind::Audio),
+        ("audio/wav; codecs=1", MediaTrackKind::Audio),
+    ];
+    for (mime, kind) in cases {
+        assert_eq!(
+            media_mime_support(mime),
+            MediaMimeSupport::Probably,
+            "{mime}"
+        );
+        assert!(is_media_decoding_type_supported(mime, kind), "{mime}");
+        let other = if kind == MediaTrackKind::Audio {
+            MediaTrackKind::Video
+        } else {
+            MediaTrackKind::Audio
+        };
+        assert!(!is_media_decoding_type_supported(mime, other), "{mime}");
+    }
+    for mime in [
+        "video/mp4; codecs=hvc1.1.6.L93.B0",
+        "video/webm; codecs=avc1.640028",
+        "video/mp4; codecs=avc1.nothex",
+        "video/mp4; codecs=avc1.ffffff",
+        "video/webm; codecs=not-a-codec",
+        "video/webm; codecs=vp09.00.10.12",
+        "video/webm; codecs=vp09.00.99.08",
+        "video/mp4; codecs=av01.0.00H.08",
+        "video/mp4; codecs=av01.0.08M.12",
+        "video/mp4; codecs=av01.0.08M.08.garbage",
+        "audio/mp4; codecs=mp4a.40.999",
+        "audio/mp4; codecs=unknown",
+        "video/mp4; codecs=\"\"",
+        "video/mp4; codecs=\"avc1.640028,unknown\"",
+    ] {
+        assert_eq!(
+            media_mime_support(mime),
+            MediaMimeSupport::Unsupported,
+            "{mime}"
+        );
+        assert!(!is_media_source_type_supported(mime), "{mime}");
+    }
+    for mime in ["video/mp4", "video/webm", "audio/mp4", "audio/ogg"] {
+        assert_eq!(media_mime_support(mime), MediaMimeSupport::Maybe, "{mime}");
+        assert!(!is_media_source_type_supported(mime), "{mime}");
+        assert!(
+            !is_media_decoding_type_supported(mime, MediaTrackKind::Video),
+            "{mime}"
+        );
+    }
+    let mixed = "video/mp4; codecs=\"avc1.640028,mp4a.40.2\"";
+    assert!(is_media_source_type_supported(mixed));
+    assert!(!is_media_decoding_type_supported(
+        mixed,
+        MediaTrackKind::Video
+    ));
+    assert!(is_media_source_type_supported(
+        "audio/mp4; codecs=mp4a.40.5"
+    ));
+    assert!(is_media_source_type_supported("video/webm; codecs=vp8"));
+    assert!(is_media_source_type_supported("audio/mpeg"));
+    assert!(!is_media_source_type_supported("audio/flac"));
+    assert!(!is_media_source_type_supported("audio/ogg; codecs=opus"));
 }
 
 #[test]

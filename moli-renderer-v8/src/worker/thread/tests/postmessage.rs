@@ -2153,6 +2153,23 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
 }
 
 #[tokio::test]
+async fn worker_media_capabilities_matches_the_software_chromium_profile() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(value => {{ postMessage(JSON.parse(value)); close(); }}, error => {{ postMessage(String(error)); close(); }});",
+            include_str!("../../../../tests/fixtures/media-capabilities.js")
+        ),
+        "test://worker_media_capabilities_profile".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), "[3,3,3,0,3,3,3,3]");
+}
+
+#[tokio::test]
 async fn worker_webgl_queries_match_the_window_contract() {
     ensure_v8();
     let mut handle = spawn_worker(

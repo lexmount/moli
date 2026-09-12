@@ -360,11 +360,26 @@ fn media_capabilities_decoding_info_callback<'s>(
         return;
     };
     let supported =
-        configuration_supported(configuration.audio.as_ref(), configuration.video.as_ref());
+        configuration_supported(configuration.audio.as_ref(), configuration.video.as_ref())
+            && match configuration.decoding_type {
+                MediaDecodingType::File => true,
+                MediaDecodingType::MediaSource => {
+                    configuration.audio.as_ref().is_none_or(|audio| {
+                        moli_web_mime::is_media_source_type_supported(&audio.content_type)
+                    }) && configuration.video.as_ref().is_none_or(|video| {
+                        moli_web_mime::is_media_source_type_supported(&video.content_type)
+                    })
+                }
+                // RTP codec negotiation is separate from the file/container profile.
+                MediaDecodingType::Webrtc => false,
+            };
+    // Compatibility prediction, not a measurement of a native video decoder.
+    // Match Chromium's software profile: supported video defaults to smooth,
+    // without hardware efficiency; clear audio-only defaults to both.
     let Ok(info) = MediaCapabilitiesDecodingInfoDeclaration::new(
         supported,
-        false,
-        false,
+        supported,
+        supported && configuration.video.is_none(),
         v8::null(scope).into(),
         configuration_object,
     )
@@ -724,54 +739,19 @@ fn valid_media_content_type(content_type: &str, prefix: &str, is_webrtc: bool) -
     let Some(essence) = moli_web_mime::mime_essence(content_type) else {
         return false;
     };
-    if !essence.starts_with(prefix) {
+    if !essence.starts_with(prefix) && (is_webrtc || !essence.starts_with("application/")) {
         return false;
     }
     if is_webrtc {
         return true;
     }
     let mut parameters = parsed.params();
-    let Some((name, codecs)) = parameters.next() else {
-        return false;
+    let Some((name, _)) = parameters.next() else {
+        return true;
     };
-    if parameters.next().is_some() || !name.as_str().eq_ignore_ascii_case("codecs") {
-        return false;
-    }
-    let codecs = codecs.as_str();
-    let mut codecs = codecs
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(codec) = codecs.next() else {
-        return false;
-    };
-    if codecs.next().is_some() {
-        return false;
-    }
-    codec_matches_media_kind(codec, prefix)
-}
-
-fn codec_matches_media_kind(codec: &str, prefix: &str) -> bool {
-    let codec = codec.to_ascii_lowercase();
-    let audio = [
-        "aac", "ac-3", "ec-3", "flac", "mp3", "mp4a", "opus", "vorbis",
-    ];
-    let video = [
-        "av01", "avc1", "avc3", "hev1", "hvc1", "theora", "vp8", "vp9", "vp09",
-    ];
-    let matches = |known: &[&str]| {
-        known.iter().any(|value| {
-            codec == *value
-                || codec
-                    .strip_prefix(*value)
-                    .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('-'))
-        })
-    };
-    if prefix == "audio/" {
-        !matches(&video)
-    } else {
-        !matches(&audio)
-    }
+    // A syntactically valid but unknown, ambiguous or wrong-track codec is an
+    // unsupported configuration, not a WebIDL TypeError.
+    parameters.next().is_none() && name.as_str().eq_ignore_ascii_case("codecs")
 }
 
 fn configuration_supported(
@@ -779,11 +759,15 @@ fn configuration_supported(
     video: Option<&VideoConfiguration>,
 ) -> bool {
     audio.is_none_or(|audio| {
-        moli_web_mime::media_mime_support(&audio.content_type)
-            != moli_web_mime::MediaMimeSupport::Unsupported
+        moli_web_mime::is_media_decoding_type_supported(
+            &audio.content_type,
+            moli_web_mime::MediaTrackKind::Audio,
+        ) && audio.spatial_rendering != Some(true)
     }) && video.is_none_or(|video| {
-        moli_web_mime::media_mime_support(&video.content_type)
-            != moli_web_mime::MediaMimeSupport::Unsupported
+        moli_web_mime::is_media_decoding_type_supported(
+            &video.content_type,
+            moli_web_mime::MediaTrackKind::Video,
+        )
     })
 }
 

@@ -356,6 +356,9 @@ Its current intentional boundaries include:
   paint architecture.
 - It does not pursue pixel-for-pixel parity with Chrome or provide
   high-fidelity Canvas/WebGL/media playback.
+- Media capability queries use a Chromium-style software compatibility profile;
+  advertised support and smoothness do not imply implemented media playback or
+  hardware acceleration.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 
