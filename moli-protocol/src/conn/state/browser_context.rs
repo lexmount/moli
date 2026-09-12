@@ -1558,8 +1558,7 @@ impl BrowserContext {
         &mut self,
         timezone: Option<String>,
     ) -> Result<(), &'static str> {
-        self.environment_owner.set_timezone(timezone.as_deref())?;
-        Ok(())
+        self.environment_owner.set_timezone(timezone.as_deref())
     }
 
     #[cfg(test)]

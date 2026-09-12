@@ -6,7 +6,7 @@
 //! V8 retains responsibility for parsing, coercion, locale matching and DST.
 
 use std::sync::{
-    Arc, OnceLock,
+    OnceLock,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -31,7 +31,7 @@ fn environment() -> &'static Mutex<Environment> {
 }
 
 struct Claim {
-    owner: u64,
+    owner: EnvironmentOwnerId,
     value: String,
 }
 
@@ -42,18 +42,28 @@ struct Environment {
     timezone: Option<Claim>,
 }
 
-/// Cloneable identity for one configuration owner. Explicit release handles
-/// session/target retirement; final drop also restores defaults on failed setup.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProcessEnvironmentOwner(Arc<Owner>);
-
+/// Unique authority for one configuration owner. Moving it transfers ownership;
+/// dropping it restores the defaults it still owns. It deliberately cannot be
+/// cloned into policy snapshots or deferred work that outlives a session.
 #[derive(Debug, PartialEq, Eq)]
-struct Owner(u64);
+pub struct ProcessEnvironmentOwner {
+    id: EnvironmentOwnerId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EnvironmentOwnerId(u64);
 
 impl Default for ProcessEnvironmentOwner {
     fn default() -> Self {
         static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
-        Self(Arc::new(Owner(NEXT_OWNER.fetch_add(1, Ordering::Relaxed))))
+        let id = NEXT_OWNER
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .expect("process environment owner ID exhausted");
+        Self {
+            id: EnvironmentOwnerId(id),
+        }
     }
 }
 
@@ -64,7 +74,7 @@ impl ProcessEnvironmentOwner {
         if state
             .locale
             .as_ref()
-            .is_some_and(|claim| claim.owner != self.0.0)
+            .is_some_and(|claim| claim.owner != self.id)
         {
             return Err("Another locale override is already in effect");
         }
@@ -79,10 +89,10 @@ impl ProcessEnvironmentOwner {
             v8::icu::set_default_locale(&state.original_locale);
         }
         state.locale = locale.map(|value| Claim {
-            owner: self.0.0,
+            owner: self.id,
             value: value.to_owned(),
         });
-        changed(state);
+        publish_change(state);
         Ok(())
     }
 
@@ -97,7 +107,7 @@ impl ProcessEnvironmentOwner {
         let owns = state
             .timezone
             .as_ref()
-            .is_some_and(|claim| claim.owner == self.0.0);
+            .is_some_and(|claim| claim.owner == self.id);
         if timezone.is_none() && !owns {
             return Ok(());
         }
@@ -112,30 +122,30 @@ impl ProcessEnvironmentOwner {
             return Err("Invalid timezone id");
         }
         state.timezone = timezone.map(|value| Claim {
-            owner: self.0.0,
+            owner: self.id,
             value: value.to_owned(),
         });
-        changed(state);
+        publish_change(state);
         Ok(())
     }
 
     /// Only claims belonging to this identity, not another owner's inherited
     /// process defaults. This is also the sole source of retained policy state.
     pub fn locale(&self) -> Option<String> {
-        let state = environment().lock();
+        let state = ENVIRONMENT.get()?.lock();
         state
             .locale
             .as_ref()
-            .filter(|claim| claim.owner == self.0.0)
+            .filter(|claim| claim.owner == self.id)
             .map(|claim| claim.value.clone())
     }
 
     pub fn timezone(&self) -> Option<String> {
-        let state = environment().lock();
+        let state = ENVIRONMENT.get()?.lock();
         state
             .timezone
             .as_ref()
-            .filter(|claim| claim.owner == self.0.0)
+            .filter(|claim| claim.owner == self.id)
             .map(|claim| claim.value.clone())
     }
 
@@ -146,21 +156,23 @@ impl ProcessEnvironmentOwner {
         let state = environment.lock();
         [&state.locale, &state.timezone]
             .iter()
-            .any(|claim| claim.as_ref().is_some_and(|claim| claim.owner == self.0.0))
+            .any(|claim| claim.as_ref().is_some_and(|claim| claim.owner == self.id))
     }
 
+    /// Releases both claims without retiring this owner. Repeated release (or
+    /// a later drop) cannot clear defaults subsequently claimed by another owner.
     pub fn release(&self) {
-        release(self.0.0);
+        release(self.id);
     }
 }
 
-impl Drop for Owner {
+impl Drop for ProcessEnvironmentOwner {
     fn drop(&mut self) {
-        release(self.0);
+        self.release();
     }
 }
 
-fn release(owner: u64) {
+fn release(owner: EnvironmentOwnerId) {
     // Unused identities must not initialize ICU or capture host defaults.
     let Some(environment) = ENVIRONMENT.get() else {
         return;
@@ -186,10 +198,13 @@ fn release(owner: u64) {
         debug_assert!(restored, "the original ICU timezone must be restorable");
         state.timezone = None;
     }
-    changed(state);
+    publish_change(state);
 }
 
-fn changed(state: parking_lot::MutexGuard<'_, Environment>) {
+/// Publish only a successfully committed ICU change. Advance the generation
+/// under the configuration lock, but enqueue owner work after unlocking: an
+/// isolate refresh must never run while holding the process configuration lock.
+fn publish_change(state: parking_lot::MutexGuard<'_, Environment>) {
     GENERATION.fetch_add(1, Ordering::Release);
     drop(state);
     // Reuse the platform's exact-generation routes: no second isolate registry,
@@ -233,24 +248,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn independent_claims_and_retained_owner_clones_release_only_their_own_defaults() {
+    fn unused_owner_queries_and_drop_do_not_initialize_process_defaults() {
+        // Nextest runs each process-global environment test in its own process.
+        assert!(ENVIRONMENT.get().is_none());
+        let owner = ProcessEnvironmentOwner::default();
+        assert_eq!(owner.locale(), None);
+        assert_eq!(owner.timezone(), None);
+        assert!(!owner.has_override());
+        owner.release();
+        drop(owner);
+        assert!(ENVIRONMENT.get().is_none());
+    }
+
+    #[test]
+    fn independent_claims_and_released_owners_do_not_clear_replacements() {
         let locale = v8::icu::get_default_locale_name();
         let timezone = v8::icu::get_default_time_zone();
         let locale_owner = ProcessEnvironmentOwner::default();
-        let retained = locale_owner.clone();
         let timezone_owner = ProcessEnvironmentOwner::default();
         locale_owner.set_locale(Some("fr_FR")).unwrap();
         timezone_owner.set_timezone(Some("Europe/Paris")).unwrap();
-        drop(locale_owner);
-        assert_eq!(retained.locale().as_deref(), Some("fr_FR"));
-        retained.release();
+        let moved_owner = locale_owner;
+        assert_eq!(moved_owner.locale().as_deref(), Some("fr_FR"));
+        moved_owner.release();
         assert_eq!(v8::icu::get_default_locale_name(), locale);
         assert_eq!(v8::icu::get_default_time_zone(), "Europe/Paris");
 
         let replacement = ProcessEnvironmentOwner::default();
         replacement.set_locale(Some("de_DE")).unwrap();
-        retained.release();
-        drop(retained);
+        moved_owner.release();
+        drop(moved_owner);
         assert_eq!(replacement.locale().as_deref(), Some("de_DE"));
         drop(timezone_owner);
         assert_eq!(v8::icu::get_default_time_zone(), timezone);

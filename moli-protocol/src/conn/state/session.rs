@@ -138,8 +138,7 @@ impl PageTargetHost {
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
         self.environment_owner
-            .set_locale(locale_override.as_deref())?;
-        Ok(())
+            .set_locale(locale_override.as_deref())
     }
 
     pub(crate) fn set_base_timezone_override(
@@ -147,8 +146,7 @@ impl PageTargetHost {
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
         self.environment_owner
-            .set_timezone(timezone_override.as_deref())?;
-        Ok(())
+            .set_timezone(timezone_override.as_deref())
     }
 
     pub(crate) fn clear_devtools_network_state(

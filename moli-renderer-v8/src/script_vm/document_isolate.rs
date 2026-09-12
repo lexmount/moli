@@ -445,7 +445,7 @@ impl RendererDocumentIsolateHandle {
         let inspector_backend = inspector_backend
             .as_mut()
             .expect("document isolate Inspector backend missing before ScriptVm drop");
-        with_entered_owned_isolate_value(isolate, |isolate| op(isolate, inspector_backend))
+        with_entered_owned_isolate(isolate, |isolate| op(isolate, inspector_backend))
     }
 
     pub(super) fn with_entered_renderer_document_isolate_and_inspector_mut<T>(
@@ -469,7 +469,7 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
     ) -> T {
         let mut holder = self.inner.borrow_mut();
-        with_entered_owned_isolate_value(&mut holder.isolate, op)
+        with_entered_owned_isolate(&mut holder.isolate, op)
     }
 
     pub(super) fn with_entered_renderer_document_isolate<T>(
@@ -703,18 +703,6 @@ impl Drop for EnteredIsolateGuard {
 }
 
 fn with_entered_owned_isolate<T>(
-    isolate: &mut v8::OwnedIsolate,
-    op: impl FnOnce(&mut v8::OwnedIsolate) -> Result<T>,
-) -> Result<T> {
-    unsafe {
-        isolate.enter();
-    }
-    let _guard = EnteredIsolateGuard(isolate);
-    moli_v8_platform::refresh_process_environment(isolate);
-    op(isolate)
-}
-
-fn with_entered_owned_isolate_value<T>(
     isolate: &mut v8::OwnedIsolate,
     op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
 ) -> T {

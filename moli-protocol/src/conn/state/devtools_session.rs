@@ -58,11 +58,13 @@ pub(crate) struct DevToolsSessionState {
 /// target sessions use `Attached(session_id)`. Keeping both in one ordered map
 /// gives attachment, disposal, replay, and effective-domain aggregation one
 /// source of truth.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct DevToolsSessionRegistry {
     primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
+    // Live, non-cloneable authority stays outside DevToolsSessionState, whose
+    // snapshots may outlive attachment. Removing an entry releases its claims.
     environment_owners: BTreeMap<DevToolsSessionKey, moli_core::ProcessEnvironmentOwner>,
 }
 
@@ -150,7 +152,7 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
-        self.release_environment_owner(&key);
+        self.environment_owners.remove(&key);
         let removed = self.states.remove(&key);
         if removed.is_some() {
             self.attached_order
@@ -175,7 +177,7 @@ impl DevToolsSessionRegistry {
                     return None;
                 }
                 self.primary_session_id = None;
-                self.release_environment_owner(session_key);
+                self.environment_owners.remove(session_key);
                 Some(std::mem::take(self.primary_mut()))
             }
             DevToolsSessionKey::Attached(attached_session_id)
@@ -337,16 +339,9 @@ impl DevToolsSessionRegistry {
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
-        // Admission is process-wide and precedes publishing session policy.
-        // A rejected claim must not be replayed later during navigation.
-        let owner = self
-            .environment_owners
-            .get(session_key)
-            .cloned()
-            .unwrap_or_default();
-        owner.set_locale(locale_override.as_deref())?;
-        self.retain_environment_owner(session_key, owner);
-        Ok(())
+        self.update_environment_owner(session_key, |owner| {
+            owner.set_locale(locale_override.as_deref())
+        })
     }
 
     pub(crate) fn set_timezone_override(
@@ -354,29 +349,27 @@ impl DevToolsSessionRegistry {
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
-        let owner = self
-            .environment_owners
-            .get(session_key)
-            .cloned()
-            .unwrap_or_default();
-        owner.set_timezone(timezone_override.as_deref())?;
-        self.retain_environment_owner(session_key, owner);
-        Ok(())
+        self.update_environment_owner(session_key, |owner| {
+            owner.set_timezone(timezone_override.as_deref())
+        })
     }
 
-    fn retain_environment_owner(
+    fn update_environment_owner(
         &mut self,
         key: &DevToolsSessionKey,
-        owner: moli_core::ProcessEnvironmentOwner,
-    ) {
-        // Same-timezone non-owner success creates no retained state. There is
-        // no second copy of the claim in an Emulation snapshot or navigation.
+        update: impl FnOnce(&moli_core::ProcessEnvironmentOwner) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        let owner = self.environment_owners.entry(key.clone()).or_default();
+        let result = update(owner);
+        // Reconcile on both success and failure. An invalid update must retain
+        // an existing claim; a rejected first claim or same-timezone non-owner
+        // success must leave neither an owner entry nor a phantom session.
         if owner.has_override() {
             self.ensure_session(key);
-            self.environment_owners.insert(key.clone(), owner);
         } else {
             self.environment_owners.remove(key);
         }
+        result
     }
 
     #[cfg(test)]
@@ -400,16 +393,10 @@ impl DevToolsSessionRegistry {
     }
 
     pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
-        self.release_environment_owner(session_key);
+        self.environment_owners.remove(session_key);
         if let Some(state) = self.states.get_mut(session_key) {
             let emulation = &mut state.emulation_session_state;
             emulation.browser_identity_override = None;
-        }
-    }
-
-    fn release_environment_owner(&mut self, session_key: &DevToolsSessionKey) {
-        if let Some(owner) = self.environment_owners.remove(session_key) {
-            owner.release();
         }
     }
 
@@ -1409,6 +1396,112 @@ mod tests {
         sessions
             .set_timezone_override(&session_b, Some("America/New_York".to_owned()))
             .unwrap();
+    }
+
+    #[test]
+    fn environment_admission_does_not_retain_rejected_or_unowned_sessions() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let owner = DevToolsSessionKey::Attached("SID-owner".to_owned());
+        let peer = DevToolsSessionKey::Attached("SID-peer".to_owned());
+        assert!(
+            sessions
+                .set_locale_override(&peer, Some("fr\0FR".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .set_timezone_override(&peer, Some("Mars/Olympus".to_owned()))
+                .is_err()
+        );
+        assert!(sessions.environment_owners.is_empty());
+        assert!(sessions.session(&peer).is_none());
+
+        sessions
+            .set_locale_override(&owner, Some("fr_FR".to_owned()))
+            .unwrap();
+        sessions
+            .set_timezone_override(&owner, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        assert!(sessions.set_locale_override(&peer, None).is_err());
+        assert!(
+            sessions
+                .set_timezone_override(&peer, Some("Asia/Shanghai".to_owned()))
+                .is_err()
+        );
+        sessions
+            .set_timezone_override(&peer, Some("Europe/Paris".to_owned()))
+            .expect("same-timezone success does not grant ownership");
+        sessions.set_timezone_override(&peer, None).unwrap();
+        assert_eq!(sessions.environment_owners.len(), 1);
+        assert!(sessions.environment_owners.contains_key(&owner));
+        assert!(sessions.session(&peer).is_none());
+        assert_eq!(sessions.attached_len(), 1);
+    }
+
+    #[test]
+    fn environment_owner_survives_failed_updates_and_partial_clear() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let key = DevToolsSessionKey::Attached("SID-owner".to_owned());
+        sessions
+            .set_locale_override(&key, Some("fr_FR".to_owned()))
+            .unwrap();
+        sessions
+            .set_timezone_override(&key, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        assert!(
+            sessions
+                .set_locale_override(&key, Some("fr\0FR".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .set_timezone_override(&key, Some("Mars/Olympus".to_owned()))
+                .is_err()
+        );
+        assert_eq!(
+            sessions.effective_locale_override().as_deref(),
+            Some("fr_FR")
+        );
+        assert_eq!(
+            sessions.effective_timezone_override().as_deref(),
+            Some("Europe/Paris")
+        );
+
+        sessions.set_locale_override(&key, None).unwrap();
+        assert_eq!(sessions.effective_locale_override(), None);
+        assert_eq!(sessions.environment_owners.len(), 1);
+        assert_eq!(
+            sessions.effective_timezone_override().as_deref(),
+            Some("Europe/Paris")
+        );
+        sessions.set_timezone_override(&key, None).unwrap();
+        assert!(sessions.environment_owners.is_empty());
+        assert!(
+            sessions.session(&key).is_some(),
+            "clearing claims is not detach"
+        );
+    }
+
+    #[test]
+    fn policy_snapshots_cannot_retain_environment_authority_after_registry_drop() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.attach_primary("SID-primary".to_owned());
+        let key = DevToolsSessionKey::Primary;
+        sessions
+            .set_locale_override(&key, Some("fr_FR".to_owned()))
+            .unwrap();
+        sessions
+            .set_timezone_override(&key, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        let snapshot = sessions.primary().clone();
+        drop(sessions);
+
+        let replacement = moli_core::ProcessEnvironmentOwner::default();
+        replacement.set_locale(Some("de_DE")).unwrap();
+        replacement.set_timezone(Some("Asia/Shanghai")).unwrap();
+        drop(snapshot);
+        assert_eq!(replacement.locale().as_deref(), Some("de_DE"));
+        assert_eq!(replacement.timezone().as_deref(), Some("Asia/Shanghai"));
     }
 
     #[test]
