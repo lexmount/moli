@@ -9,6 +9,11 @@ pub(crate) use moli_webapi::fetch_response::set_response_metadata;
 use super::headers::{HeadersGuard, build_headers_object_with_state, filter_headers_for_guard};
 use super::*;
 
+/// Fetch's main-fetch body filter, given an already normalized request method.
+pub(crate) fn response_has_null_body(method: &str, status: u16) -> bool {
+    matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+}
+
 pub(crate) use self::bindings::response_constructor_callback;
 pub(super) use self::bindings::{new_error_response, new_response_with_init};
 pub(super) use self::body_methods::install_response_body_methods;
