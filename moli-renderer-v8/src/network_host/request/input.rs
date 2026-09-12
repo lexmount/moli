@@ -3,6 +3,21 @@ use super::*;
 use crate::webidl;
 
 pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, webidl::WebIdlError> {
+    normalize_request_method(method).map_err(|error| webidl::WebIdlError::custom_message(match error {
+        RequestMethodError::InvalidToken => "Request method is not a valid HTTP token",
+        RequestMethodError::Forbidden => "Request method is forbidden",
+    }))
+}
+
+#[derive(Debug)]
+pub(in crate::network_host) enum RequestMethodError {
+    InvalidToken,
+    Forbidden,
+}
+
+pub(in crate::network_host) fn normalize_request_method(
+    method: &str,
+) -> Result<String, RequestMethodError> {
     if method.is_empty()
         || !method.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
@@ -25,22 +40,11 @@ pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, web
                 )
         })
     {
-        return Err(webidl::WebIdlError::custom_message("Request method is not a valid HTTP token"));
-    }
-    normalize_request_method(method)
-}
-
-pub(in crate::network_host) fn normalize_request_method(
-    method: &str,
-) -> Result<String, webidl::WebIdlError> {
-    if method.is_empty() {
-        return Ok("GET".to_owned());
+        return Err(RequestMethodError::InvalidToken);
     }
     let normalized = method.to_ascii_uppercase();
     if matches!(normalized.as_str(), "CONNECT" | "TRACE" | "TRACK") {
-        return Err(webidl::WebIdlError::custom_message(
-            "Request method is forbidden",
-        ));
+        return Err(RequestMethodError::Forbidden);
     }
     if matches!(
         normalized.as_str(),
