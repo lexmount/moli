@@ -716,8 +716,12 @@ mod tests {
                         )
                     }));
                     assert_eq!(
-                        validate_cors_response_for_origin(&origin, &response_url, &headers, mode)
-                            .is_ok(),
+                        validate_cors_response_chain(
+                            &origin,
+                            &header_response(response_url.clone(), headers.clone()),
+                            mode
+                        )
+                        .is_ok(),
                         allowed,
                         "origin={matching}, mode={mode:?}, values={values:?}"
                     );
@@ -764,12 +768,22 @@ mod tests {
                 RequestCredentialsMode::Include,
             ] {
                 assert_eq!(
-                    validate_cors_response_for_origin(&WebOrigin::from_url(&document_url), &response_url, &headers, mode).is_ok(),
+                    validate_cors_response_chain(
+                        &document_url,
+                        &header_response(response_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
                     mode != RequestCredentialsMode::Include || values == ["true"],
                     "mode={mode:?}, values={values:?}"
                 );
                 assert!(
-                    validate_cors_response_for_origin(&WebOrigin::from_url(&document_url), &document_url, &headers, mode).is_ok(),
+                    validate_cors_response_chain(
+                        &document_url,
+                        &header_response(document_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
                     "same-origin responses do not require CORS permission"
                 );
             }

@@ -57,15 +57,13 @@ use crate::context_bootstrap::{
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::{
-    apply_xhr_upload_event,
     capture_xhr_upload_listener_flag,
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
     XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
     XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
-    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout,
-    browser_request_needs_manual_preflight_redirects,
+    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, apply_xhr_upload_event,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,

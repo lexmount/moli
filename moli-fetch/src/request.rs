@@ -766,6 +766,17 @@ impl Request {
         )
     }
 
+    /// Retains the referrer already selected for this hop. A later, more
+    /// permissive policy cannot restore an omitted referrer or its stripped path.
+    pub fn update_referrer_for_redirect(&mut self, response_url: &Url) {
+        self.referrer_url = self
+            .referrer_header_value(response_url)
+            .and_then(|value| Url::parse(&value).ok());
+        if self.referrer_url.is_none() {
+            self.infer_referrer_from_initiator = false;
+        }
+    }
+
     pub fn with_page_network_policy(mut self) -> Self {
         self.use_page_network_policy = true;
         self
@@ -888,6 +899,11 @@ impl Request {
 
     pub fn redirect_chain(&self) -> &[RedirectInfo] {
         &self.redirect_chain
+    }
+
+    /// Updates observations attached to already followed redirects.
+    pub fn redirect_chain_mut(&mut self) -> &mut [RedirectInfo] {
+        &mut self.redirect_chain
     }
 
     /// Records a followed redirect. The caller controls method and current URL
