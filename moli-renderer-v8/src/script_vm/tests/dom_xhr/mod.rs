@@ -8,6 +8,7 @@ mod forms;
 mod misc;
 mod query_realms;
 mod shadow_dom;
+mod streaming_failure;
 mod style_invalidation;
 mod upload_preflight;
 mod upload_transport;
