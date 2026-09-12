@@ -670,7 +670,6 @@ pub(crate) struct DevToolsNetworkSessionState {
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
-    // Locale and timezone are exclusive controller claims, unlike UA fields.
     pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: super::EmulatedMediaOverrides,

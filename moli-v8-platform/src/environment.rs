@@ -14,11 +14,14 @@ use parking_lot::Mutex;
 
 use super::registered_isolate_owners;
 
+mod notifications;
+pub use notifications::{ProcessEnvironmentNotifications, ProcessEnvironmentNotifier};
+
 static ENVIRONMENT: OnceLock<Mutex<Environment>> = OnceLock::new();
 
 /// A committed change to the renderer-process defaults, delivered as owner
-/// work rather than checked at every V8 entry. Delivery must enqueue the
-/// notification; only the isolate's owner may apply it, including in a nested
+/// work rather than checked at every V8 entry. Unconsumed changes are merged;
+/// only the isolate's owner may apply them, including in a nested
 /// Inspector pause loop. It carries no isolate pointer or configuration lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessEnvironmentChange {
@@ -227,17 +230,33 @@ fn release(owner: EnvironmentOwnerId) {
     );
 }
 
-/// Keep ICU updates and notification publication serialized, as in Blink's
-/// controllers. Dispatchers only enqueue owner work, never enter V8 or acquire
-/// this configuration lock. Publication finishes before the setter returns,
-/// so a subsequent command cannot be enqueued ahead of its notification.
+/// Serialize ICU updates and typed mailbox publication, not arbitrary owner
+/// callbacks. All mailboxes are marked before unlocking; only then may wakes
+/// acquire ingress locks or request V8 interrupts. Wake order need not match
+/// setter order: each mailbox accumulates invalidations of the latest ICU state.
+///
+/// Publication completes before a setter returns; a coalesced batch shares the
+/// first publisher's wake. There is no process-wide isolate ACK barrier.
+/// Owner observation boundaries consume pending work first; already-running JS
+/// may use old caches until the next notification/interrupt opportunity, as with
+/// Blink's asynchronous Worker notifications.
 fn publish_change(
-    _state: parking_lot::MutexGuard<'_, Environment>,
+    state: parking_lot::MutexGuard<'_, Environment>,
     change: ProcessEnvironmentChange,
 ) {
-    for owner in registered_isolate_owners() {
-        if owner.registration.generation.is_active() {
-            (owner.registration.environment_changed)(change);
+    let owners: Vec<_> = registered_isolate_owners()
+        .into_iter()
+        .map(|owner| {
+            let wake = owner.registration.generation.is_active()
+                && owner.registration.environment_notifications.publish(change);
+            (owner, wake)
+        })
+        .collect();
+    // Also drop retained callback captures only after releasing this mutex.
+    drop(state);
+    for (owner, wake) in owners {
+        if wake {
+            owner.registration.environment_notifications.wake();
         }
     }
 }
@@ -286,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn environment_changes_are_published_before_return_without_polling_or_redundant_work() {
+    fn environment_publication_precedes_return_and_wakes_run_outside_the_controller_lock() {
         moli_v8_init::ensure_v8_initialized(crate::create_platform);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -294,24 +313,34 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let (tx, rx) = std::sync::mpsc::channel();
+            let notifications = ProcessEnvironmentNotifications::default();
+            let wake_notifications = notifications.clone();
             let mut isolate = v8::Isolate::new(Default::default());
             let registration = crate::V8PlatformIsolateRegistration::register(
                 &mut isolate,
                 crate::V8ForegroundTaskWake::queued(|_| {}),
-                move |change| tx.send(change).unwrap(),
+                notifications.notifier(move || {
+                    assert!(
+                        environment().try_lock().is_some(),
+                        "owner wake must not hold ICU lock"
+                    );
+                    assert!(
+                        wake_notifications.has_pending(),
+                        "publication must precede wake"
+                    );
+                    tx.send(()).unwrap();
+                }),
             );
             let owner = ProcessEnvironmentOwner::default();
             owner.set_locale(Some("fr_FR")).unwrap();
             owner.set_timezone(Some("Europe/Paris")).unwrap();
-            // No runtime yield or isolate entry: publication is synchronous,
-            // ordered, and application belongs to the receiving owner.
+            // No runtime yield or isolate entry. Both changes publish before
+            // returning, but require only one owner wake and one cache reset.
+            rx.try_recv().unwrap();
+            assert!(rx.try_recv().is_err());
             assert_eq!(
-                rx.try_recv().unwrap(),
-                ProcessEnvironmentChange::LocaleChanged
-            );
-            assert_eq!(
-                rx.try_recv().unwrap(),
-                ProcessEnvironmentChange::TimezoneChanged
+                notifications.take(),
+                Some(ProcessEnvironmentChange::LocaleChanged)
             );
             owner.set_locale(Some("fr_FR")).unwrap();
             owner.set_timezone(Some("Europe/Paris")).unwrap();
@@ -321,10 +350,12 @@ mod tests {
             peer.set_timezone(Some("Europe/Paris")).unwrap();
             peer.set_timezone(None).unwrap();
             assert!(rx.try_recv().is_err());
+            assert!(!notifications.has_pending());
             owner.release();
+            rx.try_recv().unwrap();
             assert_eq!(
-                rx.try_recv().unwrap(),
-                ProcessEnvironmentChange::LocaleChanged
+                notifications.take(),
+                Some(ProcessEnvironmentChange::LocaleChanged)
             );
             owner.release();
             assert!(rx.try_recv().is_err());
@@ -332,6 +363,7 @@ mod tests {
             drop(registration);
             drop(isolate);
             owner.set_locale(Some("de_DE")).unwrap();
+            assert_eq!(notifications.take(), None);
             assert!(
                 rx.try_recv().is_err(),
                 "retired owners receive no notification"

@@ -322,7 +322,7 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
         moli_v8_platform::V8ForegroundTaskWake::queued(move |task| {
             let _ = owner_task_tx.send(task);
         }),
-        |_| {},
+        moli_v8_platform::ProcessEnvironmentNotifications::default().notifier(|| {}),
     );
     let mut ctx = context_with_page_sessions();
 
@@ -568,7 +568,7 @@ async fn cpu_trace_start_response_waits_for_existing_isolate_ack() {
         moli_v8_platform::V8ForegroundTaskWake::queued(move |task| {
             let _ = owner_task_tx.send(task);
         }),
-        |_| {},
+        moli_v8_platform::ProcessEnvironmentNotifications::default().notifier(|| {}),
     );
     let mut ctx = context_with_page_sessions();
 
@@ -635,7 +635,7 @@ async fn cpu_trace_start_reports_chromium_error_when_stopped_before_ack() {
         moli_v8_platform::V8ForegroundTaskWake::queued(move |task| {
             let _ = owner_task_tx.send(task);
         }),
-        |_| {},
+        moli_v8_platform::ProcessEnvironmentNotifications::default().notifier(|| {}),
     );
     let mut ctx = context_with_page_sessions();
 

@@ -10,6 +10,7 @@ use std::{
 };
 
 use moli_protocol_cdp::CdpInspectorTaskMode;
+use moli_v8_platform::{ProcessEnvironmentNotifications, ProcessEnvironmentNotifier};
 use parking_lot::{Condvar, Mutex};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
@@ -129,6 +130,10 @@ struct WorkerInspectorTaskRunnerState {
 
 struct WorkerInspectorTaskRunnerShared {
     state: Mutex<WorkerInspectorTaskRunnerState>,
+    environment_notifications: ProcessEnvironmentNotifications,
+    // Interrupt/pause consumption must not clear this bit: a fallback owner
+    // message can still be in the channel while JS processes many interrupts.
+    environment_owner_wake_armed: AtomicBool,
     pause_work: Condvar,
     wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
@@ -154,6 +159,8 @@ impl WorkerInspectorTaskRunner {
             .expect("worker Inspector route ID exhausted");
         Self {
             shared: Arc::new(WorkerInspectorTaskRunnerShared {
+                environment_notifications: ProcessEnvironmentNotifications::default(),
+                environment_owner_wake_armed: AtomicBool::new(false),
                 state: Mutex::new(WorkerInspectorTaskRunnerState {
                     interrupting_tasks: VecDeque::new(),
                     dont_interrupting_tasks: VecDeque::new(),
@@ -176,16 +183,54 @@ impl WorkerInspectorTaskRunner {
         self.shared.interrupt_target.route_id
     }
 
-    /// An isolate notification shares the existing owner/interrupt/pause task
-    /// route, but has no Inspector session and invokes no page script.
-    pub(crate) fn append_environment_change(
+    /// Share owner/interrupt/pause delivery without appending a task per change.
+    /// The controller publishes the mailbox before calling this wake, unlocked.
+    pub(crate) fn environment_notifier(&self) -> ProcessEnvironmentNotifier {
+        let runner = self.clone();
+        self.shared.environment_notifications.notifier(move || {
+            runner.wake_environment();
+        })
+    }
+
+    fn wake_environment(&self) {
+        if !self.shared.environment_notifications.has_pending() {
+            return;
+        }
+        if !self
+            .shared
+            .environment_owner_wake_armed
+            .swap(true, Ordering::AcqRel)
+            && self
+                .shared
+                .wake_tx
+                .send(WorkerMessage::RunEnvironmentNotification)
+                .is_err()
+        {
+            self.dispose("Worker environment owner is unavailable");
+            return;
+        }
+        self.request_interrupt_if_needed();
+        self.shared.pause_work.notify_one();
+    }
+
+    pub(crate) fn claim_environment_for_owner(
         &self,
-        change: moli_v8_platform::ProcessEnvironmentChange,
-    ) {
-        self.append(
-            WorkerInspectorTaskMode::Interrupt,
-            WorkerInspectorTask::EnvironmentChanged(change),
-        );
+    ) -> Option<moli_v8_platform::ProcessEnvironmentChange> {
+        self.shared
+            .environment_owner_wake_armed
+            .store(false, Ordering::Release);
+        self.claim_environment_change()
+    }
+
+    fn claim_environment_task(&self) -> Option<WorkerInspectorTask> {
+        self.claim_environment_change()
+            .map(WorkerInspectorTask::EnvironmentChanged)
+    }
+
+    pub(crate) fn claim_environment_change(
+        &self,
+    ) -> Option<moli_v8_platform::ProcessEnvironmentChange> {
+        self.shared.environment_notifications.take()
     }
 
     pub(crate) fn append_protocol_message(
@@ -289,6 +334,14 @@ impl WorkerInspectorTaskRunner {
         }
     }
 
+    /// An interrupt can service the mailbox first. An ordinary command wake
+    /// must claim its command instead: using it up on environment work would
+    /// strand that command after an idle Worker consumed both wake messages.
+    pub(crate) fn claim_interrupt_task(&self) -> Option<WorkerInspectorTask> {
+        self.claim_environment_task()
+            .or_else(|| self.claim_task(WorkerInspectorTaskMode::Interrupt))
+    }
+
     pub(crate) fn interrupt_callback_started(&self) {
         self.shared.interrupt_armed.store(false, Ordering::Release);
     }
@@ -296,7 +349,10 @@ impl WorkerInspectorTaskRunner {
     pub(crate) fn request_interrupt_if_needed(&self) {
         let should_request = {
             let state = self.shared.state.lock();
-            !state.disposed && state.isolate_ready && !state.interrupting_tasks.is_empty()
+            !state.disposed
+                && state.isolate_ready
+                && (self.shared.environment_notifications.has_pending()
+                    || !state.interrupting_tasks.is_empty())
         };
         if !should_request
             || self
@@ -342,6 +398,9 @@ impl WorkerInspectorTaskRunner {
             if state.disposed || state.quit_pause_loop {
                 return None;
             }
+            if let Some(task) = self.claim_environment_task() {
+                return Some(task);
+            }
             if let Some(task) = state.interrupting_tasks.pop_front() {
                 return Some(task);
             }
@@ -375,6 +434,7 @@ impl WorkerInspectorTaskRunner {
                 return;
             }
             state.disposed = true;
+            self.shared.environment_notifications.close();
             state.isolate_ready = false;
             state.quit_pause_loop = true;
             (
@@ -575,26 +635,97 @@ mod tests {
     }
 
     #[test]
-    fn environment_notifications_share_interrupt_fifo_and_are_discarded_on_disposal() {
+    fn environment_bursts_and_interrupt_consumption_keep_the_owner_wake_bounded() {
         use moli_v8_platform::ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
 
-        let (runner, _wake_rx) = runner();
-        runner.append_environment_change(LocaleChanged);
-        let _command = append_protocol(&runner, 1, "Debugger.resume");
-        runner.append_environment_change(TimezoneChanged);
-        assert!(runner.begin_pause_loop());
-        // The nested pause uses this same interrupting FIFO. No session or
-        // ordinary Worker-loop turn is required to receive a notification.
+        let (runner, mut wake_rx) = runner();
+        let notifier = runner.environment_notifier();
+        for _ in 0..10_000 {
+            notifier.notify(TimezoneChanged);
+            notifier.notify(LocaleChanged);
+        }
         assert!(matches!(
-            runner.claim_task(WorkerInspectorTaskMode::Interrupt),
-            Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+            wake_rx.try_recv(),
+            Ok(super::WorkerMessage::RunEnvironmentNotification)
+        ));
+        assert!(wake_rx.try_recv().is_err());
+        assert!(runner.shared.state.lock().interrupting_tasks.is_empty());
+
+        // Simulate JS repeatedly accepting V8 interrupts while the ordinary
+        // owner loop has not handled the already-posted fallback wake.
+        for _ in 0..1_000 {
+            notifier.notify(LocaleChanged);
+            assert!(matches!(
+                runner.claim_interrupt_task(),
+                Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+            ));
+        }
+        assert!(wake_rx.try_recv().is_err());
+        assert!(runner.claim_environment_for_owner().is_none());
+        notifier.notify(TimezoneChanged);
+        assert!(matches!(
+            wake_rx.try_recv(),
+            Ok(super::WorkerMessage::RunEnvironmentNotification)
+        ));
+        assert!(matches!(
+            runner.claim_environment_for_owner(),
+            Some(TimezoneChanged)
+        ));
+        assert!(wake_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn pending_environment_does_not_consume_an_ordinary_command_wake() {
+        use moli_v8_platform::ProcessEnvironmentChange::LocaleChanged;
+        let (runner, mut wake_rx) = runner();
+        let _command = append_protocol(&runner, 1, "Debugger.resume");
+        runner.environment_notifier().notify(LocaleChanged);
+        assert!(matches!(
+            wake_rx.try_recv(),
+            Ok(super::WorkerMessage::RunInspectorTask(
+                WorkerInspectorTaskMode::Interrupt
+            ))
         ));
         assert!(matches!(
             runner.claim_task(WorkerInspectorTaskMode::Interrupt),
             Some(WorkerInspectorTask::DispatchProtocolMessage { .. })
         ));
+        assert!(matches!(
+            wake_rx.try_recv(),
+            Ok(super::WorkerMessage::RunEnvironmentNotification)
+        ));
+        assert_eq!(runner.claim_environment_for_owner(), Some(LocaleChanged));
+        assert!(wake_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn environment_notifications_merge_before_pause_commands_and_are_discarded_on_disposal() {
+        use moli_v8_platform::ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
+
+        let (runner, _wake_rx) = runner();
+        let notifier = runner.environment_notifier();
+        let _first = append_protocol(&runner, 1, "Debugger.pause");
+        notifier.notify(LocaleChanged);
+        let _second = append_protocol(&runner, 2, "Debugger.resume");
+        notifier.notify(TimezoneChanged);
+        assert!(runner.begin_pause_loop());
+        // The pause claims one merged invalidation ahead of queued commands,
+        // without a session or ordinary Worker-loop turn.
+        assert!(matches!(
+            runner.wait_for_pause_task(),
+            Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+        ));
+        assert!(matches!(
+            runner.wait_for_pause_task(),
+            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+                if raw_json.contains("Debugger.pause")
+        ));
+        assert!(matches!(runner.wait_for_pause_task(),
+            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+                if raw_json.contains("Debugger.resume")));
+        notifier.notify(TimezoneChanged);
         runner.dispose("worker teardown");
-        runner.append_environment_change(LocaleChanged);
+        notifier.notify(LocaleChanged);
         assert!(
             runner
                 .claim_task(WorkerInspectorTaskMode::Interrupt)

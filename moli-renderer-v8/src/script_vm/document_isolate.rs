@@ -582,11 +582,13 @@ impl RendererDocumentIsolateHolder {
         let inspector_start = timing_enabled.then(std::time::Instant::now);
         let inspector_backend = RendererInspectorIsolateBackend::new(&mut isolate);
         let inspector_elapsed = inspector_start.map(|start| start.elapsed());
-        let environment_ingress = inspector_backend.devtools_target().io_ref().clone();
         let platform_registration = V8PlatformIsolateRegistration::register(
             &mut isolate,
             foreground_wake.into_platform_wake(),
-            move |change| environment_ingress.enqueue_environment_change(change),
+            inspector_backend
+                .devtools_target()
+                .io_ref()
+                .environment_notifier(),
         );
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let isolate_bootstrap;

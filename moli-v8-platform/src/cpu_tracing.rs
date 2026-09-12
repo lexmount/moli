@@ -703,7 +703,7 @@ mod tests {
                 V8ForegroundTaskWake::queued(move |task| {
                     let _ = owner_task_tx.send(task);
                 }),
-                |_| {},
+                crate::ProcessEnvironmentNotifications::default().notifier(|| {}),
             );
 
             let session = start_v8_cpu_trace(V8CpuTraceConfiguration {

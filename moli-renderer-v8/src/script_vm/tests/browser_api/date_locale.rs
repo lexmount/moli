@@ -201,7 +201,7 @@ fn emulation_locale_fallback_preserves_native_observation_order() {
 }
 
 #[test]
-fn emulation_default_arguments_do_not_read_array_prototype() {
+fn process_environment_defaults_do_not_read_array_prototype() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-private-arguments.test/");
     environment.set_locale(Some("fr_FR")).unwrap();
@@ -231,7 +231,7 @@ fn emulation_default_arguments_do_not_read_array_prototype() {
 }
 
 #[test]
-fn emulation_timezone_boxes_primitive_options_without_losing_defaults() {
+fn process_environment_preserves_native_primitive_options_and_defaults() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-primitive-options.test/");
     environment.set_timezone(Some("Europe/Paris")).unwrap();
@@ -306,7 +306,7 @@ fn date_and_intl_native_method_descriptors_are_unchanged() {
 }
 
 #[test]
-fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
+fn process_environment_preserves_native_date_and_intl_coercion() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-intl-raw-arguments.test/");
     let probe = r#"JSON.stringify((() => {
@@ -357,18 +357,18 @@ fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
 }
 
 #[test]
-fn emulation_private_declarations_do_not_invoke_inherited_setters() {
+fn process_environment_preserves_native_options_with_inherited_setters() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://date-intl-private-declarations.test/");
+    let mut vm = new_storage_test_vm("https://date-intl-inherited-options.test/");
     environment.set_timezone(Some("Europe/Paris")).unwrap();
     let result = vm
         .eval(
             r#"JSON.stringify((() => {
-      const keys = ['get', 'timeZone', 'original', 'timezone'];
+      const keys = ['get', 'timeZone'];
       const before = keys.map(key => Object.getOwnPropertyDescriptor(Object.prototype, key));
       const sentinel = {};
-      // These setters must not participate in building the private handler,
-      // callback data or default options objects.
+      // Changing native defaults must not add observable property writes to
+      // option handling, including frozen options and inherited accessors.
       try {
         for (const key of keys) Object.defineProperty(Object.prototype, key, {
           set() { throw sentinel; }, configurable: true

@@ -137,7 +137,6 @@ pub(crate) fn dispatch_inspector_main_owner_wake(
         unsafe { isolate.enter() };
         let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
         change.notify_isolate(isolate);
-        dispatch_environment_notifications(&session_executor, isolate);
     }
     session_executor.claim_next_main_command_from_owner()
 }
@@ -146,7 +145,9 @@ fn dispatch_environment_notifications(
     session_executor: &RendererInspectorSessionExecutorLocal,
     isolate: &mut v8::Isolate,
 ) {
-    while let Some(change) = session_executor.target.io_ref().claim_environment_change() {
+    // Consume one merged batch. A publication racing application retains its
+    // own wake instead of making this callback drain an unbounded producer.
+    if let Some(change) = session_executor.target.io_ref().claim_environment_change() {
         change.notify_isolate(isolate);
     }
 }

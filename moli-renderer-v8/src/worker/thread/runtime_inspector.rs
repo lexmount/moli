@@ -12,9 +12,8 @@ use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorRe
 use crate::worker::{
     handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage},
     inspector_task_runner::{
-        WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskMode,
-        WorkerInspectorTaskRunner, register_worker_inspector_executor,
-        unregister_worker_inspector_executor,
+        WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskRunner,
+        register_worker_inspector_executor, unregister_worker_inspector_executor,
     },
 };
 use tokio::sync::mpsc;
@@ -407,10 +406,7 @@ impl WorkerInspectorExecutor {
 impl WorkerInspectorInterruptExecutor for WorkerInspectorExecutor {
     fn dispatch_interrupt(&self, isolate: v8::UnsafeRawIsolatePtr) {
         self.task_runner.interrupt_callback_started();
-        let Some(task) = self
-            .task_runner
-            .claim_task(WorkerInspectorTaskMode::Interrupt)
-        else {
+        let Some(task) = self.task_runner.claim_interrupt_task() else {
             self.task_runner.request_interrupt_if_needed();
             return;
         };
@@ -565,6 +561,14 @@ impl WorkerRuntimeInspector {
     }
 
     pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {
+        // Owner messages for the two Inspector modes use separate queues. An
+        // already-published notification must also precede DontInterrupt work
+        // if that wake is selected before the environment fallback message.
+        if !matches!(task, WorkerInspectorTask::EnvironmentChanged(_))
+            && let Some(change) = self.task_runner.claim_environment_change()
+        {
+            change.notify_isolate(isolate);
+        }
         match task {
             WorkerInspectorTask::EnvironmentChanged(change) => change.notify_isolate(isolate),
             WorkerInspectorTask::DispatchProtocolMessage {
@@ -769,6 +773,7 @@ fn worker_runtime_inspector_message_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::inspector_task_runner::WorkerInspectorTaskMode;
     use serde_json::{Value, json};
     use std::pin::pin;
 
@@ -815,11 +820,10 @@ mod tests {
         );
         let inspector =
             WorkerRuntimeInspector::new(&mut isolate, task_runner.clone(), parent_tx, false);
-        let notifications = task_runner.clone();
         let registration = moli_v8_platform::V8PlatformIsolateRegistration::register(
             &mut isolate,
             moli_v8_platform::V8ForegroundTaskWake::queued(|_| {}),
-            move |change| notifications.append_environment_change(change),
+            task_runner.environment_notifier(),
         );
         {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -831,7 +835,7 @@ mod tests {
                 "https://worker-environment.test/worker.js",
             );
         }
-        let read_defaults = |isolate: &mut v8::Isolate| {
+        let read_defaults = |isolate: &mut v8::Isolate, pump_interrupts: bool| {
             let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
             assert!(task_runner.append_protocol_message(
                 None,
@@ -850,8 +854,10 @@ mod tests {
             // Pump explicit owner notifications before the non-interrupting
             // evaluation. No global-version check or normal Worker entry is
             // involved, and a nested pause can consume these same notifications.
-            while let Some(task) = task_runner.claim_task(WorkerInspectorTaskMode::Interrupt) {
-                inspector.execute_task(isolate, task);
+            if pump_interrupts {
+                while let Some(task) = task_runner.claim_interrupt_task() {
+                    inspector.execute_task(isolate, task);
+                }
             }
             let task = task_runner
                 .claim_task(WorkerInspectorTaskMode::DontInterrupt)
@@ -862,16 +868,24 @@ mod tests {
             assert!(response.get("error").is_none(), "{response:#?}");
             response["result"]["result"]["value"].clone()
         };
-        let baseline = read_defaults(&mut isolate);
+        let baseline = read_defaults(&mut isolate, true);
         let owner = moli_v8_platform::ProcessEnvironmentOwner::default();
         owner.set_locale(Some("fr_FR")).unwrap();
         owner.set_timezone(Some("Europe/Paris")).unwrap();
         assert_eq!(
-            read_defaults(&mut isolate),
+            read_defaults(&mut isolate, true),
             json!(["fr-FR", "Europe/Paris", -60])
         );
+        owner.set_locale(Some("de_DE")).unwrap();
+        owner.set_timezone(Some("Asia/Shanghai")).unwrap();
+        // Deliberately choose the non-interrupting command ahead of the
+        // mailbox's fallback wake. It still observes both committed changes.
+        assert_eq!(
+            read_defaults(&mut isolate, false),
+            json!(["de-DE", "Asia/Shanghai", -480])
+        );
         owner.release();
-        assert_eq!(read_defaults(&mut isolate), baseline);
+        assert_eq!(read_defaults(&mut isolate, false), baseline);
         registration.unregister();
         task_runner.dispose("test complete");
     }

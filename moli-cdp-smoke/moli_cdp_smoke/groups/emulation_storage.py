@@ -206,12 +206,12 @@ async def run_locale_timezone_runtime_surface_smoke(
             assert_equal(
                 runtime.get("invalidOptions"),
                 "TypeError",
-                "Intl option validation survives default injection",
+                "process defaults preserve native Intl option validation",
             )
             assert_equal(
                 runtime.get("intlConstruction"),
                 [True, True, True, "fr-FR"],
-                "Intl constructor proxy preserves subclass newTarget",
+                "process defaults preserve native Intl subclass newTarget",
             )
             assert_equal(
                 runtime.get("intlOptionAccess"),
