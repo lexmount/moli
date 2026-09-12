@@ -115,6 +115,8 @@ pub struct RendererPreparedDocumentInspectionConfiguration {
 /// Inspector session configuration travels through its own restricted ingress.
 #[derive(Debug, Clone)]
 pub struct RendererPreparedDocumentPolicy {
+    /// Browser-owned initialization, installed before observer preloads.
+    pub page_surface_script: String,
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: Vec<(String, String)>,
     pub locale_override: Option<String>,

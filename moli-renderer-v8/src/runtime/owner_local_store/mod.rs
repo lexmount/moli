@@ -910,6 +910,20 @@ impl RendererOwnerLocalStore {
         })?;
         if let Some(policy) = policy {
             let request = &mut residence.request;
+            // Inspection can replace only its preloads before this one-shot
+            // materialization. The Browser initializer has no session or
+            // registry identity and always precedes those observer scripts.
+            request.document_start_scripts.insert(
+                0,
+                crate::DocumentStartScript {
+                    registry_key: None,
+                    devtools_session: None,
+                    source: policy.page_surface_script,
+                    world_name: None,
+                    has_bidi_channel_argument: false,
+                    bidi_channel_handoffs: Vec::new(),
+                },
+            );
             request.permission_overrides = policy.permission_overrides;
             request.extra_http_headers = policy.extra_http_headers;
             request.locale_override = policy.locale_override;

@@ -159,8 +159,9 @@ impl BrowserContext {
         destination: DocumentNavigationDestination,
         inherited: crate::browser::web_contents::InheritedDocumentPolicy,
     ) -> Result<AdmittedDocumentMaterialization, String> {
+        let foreground = self.selected_web_contents_handle() == Some(handle);
         self.web_contents_mut(handle)?
-            .start_document_materialization(navigation, page, destination, inherited)
+            .start_document_materialization(navigation, page, destination, inherited, foreground)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -190,8 +191,9 @@ impl BrowserContext {
         inherited: crate::browser::web_contents::InheritedDocumentPolicy,
         final_url: &Url,
     ) -> Result<crate::runtime::PreparedDocumentPagePolicy, String> {
+        let foreground = self.selected_web_contents_handle() == Some(handle);
         self.web_contents_mut(handle)?
-            .capture_document_policy(inherited, final_url)
+            .capture_document_policy(inherited, final_url, foreground)
     }
 
     pub fn start_navigation_load(

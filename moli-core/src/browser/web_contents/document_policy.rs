@@ -90,17 +90,16 @@ impl WebContents {
         &mut self,
         inherited: InheritedDocumentPolicy,
         final_url: &Url,
+        foreground: bool,
     ) -> Result<PreparedDocumentPagePolicy, String> {
         let (navigator_identity, extra_http_headers, network_offline) =
             self.configure_navigation_resources(&inherited)?;
-        let navigator_overrides = self
-            .page_surface(
-                false,
-                inherited.emulation.network_conditions,
-                inherited.emulation.geolocation.as_ref(),
-                inherited.emulation.device_metrics.as_ref(),
-            )
-            .navigator_overrides();
+        let surface = self.page_surface(
+            foreground,
+            inherited.emulation.network_conditions,
+            inherited.emulation.geolocation.as_ref(),
+            inherited.emulation.device_metrics.as_ref(),
+        );
         // Contexts share a renderer runtime, not a Page transport identity.
         // Never copy the resource runtime most recently registered by a peer.
         let browser_resource_runtime = self
@@ -120,6 +119,7 @@ impl WebContents {
                     .flatten()
             });
         Ok(PreparedDocumentPagePolicy {
+            page_surface_script: surface.script(),
             permission_overrides: inherited.permissions,
             extra_http_headers,
             locale_override: self.locale_override.clone().or(inherited.emulation.locale),
@@ -132,7 +132,7 @@ impl WebContents {
             cpu_throttling_rate: self.emulation_policy.cpu_throttling_rate,
             emulated_media: (&self.emulation_policy.emulated_media).into(),
             idle_override,
-            navigator_overrides,
+            navigator_overrides: surface.navigator_overrides(),
             viewport_surface: self
                 .emulation_policy
                 .emulated_device_metrics

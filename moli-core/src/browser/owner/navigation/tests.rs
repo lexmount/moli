@@ -3266,6 +3266,252 @@ async fn browser_service_navigates_queries_replaces_and_closes_without_devtools(
 }
 
 #[tokio::test]
+async fn native_document_surface_precedes_author_script_without_devtools() {
+    use crate::browser::web_contents::{EmulationPolicyChange, WindowSurfaceState};
+    let service = BrowserService::start().unwrap();
+    let (context, first) = context_with_contents(&service);
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    assert!(context.select_web_contents(first.id()));
+    let expression = "[document.hidden, document.visibilityState, document.hasFocus(), innerWidth, innerHeight].join(',')";
+    for (contents, state, focus, expected) in [
+        (
+            first,
+            WindowSurfaceState::Normal,
+            false,
+            "false,visible,true,640,360",
+        ),
+        (
+            peer,
+            WindowSurfaceState::Normal,
+            false,
+            "true,hidden,false,640,360",
+        ),
+        (
+            peer,
+            WindowSurfaceState::Normal,
+            true,
+            "false,visible,true,640,360",
+        ),
+        (
+            first,
+            WindowSurfaceState::Minimized,
+            false,
+            "true,hidden,false,640,360",
+        ),
+        (
+            peer,
+            WindowSurfaceState::Minimized,
+            true,
+            "true,hidden,true,640,360",
+        ),
+    ] {
+        context
+            .update_web_contents_window_surface(contents, Some(state), None, None, None, None)
+            .unwrap();
+        context
+            .apply_web_contents_emulation_policy_changes(
+                contents,
+                vec![
+                    EmulationPolicyChange::FocusEnabled(focus),
+                    EmulationPolicyChange::DeviceMetrics(Some(
+                        crate::browser::EmulatedDeviceMetrics {
+                            width: 640,
+                            height: 360,
+                            device_scale_factor: 2.0,
+                            screen_width: 1280,
+                            screen_height: 720,
+                        },
+                    )),
+                ],
+            )
+            .unwrap();
+        let document = navigate(
+            &context,
+            contents,
+            &format!(
+                "data:text/html,<script>globalThis.nativeSurfaceAtStart = {expression}</script>"
+            ),
+        )
+        .await;
+        for query in ["nativeSurfaceAtStart", expression] {
+            assert_eq!(
+                context
+                    .evaluate_document_expression_for_test(document, query, false)
+                    .await
+                    .unwrap()["value"],
+                expected,
+                "initial surface must precede author code: state={state:?}, focus={focus}, query={query}"
+            );
+        }
+        assert_eq!(context.selected_web_contents_handle(), Some(first));
+    }
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_initial_surface_refreshes_after_inspection_pause() {
+    use crate::browser::web_contents::{EmulationPolicyChange, InitialDocumentInspectionStage};
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let _provider = browser.register_document_decision_provider().unwrap();
+    let (context, first) = context_with_contents(&service);
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    assert!(context.select_web_contents(first.id()));
+    assert_eq!(context.selected_web_contents_handle(), Some(first));
+    let observation = context
+        .start_initial_document(
+            peer,
+            context.inherited_document_policy(Default::default(), &[], None, None),
+        )
+        .unwrap()
+        .unwrap();
+    let key = observation.key();
+    let claim = hold_initial_prepared_inspection(&browser, &context, peer, key).await;
+    let InitialDocumentInspectionStage::Prepared(endpoint) = &claim.stage else {
+        panic!("exact prepared initial Document");
+    };
+    endpoint.start_configure(moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+        document_start_scripts: vec![moli_page_types::DocumentStartScript {
+            registry_key: None, devtools_session: None, world_name: None,
+            source: "globalThis.nativeSurfaceAtStart = [document.hidden, document.visibilityState, document.hasFocus(), navigator.maxTouchPoints, innerWidth, innerHeight].join(',')".into(),
+            has_bidi_channel_argument: false, bidi_channel_handoffs: Vec::new(),
+        }],
+        ..Default::default()
+    }).await.unwrap();
+    // The real renderer reservation is still paused. These Browser changes
+    // must apply before the already-configured observer's first script runs.
+    assert!(context.select_web_contents(peer.id()));
+    context
+        .apply_web_contents_emulation_policy_changes(
+            peer,
+            vec![
+                EmulationPolicyChange::TouchEnabled(true),
+                EmulationPolicyChange::DeviceMetrics(Some(crate::browser::EmulatedDeviceMetrics {
+                    width: 640,
+                    height: 360,
+                    device_scale_factor: 2.0,
+                    screen_width: 1280,
+                    screen_height: 720,
+                })),
+            ],
+        )
+        .unwrap();
+    drop(claim);
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(5), observation.wait())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.key, key);
+    assert_eq!(
+        context
+            .evaluate_document_expression_for_test(
+                committed.snapshot.document,
+                "nativeSurfaceAtStart",
+                false
+            )
+            .await
+            .unwrap()["value"],
+        "false,visible,true,1,640,360"
+    );
+    assert!(context.document_handle(first).unwrap().is_none());
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_document_surface_refreshes_after_navigation_pause() {
+    use crate::browser::web_contents::{NavigationRequestInterception, WindowSurfaceState};
+    for prepared_stage in [false, true] {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let _provider = browser.register_document_decision_provider().unwrap();
+        let (context, contents) = context_with_contents(&service);
+        let (_, mut events) = browser.subscribe().unwrap();
+        let pending = context.navigate_document(contents, NavigationRequestInterception::new(
+            "data:text/html,<script>globalThis.nativeSurfaceAtStart = [document.hidden, document.visibilityState, document.hasFocus()].join(',')</script>".parse().unwrap(),
+            "GET".into(), None, Vec::new(), NavigationRequestLoadPolicy::BrowserInitiated,
+        )).unwrap();
+        let request = pending.request();
+        let pause = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(pause) = context.navigation_decision(contents).unwrap() {
+                    assert_eq!(pause.permit.navigation(), request.navigation);
+                    if matches!(
+                        (&pause.stage, prepared_stage),
+                        (
+                            crate::browser::NavigationDecisionStage::Response { .. },
+                            false
+                        ) | (
+                            crate::browser::NavigationDecisionStage::PreparedDocument { .. },
+                            true
+                        )
+                    ) {
+                        break pause;
+                    }
+                    assert!(
+                        context
+                            .resolve_navigation_decision(
+                                contents,
+                                pause.permit,
+                                crate::browser::NavigationDecision::Continue
+                            )
+                            .unwrap()
+                    );
+                }
+                events.recv().await.unwrap();
+            }
+        })
+        .await
+        .expect("exact response/prepared navigation pause");
+        context
+            .update_web_contents_window_surface(
+                contents,
+                Some(WindowSurfaceState::Minimized),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            context
+                .resolve_navigation_decision(
+                    contents,
+                    pause.permit,
+                    crate::browser::NavigationDecision::Continue
+                )
+                .unwrap()
+        );
+        // The remaining inspection boundary has no consumer. Neutral fallback
+        // must retain the latest Browser policy and this exact navigation.
+        drop(_provider);
+        let crate::browser::BrowserNavigationOutcome::Document(committed) =
+            pending.wait().await.unwrap()
+        else {
+            panic!("Document commit");
+        };
+        let document = committed.document;
+        while context
+            .document_lifecycle_snapshot(document)
+            .unwrap()
+            .is_none_or(|lifecycle| lifecycle.dom_content_loaded.is_none())
+        {
+            events.recv().await.unwrap();
+        }
+        assert_eq!(document.id(), request.document);
+        assert_eq!(
+            context
+                .evaluate_document_expression_for_test(document, "nativeSurfaceAtStart", false)
+                .await
+                .unwrap()["value"],
+            "true,hidden,false",
+            "prepared_stage={prepared_stage}"
+        );
+        service.shutdown();
+    }
+}
+
+#[tokio::test]
 async fn native_activation_survives_outgoing_document_retirement() {
     activation_survives_document_retirement(false).await;
 }

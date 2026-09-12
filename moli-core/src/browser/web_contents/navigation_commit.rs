@@ -287,6 +287,7 @@ impl WebContents {
         response: super::PreparedNavigationResponse,
         destination: DocumentNavigationDestination,
         inherited: InheritedDocumentPolicy,
+        foreground: bool,
     ) -> Result<AdmittedDocumentMaterialization, String> {
         let super::PreparedNavigationResponse { identity, page } = response;
         let renderer = RendererPageResidenceIdentity::from_parts(
@@ -308,7 +309,7 @@ impl WebContents {
         }
         // Reject stale/canceled work before changing this engine's resource
         // runtime. Policy and identity are frozen by the same Browser Start.
-        let policy = self.capture_document_policy(inherited, destination.url())?;
+        let policy = self.capture_document_policy(inherited, destination.url(), foreground)?;
         Ok(AdmittedDocumentMaterialization {
             identity,
             page,

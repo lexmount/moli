@@ -770,7 +770,7 @@ mod tests {
         );
         let contents = context.web_contents.get_mut(&id).unwrap();
         let policy = contents
-            .capture_document_policy(inherited, &url::Url::parse("about:blank").unwrap())
+            .capture_document_policy(inherited, &url::Url::parse("about:blank").unwrap(), false)
             .unwrap();
         assert_eq!(
             policy.extra_http_headers,

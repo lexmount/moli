@@ -349,19 +349,6 @@ impl BrowserContext {
         .script()
     }
 
-    // Navigation's legacy preload carrier is removed at Commits 12/14/20.
-    // The Browser generator never receives this descriptor or its session fields.
-    pub(in crate::conn) fn surface_preload_descriptor(source: String) -> DocumentStartScript {
-        DocumentStartScript {
-            registry_key: None,
-            devtools_session: None,
-            source,
-            world_name: None,
-            has_bidi_channel_argument: false,
-            bidi_channel_handoffs: Vec::new(),
-        }
-    }
-
     #[cfg(test)]
     pub(crate) async fn apply_cookie_manager_policy_overrides_async(
         &mut self,

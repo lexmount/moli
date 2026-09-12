@@ -2722,7 +2722,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
                 crate::DocumentStartScript {
                     registry_key: None,
                     devtools_session: None,
-                    source: r#"globalThis.__latestPreload = "ready";"#.to_owned(),
+                    source: r#"globalThis.__latestPreload = globalThis.__browserSurfaceReady ? "ready" : "missing Browser surface";"#.to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
                     bidi_channel_handoffs: Vec::new(),
@@ -2756,6 +2756,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
             }],
         });
     let policy = RendererPreparedDocumentPolicy {
+        page_surface_script: "globalThis.__browserSurfaceReady = true;".to_owned(),
         permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
             permission: serde_json::Value::String("notifications".to_owned()),
             setting: "granted".to_owned(),
