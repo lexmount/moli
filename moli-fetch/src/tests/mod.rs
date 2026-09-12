@@ -11,6 +11,7 @@ mod response_progress;
 mod response_timing;
 mod support;
 mod tls_credentials;
+mod upload;
 mod websocket_transport;
 
 use anyhow::{Context, Result};
