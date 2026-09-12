@@ -234,6 +234,7 @@ pub struct RawStreamingResponseCollector {
     current_url: Option<Url>,
     current_cookie_context: Option<NetworkCookieRequestContext>,
     status: u16,
+    follow_redirects: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
     response_bytes_received: usize,
@@ -632,6 +633,7 @@ impl RawStreamingResponseCollector {
             current_url: None,
             current_cookie_context: None,
             status: 0,
+            follow_redirects: true,
             status_text: None,
             max_response_size: None,
             response_too_large: false,
@@ -655,6 +657,10 @@ impl RawStreamingResponseCollector {
             negotiated_http_version: None,
             network_request_extra_info: None,
         }
+    }
+
+    pub fn set_follow_redirects(&mut self, follow_redirects: bool) {
+        self.follow_redirects = follow_redirects;
     }
 
     pub fn begin_request(
@@ -822,7 +828,14 @@ impl RawStreamingResponseCollector {
         }
         self.maybe_create_cache_body_writer();
         self.maybe_emit_start();
-        if response_body_ends_at_headers(self.status) && self.started {
+        let discard_redirect_body = !self.follow_redirects
+            && next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+                .ok()
+                .flatten()
+                .is_some();
+        if (response_body_ends_at_headers(self.status) || discard_redirect_body) && self.started {
+            // Manual raw redirects expose their head and an empty body. The
+            // browser redirect owner can proceed without waiting for the peer.
             self.finish_streaming_body();
             self.header_terminated = true;
             return false;
@@ -856,10 +869,11 @@ impl RawStreamingResponseCollector {
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-            .ok()
-            .flatten()
-            .is_some()
+        if self.follow_redirects
+            && next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+                .ok()
+                .flatten()
+                .is_some()
         {
             return;
         }

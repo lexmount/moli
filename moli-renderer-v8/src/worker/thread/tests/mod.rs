@@ -1004,22 +1004,22 @@ async fn spawn_connection_drop_http_server(path: &'static str) -> (String, JoinH
 }
 
 async fn spawn_redirect_loop_http_server(path: &'static str) -> (String, JoinHandle<()>) {
-    const REDIRECT_LOOP_REQUESTS: usize = 11;
+    const REDIRECT_LOOP_REQUESTS: usize = 21;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind worker redirect-loop http server");
     let addr = listener.local_addr().expect("worker redirect-loop addr");
     let server = tokio::spawn(async move {
         for _ in 0..REDIRECT_LOOP_REQUESTS {
-            let (mut stream, _) = listener
-                .accept()
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
                 .await
+                .expect("redirect loop should reach its limit without an earlier rejection")
                 .expect("accept worker redirect-loop request");
             read_http_request_head(&mut stream)
                 .await
                 .expect("read worker redirect-loop request");
             let response = format!(
-                "HTTP/1.1 302 Found\r\nLocation: {path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 302 Found\r\nLocation: {path}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );
             stream
                 .write_all(response.as_bytes())

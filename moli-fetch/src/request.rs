@@ -28,6 +28,7 @@ pub struct Request {
     pub browser_request_metadata: Option<BrowserRequestMetadata>,
     browser_navigation_kind: BrowserNavigationRequestKind,
     infer_referrer_from_initiator: bool,
+    referrer_url: Option<Url>,
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
     pub request_mode: RequestMode,
@@ -381,6 +382,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -411,6 +413,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -462,6 +465,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Cors,
@@ -603,6 +607,39 @@ impl Request {
 
     pub fn infers_referrer_from_initiator(&self) -> bool {
         self.infer_referrer_from_initiator
+    }
+
+    /// Computes the inferred Referer header without changing the initiator
+    /// used for cookie-site and request-origin decisions.
+    pub fn referrer_header_value(&self, request_url: &Url) -> Option<String> {
+        if !self.infers_referrer_from_initiator() {
+            return None;
+        }
+        let referrer_url = self
+            .referrer_url
+            .as_ref()
+            .or(self.cookie_context.initiator_url.as_ref())?;
+        let (policy, document_policy) = self
+            .subresource_request_metadata()
+            .map(|metadata| {
+                (
+                    metadata.referrer_policy.as_deref(),
+                    metadata.document_referrer_policy.as_deref(),
+                )
+            })
+            .unwrap_or((None, None));
+        crate::referrer_header_value(referrer_url, request_url, policy, document_policy)
+    }
+
+    /// Retains the referrer already selected for this hop. A later, more
+    /// permissive policy cannot restore an omitted referrer or its stripped path.
+    pub fn update_referrer_for_redirect(&mut self, response_url: &Url) {
+        self.referrer_url = self
+            .referrer_header_value(response_url)
+            .and_then(|value| Url::parse(&value).ok());
+        if self.referrer_url.is_none() {
+            self.infer_referrer_from_initiator = false;
+        }
     }
 
     pub fn with_page_network_policy(mut self) -> Self {

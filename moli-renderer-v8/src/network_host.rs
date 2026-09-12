@@ -31,7 +31,6 @@ pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
 pub(crate) use self::blob_url_entry::{CapturedBlobUrl, blob_url_entry, set_blob_url_entry};
 
 pub(crate) use self::async_fetch::{
-    browser_request_needs_manual_preflight_redirects,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,

@@ -200,13 +200,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     if let Some(auth) = auth {
                         request = request.with_auth(auth.into());
                     }
-                    if request.auth_requires_buffered_transport()
-                        || !request.follow_redirects
-                        || browser_request_needs_manual_preflight_redirects(
-                            &request,
-                            &cors_preflight_request_headers,
-                        )
-                    {
+                    if request.auth_requires_buffered_transport() || !request.follow_redirects {
                         match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
                             loader.clone(),
                             request,
@@ -539,13 +533,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             });
 
         let (result, network_request_headers) = match request {
-            Ok(request)
-                if request.auth_requires_buffered_transport()
-                    || browser_request_needs_manual_preflight_redirects(
-                        &request,
-                        &cors_preflight_request_headers,
-                    ) =>
-            {
+            Ok(request) if request.auth_requires_buffered_transport() => {
                 match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
                     loader.clone(),
                     request,

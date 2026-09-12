@@ -1299,6 +1299,7 @@ impl RuntimeOwner {
             .get_mut()
             .raw_streaming_mut()
             .expect("raw streaming request should use raw streaming collector");
+        collector.set_follow_redirects(job.request.follow_redirects);
         collector.begin_request_with_cache_plan(
             self.config.http_max_response_size(),
             job.current_url.clone(),
