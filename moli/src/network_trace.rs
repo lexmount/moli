@@ -1046,6 +1046,7 @@ mod tests {
     #[test]
     fn subresource_trace_diagnostics_classify_login_gate_and_json_error() -> anyhow::Result<()> {
         let redirect_chain = vec![NavigationRedirect {
+            source: moli_fetch::RedirectSource::Network,
             from_url: "http://example.test/api/detail".parse()?,
             to_url: "http://login.example.test/security/baxia".parse()?,
             status: 302,

@@ -204,6 +204,7 @@ impl ManualCorsRedirectState {
         }
         let redirect_status = head.status;
         self.redirect_chain.push(RedirectInfo {
+            source: moli_fetch::RedirectSource::Network,
             from_url: head.final_url,
             to_url: next_url.clone(),
             status: redirect_status,
@@ -1255,6 +1256,7 @@ mod tests {
             .with_initiator_url(&Url::parse(&format!("http://{addr}/page"))?)
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let initial_redirect_chain = vec![RedirectInfo {
+            source: moli_fetch::RedirectSource::ServiceWorker,
             from_url: source_url.clone(),
             to_url: target_url.clone(),
             status: 302,

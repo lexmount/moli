@@ -1532,6 +1532,7 @@ impl RuntimeOwner {
         {
             let redirect_has_extra_info = request_extra_info.is_some() && !response.from_cache;
             job.redirect_chain.push(RedirectInfo {
+                source: crate::RedirectSource::Network,
                 from_url: response.final_url.clone(),
                 to_url: next_url.clone(),
                 status: response.status,
@@ -1819,6 +1820,7 @@ impl RuntimeOwner {
             }
             let redirect_has_extra_info = request_extra_info.is_some();
             job.redirect_chain.push(RedirectInfo {
+                source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
                 status,
@@ -2199,6 +2201,7 @@ impl RuntimeOwner {
                 }
                 let redirect_has_extra_info = request_extra_info.is_some();
                 job.redirect_chain.push(RedirectInfo {
+                    source: crate::RedirectSource::Network,
                     from_url: final_url,
                     to_url: next_url.clone(),
                     status,
@@ -2339,6 +2342,7 @@ impl RuntimeOwner {
             && job.request.follow_redirects
         {
             job.redirect_chain.push(RedirectInfo {
+                source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
                 status: cached.status,
@@ -2400,6 +2404,7 @@ impl RuntimeOwner {
             && job.request.follow_redirects
         {
             job.redirect_chain.push(RedirectInfo {
+                source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
                 status: cached.status,
@@ -3295,6 +3300,7 @@ fn https_upgrade_redirect_info(
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) -> RedirectInfo {
     RedirectInfo {
+        source: crate::RedirectSource::Internal,
         from_url,
         headers: vec![
             ("location".to_owned(), to_url.to_string()),
@@ -3346,6 +3352,7 @@ fn critical_client_hint_restart_redirect_info(
     response_extra_info: NetworkResponseExtraInfo,
 ) -> RedirectInfo {
     RedirectInfo {
+        source: crate::RedirectSource::Internal,
         from_url: url.clone(),
         to_url: url.clone(),
         status: 307,

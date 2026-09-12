@@ -169,6 +169,7 @@ fn apply_service_worker_synthetic_redirect(
         .final_url
         .unwrap_or_else(|| job.request_url.clone());
     job.redirect_chain.push(moli_fetch::RedirectInfo {
+        source: moli_fetch::RedirectSource::ServiceWorker,
         from_url,
         to_url: next_url.clone(),
         status: response.status,
@@ -1896,6 +1897,10 @@ mod tests {
         );
         assert_eq!(redirected_job.redirect_count, 1);
         assert_eq!(redirected_job.redirect_chain.len(), 1);
+        assert_eq!(
+            redirected_job.redirect_chain[0].source,
+            moli_fetch::RedirectSource::ServiceWorker
+        );
         assert_eq!(
             redirected_job.redirect_chain[0].from_url,
             url("https://example.test/app/data.txt")

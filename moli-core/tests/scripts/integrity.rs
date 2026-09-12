@@ -153,6 +153,16 @@ fn fixture_response(path: &str, origin: &str, cross: &str) -> (&'static str, Str
                         event.respondWith(Response.redirect('{cross}/script.js'));
                     else if (path === '/sw-roundtrip.js')
                         event.respondWith(Response.redirect('{cross}/redirect-home.js'));
+                    else if (path === '/sw-cors-redirect.js')
+                        event.respondWith(Response.redirect('{origin}/cors.js'));
+                    else if (path === '/sw-cors-redirect-null.js')
+                        event.respondWith(Response.redirect('{origin}/cors-null.js'));
+                    else if (path === '/sw-cors-redirect-origin.js')
+                        event.respondWith(Response.redirect('{origin}/cors-origin.js'));
+                    else if (path === '/sw-cors-redirect-no-acao.js')
+                        event.respondWith(Response.redirect('{origin}/script.js'));
+                    else if (path === '/sw-cors-redirect-unapproved-hop.js')
+                        event.respondWith(Response.redirect('{cross}/unapproved-redirect.js'));
                 }});
             "#,
                 script = serde_json::to_string(SCRIPT).unwrap()
@@ -294,6 +304,32 @@ async fn service_worker_script_integrity_preserves_response_filter() -> Result<(
         {"name": "redirect-home", "src": "/sw-roundtrip.js", "integrity": INTEGRITY, "expected": "error"},
         {"name": "opaque-without-integrity", "src": "/sw-opaque.js", "expected": "load"},
         {"name": "opaque-empty-integrity", "src": "/sw-opaque.js", "integrity": "", "expected": "load"}
+    ]);
+    let result = page
+        .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true)
+        .await?;
+    assert_integrity_results(result, &cases);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_cross_origin_redirect_integrity_checks_network_responses() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let cross = &servers.cross_origin;
+    // These requests start cross-origin, so the worker's synthetic response
+    // must be distinguished from a cross-origin HTTP redirect without ACAO.
+    let cases = serde_json::json!([
+        {"name": "classic-cors", "src": format!("{cross}/sw-cors-redirect.js"), "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module-cors", "src": format!("{cross}/sw-cors-redirect.js"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module-null-origin", "src": format!("{cross}/sw-cors-redirect-null.js"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module-old-origin", "src": format!("{cross}/sw-cors-redirect-origin.js"), "type": "module", "integrity": INTEGRITY, "expected": "error"},
+        {"name": "module-no-acao", "src": format!("{cross}/sw-cors-redirect-no-acao.js"), "type": "module", "integrity": INTEGRITY, "expected": "error"},
+        {"name": "module-unapproved-hop", "src": format!("{cross}/sw-cors-redirect-unapproved-hop.js"), "type": "module", "integrity": INTEGRITY, "expected": "error"},
+        {"name": "classic-opaque", "src": format!("{cross}/sw-cors-redirect.js"), "integrity": INTEGRITY, "expected": "error"}
     ]);
     let result = page
         .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true)

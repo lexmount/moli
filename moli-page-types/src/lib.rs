@@ -252,6 +252,7 @@ impl DomScrollIntoViewRect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationRedirect {
+    pub source: moli_fetch::RedirectSource,
     pub from_url: Url,
     pub to_url: Url,
     pub status: u16,
@@ -269,6 +270,7 @@ pub struct NavigationRedirect {
 impl From<RedirectInfo> for NavigationRedirect {
     fn from(value: RedirectInfo) -> Self {
         Self {
+            source: value.source,
             from_url: value.from_url,
             to_url: value.to_url,
             status: value.status,
@@ -288,6 +290,7 @@ impl From<RedirectInfo> for NavigationRedirect {
 impl From<NavigationRedirect> for RedirectInfo {
     fn from(value: NavigationRedirect) -> Self {
         Self {
+            source: value.source,
             from_url: value.from_url,
             to_url: value.to_url,
             status: value.status,

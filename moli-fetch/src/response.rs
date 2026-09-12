@@ -601,8 +601,21 @@ pub struct NetworkResponseExtraInfo {
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
 }
 
+/// The producer of a redirect response, independent of cache and network
+/// observation metadata. Only network responses are subject to a CORS check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectSource {
+    /// An HTTP response, including one reused from the HTTP cache.
+    Network,
+    /// A response returned by a service worker's FetchEvent.respondWith().
+    ServiceWorker,
+    /// A browser-generated redirect such as an HTTPS upgrade or client hint retry.
+    Internal,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedirectInfo {
+    pub source: RedirectSource,
     pub from_url: Url,
     pub to_url: Url,
     pub status: u16,

@@ -41,6 +41,7 @@ mod tests {
 
     fn redirect(from_url: &Url, to_url: &Url) -> RedirectInfo {
         RedirectInfo {
+            source: moli_fetch::RedirectSource::Network,
             from_url: from_url.clone(),
             to_url: to_url.clone(),
             status: 302,

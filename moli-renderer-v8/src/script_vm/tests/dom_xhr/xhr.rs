@@ -1991,6 +1991,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             cookie_set_reports: Vec::new(),
                             redirected: true,
                             redirect_chain: vec![moli_fetch::RedirectInfo {
+                                source: moli_fetch::RedirectSource::Network,
                                 from_url: request_url.clone(),
                                 to_url: final_url.clone(),
                                 status: 301,

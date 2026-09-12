@@ -504,6 +504,7 @@ fn redirected_fetch_response(source_url: &Url, final_url: Url) -> crate::types::
     );
     response.redirected = true;
     response.redirect_chain = vec![crate::types::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: source_url.clone(),
         to_url: final_url,
         status: 302,

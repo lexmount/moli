@@ -3716,6 +3716,7 @@ mod tests {
             SubresourceResourceType::Fetch,
             Some(StoredCookieQueryReport::default()),
             vec![NavigationRedirect {
+                source: moli_fetch::RedirectSource::Network,
                 from_url: start_url.clone(),
                 to_url: final_url.clone(),
                 status: 307,

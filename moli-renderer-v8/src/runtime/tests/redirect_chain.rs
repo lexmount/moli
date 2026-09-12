@@ -32,6 +32,7 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
             .map(|location| {
                 let to_url = requested_url.join(location).unwrap();
                 let redirect = NavigationRedirect {
+                    source: moli_fetch::RedirectSource::Network,
                     from_url: from_url.clone(),
                     to_url: to_url.clone(),
                     status: 302,

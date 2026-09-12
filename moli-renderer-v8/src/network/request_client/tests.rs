@@ -1365,6 +1365,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
             cookie_set_reports: Vec::new(),
             redirected: true,
             redirect_chain: vec![RedirectInfo {
+                source: moli_fetch::RedirectSource::Network,
                 from_url: start_url,
                 to_url: final_url,
                 status: 301,

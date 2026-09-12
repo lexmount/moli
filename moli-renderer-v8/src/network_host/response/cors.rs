@@ -1,5 +1,5 @@
 use moli_cookie_jar::same_site_urls;
-use moli_fetch::{RequestCredentialsMode, RequestMode};
+use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
 use moli_url::{origin_ascii_serialization, same_origin};
 use moli_web_mime::{
     response_header_value, response_header_values, should_opaque_response_be_blocked_by_orb,
@@ -53,7 +53,9 @@ pub(crate) fn validate_cors_response(
     validate_cors_response_for_origin(&origin, response_headers, credentials_mode)
 }
 
-/// Validates an already fetched network response, including each redirect.
+/// Validates an already fetched network response and its network redirects.
+/// Service worker and browser-generated redirects still contribute to taint,
+/// but their synthetic response headers are not subject to the CORS check.
 /// Once CORS-tainted, a redirect across origins changes the request origin to
 /// null, even when the final URL returns to the initiating document's origin.
 pub(crate) fn validate_cors_response_chain(
@@ -66,7 +68,9 @@ pub(crate) fn validate_cors_response_chain(
     for redirect in &head.redirect_chain {
         cors_tainted |= !same_origin(document_url, &redirect.from_url);
         if cors_tainted {
-            validate_cors_response_for_origin(&origin, &redirect.headers, credentials_mode)?;
+            if redirect.source == RedirectSource::Network {
+                validate_cors_response_for_origin(&origin, &redirect.headers, credentials_mode)?;
+            }
             if !same_origin(&redirect.from_url, &redirect.to_url) {
                 origin = "null".to_owned();
             }
@@ -569,6 +573,47 @@ mod tests {
 
     fn url(value: &str) -> url::Url {
         url::Url::parse(value).expect("valid URL")
+    }
+
+    #[test]
+    fn cors_response_chain_checks_network_redirects_without_extra_info() {
+        for from_cache in [false, true] {
+            let mut head = moli_fetch::ResponseHead {
+                final_url: url("https://final.test/script.js"),
+                status: 200,
+                headers: vec![("Access-Control-Allow-Origin".to_owned(), "*".to_owned())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: true,
+                redirect_chain: vec![moli_fetch::RedirectInfo {
+                    source: RedirectSource::Network,
+                    from_url: url("https://redirect.test/script.js"),
+                    to_url: url("https://final.test/script.js"),
+                    status: 302,
+                    headers: Vec::new(),
+                    network_extra_info_available: false,
+                    request_extra_info: None,
+                    response_extra_info: None,
+                    redirect_has_extra_info: false,
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    from_cache,
+                    negotiated_http_version: None,
+                }],
+                from_cache: false,
+                negotiated_http_version: None,
+            };
+            let document_url = url("https://document.test/page.html");
+            validate_cors_response_chain(&document_url, &head, RequestCredentialsMode::SameOrigin)
+                .expect_err("HTTP redirects require ACAO even without network ExtraInfo");
+
+            head.redirect_chain[0].headers.push((
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://document.test".to_owned(),
+            ));
+            validate_cors_response_chain(&document_url, &head, RequestCredentialsMode::SameOrigin)
+                .expect("authorized HTTP redirect should pass");
+        }
     }
 
     #[test]

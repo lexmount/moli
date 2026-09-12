@@ -122,6 +122,7 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
     );
     let final_url = Url::parse("http://example.test/reset").unwrap();
     let redirect = RedirectInfo {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
@@ -404,6 +405,7 @@ fn live_progress_source_serializes_through_progress_emissions() {
         effective_same_site: None,
     }];
     let redirect = RedirectInfo {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
@@ -757,6 +759,7 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
     let mut events = completed_events();
     events.network_extra_info_available = true;
     events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
@@ -852,6 +855,7 @@ fn completed_body_redirect_without_transport_extra_info_keeps_flag_false() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
@@ -920,6 +924,7 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
         .with_network_observation_journal(journal);
     events.network_extra_info_available = true;
     events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Internal,
         from_url: navigation_url.clone(),
         to_url: navigation_url.clone(),
         status: 307,
@@ -996,6 +1001,7 @@ fn completed_body_uses_negotiated_protocol_for_redirect_and_final_response() {
     let mut events =
         completed_events().with_negotiated_http_version(Some(NegotiatedHttpVersion::Http2));
     events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("https://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
@@ -1073,6 +1079,7 @@ fn cached_completed_body_redirect_emits_cache_event_before_next_request() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,

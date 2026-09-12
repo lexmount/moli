@@ -287,6 +287,7 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
     );
     response.redirected = true;
     response.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Network,
         from_url: requested_url.clone(),
         to_url: final_url.clone(),
         status: 302,
