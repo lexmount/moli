@@ -294,16 +294,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let url_policy = moli_url_policy::route_xml_http_request_url(&prepared.resolved_url);
     let request_url = prepared.resolved_url.to_string();
 
-    if async_request {
-        if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
-            return true;
-        }
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
-        if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
-            || worker_xhr_open_generation_changed(scope, xhr, open_generation)
-        {
-            return true;
-        }
+    if async_request && !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
+        return true;
     }
 
     dispatch_worker_content_security_policy_report_only_violation_for_state(
@@ -383,6 +375,16 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     if !async_request {
         send_synchronous_worker_xhr(scope, &state, xhr, prepared, loader, control);
         return true;
+    }
+
+    // A locally rejected fetch has not sent its upload body.
+    if local_response.as_ref().is_none_or(Result::is_ok) {
+        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
+        if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
+            || worker_xhr_open_generation_changed(scope, xhr, open_generation)
+        {
+            return true;
+        }
     }
 
     let Some(load) = loader.register_load(

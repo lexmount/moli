@@ -21,6 +21,23 @@ const REJECTIONS: [(&str, &str, &str); 6] = [
     ("csp", "http://example.test/xhr", "Content Security Policy"),
 ];
 
+fn rejected_xhr_cases() -> impl Iterator<
+    Item = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    ),
+> {
+    REJECTIONS.into_iter().flat_map(|(case, url, error)| {
+        [
+            (case, url, error, "GET", ""),
+            (case, url, error, "POST", r#""payload""#),
+        ]
+    })
+}
+
 fn rejected_xhr_worker(case: &str, script: String) -> WorkerTestHandle {
     let policy = WorkerNetworkPolicy {
         blocked_url_patterns: if case == "blocked" {
@@ -66,7 +83,7 @@ async fn collect_rejected_xhr_output(
 #[tokio::test]
 async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
     ensure_v8();
-    for (case, url, error_text) in REJECTIONS {
+    for (case, url, error_text, method, body) in rejected_xhr_cases() {
         let script = r#"
             const events = [];
             const xhr = new XMLHttpRequest();
@@ -81,31 +98,45 @@ async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
                 postMessage({ events, readyState: xhr.readyState, status: xhr.status });
                 close();
             };
-            xhr.open("GET", URL);
-            xhr.send();
+            xhr.open(METHOD, URL);
+            xhr.send(BODY);
             events.push("returned:" + xhr.readyState);
             queueMicrotask(() => {
                 events.push("microtask");
                 xhr.onerror = () => events.push("late-error-listener");
             });
         "#
-        .replace("URL", &serde_json::to_string(url).unwrap());
+        .replace("URL", &serde_json::to_string(url).unwrap())
+            .replace("METHOD", &serde_json::to_string(method).unwrap())
+            .replace("BODY", body);
         let (result, records) =
             collect_rejected_xhr_output(rejected_xhr_worker(case, script)).await;
+        let mut events = vec!["state:1", "xhr:loadstart:0:0:false"];
+        if method == "POST" {
+            events.push("upload:loadstart:0:7:true");
+        }
+        events.extend(["returned:1", "microtask", "state:4"]);
+        if method == "POST" {
+            events.extend(["upload:error:0:0:false", "upload:loadend:0:0:false"]);
+        }
+        events.extend([
+            "xhr:error:0:0:false",
+            "late-error-listener",
+            "xhr:loadend:0:0:false",
+        ]);
         assert_eq!(
             result,
             serde_json::json!({
-                "events": [
-                    "state:1", "xhr:loadstart:0:0:false",
-                    "returned:1", "microtask", "state:4",
-                    "xhr:error:0:0:false", "late-error-listener",
-                    "xhr:loadend:0:0:false"
-                ],
+                "events": events,
                 "readyState": 4, "status": 0
             }),
-            "{case}"
+            "{method}/{case}"
         );
-        assert_eq!(records.len(), 1, "{case}: exactly one failure record");
+        assert_eq!(
+            records.len(),
+            1,
+            "{method}/{case}: exactly one failure record"
+        );
         assert_eq!(records[0].url().as_str(), url);
         assert_eq!(records[0].resource_type(), SubresourceResourceType::Xhr);
         assert!(
@@ -113,7 +144,7 @@ async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
                 records[0].outcome(),
                 SubresourceNetworkOutcome::Failure { error_text: actual } if actual.contains(error_text)
             ),
-            "{case}: {:?}",
+            "{method}/{case}: {:?}",
             records[0].outcome()
         );
     }
@@ -122,7 +153,7 @@ async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
 #[tokio::test]
 async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
     ensure_v8();
-    for (case, url, _) in REJECTIONS {
+    for (case, url, _, method, body) in rejected_xhr_cases() {
         for action in ["abort", "microtask-abort", "reopen"] {
             let script = r#"
                 const events = [];
@@ -132,8 +163,8 @@ async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
                         target.addEventListener(type, () => events.push(
                             `${target === xhr ? 'xhr' : 'upload'}:${type}`));
                 }
-                xhr.open("GET", URL);
-                xhr.send();
+                xhr.open(METHOD, URL);
+                xhr.send(BODY);
                 const returnedState = xhr.readyState;
                 function cancel() {
                     if (ACTION === "reopen") xhr.open("GET", "data:text/plain,reopened");
@@ -152,11 +183,15 @@ async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
                 barrier.send();
             "#
             .replace("URL", &serde_json::to_string(url).unwrap())
+            .replace("METHOD", &serde_json::to_string(method).unwrap())
+            .replace("BODY", body)
             .replace("ACTION", &serde_json::to_string(action).unwrap());
             let (result, records) =
                 collect_rejected_xhr_output(rejected_xhr_worker(case, script)).await;
             let events = if action == "reopen" {
                 vec![]
+            } else if method == "POST" {
+                vec!["upload:abort", "upload:loadend", "xhr:abort", "xhr:loadend"]
             } else {
                 vec!["xhr:abort", "xhr:loadend"]
             };
@@ -166,12 +201,12 @@ async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
                     "returnedState": 1, "readyState": if action == "reopen" { 1 } else { 0 },
                     "status": 0, "events": events
                 }),
-                "{case}/{action}"
+                "{method}/{case}/{action}"
             );
             assert_eq!(
                 records.len(),
                 1,
-                "{case}/{action}: only the barrier may report failure"
+                "{method}/{case}/{action}: only the barrier may report failure"
             );
         }
     }
@@ -211,7 +246,7 @@ async fn worker_xhr_early_failure_does_not_overwrite_a_new_send() {
 #[tokio::test]
 async fn worker_xhr_early_failure_still_throws_for_synchronous_requests() {
     ensure_v8();
-    for (case, url, _) in REJECTIONS {
+    for (case, url, _, method, body) in rejected_xhr_cases() {
         let script = r#"
             const xhr = new XMLHttpRequest();
             const events = [];
@@ -219,14 +254,16 @@ async fn worker_xhr_early_failure_still_throws_for_synchronous_requests() {
             for (const target of [xhr, xhr.upload])
                 for (const type of ["loadstart", "progress", "error", "abort", "load", "loadend"])
                     target.addEventListener(type, () => events.push(type));
-            xhr.open("GET", URL, false);
+            xhr.open(METHOD, URL, false);
             let exception = null;
-            try { xhr.send(); }
+            try { xhr.send(BODY); }
             catch (error) { exception = { name: error.name, domException: error instanceof DOMException }; }
             postMessage({ exception, events, readyState: xhr.readyState, status: xhr.status });
             close();
         "#
-        .replace("URL", &serde_json::to_string(url).unwrap());
+        .replace("URL", &serde_json::to_string(url).unwrap())
+            .replace("METHOD", &serde_json::to_string(method).unwrap())
+            .replace("BODY", body);
         let (result, records) =
             collect_rejected_xhr_output(rejected_xhr_worker(case, script)).await;
         assert_eq!(
@@ -235,9 +272,13 @@ async fn worker_xhr_early_failure_still_throws_for_synchronous_requests() {
                 "exception": { "name": "NetworkError", "domException": true },
                 "events": ["state:1"], "readyState": 4, "status": 0
             }),
-            "{case}"
+            "{method}/{case}"
         );
-        assert_eq!(records.len(), 1, "{case}: exactly one synchronous failure");
+        assert_eq!(
+            records.len(),
+            1,
+            "{method}/{case}: exactly one synchronous failure"
+        );
     }
 }
 

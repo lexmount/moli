@@ -1,6 +1,7 @@
 use super::super::events::{
     xhr_dispatch_progress_event, xhr_fire_readystatechange, xhr_is_aborted,
 };
+use super::super::send::{dispatch_xhr_upload_error_if_in_progress, xhr_open_generation_changed};
 use super::super::*;
 
 pub(crate) fn apply_xhr_streaming_failure(
@@ -19,12 +20,21 @@ pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     if xhr_is_aborted(scope, xhr) {
         return;
     }
+    let open_generation =
+        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     super::prepare_xhr_request_error(scope, xhr);
     xhr_fire_readystatechange(scope, xhr, XhrReadyState::Done);
-    if scope.is_execution_terminating() {
+    if scope.is_execution_terminating()
+        || xhr_is_aborted(scope, xhr)
+        || xhr_open_generation_changed(scope, xhr, open_generation)
+    {
         return;
     }
-    if xhr_is_aborted(scope, xhr) {
+    dispatch_xhr_upload_error_if_in_progress(scope, xhr, "error");
+    if scope.is_execution_terminating()
+        || xhr_is_aborted(scope, xhr)
+        || xhr_open_generation_changed(scope, xhr, open_generation)
+    {
         return;
     }
     xhr_dispatch_progress_event(scope, xhr, "error", 0.0, 0.0);
