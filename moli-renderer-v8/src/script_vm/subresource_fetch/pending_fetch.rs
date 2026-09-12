@@ -84,6 +84,14 @@ pub(super) fn request_for_pending_subresource(
     .with_redirect_headers(pending.redirect_headers.clone())
     .with_initiator_url(&pending.info.document_url)
     .with_request_mode(pending.request_mode)
+    .with_redirect_mode(
+        pending
+            .continuation
+            .window_fetch()
+            .map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+                fetch.redirect_mode()
+            }),
+    )
     .with_use_cors_preflight(pending.continuation.use_cors_preflight())
     .with_credentials_mode(pending.credentials_mode)
     .with_network_partition_key(pending.network_partition_key.clone())
