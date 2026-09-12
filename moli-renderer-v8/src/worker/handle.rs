@@ -146,6 +146,8 @@ pub(crate) enum WorkerMessage {
     },
     /// Owner-thread dispatch or fallback for one queued Inspector task.
     RunInspectorTask(WorkerInspectorTaskMode),
+    /// One coalesced fallback wake for the isolate's environment mailbox.
+    RunEnvironmentNotification,
     #[cfg(test)]
     /// Inspect worker resource-owner V8 slots from inside the worker thread.
     ResourceOwnerSlotDiagnostics {

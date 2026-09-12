@@ -56,6 +56,24 @@ async def _install_workers(page: Any) -> None:
     }""", READ_DEFAULTS)
 
 
+async def _burst_environment_updates(control: Any, peer: Any) -> None:
+    # Send a burst without interleaved observations. This is the latest-value
+    # cache invalidation contract, not a requirement to replay every ICU value.
+    updates = []
+    for index in range(24):
+        locale, timezone = ("fr_FR", "Europe/Paris") if index % 2 == 0 else (
+            "de_DE", "Asia/Shanghai"
+        )
+        updates.extend([
+            control.send("Emulation.setLocaleOverride", {"locale": locale}),
+            control.send("Emulation.setTimezoneOverride", {"timezoneId": timezone}),
+        ])
+    await asyncio.wait_for(asyncio.gather(*updates), timeout=10)
+    expected = ["de-DE", "Asia/Shanghai", -480, -480]
+    assert_equal(await peer.evaluate(READ_DEFAULTS), expected, "peer observes final burst defaults")
+    assert_equal(await _worker_defaults(peer), [expected, expected], "workers observe final burst defaults")
+
+
 async def _override_while_peer_paused(control: Any, peer: Any, baseline: list[Any]) -> None:
     # A paused isolate cannot drain its ordinary foreground notification. The
     # explicit owner notification must run before the next nested Inspector
@@ -125,6 +143,8 @@ async def run_process_environment_group(
         assert_equal(await _worker_defaults(peer), [baseline, baseline], "worker baseline")
         record(results, "process_environment_workers_before_override")
 
+        await _burst_environment_updates(control, peer)
+        record(results, "process_environment_burst_updates_reach_pages_and_workers")
         await _override_while_peer_paused(control, other, baseline)
         record(results, "process_environment_paused_change_replace_restore")
         expected = ["fr-FR", "Europe/Paris", -60, -120]

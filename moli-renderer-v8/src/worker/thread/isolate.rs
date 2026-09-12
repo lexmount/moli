@@ -54,7 +54,7 @@ impl WorkerIsolateState {
         let platform_registration = V8PlatformIsolateRegistration::register(
             &mut isolate,
             platform_wake.into_platform_wake(),
-            move |change| inspector_task_runner.append_environment_change(change),
+            inspector_task_runner.environment_notifier(),
         );
 
         Self {

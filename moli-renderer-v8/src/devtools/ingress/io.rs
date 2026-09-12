@@ -8,7 +8,9 @@ use std::{
 };
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
-use moli_v8_platform::ProcessEnvironmentChange;
+use moli_v8_platform::{
+    ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
+};
 use parking_lot::Mutex;
 
 use crate::{
@@ -245,7 +247,7 @@ struct RendererInspectorIoState {
     commands: VecDeque<RendererInspectorIoCommand>,
     // Isolate-owned notifications, not session commands. They remain eligible
     // during session detach and an active command's nested debugger pause.
-    environment_changes: VecDeque<ProcessEnvironmentChange>,
+    environment_notifications: ProcessEnvironmentNotifications,
     active_command_id: Option<u64>,
     // One count per lane is enough: every detach guard completes at most once,
     // and commands stay blocked until all outstanding guards have completed.
@@ -256,7 +258,7 @@ struct RendererInspectorIoState {
 
 impl RendererInspectorIoState {
     fn has_ready(&self) -> bool {
-        !self.closed && (!self.environment_changes.is_empty() || self.has_ready_command())
+        !self.closed && (self.environment_notifications.has_pending() || self.has_ready_command())
     }
 
     fn has_ready_command(&self) -> bool {
@@ -381,7 +383,7 @@ impl RendererInspectorIoIngress {
             shared: Arc::new(RendererInspectorIoShared {
                 state: Mutex::new(RendererInspectorIoState {
                     commands: VecDeque::new(),
-                    environment_changes: VecDeque::new(),
+                    environment_notifications: ProcessEnvironmentNotifications::default(),
                     active_command_id: None,
                     session_detaches: BTreeMap::new(),
                     closed: false,
@@ -408,22 +410,21 @@ impl RendererInspectorIoIngress {
             .map(|route| route.target.route_id())
     }
 
-    /// The process controller publishes before returning to its caller. Reuse
-    /// this owner's idle wake, active-JS interrupt and nested-pause wake; a
-    /// normal Page foreground task cannot run while the debugger is paused.
-    pub(crate) fn enqueue_environment_change(&self, change: ProcessEnvironmentChange) {
-        {
-            let mut state = self.shared.state.lock();
-            if state.closed {
-                return;
-            }
-            state.environment_changes.push_back(change);
-        }
-        self.notify_execution_opportunities();
+    /// Publication touches only the shared mailbox. The wake runs outside the
+    /// process configuration lock and reuses idle/interrupt/nested-pause routes.
+    pub(crate) fn environment_notifier(&self) -> ProcessEnvironmentNotifier {
+        let ingress = self.clone();
+        self.shared
+            .state
+            .lock()
+            .environment_notifications
+            .notifier(move || {
+                ingress.notify_execution_opportunities();
+            })
     }
 
-    pub(crate) fn claim_environment_change(&self) -> Option<ProcessEnvironmentChange> {
-        self.shared.state.lock().environment_changes.pop_front()
+    pub(crate) fn claim_environment_invalidation(&self) -> Option<ProcessEnvironmentInvalidation> {
+        self.shared.state.lock().environment_notifications.take()
     }
 
     /// Breaks an active V8 call so target teardown can reach the Page owner.
@@ -661,7 +662,7 @@ impl RendererInspectorIoIngress {
         let commands = {
             let mut state = self.shared.state.lock();
             state.closed = true;
-            state.environment_changes.clear();
+            state.environment_notifications.close();
             state.commands.drain(..).collect::<Vec<_>>()
         };
         self.shared.pause_wake.notify_all();
@@ -749,7 +750,7 @@ impl std::fmt::Debug for RendererInspectorIoIngress {
             .field("queued_tasks", &state.commands.len())
             .field(
                 "environment_notifications",
-                &state.environment_changes.len(),
+                &state.environment_notifications.has_pending(),
             )
             .field("active_command_id", &state.active_command_id)
             .field(
@@ -824,20 +825,19 @@ mod tests {
         let mut command = ingress.claim_for_owner().unwrap();
         let guard = ingress.first_dispatch_guard(&mut command);
         ingress.begin_session_detach(agent, command.ticket().session());
-        ingress.enqueue_environment_change(ProcessEnvironmentChange::LocaleChanged);
-        ingress.enqueue_environment_change(ProcessEnvironmentChange::TimezoneChanged);
+        let notifier = ingress.environment_notifier();
+        for _ in 0..1_000 {
+            notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
+            notifier.notify(ProcessEnvironmentInvalidation::DateTime);
+        }
         // A nested pause can receive these without releasing the active
         // command slot or creating another Inspector session.
         assert!(ingress.claim_for_pause().is_none());
         assert_eq!(
-            ingress.claim_environment_change(),
-            Some(ProcessEnvironmentChange::LocaleChanged)
+            ingress.claim_environment_invalidation(),
+            Some(ProcessEnvironmentInvalidation::LocaleAndDateTime)
         );
-        assert_eq!(
-            ingress.claim_environment_change(),
-            Some(ProcessEnvironmentChange::TimezoneChanged)
-        );
-        assert_eq!(ingress.claim_environment_change(), None);
+        assert_eq!(ingress.claim_environment_invalidation(), None);
         drop(guard);
         ingress.finish_session_detach(agent, command.ticket().session());
     }
@@ -845,10 +845,11 @@ mod tests {
     #[test]
     fn closed_isolate_discards_queued_and_late_environment_notifications() {
         let ingress = ingress();
-        ingress.enqueue_environment_change(ProcessEnvironmentChange::LocaleChanged);
+        let notifier = ingress.environment_notifier();
+        notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
         ingress.close("isolate disposed");
-        ingress.enqueue_environment_change(ProcessEnvironmentChange::TimezoneChanged);
-        assert_eq!(ingress.claim_environment_change(), None);
+        notifier.notify(ProcessEnvironmentInvalidation::DateTime);
+        assert_eq!(ingress.claim_environment_invalidation(), None);
         assert!(!ingress.shared.state.lock().has_ready());
     }
 

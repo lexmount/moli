@@ -131,13 +131,16 @@ pub(crate) fn dispatch_inspector_main_owner_wake(
     // Main and IO have separate owner wake channels. Do not let selection of
     // a Main wake overtake an environment notification already in IO ingress.
     // Only enter V8 when there is concrete notification work to execute.
-    if let Some(change) = session_executor.target.io_ref().claim_environment_change() {
+    if let Some(invalidation) = session_executor
+        .target
+        .io_ref()
+        .claim_environment_invalidation()
+    {
         let isolate = unsafe { &mut *session_executor.isolate.get() };
         let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
         unsafe { isolate.enter() };
         let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
-        change.notify_isolate(isolate);
-        dispatch_environment_notifications(&session_executor, isolate);
+        invalidation.notify_isolate(isolate);
     }
     session_executor.claim_next_main_command_from_owner()
 }
@@ -146,7 +149,13 @@ fn dispatch_environment_notifications(
     session_executor: &RendererInspectorSessionExecutorLocal,
     isolate: &mut v8::Isolate,
 ) {
-    while let Some(change) = session_executor.target.io_ref().claim_environment_change() {
-        change.notify_isolate(isolate);
+    // Consume one merged batch. A publication racing application retains its
+    // own wake instead of making this callback drain an unbounded producer.
+    if let Some(invalidation) = session_executor
+        .target
+        .io_ref()
+        .claim_environment_invalidation()
+    {
+        invalidation.notify_isolate(isolate);
     }
 }
