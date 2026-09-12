@@ -834,7 +834,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
             "referrerPolicy=" + event.request.referrerPolicy,
             "integrity=" + event.request.integrity,
             "keepalive=" + event.request.keepalive
-          ].join("|")));
+          ].join("|"), {headers: {"x-response": "from-worker"}}));
         });
         "#,
         ),
@@ -844,7 +844,9 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
             r#"
         self.onmessage = async () => {
           try {
-            const response = await fetch("api/worker-metadata.txt", {
+            const target = new URL("api/worker-metadata.txt", location.href);
+            target.hostname = target.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+            const response = await fetch(target, {
               cache: "reload",
               referrer: "./worker-referrer.html",
               referrerPolicy: "origin",
@@ -852,7 +854,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
               keepalive: true,
               priority: "high"
             });
-            postMessage(response.status + "|" + await response.text());
+            postMessage([response.status, response.type, response.headers.get("x-response"), await response.text()].join("|"));
           } catch (error) {
             postMessage("error:" + String(error && error.message));
           }
@@ -901,7 +903,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
+            "200|basic|from-worker|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
         ),
     )
     .await;
