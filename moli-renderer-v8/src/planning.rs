@@ -608,8 +608,12 @@ pub(crate) fn external_script_source_load_outcome_from_response(
 ) -> PreparedScriptSourceLoadOutcome {
     let request_mode = external_script_request_mode(script.kind, &script.fetch_metadata);
     let head = response.head();
-    let response_filter =
-        crate::network_host::network_response_filter(request_origin, &head, request_mode);
+    let response_filter = crate::network_host::network_response_filter(
+        request_origin,
+        &head,
+        request_mode,
+        moli_fetch::RequestRedirectMode::Follow,
+    );
     let cors_error = if request_mode == RequestMode::Cors {
         crate::network_host::validate_cors_response_chain(
             request_origin,

@@ -28,6 +28,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key,
         prepared.policy_context,
         prepared.blob_url_entry,
@@ -267,6 +268,7 @@ pub(super) fn spawn_network_fetch(
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {
