@@ -1,4 +1,4 @@
-use super::entries::{headers_entries_if_present, normalized_header_entry_or_throw};
+use super::entries::normalized_header_entry_or_throw;
 use crate::webidl;
 
 pub(in crate::network_host) fn headers_entries_from_init<'s>(
@@ -21,10 +21,6 @@ pub(in crate::network_host) fn headers_entries_from_init<'s>(
     };
 
     if let Some(entries) = headers_entries_from_iterable_init(scope, init_arg, init_obj)? {
-        return Ok(entries);
-    }
-
-    if let Some(entries) = headers_entries_if_present(scope, init_obj) {
         return Ok(entries);
     }
 

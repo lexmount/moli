@@ -6709,6 +6709,144 @@ fn vtt_cue_constructor_applies_webidl_conversion() {
 }
 
 #[test]
+fn webidl_initializer_unions_observe_iterators_on_platform_objects() {
+    let mut vm = new_storage_test_vm("https://initializer-union.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const equal = (actual, expected, label) => check(
+    JSON.stringify(actual) === JSON.stringify(expected), label + ': ' + JSON.stringify(actual));
+  const factories = [
+    ['Headers', () => new Headers([['x-original', 'original']])],
+    ['URLSearchParams', () => new URLSearchParams([['x-original', 'original']])],
+    ['FormData', () => {
+      const form = new FormData();
+      form.append('x-original', 'original');
+      return form;
+    }]
+  ];
+  const consumers = [
+    ['Headers', input => new Headers(input)],
+    ['URLSearchParams', input => new URLSearchParams(input)],
+    ['Request', input => new Request('https://initializer-union.test/', {headers: input}).headers],
+    ['Response', input => new Response(null, {headers: input}).headers]
+  ];
+  for (const [target, create] of consumers) {
+    for (const [source, factory] of factories) {
+      for (const mode of ['original', 'custom', 'undefined', 'null', 'throw', 'noncallable']) {
+        const label = target + ' from ' + source + ' with ' + mode + ' iterator';
+        const input = factory();
+        const original = input[Symbol.iterator];
+        const marker = {};
+        const log = [];
+        Object.defineProperty(input, 'x-record', {enumerable: true, get() {
+          log.push('record');
+          return 'record';
+        }});
+        Object.defineProperty(input, Symbol.iterator, {get() {
+          log.push('iterator');
+          if (mode === 'throw') throw marker;
+          if (mode === 'noncallable') return 42;
+          if (mode === 'undefined') return undefined;
+          if (mode === 'null') return null;
+          if (mode === 'original') return original;
+          return function*() {
+            check(this === input, label + ' receiver');
+            log.push('iterate');
+            yield ['x-custom', 'custom'];
+          };
+        }});
+        if (mode === 'throw' || mode === 'noncallable') {
+          let caught;
+          try { create(input); } catch (error) { caught = error; }
+          check(mode === 'throw' ? caught === marker : caught instanceof TypeError, label + ' exception');
+        } else {
+          const expected = mode === 'original' ? [['x-original', 'original']] :
+            mode === 'custom' ? [['x-custom', 'custom']] : [['x-record', 'record']];
+          equal(Array.from(create(input)), expected, label);
+        }
+        const expectedLog = ['iterator'];
+        if (mode === 'custom') expectedLog.push('iterate');
+        if (mode === 'undefined' || mode === 'null') expectedLog.push('record');
+        equal(log, expectedLog, label + ' conversion order');
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_initializer_unions_convert_platform_objects_without_iterators_as_records() {
+    let mut vm = new_storage_test_vm("https://initializer-record.test/");
+    let result = vm.eval(r#"
+(() => {
+  for (const Constructor of [Headers, URLSearchParams]) {
+    const url = new URL('https://initializer-record.test/path?query=value');
+    Object.defineProperty(url, Symbol.toPrimitive, {value() {
+      throw new Error('URL object must use record conversion');
+    }});
+    if (Array.from(new Constructor(url)).length !== 0) throw new Error('empty URL record');
+    url['x-record'] = 'record';
+    if (JSON.stringify(Array.from(new Constructor(url))) !== '[["x-record","record"]]') {
+      throw new Error(Constructor.name + ' must use own URL properties');
+    }
+    for (const factory of [() => new Headers(), () => new URLSearchParams(), () => new FormData()]) {
+      for (const value of [undefined, null]) {
+        const input = factory();
+        let iteratorReads = 0;
+        Object.defineProperty(input, Symbol.iterator, {enumerable: true, get() {
+          iteratorReads++;
+          return value;
+        }});
+        let caught;
+        try { new Constructor(input); } catch (error) { caught = error; }
+        if (!(caught instanceof TypeError) || iteratorReads !== 1) {
+          throw new Error(Constructor.name + ' must reject the enumerable Symbol key before reading its value');
+        }
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn url_search_params_form_data_initializers_convert_file_values_through_the_iterator() {
+    let mut vm = new_storage_test_vm("https://form-data-initializer.test/");
+    let result = vm.eval(r#"
+(() => {
+  const file = new File(['contents'], 'entry.txt');
+  const form = new FormData();
+  form.append('a', 'first');
+  form.append('file', file);
+  form.append('a', 'second');
+  const params = new URLSearchParams(form);
+  form.append('later', 'ignored');
+  if (JSON.stringify(Array.from(params)) !== '[["a","first"],["file","[object File]"],["a","second"]]') {
+    throw new Error('FormData entries must be copied in iteration order with File stringification');
+  }
+  const marker = {};
+  let conversions = 0;
+  Object.defineProperty(file, Symbol.toPrimitive, {value(hint) {
+    if (hint !== 'string') throw new Error('USVString must use the string hint');
+    conversions++;
+    throw marker;
+  }});
+  let caught;
+  try { new URLSearchParams(form); } catch (error) { caught = error; }
+  if (caught !== marker || conversions !== 1) throw new Error('File conversion exception must propagate');
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn webidl_string_records_observe_descriptors_and_values_in_key_order() {
     let mut vm = new_storage_test_vm("https://webidl-record-order.test/");
     let result = vm

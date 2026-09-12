@@ -1,6 +1,4 @@
-use super::storage::{url_search_params_is_object, url_search_params_pairs};
 use super::*;
-use crate::context_bootstrap::url_form::url_href_slot;
 use crate::webidl;
 use moli_url::search_params::{SearchParamPair, parse_search_params};
 
@@ -38,17 +36,6 @@ pub(super) fn url_search_params_pairs_from_constructor<'s>(
         return Some(Vec::new());
     }
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-        if form_data_is_object(scope, object) {
-            return Some(
-                form_data_entries(scope, object)
-                    .into_iter()
-                    .filter_map(|(key, value)| {
-                        callback_value_string(scope, v8::Local::new(scope, &value))
-                            .map(|value| (key, value))
-                    })
-                    .collect(),
-            );
-        }
         let sequence = match webidl::convert_optional_sequence::<UrlSearchParamsSequencePair>(
             scope,
             value,
@@ -63,17 +50,6 @@ pub(super) fn url_search_params_pairs_from_constructor<'s>(
         };
         if let Some(sequence) = sequence {
             return Some(sequence.0.into_iter().map(|pair| pair.0).collect());
-        }
-        if url_search_params_is_object(scope, object) {
-            return Some(url_search_params_pairs(scope, object));
-        }
-        if url_href_slot(scope, object).is_some() {
-            return Some(
-                callback_arg_url_like_string(scope, value)
-                    .as_deref()
-                    .map(parse_search_params)
-                    .unwrap_or_default(),
-            );
         }
         return record_string_pairs(scope, object.into());
     }
