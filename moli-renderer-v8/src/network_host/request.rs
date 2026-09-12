@@ -14,7 +14,7 @@ pub(in crate::network_host) use self::init::request_credentials_mode_label;
 pub(crate) use self::init::{FetchArgs, RequestInitValidation, convert_fetch_arguments};
 pub(crate) use self::init::{parse_fetch_init, request_object_credentials_mode, validate_fetch_body};
 pub(crate) use self::init::{parse_request_redirect_mode_label, request_redirect_mode_label};
-pub(in crate::network_host) use self::input::normalize_request_method;
+pub(in crate::network_host) use self::input::{RequestMethodError, normalize_request_method};
 pub(crate) use self::input::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
