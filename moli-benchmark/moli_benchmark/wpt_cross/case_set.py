@@ -717,7 +717,10 @@ def _html_path_is_supported(
 
 @lru_cache(maxsize=None)
 def _fetch_resource_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
-    names = ("preflight.py", "clean-stash.py", "inspect-headers.py", "redirect.py")
+    names = (
+        "preflight.py", "clean-stash.py", "inspect-headers.py", "redirect.py",
+        "redirect-empty-location.py",
+    )
     references = []
     for name in names:
         resource = "fetch/api/resources/" + name
