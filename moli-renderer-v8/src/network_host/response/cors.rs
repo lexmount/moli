@@ -591,6 +591,7 @@ pub(crate) fn validate_cors_preflight_response(
         response_status,
         response_headers,
         RequestCredentialsMode::SameOrigin,
+        false,
     )
 }
 
@@ -602,6 +603,7 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
     response_status: u16,
     response_headers: &[(String, String)],
     credentials_mode: RequestCredentialsMode,
+    use_cors_preflight: bool,
 ) -> Result<(), String> {
     if !(200..300).contains(&response_status) {
         return Err(format!(
@@ -615,20 +617,30 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
         credentials_mode,
     )?;
 
+    // Parse both complete lists before checking permissions, including for
+    // safelisted methods and requests without unsafe header names.
+    let mut allow_methods =
+        parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Methods")?;
+    let allow_headers =
+        parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Headers")?;
+    if allow_methods.is_none() && use_cors_preflight {
+        allow_methods = Some(vec![requested_method.to_owned()]);
+    }
+    let wildcard_allowed = credentials_mode != RequestCredentialsMode::Include;
+
     if !moli_fetch::is_cors_safelisted_method(requested_method) {
-        let Some(allow_methods) =
-            response_header_value(response_headers, "access-control-allow-methods")
-        else {
+        let Some(allow_methods) = allow_methods else {
             return Err(format!(
                 "CORS preflight failed: no Access-Control-Allow-Methods for {requested_method}"
             ));
         };
-        if !comma_separated_tokens(&allow_methods)
+        if !allow_methods
             .iter()
-            .any(|method| method == requested_method)
+            .any(|method| method == requested_method || (wildcard_allowed && method == "*"))
         {
             return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Methods `{allow_methods}` does not allow {requested_method}"
+                "CORS preflight failed: Access-Control-Allow-Methods `{}` does not allow {requested_method}",
+                allow_methods.join(",")
             ));
         }
     }
@@ -638,22 +650,24 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
         return Ok(());
     }
 
-    let Some(allow_headers) =
-        response_header_value(response_headers, "access-control-allow-headers")
-    else {
+    let Some(allow_headers) = allow_headers else {
         return Err(format!(
             "CORS preflight failed: no Access-Control-Allow-Headers for {}",
             unsafe_header_names.join(",")
         ));
     };
-    let allowed_header_names = comma_separated_tokens(&allow_headers)
-        .into_iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<Vec<_>>();
+    let wildcard_headers = wildcard_allowed && allow_headers.iter().any(|name| name == "*");
     for header_name in unsafe_header_names {
-        if !allowed_header_names.iter().any(|name| name == &header_name) {
+        // Authorization is a CORS non-wildcard request-header name, so it
+        // always needs an explicit, case-insensitive match.
+        if !allow_headers
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&header_name))
+            && (!wildcard_headers || header_name == "authorization")
+        {
             return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Headers `{allow_headers}` does not allow {header_name}"
+                "CORS preflight failed: Access-Control-Allow-Headers `{}` does not allow {header_name}",
+                allow_headers.join(",")
             ));
         }
     }
@@ -728,13 +742,32 @@ pub(crate) fn filter_cors_exposed_response_headers_for_origin(
         .collect()
 }
 
-fn comma_separated_tokens(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
+fn parse_cors_preflight_allowlist(
+    headers: &[(String, String)],
+    name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let values = response_header_values(headers, name);
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let mut tokens = Vec::new();
+    for value in values {
+        for token in value.split(',') {
+            let token = token.trim_matches([' ', '\t']);
+            if token.is_empty() {
+                continue;
+            }
+            // Both method and field-name use HTTP token syntax. Preserve case
+            // because method permissions require an exact match.
+            if http::Method::from_bytes(token.as_bytes()).is_err() {
+                return Err(format!(
+                    "CORS preflight failed: invalid {name} value `{value}`"
+                ));
+            }
+            tokens.push(token.to_owned());
+        }
+    }
+    Ok(Some(tokens))
 }
 
 fn is_forbidden_response_header_name(name: &str) -> bool {
@@ -955,6 +988,182 @@ mod tests {
         )
         .expect_err("unsafelisted PUT preflight should require Access-Control-Allow-Methods");
         assert!(error.contains("no Access-Control-Allow-Methods for PUT"));
+    }
+
+    fn preflight_permissions(
+        method: &str,
+        request_headers: &[(&str, &str)],
+        permissions: &[(&str, &str)],
+        credentials_mode: RequestCredentialsMode,
+    ) -> Result<(), String> {
+        let request_headers = request_headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect::<Vec<_>>();
+        let mut response_headers = vec![
+            (
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://origin.test".to_owned(),
+            ),
+            (
+                "Access-Control-Allow-Credentials".to_owned(),
+                "true".to_owned(),
+            ),
+        ];
+        response_headers.extend(
+            permissions
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+        validate_cors_preflight_response_for_origin(
+            &WebOrigin::from_url(&url("https://origin.test/page")),
+            &url("https://api.test/data"),
+            method,
+            &request_headers,
+            204,
+            &response_headers,
+            credentials_mode,
+            false,
+        )
+    }
+
+    #[test]
+    fn cors_preflight_permissions_combine_fields_without_folding_method_case() {
+        let permissions = [
+            ("Access-Control-Allow-Methods", "POST,,"),
+            ("access-control-allow-methods", "\t patcH, \t"),
+            ("Access-Control-Allow-Headers", "X-First"),
+            ("ACCESS-CONTROL-ALLOW-HEADERS", ",\t X-SECOND,,"),
+        ];
+        for credentials in [
+            RequestCredentialsMode::Omit,
+            RequestCredentialsMode::Include,
+        ] {
+            let headers = [("x-first", "1"), ("x-second", "2")];
+            assert_eq!(
+                preflight_permissions("patcH", &headers, &permissions, credentials),
+                Ok(())
+            );
+            assert!(preflight_permissions("PATCH", &headers, &permissions, credentials).is_err());
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_validate_both_complete_lists_before_safelists() {
+        for field in [
+            "Access-Control-Allow-Methods",
+            "Access-Control-Allow-Headers",
+        ] {
+            for invalid in [
+                "Bad value",
+                "\"GET\"",
+                "GET:POST",
+                "GET;POST",
+                "GET\u{00a0}",
+                "\u{000b}GET",
+                "GET\r\n",
+                "GÉT",
+            ] {
+                let fields = [(field, "GET, X-Test"), (field, invalid)];
+                assert!(
+                    preflight_permissions("GET", &[], &fields, RequestCredentialsMode::Omit)
+                        .is_err(),
+                    "a later malformed {field} must reject even a safelisted request: {invalid:?}"
+                );
+                assert!(
+                    preflight_permissions(
+                        "GET",
+                        &[("X-Test", "1")],
+                        &fields,
+                        RequestCredentialsMode::Omit
+                    )
+                    .is_err(),
+                    "an earlier matching token must not hide a malformed {field}: {invalid:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_wildcards_respect_credentials_and_authorization() {
+        let wildcards = [
+            ("Access-Control-Allow-Methods", "*"),
+            ("Access-Control-Allow-Headers", "*"),
+        ];
+        for credentials in [
+            RequestCredentialsMode::Omit,
+            RequestCredentialsMode::SameOrigin,
+            RequestCredentialsMode::Include,
+        ] {
+            assert_eq!(
+                preflight_permissions("PUT", &[("X-Test", "1")], &wildcards, credentials).is_ok(),
+                credentials != RequestCredentialsMode::Include
+            );
+            assert_eq!(
+                preflight_permissions("*", &[("*", "1")], &wildcards, credentials),
+                Ok(())
+            );
+            assert!(
+                preflight_permissions(
+                    "POST",
+                    &[("aUtHoRiZaTiOn", "secret")],
+                    &wildcards,
+                    credentials
+                )
+                .is_err()
+            );
+            assert_eq!(
+                preflight_permissions(
+                    "POST",
+                    &[("Authorization", "secret")],
+                    &[
+                        ("Access-Control-Allow-Headers", "*"),
+                        ("Access-Control-Allow-Headers", "AUTHORIZATION"),
+                    ],
+                    credentials
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_accept_http_tokens_and_empty_lists() {
+        let token = "!#$%&'*+-.^_`|~0123456789AZaz";
+        assert_eq!(
+            preflight_permissions(
+                token,
+                &[(token, "1")],
+                &[
+                    ("Access-Control-Allow-Methods", token),
+                    ("Access-Control-Allow-Headers", token),
+                ],
+                RequestCredentialsMode::Include
+            ),
+            Ok(())
+        );
+        for empty in ["", " \t ", ",, \t,"] {
+            let fields = [
+                ("Access-Control-Allow-Methods", empty),
+                ("Access-Control-Allow-Headers", empty),
+            ];
+            assert_eq!(
+                preflight_permissions("GET", &[], &fields, RequestCredentialsMode::Omit),
+                Ok(())
+            );
+            assert!(
+                preflight_permissions("PUT", &[], &fields, RequestCredentialsMode::Omit).is_err()
+            );
+            assert!(
+                preflight_permissions(
+                    "GET",
+                    &[("X-Test", "1")],
+                    &fields,
+                    RequestCredentialsMode::Omit
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
