@@ -2003,6 +2003,22 @@ fetch('/worker-api', {
     );
     assert_eq!(paused["params"]["request"]["hasPostData"], true);
     assert_eq!(paused["params"]["request"]["postData"], "payload");
+    let starts = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["sessionId"] == worker_session
+                && message["params"]["request"]["url"] == api_url
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "one Worker request before its Fetch pause: {:?}",
+        ctx.sent
+    );
+    assert_eq!(starts[0]["params"]["requestId"], network_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({

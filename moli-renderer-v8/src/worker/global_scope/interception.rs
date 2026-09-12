@@ -62,7 +62,7 @@ fn current_request(
         WorkerFetchTarget::Fetch(id) => {
             let pending = state.pending_fetches.get(&id).ok_or_else(unavailable)?;
             if pending.load.is_cancelled()
-                || pending.network_request_handle != Some(handle)
+                || pending.network.handle() != handle
                 || (phase != WorkerFetchPhase::Request && pending.paused_response.is_none())
             {
                 return Err(unavailable());

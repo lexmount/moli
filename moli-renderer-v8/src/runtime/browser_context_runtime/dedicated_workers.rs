@@ -180,6 +180,18 @@ impl Drop for RendererDedicatedWorkerHostInner {
 #[derive(Clone, Debug)]
 pub(crate) struct RendererDedicatedWorkerHost(Arc<RendererDedicatedWorkerHostInner>);
 
+#[derive(Clone, Debug)]
+pub(crate) struct RendererDedicatedWorkerNetworkObserver(Weak<RendererDedicatedWorkerHostInner>);
+
+impl RendererDedicatedWorkerNetworkObserver {
+    pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
+        if let Some(host) = self.0.upgrade() {
+            RendererDedicatedWorkerHost(host)
+                .publish(RendererProtocolObservation::Network(observation));
+        }
+    }
+}
+
 impl PartialEq for RendererDedicatedWorkerHost {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -188,6 +200,10 @@ impl PartialEq for RendererDedicatedWorkerHost {
 impl Eq for RendererDedicatedWorkerHost {}
 
 impl RendererDedicatedWorkerHost {
+    pub(crate) fn network_observer(&self) -> RendererDedicatedWorkerNetworkObserver {
+        RendererDedicatedWorkerNetworkObserver(Arc::downgrade(&self.0))
+    }
+
     pub(crate) fn instance_id(&self) -> u64 {
         self.0.info.instance_id
     }

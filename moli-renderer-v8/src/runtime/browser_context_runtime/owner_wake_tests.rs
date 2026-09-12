@@ -24,7 +24,7 @@ impl Wake for ReceiverWake {
 }
 
 fn assert_retired_receiver_releases_waker(services: WorkerServices) {
-    let context = RendererBrowserContextRuntime::new();
+    let context = RendererBrowserContextRuntime::new_for_test();
     let initialize_workers = || {
         context.inner.shared_worker_runtime.get_or_init();
         context.inner.service_worker_runtime.get_or_init();

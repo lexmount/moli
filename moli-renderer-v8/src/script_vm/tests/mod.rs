@@ -4628,7 +4628,7 @@ fn new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
     crate::runtime::PageVmTaskExecutorTestHarness,
     crate::runtime::RendererBrowserContextRuntimeOwner,
 ) {
-    let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+    let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
     let browser_context_runtime = browser_context_owner.handle();
     let storage_manager = shared_indexed_db_test_manager();
     let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(

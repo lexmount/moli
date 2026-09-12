@@ -1254,6 +1254,7 @@ impl PendingWebSocketNetworkActivitySession {
 pub(crate) enum TargetSubresourcePlanOutput {
     Complete(Box<TargetSubresourceMetadataOutput>),
     RequestStarted(Arc<TargetSubresourceRequestStartedOutput>),
+    RequestUpdated(Arc<TargetSubresourceRequestStartedOutput>),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoOutput),
     ResponseStarted(Arc<TargetSubresourceResponseStartedOutput>),
     DataReceived(TargetSubresourceDataReceivedOutput),
@@ -1265,7 +1266,7 @@ impl TargetSubresourcePlanOutput {
     pub(crate) fn index(&self) -> usize {
         match self {
             Self::Complete(output) => output.index(),
-            Self::RequestStarted(output) => output.index(),
+            Self::RequestStarted(output) | Self::RequestUpdated(output) => output.index(),
             Self::RequestExtraInfo(output) => output.index(),
             Self::ResponseStarted(output) => output.index(),
             Self::DataReceived(output) => output.index(),
@@ -1278,6 +1279,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => output.websocket_socket_id(),
             Self::RequestStarted(_)
+            | Self::RequestUpdated(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1289,7 +1291,7 @@ impl TargetSubresourcePlanOutput {
     pub(crate) fn request_handle(&self) -> Option<SubresourceNetworkRequestHandle> {
         match self {
             Self::Complete(output) => output.request_handle(),
-            Self::RequestStarted(output) => Some(output.handle()),
+            Self::RequestStarted(output) | Self::RequestUpdated(output) => Some(output.handle()),
             Self::RequestExtraInfo(output) => Some(output.handle()),
             Self::ResponseStarted(output) => Some(output.handle()),
             Self::DataReceived(output) => Some(output.handle()),
@@ -1304,6 +1306,9 @@ impl TargetSubresourcePlanOutput {
                 TargetSubresourceCompleteNetworkDeliveryOutput::new(*output, request_id),
             )),
             Self::RequestStarted(output) => TargetSubresourceNetworkDeliveryOutput::RequestStarted(
+                TargetSubresourceRequestNetworkDeliveryOutput::new(output, request_id),
+            ),
+            Self::RequestUpdated(output) => TargetSubresourceNetworkDeliveryOutput::RequestUpdated(
                 TargetSubresourceRequestNetworkDeliveryOutput::new(output, request_id),
             ),
             Self::RequestExtraInfo(output) => {
@@ -1339,6 +1344,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => Some(output),
             Self::RequestStarted(_)
+            | Self::RequestUpdated(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1352,6 +1358,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => Some(output),
             Self::RequestStarted(_)
+            | Self::RequestUpdated(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1893,6 +1900,7 @@ impl TargetSubresourceMetadataOutput {
 pub(crate) enum TargetSubresourceNetworkDeliveryOutput {
     Complete(Box<TargetSubresourceCompleteNetworkDeliveryOutput>),
     RequestStarted(TargetSubresourceRequestNetworkDeliveryOutput),
+    RequestUpdated(TargetSubresourceRequestNetworkDeliveryOutput),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoNetworkDeliveryOutput),
     ResponseStarted(TargetSubresourceResponseNetworkDeliveryOutput),
     DataReceived(TargetSubresourceDataNetworkDeliveryOutput),
@@ -2078,7 +2086,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
     pub(crate) fn request_id(&self) -> &str {
         match self {
             Self::Complete(output) => output.request_id(),
-            Self::RequestStarted(output) => output.request_id(),
+            Self::RequestStarted(output) | Self::RequestUpdated(output) => output.request_id(),
             Self::RequestExtraInfo(output) => output.request_id(),
             Self::ResponseStarted(output) => output.request_id(),
             Self::DataReceived(output) => output.request_id(),
@@ -2090,7 +2098,9 @@ impl TargetSubresourceNetworkDeliveryOutput {
     pub(crate) fn delivery_order_index(&self) -> usize {
         match self {
             Self::Complete(output) => output.delivery_order_index(),
-            Self::RequestStarted(output) => output.delivery_order_index(),
+            Self::RequestStarted(output) | Self::RequestUpdated(output) => {
+                output.delivery_order_index()
+            }
             Self::RequestExtraInfo(output) => output.delivery_order_index(),
             Self::ResponseStarted(output) => output.delivery_order_index(),
             Self::DataReceived(output) => output.delivery_order_index(),
@@ -2104,6 +2114,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
         match self {
             Self::Complete(output) => output.metadata(),
             Self::RequestStarted(_)
+            | Self::RequestUpdated(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -2118,7 +2129,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
     pub(crate) fn index(&self) -> usize {
         match self {
             Self::Complete(output) => output.index(),
-            Self::RequestStarted(output) => output.output().index(),
+            Self::RequestStarted(output) | Self::RequestUpdated(output) => output.output().index(),
             Self::RequestExtraInfo(output) => output.output().index(),
             Self::ResponseStarted(output) => output.output().index(),
             Self::DataReceived(output) => output.output().index(),
@@ -2706,11 +2717,7 @@ impl TargetNetworkOutputQueue {
     pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
         match item {
             ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
-                self.completed_subresource_handles
-                    .contains(&request.handle())
-                    || self
-                        .staged_subresource_requests
-                        .contains_key(&request.handle())
+                self.has_observed_subresource_request(request.handle())
             }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 self.completed_subresource_handles
@@ -2718,6 +2725,22 @@ impl TargetNetworkOutputQueue {
                     || self
                         .staged_subresource_responses
                         .contains_key(&response.handle())
+            }
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
+                self.completed_subresource_handles
+                    .contains(&request.handle())
+                    || self
+                        .staged_subresource_responses
+                        .contains_key(&request.handle())
+                    || self
+                        .staged_subresource_requests
+                        .get(&request.handle())
+                        .is_some_and(|previous| {
+                            previous.url() == request.url()
+                                && previous.method() == request.method()
+                                && previous.request_headers() == request.request_headers()
+                                && previous.request_body_bytes() == request.request_body_bytes()
+                        })
             }
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
                 self.completed_subresource_handles.contains(&body.handle())
@@ -2732,6 +2755,14 @@ impl TargetNetworkOutputQueue {
             | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
             | ScriptNetworkOutputItem::WebSocketLifecycleEvent(_) => false,
         }
+    }
+
+    pub(crate) fn has_observed_subresource_request(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.completed_subresource_handles.contains(&handle)
+            || self.staged_subresource_requests.contains_key(&handle)
     }
 
     fn append_page_output_item_for_loader(
@@ -2751,6 +2782,29 @@ impl TargetNetworkOutputQueue {
                     document_loader_id,
                     request,
                 );
+                *subresource_index += 1;
+            }
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
+                if self.has_observed_network_phase(item)
+                    || !self
+                        .staged_subresource_requests
+                        .contains_key(&request.handle())
+                {
+                    return;
+                }
+                let output = Arc::new(
+                    TargetSubresourceRequestStartedOutput::from_page_request_started(
+                        self.next_delivery_order_index(),
+                        *subresource_index,
+                        document_loader_id,
+                        request,
+                    ),
+                );
+                self.staged_subresource_requests
+                    .insert(request.handle(), output.clone());
+                self.delivery_outputs
+                    .push_subresource(TargetSubresourcePlanOutput::RequestUpdated(output));
+                self.subresource_record_count = *subresource_index + 1;
                 *subresource_index += 1;
             }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
@@ -3447,6 +3501,62 @@ mod tests {
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].request_id(), "REQ-H7");
         assert_eq!(snapshot.subresource_cursor_advances()[0].record_count(), 1);
+    }
+
+    #[test]
+    fn request_updates_keep_frozen_start_and_request_id_without_reopening_terminal() {
+        let handle = SubresourceNetworkRequestHandle::new(7);
+        let request = |method: &str, body: &str| {
+            Arc::new(SubresourceRequestStarted::new(
+                handle,
+                None,
+                "https://example.test/".parse().unwrap(),
+                "https://example.test/request".parse().unwrap(),
+                method.into(),
+                vec![("x-method".into(), method.into())],
+                Some(body.into()),
+                SubresourceResourceType::Fetch,
+                SubresourceRequestInitiatorType::Script,
+                None,
+            ))
+        };
+        let start = ScriptNetworkOutputItem::SubresourceRequestStarted(request("POST", "original"));
+        let update =
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(request("PATCH", "updated"));
+        let mut queue = TargetNetworkOutputQueue::default();
+        queue.append_renderer_output_item_for_loader(&update, "LOADER");
+        assert_eq!(queue.subresource_record_count(), 0);
+        queue.append_renderer_output_item_for_loader(&start, "LOADER");
+        let frozen = queue.staged_subresource_requests[&handle].clone();
+        queue.append_renderer_output_item_for_loader(&update, "LOADER");
+        assert_eq!(frozen.method(), "POST");
+        assert_eq!(frozen.request_body(), Some("original"));
+        assert_eq!(queue.staged_subresource_requests[&handle].method(), "PATCH");
+        assert_eq!(queue.subresource_record_count(), 2);
+        assert!(queue.has_observed_network_phase(&update));
+        queue.append_renderer_output_item_for_loader(&update, "LOADER");
+        assert_eq!(queue.subresource_record_count(), 2);
+        let body = ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+            SubresourceBodyFinished::failed(handle, "net::ERR_FAILED".into()),
+        ));
+        queue.append_renderer_output_item_for_loader(&body, "LOADER");
+        queue.append_renderer_output_item_for_loader(&update, "LOADER");
+        let activity = PendingSubresourceNetworkActivity::from_sessions(vec![
+            PendingSubresourceNetworkActivitySession::new(None, 0),
+        ]);
+        let mut ids = StableSubresourceHandleRequestIds::default();
+        let snapshot = pending_delivery_snapshot(&queue, activity, None, &mut ids).unwrap();
+        let outputs = subresource_outputs(&snapshot);
+        assert!(matches!(
+            outputs.as_slice(),
+            [
+                TargetSubresourceNetworkDeliveryOutput::RequestStarted(_),
+                TargetSubresourceNetworkDeliveryOutput::RequestUpdated(_),
+                TargetSubresourceNetworkDeliveryOutput::BodyFinished(_),
+            ]
+        ));
+        assert!(outputs.iter().all(|output| output.request_id() == "REQ-H7"));
+        assert_eq!(snapshot.subresource_cursor_advances()[0].record_count(), 3);
     }
 
     #[test]

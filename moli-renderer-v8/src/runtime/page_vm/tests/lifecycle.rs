@@ -3480,7 +3480,7 @@ fn top_level_http_location_navigation_reserves_service_worker_client_until_commi
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         browser_context_runtime.service_worker_runtime();
         let (owner_wake_tx, _owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();

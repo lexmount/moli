@@ -450,7 +450,7 @@ impl BrowserContext {
         engine
     }
 
-    fn renderer_runtime(&self) -> RendererBrowserContextRuntime {
+    pub(super) fn renderer_runtime(&self) -> RendererBrowserContextRuntime {
         self.renderer_runtime_owner
             .as_ref()
             .expect("BrowserContext renderer owner was already taken for teardown")

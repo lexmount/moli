@@ -1108,7 +1108,7 @@ pub(super) struct PendingWorkerFetch {
     pub(super) request_method: String,
     pub(super) request_headers: Vec<(String, String)>,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) network_request_handle: Option<SubresourceNetworkRequestHandle>,
+    pub(super) network: crate::runtime::RendererWorkerNetworkRequest,
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
@@ -1116,7 +1116,8 @@ pub(super) struct PendingWorkerFetch {
 
 pub(super) enum WorkerFetchEvent {
     Completion(Box<WorkerFetchCompletion>),
-    StreamingStarted(WorkerFetchStreamingStarted),
+    TransportCompletion(WorkerFetchTransportCompletion),
+    StreamingStarted(Box<WorkerFetchStreamingStarted>),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
 }
@@ -1125,6 +1126,14 @@ pub(super) struct WorkerFetchCompletion {
     fetch_id: u32,
     network_request_headers: Option<Vec<(String, String)>>,
     result: Result<WorkerFetchResponse, String>,
+}
+
+/// The VM claims delivery before applying policy/interception. If it is gone,
+/// dropping the packet still settles the original native transport request.
+pub(super) struct WorkerFetchTransportCompletion {
+    network: crate::runtime::RendererWorkerNetworkRequest,
+    observer: crate::worker::WorkerNetworkObserver,
+    completion: Option<Box<WorkerFetchCompletion>>,
 }
 
 pub(super) struct WorkerFetchStreamingStarted {
@@ -1142,9 +1151,21 @@ pub(super) struct WorkerFetchStreamingChunk {
 pub(super) struct WorkerFetchStreamingFinished {
     fetch_id: u32,
     body_source_id: NetworkBodySourceId,
-    head: ResponseHead,
-    network_request_headers: Option<Vec<(String, String)>>,
-    result: Result<SubresourceResponseBody, String>,
+    network: crate::runtime::RendererWorkerNetworkRequest,
+    observer: crate::worker::WorkerNetworkObserver,
+    result: moli_page_types::SubresourceBodyFinished,
+}
+
+impl Drop for WorkerFetchStreamingFinished {
+    fn drop(&mut self) {
+        // Settling the real transport survives a dropped VM completion queue.
+        // The observation is weak; only the native request lease owns this tail.
+        self.observer.publish(self.network.report(
+            moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+                self.result.clone(),
+            )),
+        ));
+    }
 }
 
 pub(super) enum WorkerFetchResponse {

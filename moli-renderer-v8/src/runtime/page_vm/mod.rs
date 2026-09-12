@@ -1196,7 +1196,7 @@ struct PageVmRendererDocumentIsolateBootstrap {
 impl PageVmRuntimeHooks {
     #[cfg(test)]
     fn standalone_base_for_test() -> Self {
-        let owner = Rc::new(super::RendererBrowserContextRuntime::new());
+        let owner = Rc::new(super::RendererBrowserContextRuntime::new_for_test());
         let browser_context_runtime = owner.handle();
         Self::bind_standalone_browser_context_owner_for_test(&browser_context_runtime);
         Self {

@@ -176,7 +176,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
     for source in sources {
         let PendingSubresourceFetchPauseSource { info, residence } = source;
         let worker = residence.worker().map(|pause| pause.pause.worker().clone());
-        let Ok((request_id, network_request_id)) =
+        let Ok((request_id, mut network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
             return outputs;
@@ -187,10 +187,9 @@ async fn prepare_subresource_fetch_pause_sources_async(
             && let Some(worker_owner) = conn.native_worker_network_owner(&context_id, worker)
             && let Some(agent) = conn.network_agent_for_owner_mut(&worker_owner)
         {
-            agent.record_subresource_request_id_for_handle_if_absent(
-                handle,
-                network_request_id.clone(),
-            );
+            network_request_id = agent
+                .record_subresource_request_id_for_handle_if_absent(handle, network_request_id)
+                .to_owned();
         }
         let document_url = document_url
             .cloned()
@@ -434,6 +433,13 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             Some(owner.clone())
         };
         let (event_session_id, request_id, mut pending, payload) = output.into_fetch_event_parts();
+        let worker_request_started = pending.residence.worker().is_some()
+            && pending.network_request_handle.is_some_and(|handle| {
+                network_owner
+                    .as_ref()
+                    .and_then(|owner| conn.network_agent_for_owner(owner))
+                    .is_some_and(|agent| agent.has_observed_subresource_request(handle))
+            });
         let pending_owner_session_id = event_session_id
             .as_deref()
             .filter(|session_id| conn.session_route(Some(session_id)).is_some())
@@ -464,7 +470,11 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             // Chromium publishes Network.requestWillBeSent before the Fetch pause.
             // The renderer's later transport start belongs to the same lifecycle
             // and must not publish a second initial Network event.
-            agent.record_fetch_pause_announced_request_id(network_request_id);
+            if worker_request_started {
+                network_events.clear();
+            } else {
+                agent.record_fetch_pause_announced_request_id(network_request_id);
+            }
         }
         out.extend(network_events);
         out.push(fetch_event);

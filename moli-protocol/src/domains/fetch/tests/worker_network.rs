@@ -2,6 +2,52 @@ use super::*;
 use moli_core::browser::{BrowserEvent, NetworkOwner, NetworkRequestState, WorkerHandle};
 use moli_core::page::{RendererNetworkOutputItem, ScriptNetworkOutputItem};
 
+async fn completed_worker_request(
+    native: &mut tokio::sync::broadcast::Receiver<moli_core::browser::BrowserEventRecord>,
+    url: &str,
+) -> (
+    moli_core::browser::NetworkOccurrence,
+    moli_core::page::SubresourceNetworkRecord,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut reports =
+            std::collections::HashMap::<_, moli_core::page::ScriptExecutionReport>::new();
+        loop {
+            let event = native.recv().await.unwrap().event;
+            let (BrowserEvent::NetworkRequestStarted(occurrence)
+            | BrowserEvent::NetworkActivity(occurrence)
+            | BrowserEvent::NetworkRequestCompleted(occurrence)) = &event
+            else {
+                continue;
+            };
+            if !matches!(occurrence.owner, NetworkOwner::Worker(_)) {
+                continue;
+            }
+            let RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item else {
+                continue;
+            };
+            let report = reports
+                .entry(occurrence.renderer.source.identity())
+                .or_default();
+            let before = report.subresource_network_records().len();
+            report.extend_network_output(moli_core::page::ScriptNetworkOutput::from_items([item
+                .as_ref()
+                .clone()]));
+            if let Some(record) = report.subresource_network_records().get(before)
+                && record.url().as_str() == url
+            {
+                assert!(
+                    matches!(event, BrowserEvent::NetworkRequestCompleted(_)),
+                    "only the real terminal may complete a request"
+                );
+                return (occurrence.clone(), record.clone());
+            }
+        }
+    })
+    .await
+    .expect("the exact Worker must commit its terminal fact")
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dedicated_fetch_without_worker_attachment() {
     worker_fetch_without_attachment(false, false, UnattachedWorkerFinish::Fulfill).await;
@@ -195,20 +241,7 @@ async fn worker_fetch_without_attachment(
         take_response_by_id(&mut ctx, 5)["result"]["result"]["value"],
         "worker-owned"
     );
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let BrowserEvent::NetworkRequestCompleted(occurrence) =
-                native.recv().await.unwrap().event
-                && let RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
-                && let ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref()
-                && record.url().as_str() == url
-            {
-                break occurrence;
-            }
-        }
-    })
-    .await
-    .expect("unattached Worker must publish its own terminal fact");
+    let (completed, _) = completed_worker_request(&mut native, &url).await;
     assert!(matches!(completed.owner, NetworkOwner::Worker(_)));
     assert!(
         !ctx.sent
@@ -650,16 +683,8 @@ if (typeof postMessage === 'function') postMessage('ready');
     {
         assert_eq!(value["text"], body);
     }
-    let owner = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let BrowserEvent::NetworkRequestCompleted(occurrence) = native.recv().await.unwrap().event
-                && matches!(occurrence.owner, NetworkOwner::Worker(_))
-                && matches!(&occurrence.renderer.item, RendererNetworkOutputItem::Resource(item)
-                    if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.url().as_str() == url)) {
-                break occurrence.owner;
-            }
-        }
-    }).await.expect("the exact Worker must commit its terminal fact");
+    let (completed, record) = completed_worker_request(&mut native, &url).await;
+    let owner = completed.owner;
     assert!(if shared {
         matches!(owner, NetworkOwner::Worker(WorkerHandle::Shared { .. }))
     } else {
@@ -677,9 +702,20 @@ if (typeof postMessage === 'function') postMessage('ready');
         "Page must not keep a second Worker fact: {requests:?}"
     );
     assert_eq!(requests[0].owner, owner);
-    let NetworkRequestState::Recorded(record) = &requests[0].state else {
-        panic!("terminal Worker record");
-    };
+    let mut recovered = moli_core::page::ScriptExecutionReport::default();
+    for item in requests[0].output_items() {
+        let RendererNetworkOutputItem::Resource(item) = item else {
+            panic!("a Worker request must be a resource")
+        };
+        recovered.extend_network_output(moli_core::page::ScriptNetworkOutput::from_items([item
+            .as_ref()
+            .clone()]));
+    }
+    assert_eq!(
+        recovered.subresource_network_records(),
+        std::slice::from_ref(&record),
+        "snapshot recovery must preserve the real request and terminal"
+    );
     if !csp_report {
         let (method, header, body) = if request_stage {
             ("POST", "original", "worker-payload")
@@ -715,6 +751,16 @@ if (typeof postMessage === 'function') postMessage('ready');
         },
     )
     .await;
+    // Native commit does not imply that Protocol consumed the original FIFO.
+    // Query wire artifacts only after this exact request's publication fence.
+    if !binary && !csp_report {
+        ctx.process_async(json!({"id":20,"method":"Network.getRequestPostData","sessionId":worker_session,"params":{"requestId":network_id}})).await;
+        ctx.expect_result(
+            20,
+            json!({"postData":record.request_body().unwrap()}),
+            Some(&worker_session),
+        );
+    }
     assert!(
         !ctx.sent
             .iter()

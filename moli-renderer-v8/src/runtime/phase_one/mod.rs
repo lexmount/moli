@@ -6071,7 +6071,7 @@ globalThis.__outerDocumentWriteScriptContinued = true;
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state =
             ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let client_id = browser_context_runtime.register_service_worker_client(

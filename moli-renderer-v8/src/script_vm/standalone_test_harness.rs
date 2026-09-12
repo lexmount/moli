@@ -105,7 +105,7 @@ impl ScriptVmDefaultWorldBootstrap {
     ) -> Result<StandaloneScriptVmBootstrapHarness, ScriptVmBootstrapError> {
         let resource_loader_owner = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("standalone test loader");
-        let browser_context_owner = RendererBrowserContextRuntime::new();
+        let browser_context_owner = RendererBrowserContextRuntime::new_for_test();
         Self::standalone_from_dom_host_with_resource_environment_for_test(
             bootstrap_dom_host,
             page_task_tx,
@@ -132,7 +132,7 @@ impl ScriptVmDefaultWorldBootstrap {
         resource_completion_tx: RendererResourceCompletionSender,
         resource_loader: ResourceRequestClient,
     ) -> Result<StandaloneScriptVmBootstrapHarness, ScriptVmBootstrapError> {
-        let browser_context_owner = RendererBrowserContextRuntime::new();
+        let browser_context_owner = RendererBrowserContextRuntime::new_for_test();
         Self::standalone_from_dom_host_with_resource_environment_for_test(
             bootstrap_dom_host,
             page_task_tx,

@@ -119,6 +119,57 @@ pub struct RendererNetworkOccurrence {
 mod tests {
     use super::*;
 
+    #[test]
+    fn worker_source_retirement_waits_for_exact_request_leases_not_reporter_clones() {
+        let reporter =
+            RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(23));
+        let inputs = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let pending = inputs.clone();
+        reporter.install_handler(move |input| pending.lock().push_back(input));
+        let worker =
+            RendererWorkerNetworkReporter::new(reporter, RendererWorkerIdentity::Dedicated(41));
+        let first = worker.start_request().unwrap();
+        let same_request = first.clone();
+        let second = worker.start_request().unwrap();
+        assert_ne!(first.handle(), second.handle());
+        worker.close_source();
+        worker.close_source();
+        assert!(worker.start_request().is_none());
+        assert!(inputs.lock().is_empty());
+        drop(first);
+        drop(second);
+        assert!(
+            inputs.lock().is_empty(),
+            "a cloned request still owns the original transfer"
+        );
+        same_request.report(ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+            moli_page_types::SubresourceBodyFinished::failed(
+                same_request.handle(),
+                "detached transport failed".into(),
+            ),
+        )));
+        assert!(matches!(
+            inputs.lock().pop_front(),
+            Some(RendererNetworkInput::Observation(_))
+        ));
+        drop(same_request);
+        assert!(matches!(
+            inputs.lock().pop_front(),
+            Some(RendererNetworkInput::SourceClosed {
+                source: RendererNetworkSourceIdentity::Worker(RendererWorkerIdentity::Dedicated(
+                    41
+                )),
+                ..
+            })
+        ));
+        worker.close_source();
+        drop(worker);
+        assert!(
+            inputs.lock().is_empty(),
+            "reporter/drop paths must not repeat source close"
+        );
+    }
+
     #[tokio::test]
     async fn native_network_receipts_require_exact_commit_and_source_close_follows_the_fifo() {
         let runtime = RendererBrowserContextRuntimeId::new_for_testing(19);
@@ -327,6 +378,65 @@ type NetworkHandler = Box<dyn Fn(RendererNetworkInput) + Send + Sync>;
 pub(crate) struct RendererWorkerNetworkReporter {
     reporter: RendererNetworkReporter,
     source: RendererWorkerIdentity,
+    requests: Arc<Mutex<WorkerNetworkSourceState>>,
+}
+
+#[derive(Debug)]
+enum WorkerNetworkSourceState {
+    Active(usize),
+    Retiring(std::num::NonZeroUsize),
+    Closed,
+}
+
+/// One admitted request keeps only its native source, never a Worker or VM.
+/// Clones share the same request identity and release one source lease together.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererWorkerNetworkRequest(Arc<WorkerNetworkRequestInner>);
+
+#[derive(Debug)]
+struct WorkerNetworkRequestInner {
+    source: RendererWorkerNetworkReporter,
+    handle: moli_page_types::SubresourceNetworkRequestHandle,
+}
+
+impl RendererWorkerNetworkRequest {
+    pub(crate) fn handle(&self) -> moli_page_types::SubresourceNetworkRequestHandle {
+        self.0.handle
+    }
+
+    pub(crate) fn report(&self, item: ScriptNetworkOutputItem) -> RendererNetworkObservation {
+        self.0.source.report_item(item)
+    }
+}
+
+impl Drop for WorkerNetworkRequestInner {
+    fn drop(&mut self) {
+        let mut state = self.source.requests.lock();
+        let close = match &mut *state {
+            WorkerNetworkSourceState::Active(count) => {
+                *count = count.checked_sub(1).expect("admitted request source lease");
+                false
+            }
+            WorkerNetworkSourceState::Retiring(count) => {
+                if let Some(remaining) = std::num::NonZeroUsize::new(count.get() - 1) {
+                    *count = remaining;
+                    false
+                } else {
+                    *state = WorkerNetworkSourceState::Closed;
+                    true
+                }
+            }
+            WorkerNetworkSourceState::Closed => unreachable!("live request outlasts source close"),
+        };
+        drop(state);
+        if close {
+            self.source
+                .reporter
+                .close_producer(RendererNetworkSourceIdentity::Worker(
+                    self.source.source.clone(),
+                ));
+        }
+    }
 }
 
 impl RendererWorkerNetworkReporter {
@@ -352,7 +462,27 @@ impl RendererWorkerNetworkReporter {
     }
 
     pub(crate) fn new(reporter: RendererNetworkReporter, source: RendererWorkerIdentity) -> Self {
-        Self { reporter, source }
+        Self {
+            reporter,
+            source,
+            requests: Arc::new(Mutex::new(WorkerNetworkSourceState::Active(0))),
+        }
+    }
+
+    pub(crate) fn start_request(&self) -> Option<RendererWorkerNetworkRequest> {
+        let mut state = self.requests.lock();
+        let WorkerNetworkSourceState::Active(count) = &mut *state else {
+            return None;
+        };
+        *count = count
+            .checked_add(1)
+            .expect("Worker request count exhausted");
+        Some(RendererWorkerNetworkRequest(Arc::new(
+            WorkerNetworkRequestInner {
+                source: self.clone(),
+                handle: moli_page_types::SubresourceNetworkRequestHandle::allocate(),
+            },
+        )))
     }
 
     pub(crate) fn report(
@@ -363,15 +493,33 @@ impl RendererWorkerNetworkReporter {
             record = record
                 .with_request_handle(moli_page_types::SubresourceNetworkRequestHandle::allocate());
         }
-        self.reporter.report_source(
-            RendererNetworkSource::Worker(self.source.clone()),
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
-        )
+        self.report_item(ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+            record,
+        )))
+    }
+
+    pub(crate) fn report_item(&self, item: ScriptNetworkOutputItem) -> RendererNetworkObservation {
+        self.reporter
+            .report_source(RendererNetworkSource::Worker(self.source.clone()), item)
     }
 
     pub(crate) fn close_source(&self) {
-        self.reporter
-            .close_producer(RendererNetworkSourceIdentity::Worker(self.source.clone()));
+        let mut state = self.requests.lock();
+        let mut close = false;
+        if let WorkerNetworkSourceState::Active(count) = *state {
+            *state = match std::num::NonZeroUsize::new(count) {
+                Some(count) => WorkerNetworkSourceState::Retiring(count),
+                None => {
+                    close = true;
+                    WorkerNetworkSourceState::Closed
+                }
+            };
+        }
+        drop(state);
+        if close {
+            self.reporter
+                .close_producer(RendererNetworkSourceIdentity::Worker(self.source.clone()));
+        }
     }
 
     #[cfg(test)]

@@ -18,7 +18,7 @@ mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
 mod parent_output;
-pub(crate) use parent_output::WorkerParentSender;
+pub(crate) use parent_output::{WorkerNetworkObserver, WorkerParentSender};
 mod script_loading;
 mod script_mime;
 mod thread;

@@ -668,7 +668,7 @@ async fn real_workers_register_service_worker_clients_until_thread_exit() {
     ensure_v8();
 
     async fn assert_worker_client_lifetime(global_kind: WorkerGlobalKind, script_url: &str) {
-        let browser_context_runtime = RendererBrowserContextRuntime::new();
+        let browser_context_runtime = RendererBrowserContextRuntime::new_for_test();
         let service = browser_context_runtime.service_worker_runtime();
         let (bootstrap_tx, mut bootstrap_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();

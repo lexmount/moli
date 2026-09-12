@@ -1646,8 +1646,9 @@ async fn worker_main(
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion =
         WorkerBootstrapCompletionReporter::new(bootstrap_completion_target);
-    let resource_task_runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
-        .expect("Worker owner loop must expose its resource task runner");
+    let resource_task_runner = worker_context_runtime
+        .resource_task_runner()
+        .expect("BrowserContext must select a resource executor before starting a Worker");
     let loader = resource_loader_for_worker_context(
         request_client,
         &network_policy,

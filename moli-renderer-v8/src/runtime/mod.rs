@@ -49,7 +49,9 @@ pub use network_observation::{
     RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
     RendererWorkerIdentity,
 };
-pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
+pub(crate) use network_observation::{
+    RendererNetworkReporter, RendererWorkerNetworkReporter, RendererWorkerNetworkRequest,
+};
 mod worker_fetch;
 pub use worker_fetch::{
     PendingWorkerFetchDecision, RendererWorkerFetchPause, RendererWorkerFetchStage,
@@ -281,7 +283,8 @@ pub use self::browser_context_runtime::{
     RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
 };
 pub(crate) use self::browser_context_runtime::{
-    RendererDedicatedWorkerHost, RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
+    RendererDedicatedWorkerHost, RendererDedicatedWorkerNetworkObserver,
+    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
 };
 pub(crate) use self::document_lifecycle::{
     RendererDocumentLifecycleDriveAdmission, RendererDocumentLifecycleJournalHandle,

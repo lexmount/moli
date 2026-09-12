@@ -110,6 +110,20 @@ fn emit_subresource_network_delivery_record(
                 base_timestamp,
             )
         }
+        TargetSubresourceNetworkDeliveryOutput::RequestUpdated(output) => {
+            // Update the same request's captured upload without announcing a
+            // second request or resetting its pending response state.
+            if !event_session_ids.is_empty() {
+                record_subresource_request_body(
+                    conn,
+                    owner,
+                    output.request_id(),
+                    output.output().request_body_bytes(),
+                    event_session_ids,
+                );
+            }
+            false
+        }
         TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => {
             emit_staged_subresource_request_extra_info(
                 out,

@@ -50,19 +50,41 @@ impl NativeWorkers {
         url: &str,
     ) -> Vec<(
         moli_core::RendererOutputResidenceIdentity,
-        RendererCommittedNetworkObservation,
+        Vec<RendererCommittedNetworkObservation>,
     )> {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let mut result = Vec::new();
+            let mut pending = std::collections::HashMap::<_, (moli_core::RendererOutputResidenceIdentity, Vec<RendererCommittedNetworkObservation>)>::new();
             while result.len() < count {
                 let moli_core::RendererOutputTransportMessage::Publication(publication) = self.output.recv().await.unwrap() else { continue; };
                 let residence = publication.cursor().stream().residence();
                 for record in publication.into_records() {
                     if let moli_core::RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(observation)) = record.into_parts().1 {
                         let committed = observation.clone().committed().await.unwrap_or_else(|| panic!("native producer from {residence:?} rejected: {observation:?}; workers: {:?}", self.service.handle().subscribe().unwrap().0.workers));
-                        if matches!(&committed.occurrence().item, RendererNetworkOutputItem::Resource(item)
-                            if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.url().as_str() == url)) {
-                            result.push((residence, committed));
+                        let RendererNetworkOutputItem::Resource(item) = &committed.occurrence().item else { continue };
+                        let (handle, started, finished) = match item.as_ref() {
+                            ScriptNetworkOutputItem::SubresourceRequestStarted(request) if request.url().as_str() == url => (request.handle(), true, false),
+                            ScriptNetworkOutputItem::SubresourceResponseStarted(response) => (response.handle(), false, false),
+                            ScriptNetworkOutputItem::SubresourceDataReceived(data) => (data.handle(), false, false),
+                            ScriptNetworkOutputItem::SubresourceBodyFinished(body) => (body.handle(), false, true),
+                            ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.url().as_str() == url => {
+                                result.push((residence, vec![committed]));
+                                continue;
+                            }
+                            _ => continue,
+                        };
+                        let key = (committed.occurrence().source.identity(), handle);
+                        if started {
+                            assert!(pending.insert(key.clone(), (residence, Vec::new())).is_none(), "one admission per physical request");
+                        }
+                        let Some((source, phases)) = pending.get_mut(&key) else { continue };
+                        assert_eq!(*source, residence);
+                        if let Some(previous) = phases.last() {
+                            assert!(committed.browser_sequence() > previous.browser_sequence(), "native receipt order must agree with the real Worker FIFO");
+                        }
+                        phases.push(committed);
+                        if finished {
+                            result.push(pending.remove(&key).unwrap());
                         }
                     }
                 }
@@ -70,6 +92,21 @@ impl NativeWorkers {
             result
         }).await.expect("the real Worker FIFO must retain its Network receipts")
     }
+}
+
+fn prepare_worker_network_receipts(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    residence: moli_core::RendererOutputResidenceIdentity,
+    receipts: &[RendererCommittedNetworkObservation],
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    for receipt in receipts {
+        outputs.extend(worker_network_prepared_outputs(
+            conn, owner, residence, receipt,
+        ));
+    }
+    outputs
 }
 
 fn attach_worker_network(
@@ -153,7 +190,7 @@ async fn worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibili
     });
     let mut sessions = Vec::new();
     for (index, (_, observation)) in observations.iter().enumerate() {
-        let RendererNetworkSource::Worker(source) = &observation.occurrence().source else {
+        let RendererNetworkSource::Worker(source) = &observation[0].occurrence().source else {
             panic!("Worker network cannot be a Page fact");
         };
         let session = format!("SID-network-{index}");
@@ -176,7 +213,7 @@ async fn worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibili
     assert!(collector.is_ok(), "{collector:?}");
     assert!(work.is_empty());
     assert!(
-        worker_network_prepared_outputs(&mut conn, &owner, observations[1].0, &observations[0].1)
+        prepare_worker_network_receipts(&mut conn, &owner, observations[1].0, &observations[0].1)
             .is_empty(),
         "another Worker stream cannot consume this receipt"
     );
@@ -211,7 +248,7 @@ async fn worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibili
     assert!(conn.project_browser_snapshot(recover).await.is_empty());
     for (residence, observation) in observations {
         assert!(
-            worker_network_prepared_outputs(&mut conn, &owner, residence, &observation).is_empty(),
+            prepare_worker_network_receipts(&mut conn, &owner, residence, &observation).is_empty(),
             "snapshot and delayed real FIFO may publish each request only once"
         );
     }
@@ -270,7 +307,7 @@ async fn native_service_worker_network_held_output_and_old_receipt_cannot_cross_
         .await
         .pop()
         .unwrap();
-    let RendererNetworkSource::Worker(source) = &observation.1.occurrence().source else {
+    let RendererNetworkSource::Worker(source) = &observation.1[0].occurrence().source else {
         panic!("native Service Worker source required");
     };
     let browser = fixture.service.handle();
@@ -307,7 +344,7 @@ async fn native_service_worker_network_held_output_and_old_receipt_cannot_cross_
     let owner = CommandOwnerScope::for_route(CdpSessionRoute::BrowserContext {
         browser_context_id: context_id.clone(),
     });
-    let held = worker_network_prepared_outputs(&mut conn, &owner, observation.0, &observation.1);
+    let held = prepare_worker_network_receipts(&mut conn, &owner, observation.0, &observation.1);
     assert!(!held.is_empty());
     let old_request = held
         .worker_target_lifecycle_outputs
@@ -391,11 +428,11 @@ async fn native_service_worker_network_held_output_and_old_receipt_cannot_cross_
         "retired run output cannot be delivered to the successor's attachment"
     );
     assert!(
-        worker_network_prepared_outputs(&mut conn, &owner, observation.0, &observation.1)
+        prepare_worker_network_receipts(&mut conn, &owner, observation.0, &observation.1)
             .is_empty()
     );
     assert!(
-        worker_network_prepared_outputs(&mut conn, &owner, next.0, &next.1).is_empty(),
+        prepare_worker_network_receipts(&mut conn, &owner, next.0, &next.1).is_empty(),
         "new run snapshot and its delayed receipt deduplicate"
     );
     assert!(
@@ -422,7 +459,7 @@ async fn native_dedicated_worker_held_network_cannot_follow_a_reused_attachment(
         .pop()
         .unwrap();
     let RendererNetworkSource::Worker(source @ RendererWorkerIdentity::Dedicated(instance)) =
-        &observation.occurrence().source
+        &observation[0].occurrence().source
     else {
         panic!("a physical Dedicated source is required");
     };
@@ -436,7 +473,7 @@ async fn native_dedicated_worker_held_network_cannot_follow_a_reused_attachment(
         .id
         .clone();
     let owner = attach_worker_network(&mut conn, &context_id, source, "SID-held");
-    let held = worker_network_prepared_outputs(&mut conn, &owner, residence, &observation);
+    let held = prepare_worker_network_receipts(&mut conn, &owner, residence, &observation);
     assert!(!held.is_empty());
     {
         let target = conn
@@ -456,7 +493,7 @@ async fn native_dedicated_worker_held_network_cannot_follow_a_reused_attachment(
         "target/session strings cannot revive the previous attachment's held output"
     );
     assert!(
-        worker_network_prepared_outputs(&mut conn, &owner, residence, &observation).is_empty(),
+        prepare_worker_network_receipts(&mut conn, &owner, residence, &observation).is_empty(),
         "a held request's publication claim cannot be acquired twice"
     );
     fixture.service.shutdown();

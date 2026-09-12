@@ -192,7 +192,8 @@ pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<Netw
     };
     let handle = match item.as_ref() {
         ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => record.request_handle()?,
-        ScriptNetworkOutputItem::SubresourceRequestStarted(request) => request.handle(),
+        ScriptNetworkOutputItem::SubresourceRequestStarted(request)
+        | ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => request.handle(),
         ScriptNetworkOutputItem::SubresourceResponseStarted(response) => response.handle(),
         ScriptNetworkOutputItem::SubresourceDataReceived(data) => data.handle(),
         ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(message) => message.handle(),
@@ -348,6 +349,19 @@ impl NetworkRequests {
             RendererNetworkOutputItem::Resource(item) => match item.as_ref() {
                 ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
                     if previous.is_some() {
+                        return false;
+                    }
+                    NetworkRequestState::Started(request.clone())
+                }
+                ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
+                    let Some(NetworkRequestSnapshot {
+                        state: NetworkRequestState::Started(previous),
+                        ..
+                    }) = previous
+                    else {
+                        return false;
+                    };
+                    if request == previous {
                         return false;
                     }
                     NetworkRequestState::Started(request.clone())
@@ -627,6 +641,102 @@ mod tests {
                 .get(&request_key(&oversized_failure).unwrap())
                 .is_none(),
             "failure diagnostics must obey the same retained-byte cap"
+        );
+    }
+
+    #[test]
+    fn native_network_request_update_preserves_one_admission_and_current_recovery_metadata() {
+        let (document, renderer) = source();
+        let owner = NetworkOwner::Document(document);
+        let handle = SubresourceNetworkRequestHandle::new(19);
+        let request = |method: &str, body: &[u8]| {
+            Arc::new(
+                SubresourceRequestStarted::new(
+                    handle,
+                    None,
+                    "https://example.test/".parse().unwrap(),
+                    "https://example.test/request".parse().unwrap(),
+                    method.into(),
+                    vec![("x-method".into(), method.into())],
+                    None,
+                    SubresourceResourceType::Fetch,
+                    SubresourceRequestInitiatorType::Script,
+                    None,
+                )
+                .with_request_body_bytes(Some(body.to_vec())),
+            )
+        };
+        let original = request("POST", b"original");
+        let updated = request("PATCH", &[0, 128, 255]);
+        let start = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceRequestStarted(original.clone()),
+        );
+        let update = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(updated.clone()),
+        );
+        let mut requests = NetworkRequests::default();
+        assert!(
+            !requests.commit(owner, &update, BrowserSequence::allocate()),
+            "metadata cannot admit a request"
+        );
+        assert!(requests.commit(owner, &start, BrowserSequence::allocate()));
+        assert!(requests.commit(owner, &update, BrowserSequence::allocate()));
+        assert!(!requests.commit(owner, &update, BrowserSequence::allocate()));
+        let snapshot = requests.snapshots().next().unwrap();
+        let NetworkRequestState::Started(current) = snapshot.state else {
+            panic!("the request remains in its original stage")
+        };
+        assert!(Arc::ptr_eq(&current, &updated));
+        assert_eq!(requests.snapshots().count(), 1);
+        assert_eq!(
+            original.method(),
+            "POST",
+            "the original occurrence remains immutable"
+        );
+        let response = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceResponseStarted(Arc::new(
+                SubresourceResponseStarted::new(
+                    handle,
+                    Vec::new(),
+                    updated.url().clone(),
+                    200,
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            )),
+        );
+        assert!(requests.commit(owner, &response, BrowserSequence::allocate()));
+        let stale = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(original),
+        );
+        assert!(
+            !requests.commit(owner, &stale, BrowserSequence::allocate()),
+            "a response seals request metadata"
+        );
+        let body = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+                SubresourceBodyFinished::ready(
+                    handle,
+                    crate::page::SubresourceResponseBody::from_bytes(b"ok".to_vec()),
+                ),
+            )),
+        );
+        assert!(requests.commit(owner, &body, BrowserSequence::allocate()));
+        assert!(!requests.commit(owner, &stale, BrowserSequence::allocate()));
+        let snapshot = requests.snapshots().next().unwrap();
+        let NetworkRequestState::Completed { request, .. } = &snapshot.state else {
+            panic!("one native terminal")
+        };
+        assert!(Arc::ptr_eq(request, &updated));
+        assert_eq!(
+            snapshot.output_items().len(),
+            3,
+            "recovery keeps current facts, not the override history"
         );
     }
 

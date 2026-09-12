@@ -13,6 +13,54 @@ use tokio::{
 };
 use url::Url;
 
+mod network_stages;
+
+#[derive(Default)]
+struct NativeWorkerNetworkRecords(
+    std::collections::HashMap<
+        crate::page::RendererNetworkSourceIdentity,
+        crate::page::ScriptExecutionReport,
+    >,
+);
+
+impl NativeWorkerNetworkRecords {
+    fn observe(
+        &mut self,
+        event: &BrowserEvent,
+    ) -> Option<(
+        crate::browser::NetworkOccurrence,
+        crate::page::SubresourceNetworkRecord,
+    )> {
+        let (BrowserEvent::NetworkRequestStarted(occurrence)
+        | BrowserEvent::NetworkActivity(occurrence)
+        | BrowserEvent::NetworkRequestCompleted(occurrence)) = event
+        else {
+            return None;
+        };
+        if !matches!(occurrence.owner, crate::browser::NetworkOwner::Worker(_)) {
+            return None;
+        }
+        let crate::page::RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
+        else {
+            return None;
+        };
+        let report = self
+            .0
+            .entry(occurrence.renderer.source.identity())
+            .or_default();
+        let before = report.subresource_network_records().len();
+        report.extend_network_output(crate::page::ScriptNetworkOutput::from_items([item
+            .as_ref()
+            .clone()]));
+        let record = report.subresource_network_records().get(before)?.clone();
+        assert!(
+            matches!(event, BrowserEvent::NetworkRequestCompleted(_)),
+            "a record must materialize at its real terminal event"
+        );
+        Some((occurrence.clone(), record))
+    }
+}
+
 fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, WebContentsHandle) {
     let context = service
         .handle()
@@ -1148,7 +1196,10 @@ async fn shared_worker_pause_survives_observer_retirement(response_stage: bool) 
             .any(|worker| worker.handle() == pause.worker)
     );
     assert!(snapshot.network_requests.iter().any(|request| request.owner == crate::browser::NetworkOwner::Worker(pause.worker)
-        && matches!(&request.state, crate::browser::NetworkRequestState::Recorded(record) if record.url().as_str() == "data:text/plain,native-release")));
+        && matches!(&request.state, crate::browser::NetworkRequestState::Completed { request, body, .. }
+            if request.url().as_str() == "data:text/plain,native-release"
+                && request.handle() == pause.pause.handle()
+                && matches!(body.result(), crate::page::SubresourceBodyFinishedResult::Ready(body) if body.clone_body_bytes() == b"native-release"))));
     service.shutdown();
     server.await.unwrap();
 }
@@ -1167,15 +1218,7 @@ async fn native_shared_worker_network_xhr_success_and_fetch_failure_without_devt
             false,
         ),
     ] {
-        let occurrence = shared_worker_network_before_close(script, url).await;
-        let crate::page::RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
-        else {
-            unreachable!();
-        };
-        let crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref()
-        else {
-            unreachable!();
-        };
+        let (_, record) = shared_worker_network_before_close(script, url).await;
         assert_eq!(
             matches!(
                 record.outcome(),
@@ -1189,7 +1232,10 @@ async fn native_shared_worker_network_xhr_success_and_fetch_failure_without_devt
 async fn shared_worker_network_before_close(
     script: &str,
     url: &str,
-) -> crate::browser::NetworkOccurrence {
+) -> (
+    crate::browser::NetworkOccurrence,
+    crate::page::SubresourceNetworkRecord,
+) {
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
     let (context, contents) = context_with_contents(&service);
@@ -1198,25 +1244,28 @@ async fn shared_worker_network_before_close(
     navigate(&context, contents, &format!("data:text/html,<script>globalThis.worker = new SharedWorker({script:?}, 'native-network')</script>")).await;
     let mut worker = None;
     let mut completed = Vec::new();
+    let mut network = NativeWorkerNetworkRecords::default();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let record = events.recv().await.unwrap();
+            if let Some((occurrence, result)) = network.observe(&record.event)
+                && result.url().as_str() == url
+            {
+                completed.push((occurrence, result));
+            }
             match record.event {
-                BrowserEvent::WorkerCreated(created @ crate::browser::WorkerSnapshot::Shared { .. }) => {
+                BrowserEvent::WorkerCreated(
+                    created @ crate::browser::WorkerSnapshot::Shared { .. },
+                ) => {
                     assert!(worker.replace(created.handle()).is_none());
-                }
-                BrowserEvent::NetworkRequestCompleted(occurrence) => {
-                    if matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::Resource(item)
-                        if matches!(item.as_ref(), crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(result)
-                            if result.url().as_str() == url)) {
-                        completed.push(occurrence);
-                    }
                 }
                 BrowserEvent::WorkerDestroyed(closed) if Some(closed) == worker => break,
                 _ => {}
             }
         }
-    }).await.expect("the real worker completes fetch and closes without a Protocol observer");
+    })
+    .await
+    .expect("the real worker completes fetch and closes without a Protocol observer");
     assert!(worker.is_some());
     assert_eq!(
         completed.len(),
@@ -1225,14 +1274,14 @@ async fn shared_worker_network_before_close(
     );
     let worker = worker.unwrap();
     assert_eq!(
-        completed[0].owner,
+        completed[0].0.owner,
         crate::browser::NetworkOwner::Worker(worker)
     );
     let crate::browser::WorkerHandle::Shared { instance, .. } = worker else {
         unreachable!();
     };
     assert_eq!(
-        completed[0].renderer.source,
+        completed[0].0.renderer.source,
         crate::page::RendererNetworkSource::Worker(crate::page::RendererWorkerIdentity::Shared(
             instance
         ))
@@ -1313,10 +1362,7 @@ async fn native_service_worker_network_is_owned_by_each_real_run_without_devtool
     use crate::browser::{
         NetworkOwner, ServiceWorkerCommand, ServiceWorkerExecution, WorkerSnapshot,
     };
-    use crate::page::{
-        RendererNetworkOutputItem, RendererNetworkSource, RendererWorkerIdentity,
-        ScriptNetworkOutputItem, SubresourceNetworkOutcome,
-    };
+    use crate::page::{RendererNetworkSource, RendererWorkerIdentity, SubresourceNetworkOutcome};
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
@@ -1325,17 +1371,21 @@ async fn native_service_worker_network_is_owned_by_each_real_run_without_devtool
     navigate(&context, contents, &server.url("/native-worker-network/")).await;
     let mut previous_run = None;
     let mut version = None;
+    let mut network = NativeWorkerNetworkRecords::default();
     for attempt in 0..2 {
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if let BrowserEvent::NetworkRequestCompleted(occurrence) = events.recv().await.unwrap().event
-                    && matches!(&occurrence.renderer.item, RendererNetworkOutputItem::Resource(item)
-                        if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                            if record.url().as_str() == server.url("/native-worker-network/probe"))) {
-                    break occurrence;
+        let (completed, completed_record) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let Some((occurrence, record)) =
+                        network.observe(&events.recv().await.unwrap().event)
+                        && record.url().as_str() == server.url("/native-worker-network/probe")
+                    {
+                        break (occurrence, record);
+                    }
                 }
-            }
-        }).await.expect("a real Service Worker fetch commits without Protocol consumption");
+            })
+            .await
+            .expect("a real Service Worker fetch commits without Protocol consumption");
         let RendererNetworkSource::Worker(RendererWorkerIdentity::Service {
             version: current_version,
             run,
@@ -1360,18 +1410,31 @@ async fn native_service_worker_network_is_owned_by_each_real_run_without_devtool
         let retained = snapshot
             .network_requests
             .iter()
-            .find(|request| request.renderer_source == completed.renderer.source)
+            .find(|request| request.renderer_source == completed.renderer.source && matches!(&request.state,
+                crate::browser::NetworkRequestState::Completed { request, .. } if Some(request.handle()) == completed_record.request_handle()))
             .unwrap();
         assert_eq!(retained.owner, completed.owner);
-        let crate::browser::NetworkRequestState::Recorded(record) = &retained.state else {
-            panic!("the complete-only producer must not invent a Started phase");
+        let crate::browser::NetworkRequestState::Completed {
+            request,
+            response,
+            body,
+        } = &retained.state
+        else {
+            panic!("the real fetch must retain its request, response and terminal stages");
         };
-        let SubresourceNetworkOutcome::Success { response_body, .. } = record.outcome() else {
+        assert_eq!(Some(request.handle()), completed_record.request_handle());
+        assert!(response.is_some());
+        let SubresourceNetworkOutcome::Success { response_body, .. } = completed_record.outcome()
+        else {
             panic!("the real fixture response must succeed");
         };
         assert_eq!(
             response_body.clone_body_bytes(),
             b"native worker network body"
+        );
+        assert!(
+            matches!(body.result(), crate::page::SubresourceBodyFinishedResult::Ready(body)
+            if body.clone_body_bytes() == response_body.clone_body_bytes())
         );
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -1473,31 +1536,34 @@ async fn dedicated_worker_network_before_close(script: &str, urls: &[(&str, bool
     let mut root = None;
     let mut created = Vec::new();
     let mut completed = Vec::new();
+    let mut network = NativeWorkerNetworkRecords::default();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let record = events.recv().await.unwrap();
+            if let Some((occurrence, result)) = network.observe(&record.event)
+                && urls.iter().any(|(url, _)| *url == result.url().as_str())
+            {
+                completed.push((occurrence, result));
+            }
             match record.event {
                 BrowserEvent::WorkerCreated(worker @ WorkerSnapshot::Dedicated { .. }) => {
                     let handle = worker.handle();
-                    let WorkerSnapshot::Dedicated { worker, .. } = worker else { unreachable!() };
+                    let WorkerSnapshot::Dedicated { worker, .. } = worker else {
+                        unreachable!()
+                    };
                     if worker.info.name == "native-dedicated-network" {
                         assert!(root.replace(handle).is_none());
                     }
                     assert!(!created.contains(&handle));
                     created.push(handle);
                 }
-                BrowserEvent::NetworkRequestCompleted(occurrence) => {
-                    if matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::Resource(item)
-                        if matches!(item.as_ref(), crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(result)
-                            if urls.iter().any(|(url, _)| *url == result.url().as_str()))) {
-                        completed.push(occurrence);
-                    }
-                }
                 BrowserEvent::WorkerDestroyed(closed) if Some(closed) == root => break,
                 _ => {}
             }
         }
-    }).await.expect("the real Dedicated Worker finishes its own and nested requests before closing");
+    })
+    .await
+    .expect("the real Dedicated Worker finishes its own and nested requests before closing");
     assert!(root.is_some());
     assert_eq!(
         completed.len(),
@@ -1510,15 +1576,7 @@ async fn dedicated_worker_network_before_close(script: &str, urls: &[(&str, bool
         "every physical Worker has native membership"
     );
     let mut owners = std::collections::HashSet::new();
-    for occurrence in completed {
-        let crate::page::RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
-        else {
-            unreachable!()
-        };
-        let crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref()
-        else {
-            unreachable!()
-        };
+    for (occurrence, record) in completed {
         let expected = urls
             .iter()
             .find(|(url, _)| *url == record.url().as_str())
@@ -1654,27 +1712,35 @@ async fn native_nested_worker_execution_retires_with_each_parent_boundary_withou
         let mut created = std::collections::HashSet::new();
         let mut parent = None;
         let mut child_owner = None;
+        let mut network = NativeWorkerNetworkRecords::default();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                match events.recv().await.unwrap().event {
-                    BrowserEvent::WorkerCreated(worker @ WorkerSnapshot::Dedicated { .. }) => {
-                        let handle = worker.handle();
-                        let WorkerSnapshot::Dedicated { worker, .. } = worker else { unreachable!() };
-                        assert!(created.insert(handle));
-                        if worker.info.name == "parent" { parent = Some(handle); }
-                        else { assert_eq!(worker.info.name, "child"); child_owner = Some(worker.info.owner); }
+                let event = events.recv().await.unwrap().event;
+                if let Some((occurrence, record)) = network.observe(&event)
+                    && record.url().as_str() == "data:text/plain,parent-ready"
+                {
+                    assert_eq!(occurrence.owner, NetworkOwner::Worker(parent.unwrap()));
+                    break;
+                }
+                if let BrowserEvent::WorkerCreated(worker @ WorkerSnapshot::Dedicated { .. }) =
+                    event
+                {
+                    let handle = worker.handle();
+                    let WorkerSnapshot::Dedicated { worker, .. } = worker else {
+                        unreachable!()
+                    };
+                    assert!(created.insert(handle));
+                    if worker.info.name == "parent" {
+                        parent = Some(handle);
+                    } else {
+                        assert_eq!(worker.info.name, "child");
+                        child_owner = Some(worker.info.owner);
                     }
-                    BrowserEvent::NetworkRequestCompleted(occurrence) if matches!(
-                        &occurrence.renderer.item, crate::page::RendererNetworkOutputItem::Resource(item)
-                        if matches!(item.as_ref(), crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                            if record.url().as_str() == "data:text/plain,parent-ready")) => {
-                        assert_eq!(occurrence.owner, NetworkOwner::Worker(parent.unwrap()));
-                        break;
-                    }
-                    _ => {}
                 }
             }
-        }).await.expect("both real Worker threads must execute before the retirement trigger");
+        })
+        .await
+        .expect("both real Worker threads must execute before the retirement trigger");
         let parent = parent.unwrap();
         let WorkerHandle::Dedicated { instance, .. } = parent else {
             unreachable!()

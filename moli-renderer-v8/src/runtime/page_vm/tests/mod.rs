@@ -14221,6 +14221,7 @@ fn split_network_output_items(
                 lifecycle_events.push(event);
             }
             ScriptNetworkOutputItem::SubresourceRequestStarted(_)
+            | ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
             | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
             | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)

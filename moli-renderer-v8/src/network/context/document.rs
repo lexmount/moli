@@ -99,6 +99,10 @@ impl DocumentResourceLoaderBootstrap {
         DocumentResourceLoader::new(self.request_client, self.task_runner, context)
     }
 
+    pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
+        self.task_runner.clone()
+    }
+
     pub(crate) fn author_styles_disabled(&self) -> bool {
         self.request_client.author_styles_disabled()
     }

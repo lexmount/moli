@@ -572,6 +572,9 @@ pub struct ScriptNetworkOutput {
 pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
     SubresourceRequestStarted(Arc<SubresourceRequestStarted>),
+    /// Accepted request overrides before transport; the handle and admission
+    /// remain unchanged. Recovery retains the current metadata, not this history.
+    SubresourceRequestUpdated(Arc<SubresourceRequestStarted>),
     SubresourceResponseStarted(Arc<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
@@ -920,7 +923,8 @@ impl ScriptExecutionReport {
                 }
                 self.subresource_network_records.push(*record);
             }
-            ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
+            ScriptNetworkOutputItem::SubresourceRequestStarted(request)
+            | ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
                 let handle = request.handle().get();
                 let state = self.staged_subresource_report_state_mut();
                 if state.completed_handles.contains(&handle) {

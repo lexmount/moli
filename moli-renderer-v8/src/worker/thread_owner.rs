@@ -199,8 +199,8 @@ mod tests {
         };
 
         crate::ensure_v8_for_test();
-        let mut owner = RendererBrowserContextRuntime::new();
-        let peer = RendererBrowserContextRuntime::new();
+        let mut owner = RendererBrowserContextRuntime::new_for_test();
+        let peer = RendererBrowserContextRuntime::new_for_test();
         let context = owner.worker_context_runtime();
         let client =
             ResourceRequestClient::from_browser_resource_runtime(owner.browser_resource_runtime());
@@ -330,7 +330,7 @@ mod tests {
         let (retire_tx, retire_rx) = mpsc::channel();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         let owner_thread = std::thread::spawn(move || {
-            let mut owner = RendererBrowserContextRuntime::new();
+            let mut owner = RendererBrowserContextRuntime::new_for_test();
             let context = owner.worker_context_runtime();
             let client = ResourceRequestClient::from_browser_resource_runtime(
                 owner.browser_resource_runtime(),

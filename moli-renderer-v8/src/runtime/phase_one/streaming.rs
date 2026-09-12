@@ -1240,7 +1240,7 @@ mod tests {
         let (script_url, server) = spawn_single_script_server(script_body).await;
         let load = crate::planning::SharedScriptSourceLoad::ready_ok("window.blocking = true;");
         let mut runtime = streaming_runtime_with_pending_parser_blocking_source_load(load);
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         let document_url = Url::parse("https://example.test/").expect("test document url");
         let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();

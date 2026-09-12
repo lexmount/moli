@@ -177,6 +177,13 @@ impl NetworkBacklogPreferredRequestIdBudget {
 }
 
 impl TargetNetworkAgentState {
+    pub(crate) fn has_observed_subresource_request(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.output_queue.has_observed_subresource_request(handle)
+    }
+
     pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
         self.output_queue.has_observed_network_phase(item)
     }
@@ -499,10 +506,10 @@ impl TargetNetworkAgentState {
         &mut self,
         handle: SubresourceNetworkRequestHandle,
         request_id: String,
-    ) {
+    ) -> &str {
         self.artifacts
             .subresource_network_artifacts
-            .set_request_id_for_handle_if_absent(handle, request_id);
+            .set_request_id_for_handle_if_absent(handle, request_id)
     }
 
     pub(crate) fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {
@@ -1081,7 +1088,8 @@ fn update_active_renderer_subresource_requests(
                 active_requests.remove(&handle);
             }
         }
-        ScriptNetworkOutputItem::SubresourceResponseStarted(_)
+        ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+        | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
         | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
@@ -1892,10 +1900,10 @@ impl SubresourceNetworkArtifacts {
         &mut self,
         handle: SubresourceNetworkRequestHandle,
         request_id: String,
-    ) {
+    ) -> &str {
         self.request_ids_by_handle
             .entry(handle)
-            .or_insert(request_id);
+            .or_insert(request_id)
     }
 
     fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {

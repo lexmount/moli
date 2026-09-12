@@ -103,7 +103,7 @@ impl PageVmTaskExecutorTestHarness {
     }
 
     pub(crate) fn new(document_url: Url, loader: &ResourceRequestClient) -> Self {
-        let owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let mut harness =
             Self::new_with_browser_context_runtime(document_url, loader, owner.handle());
         harness._browser_context_owner = Some(owner);
@@ -134,7 +134,7 @@ impl PageVmTaskExecutorTestHarness {
     /// dispatcher. It must not be used as evidence for owner-slot admission or
     /// scheduler fairness, which this fixture deliberately does not model.
     pub(crate) fn new_with_dom_host(dom_host: DomHost, loader: &ResourceRequestClient) -> Self {
-        let owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let mut harness =
             Self::new_with_dom_host_and_browser_context_runtime(dom_host, loader, owner.handle());
         harness._browser_context_owner = Some(owner);
