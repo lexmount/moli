@@ -132,6 +132,7 @@ struct InputEventInitDeclaration<'scope> {
     composed: bool,
     input_type: v8::Local<'scope, v8::String>,
     data: v8::Local<'scope, v8::Value>,
+    data_transfer: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -798,16 +799,42 @@ pub(crate) fn construct_input_event<'s>(
     input_type: TextEditInputType,
     data: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    construct_input_event_with_transfer(scope, event_type, input_type, data, None)
+}
+
+pub(crate) fn construct_drop_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    construct_input_event_with_transfer(
+        scope, event_type, TextEditInputType::InsertFromDrop, None, Some(data_transfer),
+    )
+}
+
+fn construct_input_event_with_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    input_type: TextEditInputType,
+    data: Option<&str>,
+    data_transfer: Option<v8::Local<'s, v8::Object>>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let input_type = v8_string(scope, input_type.as_str())?;
     let data = match data {
         Some(text) => v8_string(scope, text)?.into(),
         None => v8::null(scope).into(),
     };
+    let data_transfer = data_transfer.map(|value| value.into()).unwrap_or_else(|| v8::null(scope).into());
     let init =
-        InputEventInitDeclaration::new(true, event_type == "beforeinput", true, input_type, data)
+        InputEventInitDeclaration::new(true, event_type == "beforeinput", true, input_type, data, data_transfer)
             .bind(scope)
             .ok()?;
-    construct_event(scope, "InputEvent", event_type, init)
+    // Native editing must not invoke a page-replaced InputEvent constructor.
+    let ctor = crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "InputEvent").ok()?;
+    let event_type = v8_string(scope, event_type)?;
+    let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(crate) fn construct_simple_event<'s>(
