@@ -1434,6 +1434,8 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     let body_source_id = crate::network_host::new_network_body_source_id();
                     vm.start_streaming_async_subresource_fetch(
                         crate::types::AsyncSubresourceStreamingStarted {
+                            response_filter: None,
+                            skip_fetch_security_validation: false,
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: "GET".to_owned(),
@@ -1562,6 +1564,8 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
             let body_source_id = crate::network_host::new_network_body_source_id();
             vm.start_streaming_async_subresource_fetch(
                 crate::types::AsyncSubresourceStreamingStarted {
+                    response_filter: None,
+                    skip_fetch_security_validation: false,
                     internal_id: request.internal_id,
                     request_url: request.url.clone(),
                     request_method: "GET".to_owned(),
@@ -1699,6 +1703,8 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                 let body_source_id = crate::network_host::new_network_body_source_id();
                 vm.start_streaming_async_subresource_fetch(
                     crate::types::AsyncSubresourceStreamingStarted {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),
@@ -2880,6 +2886,8 @@ __streamingXhr.send();
     };
 
     vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
@@ -2989,6 +2997,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             info: crate::types::PendingSubresourceFetchInfo {
                                 internal_id,
@@ -3273,6 +3282,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             info: crate::types::PendingSubresourceFetchInfo {
                                 internal_id,
@@ -3435,6 +3445,7 @@ fn install_streaming_fetch_response_fixture(
             context_host
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                    skip_fetch_security_validation: false,
                     pending: super::PendingSubresourceFetchState {
                         info: crate::types::PendingSubresourceFetchInfo {
                             internal_id,
@@ -3537,6 +3548,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             info: crate::types::PendingSubresourceFetchInfo {
                                 internal_id,
@@ -4162,6 +4174,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             context_host
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                    skip_fetch_security_validation: false,
                     pending: super::PendingSubresourceFetchState {
                         info: crate::types::PendingSubresourceFetchInfo {
                             internal_id,

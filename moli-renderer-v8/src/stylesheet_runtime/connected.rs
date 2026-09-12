@@ -2154,7 +2154,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
             Ok(Some(response)) => {
                 let response_filter = response.response_filter;
                 let origin_clean =
-                    connected_link_origin_clean_from_service_worker_filter(response_filter);
+                    connected_link_origin_clean_from_service_worker_filter(response_filter.clone());
                 let response = *response.response;
                 let load_event_successful =
                     connected_link_load_event_successful(&response, response_filter);
@@ -2235,11 +2235,13 @@ fn connected_link_readiness_request(
 fn connected_link_origin_clean_from_service_worker_filter(
     response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 ) -> bool {
-    match response_filter {
-        Some(AsyncSubresourceFetchResponseFilter::Opaque)
-        | Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect) => false,
-        None => true,
-    }
+    !matches!(
+        response_filter,
+        Some(
+            AsyncSubresourceFetchResponseFilter::Opaque
+                | AsyncSubresourceFetchResponseFilter::OpaqueRedirect
+        )
+    )
 }
 
 fn link_crossorigin_credentials_mode(cross_origin: Option<&str>) -> RequestCredentialsMode {
@@ -2260,7 +2262,7 @@ fn connected_link_load_event_successful(
     match response_filter {
         Some(AsyncSubresourceFetchResponseFilter::Opaque)
         | Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect) => true,
-        None => (200..=299).contains(&response.status),
+        _ => (200..=299).contains(&response.status),
     }
 }
 

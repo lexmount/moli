@@ -658,8 +658,10 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) result: std::result::Result<NavigationResponse, String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum AsyncSubresourceFetchResponseFilter {
+    Basic,
+    Cors(Vec<String>),
     Opaque,
     OpaqueRedirect,
 }
@@ -692,6 +694,8 @@ pub(super) struct AsyncSubresourceNetworkContext {
 
 #[derive(Debug)]
 pub(super) struct AsyncSubresourceStreamingStarted {
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -922,6 +926,7 @@ pub(super) struct ServiceWorkerControllerChangeCompletion {
 }
 
 pub(super) struct StreamingSubresourceFetchState {
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -937,12 +942,13 @@ pub(super) struct StreamingSubresourceFetchState {
 
 impl StreamingSubresourceFetchState {
     pub(super) fn needs_orb_body_validation(&self) -> bool {
-        crate::network_host::fetch_response_needs_orb_body_validation(
-            &self.pending.info.document_url,
-            &self.head.final_url,
-            &self.head.headers,
-            self.pending.request_mode,
-        )
+        !self.skip_fetch_security_validation
+            && crate::network_host::fetch_response_needs_orb_body_validation(
+                &self.pending.info.document_url,
+                &self.head.final_url,
+                &self.head.headers,
+                self.pending.request_mode,
+            )
     }
 }
 

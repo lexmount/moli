@@ -185,6 +185,8 @@ fn xhr_null_body_statuses_discard_buffered_and_streamed_bytes() {
                     let body_source_id = crate::network_host::new_network_body_source_id();
                     vm.start_streaming_async_subresource_fetch(
                         crate::types::AsyncSubresourceStreamingStarted {
+                            response_filter: None,
+                            skip_fetch_security_validation: false,
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: method.to_owned(),
@@ -321,6 +323,8 @@ fn xhr_null_body_late_completion_preserves_a_replacement_requests_progress() {
         let body_source_id = crate::network_host::new_network_body_source_id();
         vm.start_streaming_async_subresource_fetch(
             crate::types::AsyncSubresourceStreamingStarted {
+                response_filter: None,
+                skip_fetch_security_validation: false,
                 internal_id: request.internal_id,
                 request_url: request.url.clone(),
                 request_method: method.to_owned(),

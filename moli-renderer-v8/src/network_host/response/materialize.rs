@@ -16,25 +16,30 @@ pub(crate) struct FetchResponseRequest<'a> {
 }
 
 impl FetchResponseRequest<'_> {
-    pub(crate) fn filter_response_headers(
+    pub(crate) fn network_response_filter(
         self,
+        document_url: &url::Url,
         request_origin: &moli_url::WebOrigin,
         head: &moli_fetch::ResponseHead,
         credentials_mode: moli_fetch::RequestCredentialsMode,
-    ) -> Vec<(String, String)> {
-        // Opaque responses need their internal headers for Cache and respondWith.
-        // Their public header list is made empty when the Response is built.
-        if self.mode == RequestMode::NoCors
-            || self.redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status)
-        {
-            head.headers.clone()
-        } else {
-            filter_cors_exposed_response_headers_for_origin(
-                request_origin,
-                &head.final_url,
-                &head.headers,
-                credentials_mode,
-            )
+    ) -> crate::types::AsyncSubresourceFetchResponseFilter {
+        use crate::types::AsyncSubresourceFetchResponseFilter as Filter;
+        let filter = response_filter(document_url, head, self);
+        match compute_fetch_response_type(document_url, head, filter) {
+            "opaque" => Filter::Opaque,
+            "opaqueredirect" => Filter::OpaqueRedirect,
+            "cors" => Filter::Cors(
+                filter_cors_exposed_response_headers_for_origin(
+                    request_origin,
+                    &head.final_url,
+                    &head.headers,
+                    credentials_mode,
+                )
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect(),
+            ),
+            _ => Filter::Basic,
         }
     }
 }
@@ -46,13 +51,17 @@ fn is_redirect_status(status: u16) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FetchResponseFilter {
     None,
+    Basic,
+    Cors,
     Opaque,
     OpaqueRedirect,
 }
 
-impl From<crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFilter {
-    fn from(value: crate::types::AsyncSubresourceFetchResponseFilter) -> Self {
+impl From<&crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFilter {
+    fn from(value: &crate::types::AsyncSubresourceFetchResponseFilter) -> Self {
         match value {
+            crate::types::AsyncSubresourceFetchResponseFilter::Basic => Self::Basic,
+            crate::types::AsyncSubresourceFetchResponseFilter::Cors(_) => Self::Cors,
             crate::types::AsyncSubresourceFetchResponseFilter::Opaque => Self::Opaque,
             crate::types::AsyncSubresourceFetchResponseFilter::OpaqueRedirect => {
                 Self::OpaqueRedirect
@@ -127,6 +136,8 @@ fn compute_fetch_response_type(
     // Main fetch selects basic tainting for data URLs regardless of request mode.
     // HTTP responses retain cross-origin taint after a redirect back to the client.
     match filter {
+        FetchResponseFilter::Basic => "basic",
+        FetchResponseFilter::Cors => "cors",
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
         FetchResponseFilter::None
@@ -140,7 +151,7 @@ fn compute_fetch_response_type(
 }
 
 fn filtered_response_status(head: &moli_fetch::ResponseHead, filter: FetchResponseFilter) -> u16 {
-    if filter == FetchResponseFilter::None {
+    if filtered_response_exposes_body(filter) {
         head.status
     } else {
         0
@@ -152,27 +163,33 @@ fn filtered_response_url(head: &moli_fetch::ResponseHead, filter: FetchResponseF
         FetchResponseFilter::Opaque => "",
         // Manual redirects preserve the URL list; only their status, headers,
         // and body are filtered. No redirect target was fetched.
-        FetchResponseFilter::None | FetchResponseFilter::OpaqueRedirect => head.final_url.as_str(),
+        FetchResponseFilter::None
+        | FetchResponseFilter::Basic
+        | FetchResponseFilter::Cors
+        | FetchResponseFilter::OpaqueRedirect => head.final_url.as_str(),
     }
 }
 
 fn filtered_response_exposes_body(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    !matches!(
+        filter,
+        FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect
+    )
 }
 
 fn filtered_response_exposes_redirected(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    filtered_response_exposes_body(filter)
 }
 
 fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    filtered_response_exposes_body(filter)
 }
 
 fn filtered_response_status_text(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &str {
-    if filter == FetchResponseFilter::None {
+    if filtered_response_exposes_body(filter) {
         head.status_text()
     } else {
         ""
@@ -229,9 +246,17 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
     let filter = filter_override
+        .as_ref()
         .map(FetchResponseFilter::from)
         .unwrap_or_else(|| response_filter(document_url, &head, request));
-    let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
+    let obj = build_fetch_response_object_head(
+        scope,
+        document_url,
+        &head,
+        filter,
+        None,
+        filter_override.as_ref(),
+    );
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
     } else if filtered_response_exposes_body(filter) {
@@ -243,6 +268,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream)
 }
 
+#[cfg(test)]
 pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
@@ -250,8 +276,36 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
     head: moli_fetch::ResponseHead,
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request);
-    let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
+    build_fetch_response_object_from_subresource_body_for_request_mode_with_filter(
+        scope,
+        document_url,
+        request,
+        head,
+        body,
+        None,
+    )
+}
+
+pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode_with_filter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: &url::Url,
+    request: FetchResponseRequest<'_>,
+    head: moli_fetch::ResponseHead,
+    body: crate::protocol_types::SubresourceResponseBody,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+) -> v8::Local<'s, v8::Object> {
+    let filter = filter_override
+        .as_ref()
+        .map(FetchResponseFilter::from)
+        .unwrap_or_else(|| response_filter(document_url, &head, request));
+    let obj = build_fetch_response_object_head(
+        scope,
+        document_url,
+        &head,
+        filter,
+        None,
+        filter_override.as_ref(),
+    );
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
     } else if filtered_response_exposes_body(filter) {
@@ -263,12 +317,31 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
     finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream)
 }
 
+#[cfg(test)]
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: &url::Url,
     request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
+) -> v8::Local<'s, v8::Object> {
+    build_fetch_response_object_from_stream_for_request_mode_with_filter(
+        scope,
+        document_url,
+        request,
+        head,
+        body_source_id,
+        None,
+    )
+}
+
+pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: &url::Url,
+    request: FetchResponseRequest<'_>,
+    head: moli_fetch::ResponseHead,
+    body_source_id: NetworkBodySourceId,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
@@ -277,6 +350,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
         head,
         body_source_id,
         None,
+        filter_override,
     )
 }
 
@@ -294,6 +368,7 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
         head,
         body_source_id,
         Some(request_url.as_str()),
+        None,
     )
 }
 
@@ -304,13 +379,23 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request);
+    let filter = filter_override
+        .as_ref()
+        .map(FetchResponseFilter::from)
+        .unwrap_or_else(|| response_filter(document_url, &head, request));
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
-    let obj =
-        build_fetch_response_object_head(scope, document_url, &head, filter, filtered_surface_url);
+    let obj = build_fetch_response_object_head(
+        scope,
+        document_url,
+        &head,
+        filter,
+        filtered_surface_url,
+        filter_override.as_ref(),
+    );
     if response_has_null_body(request.method, head.status) {
         // Fetch nulls the internal body, including for filtered responses. Do
         // not register a body source: subsequent transport chunks and terminal
@@ -331,6 +416,7 @@ fn build_fetch_response_object_head<'s>(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
     filtered_surface_url: Option<&str>,
+    filter_override: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
     let status = filtered_response_status(head, filter);
     let response_type = compute_fetch_response_type(document_url, head, filter);
@@ -348,22 +434,36 @@ fn build_fetch_response_object_head<'s>(
     FetchResponseInternalUrlDeclaration::new(head.final_url.to_string())
         .initialize(scope, obj)
         .expect("Fetch Response internal URL declaration should initialize");
-    if filter != FetchResponseFilter::None {
-        set_filtered_response_internal_head(
-            scope,
-            obj,
-            head.status,
-            head.status_text(),
-            &head.headers,
-        );
-    }
+    set_filtered_response_internal_head(scope, obj, head.status, head.status_text(), &head.headers);
+    let header_entries = if filtered_response_exposes_headers(filter) {
+        match filter_override {
+            Some(crate::types::AsyncSubresourceFetchResponseFilter::Cors(names)) => head
+                .headers
+                .iter()
+                .filter(|(name, _)| {
+                    names
+                        .iter()
+                        .any(|exposed| exposed.eq_ignore_ascii_case(name))
+                })
+                .cloned()
+                .collect(),
+            _ => head.headers.clone(),
+        }
+    } else {
+        Vec::new()
+    };
+    let headers = filter_headers_for_guard(&header_entries, HeadersGuard::Response);
+    let headers_obj =
+        build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
+    install_headers_object_methods(scope, headers_obj);
+    set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
     mark_response_object(scope, obj);
     obj
 }
 
-fn set_filtered_response_internal_head(
-    scope: &mut v8::PinScope<'_, '_>,
-    obj: v8::Local<'_, v8::Object>,
+pub(crate) fn set_filtered_response_internal_head<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    obj: v8::Local<'s, v8::Object>,
     status: u16,
     status_text: &str,
     headers: &[(String, String)],
@@ -384,6 +484,9 @@ fn set_filtered_response_internal_head(
         RESPONSE_INTERNAL_HEADERS_SLOT,
         internal_headers.into(),
     );
+    if let Some(headers) = response_slot_object(scope, obj, RESPONSE_HEADERS_SLOT) {
+        super::super::headers::mark_headers_immutable(scope, headers);
+    }
 }
 
 fn finish_fetch_response_object_with_body_stream<'s>(
@@ -399,17 +502,6 @@ fn finish_fetch_response_object_with_body_stream<'s>(
         "opaqueredirect" => FetchResponseFilter::OpaqueRedirect,
         _ => FetchResponseFilter::None,
     };
-    let header_entries = if filtered_response_exposes_headers(filter) {
-        head.headers.as_slice()
-    } else {
-        &[][..]
-    };
-    let headers = filter_headers_for_guard(header_entries, HeadersGuard::Response);
-    let headers_obj =
-        build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
-    install_headers_object_methods(scope, headers_obj);
-    set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
-
     let body_value = if !filtered_response_exposes_body(filter) {
         v8::null(scope).into()
     } else if let Some(stream) = body_stream {
@@ -470,6 +562,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
 
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseObject {
+    pub(crate) cors_exposed_header_names: Option<Vec<String>>,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -481,6 +574,7 @@ pub(crate) struct MaterializedResponseObject {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseHead {
+    pub(crate) cors_exposed_header_names: Option<Vec<String>>,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -492,6 +586,7 @@ pub(crate) struct MaterializedResponseHead {
 impl MaterializedResponseHead {
     pub(crate) fn with_body(self, body: Vec<u8>) -> MaterializedResponseObject {
         MaterializedResponseObject {
+            cors_exposed_header_names: self.cors_exposed_header_names,
             final_url: self.final_url,
             response_type: self.response_type,
             redirected: self.redirected,
@@ -593,6 +688,8 @@ pub(crate) fn materialize_response_object_head<'s>(
 
     Ok((
         MaterializedResponseHead {
+            cors_exposed_header_names: (response_type == "cors")
+                .then(|| headers.iter().map(|(name, _)| name.clone()).collect()),
             final_url,
             response_type,
             redirected: response_slot_bool(scope, response, RESPONSE_REDIRECTED_SLOT),
@@ -610,9 +707,8 @@ pub(crate) fn materialize_response_object_internal_head<'s>(
     context: &str,
 ) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
     let (mut head, response) = materialize_response_object_head(scope, value, context)?;
-    if matches!(head.response_type.as_str(), "opaque" | "opaqueredirect")
-        && let Some(internal_status) =
-            response_slot_number(scope, response, RESPONSE_INTERNAL_STATUS_SLOT)
+    if let Some(internal_status) =
+        response_slot_number(scope, response, RESPONSE_INTERNAL_STATUS_SLOT)
     {
         head.status = internal_status as u16;
         head.status_text =

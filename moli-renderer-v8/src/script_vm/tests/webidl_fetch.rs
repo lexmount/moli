@@ -9115,6 +9115,8 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
         let id = crate::network_host::new_network_body_source_id();
         vm.start_streaming_async_subresource_fetch(
             crate::types::AsyncSubresourceStreamingStarted {
+                response_filter: None,
+                skip_fetch_security_validation: false,
                 internal_id: pending.internal_id,
                 request_url: pending.url.clone(),
                 request_method: "GET".to_owned(),

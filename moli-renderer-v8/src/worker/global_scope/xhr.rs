@@ -1017,6 +1017,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 {
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         head: response_head.clone(),
                         body: response_body.clone(),
                     });
@@ -1073,6 +1075,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         from_cache: response_head.from_cache,
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         head: response_head,
                         body: response_body,
                     });

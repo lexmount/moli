@@ -64,6 +64,8 @@ const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_SLOT: &str =
     "__moliStorageBucketCachePutResponseStatus";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT: &str =
     "__moliStorageBucketCachePutResponseStatusText";
+const STORAGE_BUCKET_CACHE_PUT_RESPONSE_CORS_EXPOSED_HEADERS_SLOT: &str =
+    "__lmStorageBucketCachePutResponseCorsExposedHeaders";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT: &str =
     "__moliStorageBucketCachePutResponseHeaders";
 const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent";
@@ -372,6 +374,8 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT)]
     response_headers_json: String,
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_CORS_EXPOSED_HEADERS_SLOT)]
+    response_cors_exposed_header_names_json: String,
 }
 
 enum StorageBucketCachedResponseMaterialization<'scope> {
@@ -1801,6 +1805,10 @@ fn storage_bucket_cache_put_pending_body<'s>(
         response_status_text: head.status_text,
         response_headers_json: serde_json::to_string(&head.headers)
             .unwrap_or_else(|_| "[]".to_owned()),
+        response_cors_exposed_header_names_json: serde_json::to_string(
+            &head.cors_exposed_header_names,
+        )
+        .unwrap_or_else(|_| "null".to_owned()),
     }
     .bind(scope)
     .expect("Cache.put pending body data should bind");
@@ -1858,6 +1866,7 @@ fn storage_bucket_cache_put_body_fulfilled_callback<'s>(
         }
     };
     let response = StorageBucketCachedResponse {
+        cors_exposed_header_names: pending.response_cors_exposed_header_names,
         response_type: pending.response_type,
         url: pending.response_url,
         redirected: pending.response_redirected,
@@ -1897,6 +1906,7 @@ fn storage_bucket_cache_put_body_rejected_callback<'s>(
 }
 
 struct StorageBucketCachePutPendingData<'scope> {
+    response_cors_exposed_header_names: Option<Vec<String>>,
     resolver: v8::Local<'scope, v8::PromiseResolver>,
     handle: StorageBucketCacheHandle,
     request: CacheRequestInfo,
@@ -1958,6 +1968,13 @@ fn storage_bucket_cache_put_pending_data<'s>(
         data,
         STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT,
     )?;
+    let response_cors_exposed_header_names =
+        serde_json::from_str::<Option<Vec<String>>>(&data_private_string(
+            scope,
+            data,
+            STORAGE_BUCKET_CACHE_PUT_RESPONSE_CORS_EXPOSED_HEADERS_SLOT,
+        )?)
+        .ok()?;
     let response_headers_json =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT)?;
     let response_headers =
@@ -1967,6 +1984,7 @@ fn storage_bucket_cache_put_pending_data<'s>(
         indexed_db_storage_key: bucket_storage_key,
     };
     Some(StorageBucketCachePutPendingData {
+        response_cors_exposed_header_names,
         resolver,
         handle: StorageBucketCacheHandle {
             bucket,
@@ -2816,6 +2834,7 @@ fn storage_bucket_cached_response_from_head_body(
     body: Vec<u8>,
 ) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
+        cors_exposed_header_names: head.cors_exposed_header_names,
         response_type: head.response_type,
         url: head
             .final_url
@@ -2955,13 +2974,38 @@ fn build_storage_bucket_cached_response_object<'s>(
     );
     let status_text = v8_string(scope, &response.status_text)?;
     init.set_string_property(scope, "statusText", status_text.into());
-    let headers = headers_entries_to_init_array(scope, &response.headers);
+    let public_headers = response
+        .headers
+        .iter()
+        .filter(|(name, _)| {
+            response.response_type != "cors"
+                || response
+                    .cors_exposed_header_names
+                    .as_ref()
+                    .is_none_or(|names| {
+                        names
+                            .iter()
+                            .any(|exposed| exposed.eq_ignore_ascii_case(name))
+                    })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let headers = headers_entries_to_init_array(scope, &public_headers);
     init.set_string_property(scope, "headers", headers.into());
     let global = scope.get_current_context().global(scope);
     let constructor = global
         .get(scope, v8str(scope, "Response").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
+    if matches!(response.response_type.as_str(), "basic" | "cors") {
+        crate::network_host::set_filtered_response_internal_head(
+            scope,
+            response_obj,
+            response.status,
+            &response.status_text,
+            &response.headers,
+        );
+    }
     crate::network_host::set_response_slot_string(
         scope,
         response_obj,

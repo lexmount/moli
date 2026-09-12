@@ -72,9 +72,6 @@ use crate::network_host::{
     XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
     XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
     apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, apply_xhr_upload_event,
-    build_fetch_response_object_from_body_source_for_request_mode,
-    build_fetch_response_object_from_stream_for_request_mode,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
     capture_xhr_upload_listener_flag, close_pending_network_body_stream,
     cors_request_origin_after_redirects, dispatch_xhr_loadstart,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
@@ -1125,6 +1122,8 @@ pub(super) enum WorkerFetchEvent {
 }
 
 pub(super) struct WorkerFetchCompletion {
+    response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    skip_fetch_security_validation: bool,
     fetch_id: u32,
     network_request_headers: Option<Vec<(String, String)>>,
     result: Result<WorkerFetchResponse, String>,
@@ -1241,6 +1240,8 @@ pub(super) struct PendingWorkerCspReport {
 }
 
 pub(super) struct PausedWorkerSubresourceResponse {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) head: ResponseHead,
     pub(super) body: SubresourceResponseBody,
 }

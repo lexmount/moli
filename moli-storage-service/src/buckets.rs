@@ -132,6 +132,7 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageBucketCachedResponse {
+    pub cors_exposed_header_names: Option<Vec<String>>,
     pub response_type: String,
     pub url: String,
     pub redirected: bool,
@@ -388,6 +389,8 @@ struct StorageBucketCacheJson {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageBucketCacheJsonEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cors_exposed_header_names: Option<Vec<String>>,
     usage_bytes: u64,
     #[serde(
         default = "default_cache_request_method",
@@ -1773,6 +1776,8 @@ fn cache_entry_matches_query(
     query.ignore_vary
         // Opaque public headers are empty even though Cache retains the internal head.
         || matches!(entry.response.response_type.as_str(), "opaque" | "opaqueredirect")
+        || entry.response.response_type == "cors" && entry.response.cors_exposed_header_names.as_ref()
+            .is_some_and(|names| !names.iter().any(|name| name.eq_ignore_ascii_case("vary")))
         || cached_response_vary_matches_request(
             &entry.response.headers,
             &entry.request.headers,
@@ -2098,6 +2103,7 @@ fn load_storage_bucket_cache_file(
                         headers: entry.request_headers,
                     },
                     response: StorageBucketCachedResponse {
+                        cors_exposed_header_names: entry.cors_exposed_header_names,
                         response_type: entry.response_type,
                         url: entry.url,
                         redirected: entry.redirected,
@@ -2129,6 +2135,7 @@ fn save_storage_bucket_cache_file(
                 (
                     request_key.clone(),
                     StorageBucketCacheJsonEntry {
+                        cors_exposed_header_names: entry.response.cors_exposed_header_names.clone(),
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
@@ -2827,6 +2834,7 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
+                    cors_exposed_header_names: None,
                     response_type: "default".to_owned(),
                     url: "https://quota.test/resource".to_owned(),
                     redirected: false,
@@ -2904,6 +2912,7 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
+                    cors_exposed_header_names: None,
                     response_type: "default".to_owned(),
                     url: "https://default-quota.test/resource".to_owned(),
                     redirected: false,
@@ -3133,6 +3142,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3178,6 +3188,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3234,6 +3245,7 @@ mod tests {
         );
 
         let replacement_response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3288,6 +3300,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, String)>| StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3380,6 +3393,7 @@ mod tests {
             .open_cache_handle_for_identity(&identity, "cache")?
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3444,6 +3458,7 @@ mod tests {
         )?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3453,6 +3468,7 @@ mod tests {
             body: b"small".to_vec(),
         };
         let oversized = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3562,6 +3578,7 @@ mod tests {
                     "global-cache",
                     "/entry",
                     StorageBucketCachedResponse {
+                        cors_exposed_header_names: None,
                         response_type: "default".to_owned(),
                         url: "https://a.test/entry".to_owned(),
                         redirected: false,
@@ -3800,6 +3817,7 @@ mod tests {
                         "cache",
                         "/cached.txt",
                         StorageBucketCachedResponse {
+                            cors_exposed_header_names: None,
                             response_type: "default".to_owned(),
                             url: String::new(),
                             redirected: false,
@@ -3889,81 +3907,102 @@ mod tests {
 
     #[test]
     fn json_storage_bucket_store_persists_cache_entries() -> Result<()> {
-        let temp = TempStorePath::new("cache-persist");
-        let cache_root = temp.cache_root();
-        let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            url: String::new(),
-            redirected: false,
-            status: 202,
-            status_text: "Accepted".to_owned(),
-            headers: vec![("x-cache".to_owned(), "persisted".to_owned())],
-            body: b"profile cache body".to_vec(),
-        };
-        {
+        for cors in [false, true] {
+            let temp = TempStorePath::new("cache-persist");
+            let cache_root = temp.cache_root();
+            let response = StorageBucketCachedResponse {
+                cors_exposed_header_names: cors.then(|| vec!["x-cache".to_owned()]),
+                response_type: if cors { "cors" } else { "default" }.to_owned(),
+                url: if cors {
+                    "https://remote.test/cached.txt"
+                } else {
+                    ""
+                }
+                .to_owned(),
+                redirected: false,
+                status: 202,
+                status_text: "Accepted".to_owned(),
+                headers: if cors {
+                    vec![
+                        ("x-cache".to_owned(), "persisted".to_owned()),
+                        (
+                            "cross-origin-resource-policy".to_owned(),
+                            "same-origin".to_owned(),
+                        ),
+                        ("vary".to_owned(), "*".to_owned()),
+                    ]
+                } else {
+                    vec![("x-cache".to_owned(), "persisted".to_owned())]
+                },
+                body: b"profile cache body".to_vec(),
+            };
+            {
+                let store =
+                    new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
+                let mut store = store.lock();
+                let identity = store.open_bucket("https://a.test", "bucket")?;
+                assert!(store.open_cache_for_identity(&identity, "cache")?);
+                assert_eq!(
+                    store.put_cache_entry_for_identity(
+                        &identity,
+                        "cache",
+                        "/cached.txt",
+                        response.clone(),
+                        64,
+                        0,
+                    )?,
+                    StorageBucketCachePutOutcome::Stored
+                );
+            }
+
+            assert!(
+                cache_root.exists(),
+                "profile-backed CacheStorage root should be written"
+            );
+            let (next, previous) = storage_bucket_cache_replacement_paths(&cache_root)?;
+            assert!(
+                !next.exists(),
+                "profile-backed CacheStorage replacement root should not be left after save"
+            );
+            assert!(
+                !previous.exists(),
+                "profile-backed CacheStorage previous root should not be left after save"
+            );
+
+            {
+                let store =
+                    new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
+                let mut store = store.lock();
+                let identity = store.open_bucket("https://a.test", "bucket")?;
+                assert_eq!(
+                    store.cache_names_for_identity(&identity),
+                    Some(vec!["cache".to_owned()])
+                );
+                let matched = store
+                    .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
+                    .flatten()
+                    .expect("cache entry should persist across reopen");
+                assert_eq!(matched, response);
+                assert_eq!(store.cache_usage_for_identity(&identity), Some(64));
+                assert_eq!(
+                    store.delete_cache_for_identity(&identity, "cache")?,
+                    Some(true)
+                );
+            }
+
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
             let identity = store.open_bucket("https://a.test", "bucket")?;
-            assert!(store.open_cache_for_identity(&identity, "cache")?);
-            assert_eq!(
-                store.put_cache_entry_for_identity(
-                    &identity,
-                    "cache",
-                    "/cached.txt",
-                    response.clone(),
-                    64,
-                    0,
-                )?,
-                StorageBucketCachePutOutcome::Stored
-            );
+            assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
         }
-
-        assert!(
-            cache_root.exists(),
-            "profile-backed CacheStorage root should be written"
-        );
-        let (next, previous) = storage_bucket_cache_replacement_paths(&cache_root)?;
-        assert!(
-            !next.exists(),
-            "profile-backed CacheStorage replacement root should not be left after save"
-        );
-        assert!(
-            !previous.exists(),
-            "profile-backed CacheStorage previous root should not be left after save"
-        );
-
-        {
-            let store =
-                new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
-            let mut store = store.lock();
-            let identity = store.open_bucket("https://a.test", "bucket")?;
-            assert_eq!(
-                store.cache_names_for_identity(&identity),
-                Some(vec!["cache".to_owned()])
-            );
-            let matched = store
-                .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
-                .flatten()
-                .expect("cache entry should persist across reopen");
-            assert_eq!(matched, response);
-            assert_eq!(store.cache_usage_for_identity(&identity), Some(64));
-            assert_eq!(
-                store.delete_cache_for_identity(&identity, "cache")?,
-                Some(true)
-            );
-        }
-
-        let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
-        let mut store = store.lock();
-        let identity = store.open_bucket("https://a.test", "bucket")?;
-        assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
         Ok(())
     }
 
     #[test]
     fn json_storage_bucket_cache_crash_points_recover_one_committed_root() -> Result<()> {
         let old_response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3973,6 +4012,7 @@ mod tests {
             body: b"old committed cache body".to_vec(),
         };
         let new_response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4057,6 +4097,7 @@ mod tests {
         let temp = TempStorePath::new("cache-promote-next");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4109,6 +4150,7 @@ mod tests {
         let temp = TempStorePath::new("cache-restore-previous");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4164,6 +4206,7 @@ mod tests {
         let indexed_db_manager = new_indexed_db_manager(None).map_err(anyhow::Error::msg)?;
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4526,6 +4569,7 @@ mod tests {
         let bucket_name = "bucket";
         let bucket_id = StorageBucketId::new(17).unwrap();
         let response = StorageBucketCachedResponse {
+            cors_exposed_header_names: None,
             response_type: "default".to_owned(),
             url: "https://a.test/cached".to_owned(),
             redirected: false,

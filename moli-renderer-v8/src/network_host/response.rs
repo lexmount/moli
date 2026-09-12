@@ -33,14 +33,20 @@ pub(crate) use self::cors::{
 pub(crate) use self::materialize::{
     FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
-    build_fetch_response_object_from_stream_for_request_mode,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
+    build_fetch_response_object_from_stream_for_request_mode_with_filter,
+    build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
+    set_filtered_response_internal_head,
 };
 #[cfg(test)]
 pub(crate) use self::materialize::{materialize_response_object, materialize_response_object_head};
+
+#[cfg(test)]
+pub(crate) use self::materialize::{
+    build_fetch_response_object_from_stream_for_request_mode,
+    build_fetch_response_object_from_subresource_body_for_request_mode,
+};

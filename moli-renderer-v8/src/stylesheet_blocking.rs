@@ -254,7 +254,7 @@ async fn fetch_stylesheet_readiness_with_request(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum StylesheetResponseProvenance {
     Network,
     ServiceWorker {
@@ -264,7 +264,7 @@ enum StylesheetResponseProvenance {
 
 impl StylesheetResponseProvenance {
     fn is_cors_same_origin(
-        self,
+        &self,
         document_url: &Url,
         request_url: &Url,
         response: &crate::protocol_types::NavigationResponse,
@@ -306,7 +306,7 @@ fn stylesheet_terminal_from_response(
 ) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let cors_usability =
-        (request_mode == moli_fetch::RequestMode::Cors).then(|| match response_provenance {
+        (request_mode == moli_fetch::RequestMode::Cors).then(|| match &response_provenance {
             StylesheetResponseProvenance::ServiceWorker {
                 filter:
                     Some(
@@ -316,7 +316,7 @@ fn stylesheet_terminal_from_response(
             } => Err(format!(
                 "failed to fetch stylesheet `{request_url}`: CORS response is opaque"
             )),
-            StylesheetResponseProvenance::ServiceWorker { filter: None } => Ok(()),
+            StylesheetResponseProvenance::ServiceWorker { .. } => Ok(()),
             StylesheetResponseProvenance::Network => crate::network_host::validate_cors_response(
                 document_url,
                 &response.final_url,

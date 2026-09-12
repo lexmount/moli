@@ -3750,11 +3750,12 @@ impl ScriptVm {
                                 mode: pending.request_mode,
                                 redirect_mode,
                             };
-                            head.headers = response_request.filter_response_headers(
+                            let response_filter = response_filter.or_else(|| Some(response_request.network_response_filter(
+                                &pending.info.document_url,
                                 &response_request_origin,
                                 &head,
                                 pending.credentials_mode,
-                            );
+                            )));
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
@@ -4491,6 +4492,9 @@ impl ScriptVm {
                     None
                 }
                 .or_else(|| {
+                    if started.skip_fetch_security_validation {
+                        return None;
+                    }
                     crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
                         &pending.response_request_origin(
@@ -4549,6 +4553,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                skip_fetch_security_validation: started.skip_fetch_security_validation,
                 pending,
                 request_url: started.request_url,
                 request_method: started.request_method,
@@ -4692,12 +4697,12 @@ impl ScriptVm {
                 None
             }
             .or_else(|| {
-                matches!(
+                (!started.skip_fetch_security_validation && matches!(
                     pending.info.resource_type,
                     SubresourceResourceType::EventSource
                         | SubresourceResourceType::Fetch
                         | SubresourceResourceType::Xhr
-                )
+                ))
                 .then(|| {
                     crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
@@ -4935,6 +4940,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: started.skip_fetch_security_validation,
                         pending,
                         request_url: started.request_url.clone(),
                         request_method: started.request_method.clone(),
@@ -4986,17 +4992,19 @@ impl ScriptVm {
                         mode: pending.request_mode,
                         redirect_mode: fetch.redirect_mode(),
                     };
-                    observable_head.headers = response_request.filter_response_headers(
+                    let response_filter = started.response_filter.clone().or_else(|| Some(response_request.network_response_filter(
+                        &pending.info.document_url,
                         &response_request_origin,
                         &observable_head,
                         pending.credentials_mode,
-                    );
-                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                    )));
+                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
                         scope,
                         &pending.info.document_url,
                         response_request,
                         observable_head,
                         started.body_source_id,
+                        response_filter,
                     );
                     resolver.resolve(scope, response_obj.into());
                 }
@@ -5095,6 +5103,7 @@ impl ScriptVm {
             let pending_owner = pending.execution_context.dispatch_scope();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
+                    skip_fetch_security_validation: started.skip_fetch_security_validation,
                     pending,
                     request_url: started.request_url.clone(),
                     request_method: started.request_method.clone(),

@@ -84,6 +84,7 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        cors_exposed_header_names: None,
         status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),

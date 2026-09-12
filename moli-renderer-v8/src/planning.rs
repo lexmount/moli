@@ -530,7 +530,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ClassicScriptResponseProvenance {
     Network,
     ServiceWorker {

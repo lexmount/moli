@@ -352,6 +352,7 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Streaming => {
                 host.record_streaming_subresource_fetch(
                     crate::types::StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: false,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),
@@ -3363,6 +3364,8 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
     let request_url = Url::parse("https://beacon-execution-context.test/accepted").unwrap();
     let body_source_id = 60_000 + internal_id;
     vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         internal_id,
         request_url: request_url.clone(),
         request_method: "POST".to_owned(),
@@ -3602,6 +3605,8 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
 
     let body_source_id = 70_000 + internal_id;
     vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         internal_id,
         request_url: report_url.clone(),
         request_method: "POST".to_owned(),
@@ -3805,6 +3810,8 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
     let request_url = Url::parse("https://fetch-execution-context.test/pending").unwrap();
     let body_source_id = 50_000 + keepalive.0;
     vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         internal_id: keepalive.0,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),

@@ -8690,6 +8690,7 @@ self.addEventListener("message", event => {
             event_id,
             owner: test_run_owner(version_id, &run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                cors_exposed_header_names: None,
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -8991,6 +8992,7 @@ self.addEventListener("message", event => {
             event_id,
             owner: test_run_owner(version_id, &run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                cors_exposed_header_names: None,
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

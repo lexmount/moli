@@ -864,6 +864,8 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     }
     let _ = completion_tx.send_async_subresource_event(
         AsyncSubresourceFetchEvent::StreamingStarted(Box::new(AsyncSubresourceStreamingStarted {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             internal_id,
             request_url,
             request_method,

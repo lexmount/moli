@@ -43,7 +43,7 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                         request_body: None,
                         response_status_text: Some("Override Text".to_owned()),
                         skip_fetch_security_validation: true,
-                        response_filter: filter,
+                        response_filter: filter.clone(),
                         network_error_text: None,
                         result: Ok(
                             crate::protocol_types::NavigationResponse::from_head_and_body(
@@ -66,7 +66,9 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                     },
                 )
                 .unwrap();
-                let expected_type = match filter {
+                let expected_type = match &filter {
+                    Some(crate::types::AsyncSubresourceFetchResponseFilter::Basic) => "basic",
+                    Some(crate::types::AsyncSubresourceFetchResponseFilter::Cors(_)) => "cors",
                     Some(Opaque) => "opaque",
                     Some(OpaqueRedirect) => "opaqueredirect",
                     None if redirect == "manual" && status == 302 => "opaqueredirect",
