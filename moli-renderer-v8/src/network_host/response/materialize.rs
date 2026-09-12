@@ -77,7 +77,10 @@ fn response_filter(
 ) -> FetchResponseFilter {
     if request.redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status) {
         FetchResponseFilter::OpaqueRedirect
-    } else if request.mode == RequestMode::NoCors && response_crosses_origin(document_url, head) {
+    } else if request.mode == RequestMode::NoCors
+        && head.final_url.scheme() != "data"
+        && response_crosses_origin(document_url, head)
+    {
         FetchResponseFilter::Opaque
     } else {
         FetchResponseFilter::None
@@ -97,12 +100,17 @@ fn compute_fetch_response_type(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &'static str {
-    // Crossing an origin taints the response even if a later redirect returns
-    // to the client's origin. The final URL alone cannot restore a basic response.
+    // Main fetch selects basic tainting for data URLs regardless of request mode.
+    // HTTP responses retain cross-origin taint after a redirect back to the client.
     match filter {
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if !response_crosses_origin(document_url, head) => "basic",
+        FetchResponseFilter::None
+            if head.final_url.scheme() == "data"
+                || !response_crosses_origin(document_url, head) =>
+        {
+            "basic"
+        }
         FetchResponseFilter::None => "cors",
     }
 }

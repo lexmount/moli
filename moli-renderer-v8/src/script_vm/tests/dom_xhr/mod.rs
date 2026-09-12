@@ -5,6 +5,7 @@ mod cors_preflight;
 mod cors_redirect;
 mod cors_response;
 mod cssom;
+mod data_response;
 mod dom;
 mod file_input;
 mod forms;
