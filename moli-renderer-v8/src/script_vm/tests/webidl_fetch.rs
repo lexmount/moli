@@ -6119,6 +6119,127 @@ fn webidl_sequence_conversion_uses_iterator_without_mutable_array_from() {
 }
 
 #[test]
+fn initializer_sequences_convert_all_entries_before_validating_pairs() {
+    let mut vm = new_storage_test_vm("https://initializer-sequence.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const consumers = [
+    ['Headers', input => new Headers(input)],
+    ['URLSearchParams', input => new URLSearchParams(input)],
+    ['Request', input => new Request('https://initializer-sequence.test/', {headers: input})],
+    ['Response', input => new Response(null, {headers: input})]
+  ];
+  for (const [name, consume] of consumers) {
+    const invalidPairs = [['short'], ['key', 'value', 'extra']];
+    if (name !== 'URLSearchParams') invalidPairs.push(['', 'value'], ['key', 'bad\nvalue']);
+    for (const bad of invalidPairs) {
+      for (const stage of ['complete', 'next', 'done', 'value', 'convert']) {
+        const marker = {};
+        const log = [];
+        const fail = () => { log.push('fail:' + stage); throw marker; };
+        const input = {[Symbol.iterator]() {
+          let index = 0;
+          return {
+            next() {
+              log.push('next:' + index);
+              if (index++ === 0) return {done: false, value: bad};
+              if (index === 2) {
+                if (stage === 'next') fail();
+                return {
+                  get done() { if (stage === 'done') fail(); return false; },
+                  get value() {
+                    if (stage === 'value') fail();
+                    return ['later', {toString() {
+                      if (stage === 'convert') fail();
+                      log.push('convert:later');
+                      return 'value';
+                    }}];
+                  }
+                };
+              }
+              return {done: true};
+            },
+            get return() { log.push('return'); throw new Error('return must not be read'); }
+          };
+        }};
+        let caught;
+        try { consume(input); } catch (error) { caught = error; }
+        const label = name + ' ' + JSON.stringify(bad) + ' ' + stage;
+        check(stage === 'complete' ? caught instanceof TypeError : caught === marker, label + ' exception');
+        const expected = stage === 'complete' ? ['next:0', 'next:1', 'convert:later', 'next:2'] :
+          ['next:0', 'next:1', 'fail:' + stage];
+        check(JSON.stringify(log) === JSON.stringify(expected), label + ': ' + JSON.stringify(log));
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn initializer_pairs_use_inner_iterators_and_convert_extra_elements() {
+    let mut vm = new_storage_test_vm("https://initializer-inner-sequence.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const Constructor of [Headers, URLSearchParams]) {
+    let iteratorReads = 0;
+    const pair = {
+      get length() { throw new Error('length must not be read'); },
+      get 0() { throw new Error('indexed properties must not be read'); },
+      get [Symbol.iterator]() {
+        iteratorReads++;
+        return function*() {
+          check(this === pair, 'inner iterator receiver');
+          yield 'X-Key';
+          yield ' one ';
+        };
+      }
+    };
+    const expected = Constructor === Headers ? [['x-key', 'one']] : [['X-Key', ' one ']];
+    const actual = Array.from(new Constructor([pair]));
+    check(JSON.stringify(actual) === JSON.stringify(expected) && iteratorReads === 1, Constructor.name + ' inner iteration');
+    for (const invalid of ['ab', {0: 'key', 1: 'value', length: 2}]) {
+      let caught;
+      try { new Constructor([invalid]); } catch (error) { caught = error; }
+      check(caught instanceof TypeError, Constructor.name + ' requires object iterables');
+    }
+    const marker = {};
+    let conversions = 0;
+    let caught;
+    try {
+      new Constructor([['key', 'value', {toString() { conversions++; throw marker; }}]]);
+    } catch (error) { caught = error; }
+    check(caught === marker && conversions === 1, Constructor.name + ' must convert the extra element');
+
+    const log = [];
+    const input = {[Symbol.iterator]() {
+      let index = 0;
+      return {next() {
+        log.push('next:' + index);
+        if (index++ > 0) return {done: true};
+        return {done: false, value: ['key', 'value', {toString() {
+          log.push('extra');
+          return '\u0100';
+        }}]};
+      }};
+    }};
+    caught = undefined;
+    try { new Constructor(input); } catch (error) { caught = error; }
+    check(caught instanceof TypeError, Constructor.name + ' rejects the invalid initializer');
+    const expectedLog = Constructor === Headers ? ['next:0', 'extra'] : ['next:0', 'extra', 'next:1'];
+    check(JSON.stringify(log) === JSON.stringify(expectedLog), Constructor.name + ': ' + JSON.stringify(log));
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn webidl_sequences_propagate_abrupt_completion_without_closing_iterators() {
     let mut vm = new_storage_test_vm("https://sequence-abrupt.test/");
     let result = vm.eval(r#"
