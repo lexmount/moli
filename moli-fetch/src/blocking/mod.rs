@@ -220,7 +220,7 @@ fn outgoing_request_header_bytes_for_url(
     }
 
     if !header_present(&outgoing, "referer")
-        && let Some(referer) = referrer_header_value_for_request(request, request_url)
+        && let Some(referer) = request.referrer_header_value(request_url)
     {
         outgoing.push(("Referer".to_owned(), referer.into_bytes()));
     }
@@ -539,28 +539,6 @@ fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
     } else {
         "same-site".to_owned()
     }
-}
-
-fn referrer_header_value_for_request(request: &Request, request_url: &Url) -> Option<String> {
-    if !request.infers_referrer_from_initiator() {
-        return None;
-    }
-    let referrer_url = request.cookie_context.initiator_url.as_ref()?;
-    let (referrer_policy, document_referrer_policy) = request
-        .subresource_request_metadata()
-        .map(|metadata| {
-            (
-                metadata.referrer_policy.as_deref(),
-                metadata.document_referrer_policy.as_deref(),
-            )
-        })
-        .unwrap_or((None, None));
-    crate::referrer_header_value(
-        referrer_url,
-        request_url,
-        referrer_policy,
-        document_referrer_policy,
-    )
 }
 
 pub(crate) fn store_response_cookies(
