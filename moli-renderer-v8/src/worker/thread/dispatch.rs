@@ -3567,6 +3567,8 @@ fn start_service_worker_navigation_preload_response_in_context(
         crate::network_host::FetchResponseRequest {
             method: &started.request_method,
             mode: started.request_mode,
+            // Navigation preload always fetches with manual redirects.
+            redirect_mode: moli_fetch::RequestRedirectMode::Manual,
         },
         head,
         started.body_source_id,

@@ -5,7 +5,7 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use crate::types::NetworkBodySourceId;
-use moli_fetch::RequestMode;
+use moli_fetch::{RequestMode, RequestRedirectMode};
 use moli_url::WebOrigin;
 use moli_webapi_declare::WebApiObject;
 
@@ -13,6 +13,7 @@ use moli_webapi_declare::WebApiObject;
 pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) method: &'a str,
     pub(crate) mode: RequestMode,
+    pub(crate) redirect_mode: RequestRedirectMode,
 }
 
 fn is_redirect_status(status: u16) -> bool {
@@ -83,10 +84,10 @@ struct FetchResponseBodyDeclaration<'scope> {
 fn response_filter(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
-    request_mode: RequestMode,
+    request: FetchResponseRequest<'_>,
 ) -> FetchResponseFilter {
     let request_origin = request_origin.into();
-    network_response_filter(&request_origin, head, request_mode)
+    network_response_filter(&request_origin, head, request.mode, request.redirect_mode)
         .map_or(FetchResponseFilter::None, Into::into)
 }
 
@@ -98,11 +99,12 @@ pub(crate) fn network_response_filter(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     request_mode: RequestMode,
+    redirect_mode: RequestRedirectMode,
 ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
     let request_origin = request_origin.into();
     use crate::types::AsyncSubresourceFetchResponseFilter;
 
-    if is_redirect_status(head.status) {
+    if redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status) {
         Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
     } else if request_mode == RequestMode::NoCors
         && head.url_list().has_cross_origin_url(&request_origin)
@@ -217,7 +219,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request));
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
@@ -238,7 +240,7 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
     body: crate::protocol_types::SubresourceResponseBody,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
-    let filter = response_filter(&request_origin, &head, request.mode);
+    let filter = response_filter(&request_origin, &head, request);
     let obj = build_fetch_response_object_head(scope, &request_origin, &head, filter, None);
     let body_stream = if response_has_null_body(request.method, head.status) {
         None
@@ -319,7 +321,7 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     let request_origin = request_origin.into();
     let filter = filter_override
         .map(FetchResponseFilter::from)
-        .unwrap_or_else(|| response_filter(&request_origin, &head, request.mode));
+        .unwrap_or_else(|| response_filter(&request_origin, &head, request));
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();

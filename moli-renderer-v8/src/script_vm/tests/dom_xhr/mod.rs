@@ -14,6 +14,7 @@ mod no_cors_redirect;
 mod null_body;
 mod open_validation;
 mod query_realms;
+mod redirect_filter;
 mod response_headers;
 mod response_type;
 mod send_body;
