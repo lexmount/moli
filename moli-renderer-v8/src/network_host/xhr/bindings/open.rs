@@ -25,16 +25,33 @@ pub(super) fn xhr_open_callback<'s>(
     let Some(parsed) = webidl::parse_args::<XhrOpenArgs>(scope, &args) else {
         return;
     };
+    let Some(base_url) = xhr_open_request_base_url(scope, xhr) else {
+        return;
+    };
     let method = match normalize_request_method(&parsed.method) {
         Ok(method) => method,
-        Err(message) => {
-            throw_type_error(scope, message);
+        Err(RequestMethodError::InvalidToken) => {
+            throw_dom_exception(
+                scope,
+                "SyntaxError",
+                12,
+                "Failed to execute 'open' on 'XMLHttpRequest': The method is not a valid HTTP token.",
+            );
+            return;
+        }
+        Err(RequestMethodError::Forbidden) => {
+            throw_dom_exception(
+                scope,
+                "SecurityError",
+                18,
+                "Failed to execute 'open' on 'XMLHttpRequest': The method is forbidden.",
+            );
             return;
         }
     };
     let Some(request_url) = xhr_open_request_url(
         scope,
-        xhr,
+        &base_url,
         &parsed.url,
         parsed.username.as_deref(),
         parsed.password.as_deref(),
@@ -105,18 +122,15 @@ pub(super) fn xhr_open_callback<'s>(
     }
 }
 
-fn xhr_open_request_url(
+fn xhr_open_request_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    input: &str,
-    username: Option<&str>,
-    password: Option<&str>,
 ) -> Option<url::Url> {
     let base_url = if xhr_current_context_is_worker_global(scope) {
         crate::worker::worker_current_script_url(scope)
     } else {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-            xhr_open_throw_invalid_state(
+            xhr_throw_invalid_state(
                 scope,
                 "Failed to execute 'open' on 'XMLHttpRequest': The object's document is not fully active.",
             );
@@ -124,7 +138,7 @@ fn xhr_open_request_url(
         };
         let host = unsafe { &*host_ptr };
         let Some(execution_context) = xhr_execution_context_binding(scope, host, xhr) else {
-            xhr_open_throw_invalid_state(
+            xhr_throw_invalid_state(
                 scope,
                 "Failed to execute 'open' on 'XMLHttpRequest': The object's document is not fully active.",
             );
@@ -142,14 +156,23 @@ fn xhr_open_request_url(
             }
         }
     };
-    let Some(base_url) = base_url else {
-        xhr_open_throw_invalid_state(
+    if base_url.is_none() {
+        xhr_throw_invalid_state(
             scope,
             "Failed to execute 'open' on 'XMLHttpRequest': The object's execution context is unavailable.",
         );
-        return None;
-    };
-    let mut request_url = match resolve_context_url(&base_url, input, None) {
+    }
+    base_url
+}
+
+fn xhr_open_request_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    base_url: &url::Url,
+    input: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Option<url::Url> {
+    let mut request_url = match resolve_context_url(base_url, input, None) {
         Ok(url) => url,
         Err(_) => {
             throw_dom_exception(
@@ -170,11 +193,4 @@ fn xhr_open_request_url(
         }
     }
     Some(request_url)
-}
-
-fn xhr_open_throw_invalid_state(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {
-    let current_context = scope.get_current_context();
-    let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-    let incumbent_scope = &mut v8::ContextScope::new(scope, incumbent_context);
-    xhr_throw_invalid_state(incumbent_scope, message);
 }
