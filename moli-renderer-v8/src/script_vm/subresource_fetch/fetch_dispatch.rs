@@ -642,10 +642,7 @@ impl ScriptVm {
                         record_started,
                     );
                     let mut observable_response = response;
-                    if matches!(
-                        pending.info.resource_type,
-                        SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) && !response_filter.is_some_and(|filter| filter.is_readable()) {
+                    if pending.info.resource_type == SubresourceResourceType::Xhr && !response_filter.is_some_and(|filter| filter.is_readable()) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
                                 &pending.request_origin,
@@ -663,6 +660,18 @@ impl ScriptVm {
                                 .expect("detached keepalive completion is handled before V8 entry");
                             let resolver = v8::Local::new(scope, &resolver);
                             let (mut head, body) = observable_response.into_body();
+                            let response_request = crate::network_host::FetchResponseRequest {
+                                method: &response_request_method,
+                                mode: pending.request_mode,
+                                redirect_mode,
+                            };
+                            if !response_filter.is_some_and(|filter| filter.is_readable()) {
+                                head.headers = response_request.filter_response_headers(
+                                    &pending.request_origin,
+                                    &head,
+                                    pending.credentials_mode,
+                                );
+                            }
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
@@ -678,11 +687,7 @@ impl ScriptVm {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.request_origin,
-                                    crate::network_host::FetchResponseRequest {
-                                        method: &response_request_method,
-                                        mode: pending.request_mode,
-                                        redirect_mode,
-                                    },
+                                    response_request,
                                     head,
                                     body,
                                     response_filter,

@@ -475,7 +475,7 @@ impl ScriptVm {
                         return None;
                     }
                     crate::network_host::validate_fetch_response_headers(
-                        &pending.request_origin(),
+                        &pending.request_origin,
                         &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
@@ -678,7 +678,7 @@ impl ScriptVm {
                 )
                 .then(|| {
                     crate::network_host::validate_fetch_response_headers(
-                        &pending.request_origin(),
+                        &pending.request_origin,
                         &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
@@ -864,10 +864,7 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
-            if matches!(
-                pending.info.resource_type,
-                SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
+            if pending.info.resource_type == SubresourceResourceType::Xhr && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.request_origin,
                     &observable_head,
@@ -958,14 +955,22 @@ impl ScriptVm {
                         .resolver()
                         .expect("detached keepalive stream is handled before V8 entry");
                     let resolver = v8::Local::new(scope, resolver);
+                    let response_request = crate::network_host::FetchResponseRequest {
+                        method: &started.request_method,
+                        mode: pending.request_mode,
+                        redirect_mode: fetch.redirect_mode(),
+                    };
+                    if !started.response_filter.is_some_and(|filter| filter.is_readable()) {
+                        observable_head.headers = response_request.filter_response_headers(
+                            &pending.request_origin,
+                            &observable_head,
+                            pending.credentials_mode,
+                        );
+                    }
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
                         scope,
                         &pending.request_origin,
-                        crate::network_host::FetchResponseRequest {
-                            method: &started.request_method,
-                            mode: pending.request_mode,
-                            redirect_mode: fetch.redirect_mode(),
-                        },
+                        response_request,
                         observable_head,
                         started.body_source_id,
                         started.response_filter,
