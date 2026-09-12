@@ -5890,7 +5890,9 @@ impl ScriptVm {
                                         streaming.pending.continuation
                                     {
                                         let xhr = v8::Local::new(scope, &xhr);
-                                        crate::network_host::apply_xhr_failure(scope, xhr);
+                                        crate::network_host::apply_xhr_streaming_failure(
+                                            scope, xhr, internal_id,
+                                        );
                                     }
                                     context_host
                                         .borrow_mut()
@@ -6102,6 +6104,14 @@ impl ScriptVm {
                             trace_fields,
                             error_started,
                         );
+                        if let PendingSubresourceContinuation::Xhr { xhr, .. } =
+                            &streaming.pending.continuation
+                        {
+                            let xhr = v8::Local::new(scope, xhr);
+                            crate::network_host::apply_xhr_streaming_failure(
+                                scope, xhr, internal_id,
+                            );
+                        }
                     }
                 }
                 context_host
