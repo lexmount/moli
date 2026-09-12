@@ -10523,3 +10523,177 @@ fn initializer_pairs_use_inner_iterators_and_convert_extra_elements() {
 "#).unwrap();
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn webidl_string_records_observe_descriptors_and_values_in_key_order() {
+    let mut vm = new_storage_test_vm("https://webidl-record-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const equal = (actual, expected, label) => {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(label + ': ' + JSON.stringify(actual));
+    }
+  };
+  for (const Constructor of [Headers, URLSearchParams]) {
+    const log = [];
+    const symbol = Symbol('hidden');
+    const label = key => key === Symbol.iterator ? '@@iterator' : key === symbol ? '@@hidden' : key;
+    const source = Object.create({inherited: 'ignored'});
+    source.a = {toString() { log.push('value:a'); return 'aye'; }};
+    source[2] = {toString() { log.push('value:2'); return 'two'; }};
+    Object.defineProperty(source, '\uFFFF', {get() { throw new Error('hidden value'); }});
+    Object.defineProperty(source, symbol, {get() { throw new Error('hidden symbol'); }});
+    const proxy = new Proxy(source, {
+      ownKeys(target) { log.push('keys'); return Reflect.ownKeys(target); },
+      getOwnPropertyDescriptor(target, key) {
+        log.push('desc:' + label(key));
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      get(target, key, receiver) {
+        log.push('get:' + label(key));
+        return Reflect.get(target, key, receiver);
+      }
+    });
+    const result = new Constructor(proxy);
+    equal(log, ['get:@@iterator', 'keys', 'desc:2', 'get:2', 'value:2',
+      'desc:a', 'get:a', 'value:a', 'desc:\uFFFF', 'desc:@@hidden'], Constructor.name);
+    equal(Array.from(result), [['2', 'two'], ['a', 'aye']], 'record entries');
+  }
+  const params = new URLSearchParams({'\uD800x': 'first', b: 'middle', '\uD801x': 'last'});
+  equal(Array.from(params), [['\uFFFDx', 'last'], ['b', 'middle']], 'converted duplicate keys');
+  return 'ok';
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_records_observe_mutations_and_propagate_abrupt_completion() {
+    let mut vm = new_storage_test_vm("https://webidl-record-mutations.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const equal = (actual, expected, label) => check(
+    JSON.stringify(actual) === JSON.stringify(expected), label + ': ' + JSON.stringify(actual));
+  const factories = [
+    ['Headers', 'a', 'b', value => new Headers(value), value => Array.from(value.keys())],
+    ['URLSearchParams', 'a', 'b', value => new URLSearchParams(value), value => Array.from(value.keys())]
+  ];
+  if (typeof ClipboardItem === 'function') factories.push(
+    ['ClipboardItem', 'text/plain', 'text/html', value => new ClipboardItem(value), value => Array.from(value.types)]);
+  for (const [name, first, second, create, keys] of factories) {
+    for (const mutation of ['delete', 'hide', 'show']) {
+      const source = Object.create({inherited: 'ignored'});
+      Object.defineProperty(source, first, {enumerable: true, get() {
+        if (mutation === 'delete') delete source[second];
+        else Object.defineProperty(source, second, {enumerable: mutation === 'show'});
+        return 'first';
+      }});
+      Object.defineProperty(source, second, {
+        configurable: true, enumerable: mutation !== 'show', value: 'second'
+      });
+      equal(keys(create(source)), mutation === 'show' ? [first, second] : [first], name + ' ' + mutation);
+    }
+    for (const stage of ['keys', 'descriptor', 'value']) {
+      const marker = {};
+      const log = [];
+      const source = {[first]: 'first', [second]: 'second'};
+      const proxy = new Proxy(source, {
+        ownKeys(target) {
+          log.push('keys');
+          if (stage === 'keys') throw marker;
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, key) {
+          log.push('desc:' + key);
+          if (stage === 'descriptor') throw marker;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        get(target, key, receiver) {
+          if (typeof key !== 'symbol') {
+            log.push('get:' + key);
+            if (stage === 'value') throw marker;
+          }
+          return Reflect.get(target, key, receiver);
+        }
+      });
+      let caught;
+      try { create(proxy); } catch (error) { caught = error; }
+      check(caught === marker, name + ' exception identity at ' + stage);
+      const expected = ['keys'];
+      if (stage !== 'keys') expected.push('desc:' + first);
+      if (stage === 'value') expected.push('get:' + first);
+      equal(log, expected, name + ' must stop at ' + stage);
+    }
+    const symbol = Symbol('invalid key');
+    let readSymbolValue = false;
+    const source = {[first]: 'first'};
+    Object.defineProperty(source, symbol, {enumerable: true, get() {
+      readSymbolValue = true;
+      throw new Error('symbol value must not be read');
+    }});
+    let caught;
+    try { create(source); } catch (error) { caught = error; }
+    check(caught instanceof TypeError && !readSymbolValue, name + ' must convert the key before reading its value');
+    if (name !== 'ClipboardItem') {
+      const marker = {};
+      const log = [];
+      const proxy = new Proxy({a: {toString() {log.push('convert:a'); throw marker;}}, b: 'later'}, {
+        ownKeys(target) {log.push('keys'); return Reflect.ownKeys(target);},
+        getOwnPropertyDescriptor(target, key) {log.push('desc:' + key); return Reflect.getOwnPropertyDescriptor(target, key);},
+        get(target, key, receiver) {
+          if (typeof key !== 'symbol') log.push('get:' + key);
+          return Reflect.get(target, key, receiver);
+        }
+      });
+      caught = undefined;
+      try { create(proxy); } catch (error) { caught = error; }
+      check(caught === marker, name + ' value conversion exception identity');
+      equal(log, ['keys', 'desc:a', 'get:a', 'convert:a'], name + ' value conversion must stop before later descriptors');
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn clipboard_item_record_converts_thenables_before_later_descriptors() {
+    let mut vm = new_storage_test_vm("https://clipboard-record-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const log = [];
+  const source = {};
+  for (const type of ['text/plain', 'text/html']) source[type] = {get then() {
+    log.push('then:' + type);
+    return resolve => resolve(type);
+  }};
+  const symbol = Symbol('hidden');
+  Object.defineProperty(source, symbol, {value: 'ignored'});
+  const proxy = new Proxy(source, {
+    ownKeys(target) {log.push('keys'); return Reflect.ownKeys(target);},
+    getOwnPropertyDescriptor(target, key) {
+      log.push('desc:' + (key === symbol ? '@@hidden' : key));
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    get(target, key, receiver) {log.push('get:' + key); return Reflect.get(target, key, receiver);}
+  });
+  const item = new ClipboardItem(proxy);
+  const expected = ['keys', 'desc:text/plain', 'get:text/plain', 'then:text/plain',
+    'desc:text/html', 'get:text/html', 'then:text/html', 'desc:@@hidden'];
+  if (JSON.stringify(log) !== JSON.stringify(expected)) throw new Error(JSON.stringify(log));
+  if (item.types.join(',') !== 'text/plain,text/html') throw new Error('clipboard record types');
+  return 'ok';
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
