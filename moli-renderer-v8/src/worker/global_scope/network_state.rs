@@ -34,6 +34,8 @@ pub(in crate::worker) enum WorkerFetchEvent {
 }
 
 pub(in crate::worker) struct WorkerFetchCompletion {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) fetch_id: u32,
     pub(super) network_request_headers: Option<Vec<(String, String)>>,
     pub(super) result: Result<WorkerFetchResponse, String>,
@@ -173,6 +175,8 @@ pub(in crate::worker) struct PendingWorkerCspReport {
 }
 
 pub(in crate::worker) struct PausedWorkerSubresourceResponse {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(in crate::worker) head: ResponseHead,
     pub(in crate::worker) body: SubresourceResponseBody,
 }

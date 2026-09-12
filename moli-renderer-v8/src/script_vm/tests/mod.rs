@@ -353,6 +353,7 @@ fn register_pending_window_fetch_for_test(
                 host.record_streaming_subresource_fetch(
                     crate::types::StreamingSubresourceFetchState {
                         response_filter: None,
+                        skip_fetch_security_validation: false,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),
