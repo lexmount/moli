@@ -14153,6 +14153,69 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
 }
 
 #[tokio::test]
+async fn navigator_service_worker_does_not_intercept_invalid_no_cors_redirect_mode() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        let count = 0;
+        self.addEventListener("activate", event => {
+          event.waitUntil(clients.claim());
+        });
+        self.addEventListener("fetch", event => {
+          const path = new URL(event.request.url).pathname;
+          if (path.endsWith("/api/target")) {
+            count++;
+            event.respondWith(new Response("intercepted"));
+          } else if (path.endsWith("/api/count")) {
+            event.respondWith(new Response(String(count)));
+          }
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(
+        r#"
+        globalThis.noCorsRedirectResult = "pending";
+        (async () => {
+          const assert = (value, label) => { if (!value) throw new Error(label); };
+          await navigator.serviceWorker.register("worker.js", {scope: "./"});
+          await navigator.serviceWorker.ready;
+          const remote = new URL("api/target", location.href);
+          remote.hostname = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
+          for (const redirect of ["manual", "error"]) {
+            let rejected = false;
+            try { await fetch(remote, {mode: "no-cors", redirect}); }
+            catch (error) { rejected = error instanceof TypeError; }
+            assert(rejected, "cross-origin fetch must reject " + redirect);
+            const response = await fetch("api/target", {mode: "no-cors", redirect});
+            assert(response.status === 200 && await response.text() === "intercepted", "same-origin fetch reaches Service Worker");
+          }
+          const count = await (await fetch("api/count")).text();
+          assert(count === "2", "only same-origin requests reach Service Worker: " + count);
+          noCorsRedirectResult = "ok";
+        })().catch(error => { noCorsRedirectResult = String(error.stack || error); });
+        "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "noCorsRedirectResult",
+        "ok",
+    )
+    .await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn navigator_service_worker_fetch_follows_and_filters_synthetic_redirect_response() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",

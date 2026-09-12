@@ -82,6 +82,7 @@ pub(crate) use self::event_source::{
     fail_event_source_connection, install_event_source_bindings, open_event_source_connection,
     update_event_source_stream_state,
 };
+pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_BODY_SLOT, REQUEST_BODY_USED_SLOT, REQUEST_CACHE_SLOT, REQUEST_CREDENTIALS_SLOT,

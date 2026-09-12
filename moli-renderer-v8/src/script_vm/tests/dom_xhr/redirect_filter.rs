@@ -1,6 +1,22 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+fn redirect_filter_probe_script(probe: &str, worker: bool) -> String {
+    if worker {
+        let source = format!(
+            "Promise.resolve().then(() => {probe}).then(value => {{ postMessage(value); close(); }}, error => {{ postMessage(String(error.stack || error)); close(); }});"
+        );
+        format!(
+            "globalThis.redirectFilterResult = 'pending'; const worker = new Worker(URL.createObjectURL(new Blob([{}], {{type: 'text/javascript'}}))); worker.onmessage = event => {{ redirectFilterResult = event.data; }}; worker.onerror = event => {{ redirectFilterResult = event.message; event.preventDefault(); }};",
+            serde_json::to_string(&source).unwrap()
+        )
+    } else {
+        format!(
+            "globalThis.redirectFilterResult = 'pending'; Promise.resolve().then(() => {probe}).then(value => {{ redirectFilterResult = value; }}, error => {{ redirectFilterResult = String(error.stack || error); }});"
+        )
+    }
+}
+
 #[test]
 fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
     use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
@@ -118,6 +134,22 @@ async fn check_redirect_filter_modes(worker: bool) {
     let probe = format!(
         r#"(async () => {{
           const base = {base:?};
+          const blobUrl = URL.createObjectURL(new Blob(['local-body']));
+          try {{
+            for (const url of ['data:text/plain,local-body', blobUrl]) {{
+              const reference = await fetch(url, {{mode: 'no-cors', redirect: 'follow'}});
+              const expected = [reference.type, reference.status, await reference.text()];
+              for (const redirect of ['manual', 'error']) {{
+                const response = await fetch(url, {{mode: 'no-cors', redirect}});
+                const actual = [response.type, response.status, await response.text()];
+                if (actual.some((value, index) => value !== expected[index])) {{
+                  throw new Error('redirect mode changed local URL response: ' + url + '/' + redirect);
+                }}
+              }}
+            }}
+          }} finally {{
+            URL.revokeObjectURL(blobUrl);
+          }}
           let count = 0;
           for (const status of [200, 301, 302, 303, 307, 308]) {{
             for (const redirect of ['follow', 'manual', 'error']) {{
@@ -134,7 +166,7 @@ async fn check_redirect_filter_modes(worker: bool) {
                       try {{ response = await fetch(request.clone(), override ? {{redirect}} : undefined); }}
                       catch (value) {{ error = value; }}
                       count++;
-                      if ((remote && mode === 'same-origin') || (redirect === 'error' && status !== 200)) {{
+                      if ((remote && (mode === 'same-origin' || (mode === 'no-cors' && redirect !== 'follow'))) || (redirect === 'error' && status !== 200)) {{
                         assert(error instanceof TypeError && !response, 'TypeError rejection');
                         continue;
                       }}
@@ -166,20 +198,8 @@ async fn check_redirect_filter_modes(worker: bool) {
           return String(count);
         }})()"#
     );
-    let script = if worker {
-        let source = format!(
-            "Promise.resolve().then(() => {probe}).then(value => {{ postMessage(value); close(); }}, error => {{ postMessage(String(error.stack || error)); close(); }});"
-        );
-        format!(
-            "globalThis.redirectFilterResult = 'pending'; const worker = new Worker(URL.createObjectURL(new Blob([{}], {{type: 'text/javascript'}}))); worker.onmessage = event => {{ redirectFilterResult = event.data; }}; worker.onerror = event => {{ redirectFilterResult = event.message; event.preventDefault(); }};",
-            serde_json::to_string(&source).unwrap()
-        )
-    } else {
-        format!(
-            "globalThis.redirectFilterResult = 'pending'; Promise.resolve().then(() => {probe}).then(value => {{ redirectFilterResult = value; }}, error => {{ redirectFilterResult = String(error.stack || error); }});"
-        )
-    };
-    vm.eval(&script).unwrap();
+    vm.eval(&redirect_filter_probe_script(&probe, worker))
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         while vm.eval("redirectFilterResult === 'pending'").unwrap() == "true" {
             wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
@@ -192,8 +212,9 @@ async fn check_redirect_filter_modes(worker: bool) {
     stop_tx.send(()).unwrap();
     let requests = server.await.unwrap();
     assert_eq!(vm.eval("redirectFilterResult").unwrap(), "432");
-    // Cross-origin same-origin-mode requests are rejected before transport.
-    assert_eq!(requests, 360);
+    // Cross-origin same-origin requests and no-cors manual/error requests
+    // never reach the server, including non-redirecting 200 responses.
+    assert_eq!(requests, 312);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -204,4 +225,69 @@ async fn redirect_filter_preserves_window_fetch_modes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn redirect_filter_preserves_worker_fetch_modes() {
     check_redirect_filter_modes(true).await;
+}
+
+async fn check_no_cors_redirect_before_interception(worker: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://redirect-filter.test/page", &loader);
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    let probe = r#"(async () => {
+      const url = 'https://remote.redirect-filter.test/response';
+      const assert = (value, label) => { if (!value) throw new Error(label); };
+      const rejected = async (promise, check, label) => {
+        let reason, failed = false;
+        try { await promise; } catch (error) { reason = error; failed = true; }
+        assert(failed && check(reason), label);
+      };
+      for (const redirect of ['manual', 'error']) {
+        const request = new Request(url, {mode: 'no-cors', redirect});
+        assert(request.redirect === redirect, 'Request construction must succeed');
+        await rejected(fetch(request.clone()), error => error instanceof TypeError, 'fetch rejects ' + redirect);
+        const controller = new AbortController();
+        const abortReason = {aborted: redirect};
+        controller.abort(abortReason);
+        await rejected(
+          fetch(request, {signal: controller.signal}),
+          error => error === abortReason,
+          'pre-aborted reason takes precedence'
+        );
+        const getterError = {getter: redirect};
+        await rejected(
+          fetch(url, {mode: 'no-cors', get redirect() { throw getterError; }, signal: controller.signal}),
+          error => error === getterError,
+          'RequestInit getter exception takes precedence over abort'
+        );
+      }
+      return 'ok';
+    })()"#;
+    vm.eval(&redirect_filter_probe_script(probe, worker))
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            assert!(
+                vm.take_pending_subresource_fetch_infos().is_empty(),
+                "invalid no-cors requests must not reach interception"
+            );
+            if vm.eval("redirectFilterResult === 'pending'").unwrap() != "true" {
+                break;
+            }
+            wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
+                .await
+                .unwrap();
+        }
+    })
+    .await
+    .expect("rejected fetch promises should settle without interception");
+    assert_eq!(vm.eval("redirectFilterResult").unwrap(), "ok");
+}
+
+#[tokio::test]
+async fn no_cors_redirect_rejects_window_fetch_before_interception() {
+    check_no_cors_redirect_before_interception(false).await;
+}
+
+#[tokio::test]
+async fn no_cors_redirect_rejects_worker_fetch_before_interception() {
+    check_no_cors_redirect_before_interception(true).await;
 }

@@ -266,6 +266,17 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
+    if let Err(message) = validate_no_cors_http_redirect_mode(
+        &prepared.request_origin,
+        &prepared.resolved_url,
+        prepared.request_mode,
+        prepared.redirect_mode,
+    ) {
+        let message = reject_url_policy_fetch(host, prepared, message);
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;

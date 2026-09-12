@@ -2134,6 +2134,26 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
+    if let Err(message) = crate::network_host::validate_no_cors_http_redirect_mode(
+        &moli_url::WebOrigin::from_url(&document_url),
+        &resolved_url,
+        request_mode,
+        redirect_mode,
+    ) {
+        record_worker_subresource_failure(
+            &state.borrow(),
+            document_url,
+            resolved_url,
+            method,
+            headers,
+            request_body_text(&body),
+            SubresourceResourceType::Fetch,
+            message.clone(),
+        );
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
     if fetch_subresource_interception_enabled
         && fetch_subresource_interception_resource_type.is_none_or(|expected| {
             expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Fetch)
