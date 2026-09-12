@@ -33,10 +33,15 @@ async fn check_data_response_modes(worker: bool) {
             let headerError;
             try { response.headers.set('X-Author','changed'); } catch(error) { headerError = error; }
             assert(headerError instanceof TypeError,'immutable fetch headers');
+            const clone = response.clone();
+            assert(clone.type === 'basic' && clone.status === 200 && clone.url === response.url,'clone surface');
+            assert(clone.headers.get('Content-Type') === mime,'clone Content-Type');
             const expected = method === 'HEAD' ? [] : bytes;
             const actual = Array.from(new Uint8Array(await response.arrayBuffer()));
+            const cloned = Array.from(new Uint8Array(await clone.arrayBuffer()));
             assert(JSON.stringify(actual) === JSON.stringify(expected),'body bytes '+actual);
-            assert(response.bodyUsed === (method !== 'HEAD'),'bodyUsed');
+            assert(JSON.stringify(cloned) === JSON.stringify(expected),'clone bytes '+cloned);
+            assert(response.bodyUsed === (method !== 'HEAD') && clone.bodyUsed === (method !== 'HEAD'),'bodyUsed');
             count++;
           }
         }
