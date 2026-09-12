@@ -807,6 +807,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    Upload {
+        internal_id: u64,
+    },
     Completion {
         internal_id: u64,
     },
@@ -828,6 +831,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    Upload {
+        internal_id: u64,
+        event: moli_fetch::UploadEvent,
+    },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
@@ -838,6 +845,9 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::Upload { internal_id, .. } => AsyncSubresourceFetchEventTarget::Upload {
+                internal_id: *internal_id,
+            },
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
