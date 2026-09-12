@@ -226,6 +226,8 @@ fetch({:?})
                 root_document,
                 AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
                     AsyncSubresourceStreamingStarted {
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
                         internal_id,
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
@@ -438,6 +440,8 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
 
         let started = AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
             AsyncSubresourceStreamingStarted {
+                skip_fetch_security_validation: false,
+                response_filter: None,
                 internal_id,
                 request_url: request_url.clone(),
                 request_method: "GET".to_owned(),

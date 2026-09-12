@@ -393,7 +393,9 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             *response.response,
             document_character_set,
             response.response_filter,
-            response.response_filter.is_none(),
+            response
+                .response_filter
+                .is_none_or(|filter| filter.is_readable()),
         ),
         Ok(None) => {
             load_prepared_script_source_outcome_with_document_character_set(
@@ -506,7 +508,7 @@ pub(crate) fn external_script_source_load_outcome_from_response(
     let head = response.head();
     let response_filter =
         crate::network_host::network_response_filter(&script.initiator_url, &head, request_mode);
-    let response_is_eligible = response_filter.is_none()
+    let response_is_eligible = response_filter.is_none_or(|filter| filter.is_readable())
         && (request_mode == RequestMode::NoCors
             || crate::network_host::validate_cors_response_chain(
                 &script.initiator_url,
@@ -562,7 +564,7 @@ fn external_script_source_load_outcome_from_response_inner(
     } else if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
         &response_bytes,
         script.fetch_metadata.integrity.as_deref(),
-        response_is_eligible && response_filter.is_none(),
+        response_is_eligible && response_filter.is_none_or(|filter| filter.is_readable()),
     ) {
         Err(format!(
             "script request `{}` failed its integrity check",

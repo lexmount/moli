@@ -16,10 +16,12 @@ pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,
     filter_cors_exposed_response_headers, is_cors_policy_failure_message,
     validate_cors_preflight_response, validate_cors_response, validate_cors_response_chain,
+    validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
+    validate_opaque_response_blocking_with_body,
 };
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object;
@@ -29,6 +31,7 @@ pub(crate) use self::materialize::{
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,
+    build_fetch_response_object_from_stream_for_request_mode_with_filter,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,

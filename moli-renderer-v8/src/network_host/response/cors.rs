@@ -84,7 +84,7 @@ pub(crate) fn validate_cors_response_chain(
     Ok(())
 }
 
-fn validate_cors_response_for_origin(
+pub(crate) fn validate_cors_response_for_origin(
     origin: &str,
     response_headers: &[(String, String)],
     credentials_mode: RequestCredentialsMode,
@@ -128,38 +128,31 @@ fn validate_cors_response_for_origin(
 
 pub(crate) fn validate_fetch_response_security_policy(
     document_url: &url::Url,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
+    head: &moli_fetch::ResponseHead,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), String> {
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(document_url, response_url, response_headers)?;
+        validate_cross_origin_resource_policy(document_url, &head.final_url, &head.headers)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
             document_url,
-            response_url,
-            response_headers,
+            &head.final_url,
+            &head.headers,
             request_mode,
             credentials_mode,
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
         )?;
-        validate_opaque_response_blocking(document_url, response_url, response_headers)
+        validate_opaque_response_blocking(document_url, &head.final_url, &head.headers)
     } else {
-        validate_cors_response(
-            document_url,
-            response_url,
-            response_headers,
-            credentials_mode,
-        )
+        validate_cors_response_chain(document_url, head, credentials_mode)
     }
 }
 
 pub(crate) fn validate_fetch_response_security_policy_with_body(
     document_url: &url::Url,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
+    head: &moli_fetch::ResponseHead,
     response_body: &[u8],
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
@@ -167,8 +160,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body(
 ) -> Result<(), String> {
     validate_fetch_response_security_policy_with_body_classified(
         document_url,
-        response_url,
-        response_headers,
+        head,
         response_body,
         request_mode,
         credentials_mode,
@@ -179,20 +171,19 @@ pub(crate) fn validate_fetch_response_security_policy_with_body(
 
 pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
     document_url: &url::Url,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
+    head: &moli_fetch::ResponseHead,
     response_body: &[u8],
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), FetchResponseSecurityViolation> {
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(document_url, response_url, response_headers)
+        validate_cross_origin_resource_policy(document_url, &head.final_url, &head.headers)
             .map_err(FetchResponseSecurityViolation::Rejected)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
             document_url,
-            response_url,
-            response_headers,
+            &head.final_url,
+            &head.headers,
             request_mode,
             credentials_mode,
             policy_context.cross_origin_embedder_policy,
@@ -201,19 +192,14 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
         .map_err(FetchResponseSecurityViolation::Rejected)?;
         validate_opaque_response_blocking_with_body(
             document_url,
-            response_url,
-            response_headers,
+            &head.final_url,
+            &head.headers,
             response_body,
         )
         .map_err(FetchResponseSecurityViolation::OpaqueResponseBlocked)
     } else {
-        validate_cors_response(
-            document_url,
-            response_url,
-            response_headers,
-            credentials_mode,
-        )
-        .map_err(FetchResponseSecurityViolation::Rejected)
+        validate_cors_response_chain(document_url, head, credentials_mode)
+            .map_err(FetchResponseSecurityViolation::Rejected)
     }
 }
 
@@ -400,12 +386,12 @@ pub(crate) fn validate_cross_origin_resource_policy(
 }
 
 pub(crate) fn cors_preflight_request_headers(
-    document_url: &url::Url,
+    cors_tainted: bool,
     request_url: &url::Url,
     method: &str,
     request_headers: &[(String, String)],
 ) -> Option<Vec<(String, String)>> {
-    if same_origin(document_url, request_url) {
+    if !cors_tainted {
         return None;
     }
     if !matches!(request_url.scheme(), "http" | "https") {
@@ -432,8 +418,8 @@ pub(crate) fn cors_preflight_request_headers(
 }
 
 pub(crate) fn validate_cors_preflight_response(
-    document_url: &url::Url,
-    response_url: &url::Url,
+    origin: &str,
+    credentials_mode: RequestCredentialsMode,
     requested_method: &str,
     request_headers: &[(String, String)],
     response_status: u16,
@@ -444,12 +430,7 @@ pub(crate) fn validate_cors_preflight_response(
             "CORS preflight failed: response status {response_status}"
         ));
     }
-    validate_cors_response(
-        document_url,
-        response_url,
-        response_headers,
-        RequestCredentialsMode::SameOrigin,
-    )?;
+    validate_cors_response_for_origin(origin, response_headers, credentials_mode)?;
 
     if !moli_fetch::is_cors_safelisted_method(requested_method) {
         let Some(allow_methods) =
@@ -499,14 +480,14 @@ pub(crate) fn validate_cors_preflight_response(
 
 pub(crate) fn filter_cors_exposed_response_headers(
     document_url: &url::Url,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
+    head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
 ) -> Vec<(String, String)> {
-    if same_origin(document_url, response_url) {
+    let response_headers = &head.headers;
+    if !super::materialize::response_has_cross_origin_url(document_url, head) {
         return response_headers.to_vec();
     }
-    if !matches!(response_url.scheme(), "http" | "https") {
+    if !matches!(head.final_url.scheme(), "http" | "https") {
         return response_headers.to_vec();
     }
 
@@ -575,6 +556,23 @@ mod tests {
         url::Url::parse(value).expect("valid URL")
     }
 
+    fn header_response(
+        final_url: url::Url,
+        headers: Vec<(String, String)>,
+    ) -> moli_fetch::ResponseHead {
+        moli_fetch::ResponseHead {
+            final_url,
+            status: 200,
+            headers,
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        }
+    }
+
     #[test]
     fn cors_response_chain_checks_network_redirects_without_extra_info() {
         for from_cache in [false, true] {
@@ -629,12 +627,8 @@ mod tests {
             ("X-Other".to_owned(), "ok".to_owned()),
         ];
 
-        let preflight = cors_preflight_request_headers(
-            &url("http://example.test/page"),
-            &url("http://other.test/data"),
-            "PUT",
-            &headers,
-        );
+        let preflight =
+            cors_preflight_request_headers(true, &url("http://other.test/data"), "PUT", &headers);
 
         assert_eq!(
             preflight,
@@ -660,12 +654,7 @@ mod tests {
         ];
 
         assert_eq!(
-            cors_preflight_request_headers(
-                &url("http://example.test/page"),
-                &url("http://other.test/data"),
-                "POST",
-                &headers,
-            ),
+            cors_preflight_request_headers(true, &url("http://other.test/data"), "POST", &headers,),
             None
         );
     }
@@ -693,8 +682,8 @@ mod tests {
 
         assert_eq!(
             validate_cors_preflight_response(
-                &url("http://example.test/page"),
-                &url("http://other.test/data"),
+                "http://example.test",
+                RequestCredentialsMode::SameOrigin,
                 "POST",
                 &request_headers,
                 204,
@@ -707,7 +696,6 @@ mod tests {
     #[test]
     fn validate_cors_preflight_response_allows_safelisted_methods_without_allow_methods() {
         let document_url = url::Url::parse("https://origin.test/page").unwrap();
-        let response_url = url::Url::parse("https://api.test/data").unwrap();
         let response_headers = vec![
             ("Access-Control-Allow-Origin".to_owned(), "*".to_owned()),
             (
@@ -718,8 +706,8 @@ mod tests {
 
         for method in ["GET", "HEAD", "POST"] {
             validate_cors_preflight_response(
-                &document_url,
-                &response_url,
+                &origin_ascii_serialization(&document_url),
+                RequestCredentialsMode::SameOrigin,
                 method,
                 &[("Content-Type".to_owned(), "custom/type".to_owned())],
                 200,
@@ -736,7 +724,6 @@ mod tests {
     #[test]
     fn validate_cors_preflight_response_rejects_unsafelisted_method_without_allow_methods() {
         let document_url = url::Url::parse("https://origin.test/page").unwrap();
-        let response_url = url::Url::parse("https://api.test/data").unwrap();
         let response_headers = vec![
             ("Access-Control-Allow-Origin".to_owned(), "*".to_owned()),
             (
@@ -746,8 +733,8 @@ mod tests {
         ];
 
         let error = validate_cors_preflight_response(
-            &document_url,
-            &response_url,
+            &origin_ascii_serialization(&document_url),
+            RequestCredentialsMode::SameOrigin,
             "PUT",
             &[("Content-Type".to_owned(), "custom/type".to_owned())],
             200,
@@ -773,8 +760,7 @@ mod tests {
 
         let filtered = filter_cors_exposed_response_headers(
             &url("http://example.test/page"),
-            &url("http://other.test/data"),
-            &headers,
+            &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::SameOrigin,
         );
 
@@ -798,16 +784,14 @@ mod tests {
 
         let non_credentialed = filter_cors_exposed_response_headers(
             &url("http://example.test/page"),
-            &url("http://other.test/data"),
-            &headers,
+            &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::SameOrigin,
         );
         assert_eq!(non_credentialed, headers);
 
         let credentialed = filter_cors_exposed_response_headers(
             &url("http://example.test/page"),
-            &url("http://other.test/data"),
-            &headers,
+            &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::Include,
         );
         assert_eq!(
@@ -828,8 +812,7 @@ mod tests {
 
         let filtered = filter_cors_exposed_response_headers(
             &url("http://example.test/page"),
-            &url("http://example.test/data"),
-            &headers,
+            &header_response(url("http://example.test/data"), headers.clone()),
             RequestCredentialsMode::Include,
         );
 

@@ -16,13 +16,23 @@ fn is_redirect_status(status: u16) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FetchResponseFilter {
     None,
+    Basic,
+    Cors,
     Opaque,
     OpaqueRedirect,
+}
+
+impl FetchResponseFilter {
+    fn is_readable(self) -> bool {
+        matches!(self, Self::None | Self::Basic | Self::Cors)
+    }
 }
 
 impl From<crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFilter {
     fn from(value: crate::types::AsyncSubresourceFetchResponseFilter) -> Self {
         match value {
+            crate::types::AsyncSubresourceFetchResponseFilter::Basic => Self::Basic,
+            crate::types::AsyncSubresourceFetchResponseFilter::Cors => Self::Cors,
             crate::types::AsyncSubresourceFetchResponseFilter::Opaque => Self::Opaque,
             crate::types::AsyncSubresourceFetchResponseFilter::OpaqueRedirect => {
                 Self::OpaqueRedirect
@@ -86,7 +96,8 @@ pub(crate) fn network_response_filter(
 
     if is_redirect_status(head.status) {
         Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
-    } else if request_mode == RequestMode::NoCors && no_cors_response_is_opaque(document_url, head)
+    } else if request_mode == RequestMode::NoCors
+        && response_has_cross_origin_url(document_url, head)
     {
         Some(AsyncSubresourceFetchResponseFilter::Opaque)
     } else {
@@ -94,7 +105,10 @@ pub(crate) fn network_response_filter(
     }
 }
 
-fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::ResponseHead) -> bool {
+pub(super) fn response_has_cross_origin_url(
+    document_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
+) -> bool {
     !moli_url::same_origin(document_url, &head.final_url)
         || head.redirect_chain.iter().any(|redirect| {
             !moli_url::same_origin(document_url, &redirect.from_url)
@@ -104,62 +118,50 @@ fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::Respon
 
 fn compute_fetch_response_type(
     document_url: &url::Url,
-    response_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &'static str {
-    // The fixtures that drove this helper were checking `Response.type`, not just status/body.
-    // Returning `"basic"` unconditionally looked harmless at first because our fetch stack does
-    // not yet model the full Fetch standard response filtering pipeline (`opaque`,
-    // `opaqueredirect`, etc.). In practice that shortcut breaks a useful compatibility signal:
-    // browser-facing code distinguishes same-origin subresource fetches from cross-origin ones
-    // through `Response.type`.
-    //
-    // We intentionally keep the rule narrow and deterministic here:
-    // - same origin => `basic`
-    // - different origin => `cors`
-    //
-    // This is not a complete Fetch implementation, but it preserves the observable behavior that
-    // our current runtime can support without pretending every response is same-origin.
+    // Returning to the initiating origin does not undo response tainting.
     match filter {
+        FetchResponseFilter::Basic => "basic",
+        FetchResponseFilter::Cors => "cors",
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if moli_url::same_origin(document_url, response_url) => "basic",
-        FetchResponseFilter::None => "cors",
+        FetchResponseFilter::None if response_has_cross_origin_url(document_url, head) => "cors",
+        FetchResponseFilter::None => "basic",
     }
 }
 
 fn filtered_response_status(head: &moli_fetch::ResponseHead, filter: FetchResponseFilter) -> u16 {
-    if filter == FetchResponseFilter::None {
-        head.status
-    } else {
-        0
-    }
+    if filter.is_readable() { head.status } else { 0 }
 }
 
 fn filtered_response_url(head: &moli_fetch::ResponseHead, filter: FetchResponseFilter) -> &str {
     match filter {
         FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect => "",
-        FetchResponseFilter::None => head.final_url.as_str(),
+        FetchResponseFilter::None | FetchResponseFilter::Basic | FetchResponseFilter::Cors => {
+            head.final_url.as_str()
+        }
     }
 }
 
 fn filtered_response_exposes_body(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    filter.is_readable()
 }
 
 fn filtered_response_exposes_redirected(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    filter.is_readable()
 }
 
 fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
-    filter == FetchResponseFilter::None
+    filter.is_readable()
 }
 
 fn filtered_response_status_text(
     head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &'static str {
-    if filter == FetchResponseFilter::None {
+    if filter.is_readable() {
         http_status_text(head.status)
     } else {
         ""
@@ -253,6 +255,24 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
+    build_fetch_response_object_from_stream_for_request_mode_with_filter(
+        scope,
+        document_url,
+        request_mode,
+        head,
+        body_source_id,
+        None,
+    )
+}
+
+pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_filter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: &url::Url,
+    request_mode: RequestMode,
+    head: moli_fetch::ResponseHead,
+    body_source_id: NetworkBodySourceId,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+) -> v8::Local<'s, v8::Object> {
     build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
         scope,
         document_url,
@@ -260,6 +280,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
         head,
         body_source_id,
         None,
+        filter_override,
     )
 }
 
@@ -277,6 +298,7 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
         head,
         body_source_id,
         Some(request_url.as_str()),
+        None,
     )
 }
 
@@ -287,8 +309,11 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = response_filter(document_url, &head, request_mode);
+    let filter = filter_override
+        .map(FetchResponseFilter::from)
+        .unwrap_or_else(|| response_filter(document_url, &head, request_mode));
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
@@ -310,10 +335,7 @@ fn build_fetch_response_object_head<'s>(
     filtered_surface_url: Option<&str>,
 ) -> v8::Local<'s, v8::Object> {
     let status = filtered_response_status(head, filter);
-    // `Response.type` must be derived from the final resolved URL, not the request URL string or
-    // the redirect start point. A redirect chain can cross origins, and the JS surface is meant
-    // to describe the response object the page actually observes after redirects settle.
-    let response_type = compute_fetch_response_type(document_url, &head.final_url, filter);
+    let response_type = compute_fetch_response_type(document_url, head, filter);
     let obj = FetchResponseHeadDeclaration::new(
         status as f64,
         (200..300).contains(&status),
@@ -328,7 +350,7 @@ fn build_fetch_response_object_head<'s>(
     FetchResponseInternalUrlDeclaration::new(head.final_url.to_string())
         .initialize(scope, obj)
         .expect("Fetch Response internal URL declaration should initialize");
-    if filter != FetchResponseFilter::None {
+    if !filter.is_readable() {
         set_response_slot_value(
             scope,
             obj,

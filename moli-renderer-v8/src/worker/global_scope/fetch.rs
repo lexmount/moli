@@ -2478,8 +2478,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         };
         if let Err(message) = validate_fetch_response_security_policy(
             &pending.document_url,
-            &started.head.final_url,
-            &started.head.headers,
+            &started.head,
             pending.request_mode,
             pending.credentials_mode,
             pending.policy_context,
@@ -2491,8 +2490,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             let mut observable_head = started.head.clone();
             observable_head.headers = filter_cors_exposed_response_headers(
                 &pending.document_url,
-                &observable_head.final_url,
-                &observable_head.headers,
+                &observable_head,
                 pending.credentials_mode,
             );
             pending.streaming_body_source_id = Some(started.body_source_id);
@@ -2811,8 +2809,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 WorkerFetchResponse::Materialized(response) => {
                     validate_fetch_response_security_policy_with_body_classified(
                         &pending.document_url,
-                        &response_head.final_url,
-                        &response_head.headers,
+                        &response_head,
                         response.body_bytes(),
                         pending.request_mode,
                         pending.credentials_mode,
@@ -2829,8 +2826,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     .and_then(|body_bytes| {
                         validate_fetch_response_security_policy_with_body_classified(
                             &pending.document_url,
-                            &response_head.final_url,
-                            &response_head.headers,
+                            &response_head,
                             &body_bytes,
                             pending.request_mode,
                             pending.credentials_mode,
@@ -2882,8 +2878,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             }
             let filtered_headers = filter_cors_exposed_response_headers(
                 &pending.document_url,
-                &response_head.final_url,
-                &response_head.headers,
+                &response_head,
                 pending.credentials_mode,
             );
             let response_obj = match response.into_fetch_parts() {

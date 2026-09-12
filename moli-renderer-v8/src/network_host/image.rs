@@ -134,8 +134,7 @@ pub(crate) fn start_scanned_image_preload(
             response.redirect_chain.is_empty()
                 && validate_fetch_response_security_policy_with_body(
                     &document_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     response.body_bytes(),
                     RequestMode::NoCors,
                     RequestCredentialsMode::Include,

@@ -2589,10 +2589,9 @@ impl ScriptVm {
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
                 Ok(response)
             } else {
-                crate::network_host::validate_cors_response(
+                crate::network_host::validate_cors_response_chain(
                     &pending.pending.info.document_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     pending.pending.credentials_mode,
                 )
                 .map(|()| response)
@@ -2650,10 +2649,9 @@ impl ScriptVm {
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
                 Ok(response)
             } else {
-                crate::network_host::validate_cors_response(
+                crate::network_host::validate_cors_response_chain(
                     &pending.pending.info.document_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     pending.pending.credentials_mode,
                 )
                 .map(|()| response)
@@ -2878,10 +2876,9 @@ impl ScriptVm {
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
                 Ok(response)
             } else {
-                crate::network_host::validate_cors_response(
+                crate::network_host::validate_cors_response_chain(
                     &pending.pending.info.document_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     pending.pending.credentials_mode,
                 )
                 .map(|()| response)
@@ -2941,10 +2938,9 @@ impl ScriptVm {
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
                 Ok(response)
             } else {
-                crate::network_host::validate_cors_response(
+                crate::network_host::validate_cors_response_chain(
                     &pending.pending.info.document_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     pending.pending.credentials_mode,
                 )
                 .map(|()| response)
@@ -3136,8 +3132,7 @@ impl ScriptVm {
                 if !skip_fetch_security_validation {
                     crate::network_host::validate_fetch_response_security_policy_with_body(
                         &pending.info.document_url,
-                        &response.final_url,
-                        &response.headers,
+                        &response.head(),
                         response.body_bytes(),
                         pending.request_mode,
                         pending.credentials_mode,
@@ -3309,8 +3304,7 @@ impl ScriptVm {
                                 .then(|| {
                                     crate::network_host::validate_fetch_response_security_policy_with_body(
                                         &pending.info.document_url,
-                                        &response.final_url,
-                                        &response.headers,
+                                        &response.head(),
                                         response.body_bytes(),
                                         pending.request_mode,
                                         pending.credentials_mode,
@@ -3593,8 +3587,7 @@ impl ScriptVm {
                 ) {
                     let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
                         &pending.info.document_url,
-                        &response.final_url,
-                        &response.headers,
+                        &response.head(),
                         response.body_bytes(),
                         pending.request_mode,
                         pending.credentials_mode,
@@ -3687,12 +3680,11 @@ impl ScriptVm {
                     if matches!(
                         pending.info.resource_type,
                         SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) {
+                    ) && !response_filter.is_some_and(|filter| filter.is_readable()) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
                                 &pending.info.document_url,
-                                &observable_response.final_url,
-                                &observable_response.headers,
+                                &observable_response.head(),
                                 pending.credentials_mode,
                             );
                     }
@@ -4378,10 +4370,12 @@ impl ScriptVm {
                     None
                 }
                 .or_else(|| {
+                    if started.skip_fetch_security_validation {
+                        return None;
+                    }
                     crate::network_host::validate_fetch_response_security_policy(
                         &pending.info.document_url,
-                        &started.head.final_url,
-                        &started.head.headers,
+                        &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
@@ -4429,6 +4423,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                response_filter: started.response_filter,
                 pending,
                 request_url: started.request_url,
                 request_method: started.request_method,
@@ -4572,6 +4567,9 @@ impl ScriptVm {
                 None
             }
             .or_else(|| {
+                if started.skip_fetch_security_validation {
+                    return None;
+                }
                 matches!(
                     pending.info.resource_type,
                     SubresourceResourceType::EventSource
@@ -4581,8 +4579,7 @@ impl ScriptVm {
                 .then(|| {
                     crate::network_host::validate_fetch_response_security_policy(
                         &pending.info.document_url,
-                        &started.head.final_url,
-                        &started.head.headers,
+                        &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
@@ -4770,11 +4767,10 @@ impl ScriptVm {
             if matches!(
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) {
+            ) && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.info.document_url,
-                    &observable_head.final_url,
-                    &observable_head.headers,
+                    &observable_head,
                     pending.credentials_mode,
                 );
             }
@@ -4814,6 +4810,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                        response_filter: started.response_filter,
                         pending,
                         request_url: started.request_url.clone(),
                         request_method: started.request_method.clone(),
@@ -4860,12 +4857,13 @@ impl ScriptVm {
                         .resolver()
                         .expect("detached keepalive stream is handled before V8 entry");
                     let resolver = v8::Local::new(scope, resolver);
-                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
                         scope,
                         &pending.info.document_url,
                         pending.request_mode,
                         observable_head,
                         started.body_source_id,
+                        started.response_filter,
                     );
                     resolver.resolve(scope, response_obj.into());
                 }
@@ -4964,6 +4962,7 @@ impl ScriptVm {
             let pending_owner = pending.execution_context.dispatch_scope();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
+                        response_filter: started.response_filter,
                     pending,
                     request_url: started.request_url.clone(),
                     request_method: started.request_method.clone(),
@@ -5685,13 +5684,17 @@ impl ScriptVm {
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
-                            observable_head.headers =
-                                crate::network_host::filter_cors_exposed_response_headers(
-                                    &streaming.pending.info.document_url,
-                                    &observable_head.final_url,
-                                    &observable_head.headers,
-                                    streaming.pending.credentials_mode,
-                                );
+                            if !streaming
+                                .response_filter
+                                .is_some_and(|filter| filter.is_readable())
+                            {
+                                observable_head.headers =
+                                    crate::network_host::filter_cors_exposed_response_headers(
+                                        &streaming.pending.info.document_url,
+                                        &observable_head,
+                                        streaming.pending.credentials_mode,
+                                    );
+                            }
                             // XHR still exposes a complete response at DONE. Keep the
                             // network transfer and CDP record streaming/spooled, and
                             // materialize only at this Web-visible completion boundary.

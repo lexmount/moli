@@ -1,3 +1,4 @@
+use super::response::validate_cors_response_for_origin;
 use super::*;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, RedirectInfo,
@@ -124,7 +125,6 @@ enum ManualCorsRedirectTransition {
 struct ManualCorsRedirectState {
     request: Request,
     preflight_request_headers: Vec<(String, String)>,
-    redirect_chain: Vec<RedirectInfo>,
 }
 
 impl ManualCorsRedirectState {
@@ -132,7 +132,6 @@ impl ManualCorsRedirectState {
         Self {
             request,
             preflight_request_headers,
-            redirect_chain: Vec::new(),
         }
     }
 
@@ -184,7 +183,7 @@ impl ManualCorsRedirectState {
             &head.final_url,
             head.status,
             &head.headers,
-            self.redirect_chain.len(),
+            self.request.redirect_count(),
         )?
         else {
             return Ok(ManualCorsRedirectTransition::FinalResponse);
@@ -203,7 +202,7 @@ impl ManualCorsRedirectState {
             }
         }
         let redirect_status = head.status;
-        self.redirect_chain.push(RedirectInfo {
+        self.request.record_redirect(RedirectInfo {
             source: moli_fetch::RedirectSource::Network,
             from_url: head.final_url,
             to_url: next_url.clone(),
@@ -225,7 +224,7 @@ impl ManualCorsRedirectState {
     }
 
     fn into_redirect_chain(self) -> Vec<RedirectInfo> {
-        self.redirect_chain
+        self.request.redirect_chain().to_vec()
     }
 }
 
@@ -317,24 +316,15 @@ fn validate_actual_cors_response_head(
     request: &Request,
     response: &ResponseHead,
 ) -> Result<(), String> {
-    validate_actual_cors_response_parts(request, &response.final_url, &response.headers)
-}
-
-fn validate_actual_cors_response_parts(
-    request: &Request,
-    response_url: &url::Url,
-    response_headers: &[(String, String)],
-) -> Result<(), String> {
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
-        return Ok(());
-    };
-    if request.request_mode == RequestMode::NoCors {
+    if request.request_mode == RequestMode::NoCors
+        || !matches!(response.final_url.scheme(), "http" | "https")
+        || !request.has_cross_origin_url(&response.final_url)
+    {
         return Ok(());
     }
-    validate_cors_response(
-        initiator_url,
-        response_url,
-        response_headers,
+    validate_cors_response_for_origin(
+        &request.serialized_origin(),
+        &response.headers,
         request.credentials_mode,
     )
 }
@@ -424,7 +414,7 @@ async fn run_cors_preflight_if_needed(
     if let Some(initiator_url) = request.cookie_context.initiator_url.clone()
         && request.request_mode != RequestMode::NoCors
         && let Some(preflight_headers) = cors_preflight_request_headers(
-            &initiator_url,
+            request.has_cross_origin_url(&request.url),
             &request.url,
             &request.method,
             preflight_request_headers,
@@ -436,6 +426,7 @@ async fn run_cors_preflight_if_needed(
                 .map_err(|error| format!("cors preflight: failed to build request: {error}"))?
                 .with_initiator_url(&initiator_url)
                 .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+                .with_redirect_chain(request.redirect_chain().to_vec())
                 .with_network_partition_key(request.network_partition_key().map(str::to_owned));
         if let Some(metadata) = request.browser_request_metadata() {
             preflight_request = preflight_request.with_browser_request_metadata(metadata);
@@ -470,15 +461,15 @@ async fn run_cors_preflight_if_needed(
                 &preflight_response,
             );
         }
-        if preflight_response.redirected {
+        if preflight_response.redirect_chain.len() > request.redirect_chain().len() {
             return Err(format!(
                 "CORS preflight failed: preflight request redirected to {}",
                 preflight_response.final_url
             ));
         }
         validate_cors_preflight_response(
-            &initiator_url,
-            &preflight_response.final_url,
+            &request.serialized_origin(),
+            request.credentials_mode,
             &request.method,
             preflight_request_headers,
             preflight_response.status,
@@ -495,38 +486,6 @@ pub(crate) fn spawn_async_subresource_fetch(
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
-    internal_id: u64,
-    network_context: AsyncSubresourceNetworkContext,
-    request_url: url::Url,
-    request_method: String,
-    request_headers: Vec<(String, String)>,
-    request_body: Option<String>,
-) {
-    spawn_async_subresource_fetch_with_redirect_chain(
-        task_runner,
-        completion_tx,
-        loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-        Vec::new(),
-        internal_id,
-        network_context,
-        request_url,
-        request_method,
-        request_headers,
-        request_body,
-    );
-}
-
-pub(crate) fn spawn_async_subresource_fetch_with_redirect_chain(
-    task_runner: crate::network::RendererResourceTaskRunner,
-    completion_tx: RendererResourceCompletionSender,
-    loader: ResourceRequestClient,
-    request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
-    initial_redirect_chain: Vec<RedirectInfo>,
     internal_id: u64,
     network_context: AsyncSubresourceNetworkContext,
     request_url: url::Url,
@@ -577,13 +536,7 @@ pub(crate) fn spawn_async_subresource_fetch_with_redirect_chain(
             )
             .await
             .map(|observed| {
-                let (mut response, request_observation) = observed.into_parts();
-                if !initial_redirect_chain.is_empty() {
-                    let mut redirect_chain = initial_redirect_chain;
-                    redirect_chain.append(&mut response.redirect_chain);
-                    response.redirect_chain = redirect_chain;
-                    response.redirected = true;
-                }
+                let (response, request_observation) = observed.into_parts();
                 crate::protocol_types::NavigationResponse::from(response)
                     .with_network_request_headers(
                         request_observation.map(|observation| observation.into_headers()),
@@ -620,7 +573,6 @@ pub(crate) fn spawn_async_subresource_fetch_with_redirect_chain(
             request_method_for_event,
             request_headers_for_event,
             request_body_for_event,
-            initial_redirect_chain,
         )
         .await;
         if let Err(error) = result {
@@ -652,7 +604,6 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     request_method: String,
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
-    initial_redirect_chain: Vec<RedirectInfo>,
 ) -> Result<(), String> {
     let body_source_id = new_network_body_source_id();
     let requires_manual_preflight_redirects =
@@ -677,15 +628,11 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
         .await?
     };
     let (mut response, request_observation) = observed.into_parts();
-    let mut head = response.head();
-    if !initial_redirect_chain.is_empty() {
-        let mut redirect_chain = initial_redirect_chain;
-        redirect_chain.append(&mut head.redirect_chain);
-        head.redirect_chain = redirect_chain;
-        head.redirected = true;
-    }
+    let head = response.head();
     let _ = completion_tx.send_async_subresource_event(
         AsyncSubresourceFetchEvent::StreamingStarted(Box::new(AsyncSubresourceStreamingStarted {
+            skip_fetch_security_validation: false,
+            response_filter: None,
             internal_id,
             request_url,
             request_method,
@@ -895,9 +842,9 @@ mod tests {
             redirects.preflight_request_headers(),
             &[("X-Challenge".to_owned(), "yes".to_owned())]
         );
-        assert_eq!(redirects.redirect_chain.len(), 1);
-        assert_eq!(redirects.redirect_chain[0].status, 303);
-        assert!(redirects.redirect_chain[0].network_extra_info_available);
+        assert_eq!(redirects.request().redirect_chain().len(), 1);
+        assert_eq!(redirects.request().redirect_chain()[0].status, 303);
+        assert!(redirects.request().redirect_chain()[0].network_extra_info_available);
         Ok(())
     }
 
@@ -1271,14 +1218,13 @@ mod tests {
             negotiated_http_version: None,
         }];
 
-        spawn_async_subresource_fetch_with_redirect_chain(
+        spawn_async_subresource_fetch(
             crate::network::RendererResourceTaskRunner::from_current_tokio()?,
             queue.sender(),
             loader,
-            request,
+            request.with_redirect_chain(initial_redirect_chain),
             Some(FetchCancelHandle::new()),
             Vec::new(),
-            initial_redirect_chain,
             74,
             AsyncSubresourceNetworkContext {
                 frame_id: None,

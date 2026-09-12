@@ -599,8 +599,16 @@ pub(super) struct AsyncSubresourceFetchCompletion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AsyncSubresourceFetchResponseFilter {
+    Basic,
+    Cors,
     Opaque,
     OpaqueRedirect,
+}
+
+impl AsyncSubresourceFetchResponseFilter {
+    pub(super) fn is_readable(self) -> bool {
+        matches!(self, Self::Basic | Self::Cors)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -631,6 +639,8 @@ pub(super) struct AsyncSubresourceNetworkContext {
 
 #[derive(Debug)]
 pub(super) struct AsyncSubresourceStreamingStarted {
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -851,6 +861,7 @@ pub(super) struct ServiceWorkerControllerChangeCompletion {
 }
 
 pub(super) struct StreamingSubresourceFetchState {
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,

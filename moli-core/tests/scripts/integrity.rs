@@ -1,4 +1,6 @@
 use super::*;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -11,7 +13,16 @@ const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++Ia
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
+    requests: Arc<Mutex<Vec<IntegrityRequest>>>,
     tasks: Vec<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+struct IntegrityRequest {
+    method: String,
+    path: String,
+    origin: Option<String>,
+    cookie: Option<String>,
 }
 
 impl Drop for IntegrityServers {
@@ -28,11 +39,13 @@ impl IntegrityServers {
         let cross = TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", main.local_addr()?);
         let cross_origin = format!("http://{}", cross.local_addr()?);
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let tasks = [main, cross]
             .into_iter()
             .map(|listener| {
                 let origin = origin.clone();
                 let cross_origin = cross_origin.clone();
+                let requests = Arc::clone(&requests);
                 tokio::spawn(async move {
                     let mut connections = JoinSet::new();
                     loop {
@@ -41,6 +54,7 @@ impl IntegrityServers {
                                 let Ok((mut stream, _)) = accepted else { break };
                                 let origin = origin.clone();
                                 let cross_origin = cross_origin.clone();
+                                let requests = Arc::clone(&requests);
                                 connections.spawn(async move {
                                     let mut request = Vec::new();
                                     while !request.ends_with(b"\r\n\r\n") && request.len() < 16384 {
@@ -49,8 +63,15 @@ impl IntegrityServers {
                                     }
                                     let request = String::from_utf8_lossy(&request);
                                     let path = request.split_whitespace().nth(1).unwrap_or("/");
-                                    let path = path.split('?').next().unwrap_or(path);
-                                    let (status, headers, body) = fixture_response(path, &origin, &cross_origin);
+                                    let header = |name: &str| request.lines().filter_map(|line| line.split_once(':'))
+                                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                                        .map(|(_, value)| value.trim().to_owned());
+                                    let incoming = IntegrityRequest {
+                                        method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
+                                        path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
+                                    };
+                                    let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
+                                    requests.lock().push(incoming);
                                     let response = format!(
                                         "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                                         body.len(),
@@ -67,6 +88,7 @@ impl IntegrityServers {
         Ok(Self {
             origin,
             cross_origin,
+            requests,
             tasks,
         })
     }
@@ -91,10 +113,40 @@ fn network_cases(origin: &str, cross: &str) -> serde_json::Value {
     ])
 }
 
-fn fixture_response(path: &str, origin: &str, cross: &str) -> (&'static str, String, String) {
+fn fixture_response(
+    request: &IntegrityRequest,
+    origin: &str,
+    cross: &str,
+) -> (&'static str, String, String) {
+    let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/echo-origin.js" | "/echo-origin-redirect.js" => {
+            // Echo the actual request Origin: a missing header must not silently
+            // receive ACAO: null and hide a broken redirect handoff.
+            let mut headers = format!(
+                "{javascript}Cache-Control: no-store\r\nVary: Origin\r\nX-Sri-Private: yes\r\n"
+            );
+            if let Some(origin) = &request.origin {
+                headers.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\n"));
+            }
+            if request.method == "OPTIONS" {
+                headers.push_str("Access-Control-Allow-Methods: GET, PUT\r\nAccess-Control-Allow-Headers: x-sri-test\r\n");
+                return ("204 No Content", headers, String::new());
+            }
+            if path == "/echo-origin-redirect.js" {
+                headers.push_str(&format!("Location: {cross}/echo-origin.js?{query}\r\n"));
+                ("302 Found", headers, String::new())
+            } else {
+                ("200 OK", headers, SCRIPT.to_owned())
+            }
+        }
         "/script.js" => ("200 OK", javascript.to_owned(), SCRIPT.to_owned()),
+        "/cacheable.js" => (
+            "200 OK",
+            format!("{javascript}Cache-Control: max-age=60\r\n"),
+            SCRIPT.to_owned(),
+        ),
         "/cors.js" | "/cors-null.js" | "/cors-origin.js" => (
             "200 OK",
             format!(
@@ -163,13 +215,32 @@ fn fixture_response(path: &str, origin: &str, cross: &str) -> (&'static str, Str
                         event.respondWith(Response.redirect('{origin}/script.js'));
                     else if (path === '/sw-cors-redirect-unapproved-hop.js')
                         event.respondWith(Response.redirect('{cross}/unapproved-redirect.js'));
+                    else if (path === '/sw-request-state.js')
+                        event.respondWith(Response.redirect('{origin}/echo-origin.js' + new URL(event.request.url).search));
+                    else if (path === '/sw-request-state-redirect.js')
+                        event.respondWith(Response.redirect('{origin}/echo-origin-redirect.js' + new URL(event.request.url).search));
+                    else if (path === '/sw-cacheable.js')
+                        event.respondWith(Response.redirect('{origin}/cacheable.js'));
+                    else if (path.startsWith('/sw-return-'))
+                        event.respondWith(Response.redirect('{origin}' + path.replace('/sw-return-', '/sw-final-')));
+                    else if (path === '/sw-final-basic.js')
+                        event.respondWith(fetch('{origin}/echo-origin.js?worker-basic'));
+                    else if (path === '/sw-final-basic-buffered.js')
+                        event.respondWith(fetch('{origin}/echo-origin.js?worker-basic-buffered').then(async response => {{
+                            await response.clone().text();
+                            return response;
+                        }}));
+                    else if (path === '/sw-final-cors.js')
+                        event.respondWith(fetch('{cross}/echo-origin.js?worker-cors'));
+                    else if (path === '/sw-final-default.js')
+                        event.respondWith(new Response({script}, {{headers: {{'Content-Type': 'text/javascript', 'X-Sri-Private': 'yes'}}}}));
                 }});
             "#,
                 script = serde_json::to_string(SCRIPT).unwrap()
             );
             ("200 OK", javascript.to_owned(), body)
         }
-        "/page.html" | "/parser.html" => {
+        "/page.html" | "/parser.html" | "/cookie-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
             if path == "/parser.html" {
                 for case in network_cases(origin, cross).as_array().unwrap() {
@@ -183,7 +254,11 @@ fn fixture_response(path: &str, origin: &str, cross: &str) -> (&'static str, Str
                     html.push_str("></script>");
                 }
             }
-            ("200 OK", "Content-Type: text/html\r\n".to_owned(), html)
+            let mut headers = "Content-Type: text/html\r\n".to_owned();
+            if path == "/cookie-page.html" {
+                headers.push_str("Set-Cookie: sriSession=present; Path=/; SameSite=Lax\r\n");
+            }
+            ("200 OK", headers, html)
         }
         _ => (
             "404 Not Found",
@@ -333,6 +408,262 @@ async fn service_worker_cross_origin_redirect_integrity_checks_network_responses
     ]);
     let result = page
         .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true)
+        .await?;
+    assert_integrity_results(result, &cases);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_script_redirect_preserves_origin_and_credentials() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/cookie-page.html", servers.origin))
+        .await?;
+    let cross = &servers.cross_origin;
+    let cases = serde_json::json!([
+        {"name": "control", "src": "/echo-origin.js?control", "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module", "src": format!("{cross}/sw-request-state.js?module"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "classic", "src": format!("{cross}/sw-request-state.js?classic"), "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module-include", "src": format!("{cross}/sw-request-state.js?module-include"), "type": "module", "crossOrigin": "use-credentials", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "classic-include", "src": format!("{cross}/sw-request-state.js?classic-include"), "crossOrigin": "use-credentials", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "module-chain", "src": format!("{cross}/sw-request-state-redirect.js?module-chain"), "type": "module", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "classic-chain", "src": format!("{cross}/sw-request-state-redirect.js?classic-chain"), "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "load"}
+    ]);
+    let result = page
+        .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true)
+        .await?;
+    {
+        let requests = servers.requests.lock();
+        for case in cases.as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let requests: Vec<_> = requests
+                .iter()
+                .filter(|request| request.path.ends_with(&format!("?{name}")))
+                .collect();
+            assert_eq!(
+                requests.len(),
+                if name.ends_with("-chain") { 2 } else { 1 },
+                "{name}: {requests:?}"
+            );
+            for request in requests {
+                assert_eq!(
+                    request.origin.as_deref(),
+                    if name == "control" {
+                        None
+                    } else {
+                        Some("null")
+                    },
+                    "{name}: {request:?}"
+                );
+                assert_eq!(
+                    request.cookie.as_deref(),
+                    if name == "control" || name.ends_with("-include") {
+                        Some("sriSession=present")
+                    } else {
+                        None
+                    },
+                    "{name}: {request:?}"
+                );
+            }
+        }
+    }
+    assert_integrity_results(result, &cases);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_fetch_redirect_preserves_origin_and_credentials() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/cookie-page.html", servers.origin))
+        .await?;
+    page.evaluate_runtime_expression_with_await_async(
+        &dynamic_probe(&serde_json::json!([]), true),
+        true,
+    )
+    .await?;
+    let cross = &servers.cross_origin;
+    let cases = serde_json::json!([
+        {"name": "control", "src": "/echo-origin.js?control", "credentials": "same-origin"},
+        {"name": "same-origin", "src": format!("{cross}/sw-request-state.js?same-origin"), "credentials": "same-origin"},
+        {"name": "include", "src": format!("{cross}/sw-request-state.js?include"), "credentials": "include"},
+        {"name": "omit", "src": format!("{cross}/sw-request-state.js?omit"), "credentials": "omit"},
+        {"name": "preflight", "src": format!("{cross}/sw-request-state.js?preflight"), "credentials": "same-origin", "method": "PUT", "headers": {"X-Sri-Test": "yes"}},
+        {"name": "chain", "src": format!("{cross}/sw-request-state-redirect.js?chain"), "credentials": "same-origin"},
+        {"name": "preflight-chain", "src": format!("{cross}/sw-request-state-redirect.js?preflight-chain"), "credentials": "same-origin", "method": "PUT", "headers": {"X-Sri-Test": "yes"}}
+    ]);
+    let result = page
+        .evaluate_runtime_expression_with_await_async(
+            &format!(
+                r#"(async () => {{
+        const results = {{}};
+        for (const test of {cases}) {{
+            try {{
+                const response = await fetch(test.src, test);
+                results[test.name] = {{body: await response.text(), type: response.type,
+                    privateHeader: response.headers.get('X-Sri-Private')}};
+            }}
+            catch (error) {{ results[test.name] = String(error); }}
+        }}
+        return JSON.stringify(results);
+    }})()"#
+            ),
+            true,
+        )
+        .await?;
+    let results: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    let requests = servers.requests.lock();
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let requests: Vec<_> = requests
+            .iter()
+            .filter(|request| request.path.ends_with(&format!("?{name}")))
+            .collect();
+        assert_eq!(
+            requests.len(),
+            match name {
+                "preflight-chain" => 4,
+                "preflight" | "chain" => 2,
+                _ => 1,
+            },
+            "{name}: {requests:?}"
+        );
+        for request in requests {
+            assert_eq!(
+                request.origin.as_deref(),
+                if name == "control" {
+                    None
+                } else {
+                    Some("null")
+                },
+                "{name}: {request:?}"
+            );
+            assert_eq!(
+                request.cookie.as_deref(),
+                if name == "control" || name == "include" {
+                    Some("sriSession=present")
+                } else {
+                    None
+                },
+                "{name}: {request:?}"
+            );
+        }
+        assert_eq!(results[name]["body"], SCRIPT, "{name}: {results}");
+        assert_eq!(
+            results[name]["type"],
+            if name == "control" { "basic" } else { "cors" },
+            "{name}: {results}"
+        );
+        assert_eq!(
+            results[name]["privateHeader"],
+            if name == "control" {
+                serde_json::json!("yes")
+            } else {
+                serde_json::Value::Null
+            },
+            "{name}: {results}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_script_redirect_does_not_reuse_another_response_url_list() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    // Prime the ordinary Fetch memory cache, and prove the entry is reusable
+    // before introducing a different URL list through the worker.
+    let result = page.evaluate_runtime_expression_with_await_async(
+        "(async () => { await (await fetch('/cacheable.js')).text(); return await (await fetch('/cacheable.js')).text(); })()",
+        true,
+    ).await?;
+    assert_eq!(result["value"], SCRIPT);
+    assert_eq!(
+        servers
+            .requests
+            .lock()
+            .iter()
+            .filter(|request| request.path == "/cacheable.js")
+            .count(),
+        1
+    );
+    let cases = serde_json::json!([
+        {"name": "same-origin", "src": "/sw-cacheable.js", "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "load"},
+        {"name": "cross-origin", "src": format!("{}/sw-cacheable.js", servers.cross_origin), "crossOrigin": "anonymous", "integrity": INTEGRITY, "expected": "error"}
+    ]);
+    // Both fetches end at the same cacheable URL. Its body can be reused, but
+    // the first response's same-origin URL list must not authorize the second.
+    let result = page
+        .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, true), true)
+        .await?;
+    assert_integrity_results(result, &cases);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    page.evaluate_runtime_expression_with_await_async(
+        &dynamic_probe(&serde_json::json!([]), true),
+        true,
+    )
+    .await?;
+    let result = page.evaluate_runtime_expression_with_await_async(
+        &format!(r#"(async () => {{
+            const results = {{}};
+            for (const kind of ['basic', 'basic-buffered', 'cors', 'default']) {{
+                try {{
+                    const response = await fetch('{cross}/sw-return-' + kind + '.js');
+                    results[kind] = {{type: response.type, privateHeader: response.headers.get('X-Sri-Private'), body: await response.text()}};
+                }} catch (error) {{ results[kind] = String(error); }}
+            }}
+            return JSON.stringify(results);
+        }})()"#, cross = servers.cross_origin), true,
+    ).await?;
+    let results: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    for kind in ["basic", "basic-buffered", "cors", "default"] {
+        assert_eq!(results[kind]["body"], SCRIPT, "{kind}: {results}");
+        assert_eq!(
+            results[kind]["type"],
+            if kind.starts_with("basic") {
+                "basic"
+            } else {
+                "cors"
+            },
+            "{kind}: {results}"
+        );
+        assert_eq!(
+            results[kind]["privateHeader"],
+            if kind.starts_with("basic") {
+                serde_json::json!("yes")
+            } else {
+                serde_json::Value::Null
+            },
+            "{kind}: {results}"
+        );
+    }
+    let cases = serde_json::Value::Array(
+        ["basic", "basic-buffered", "cors", "default"]
+            .into_iter()
+            .map(|kind| {
+                serde_json::json!({
+                    "name": kind, "src": format!("{}/sw-return-{kind}.js", servers.cross_origin),
+                    "type": "module", "integrity": INTEGRITY, "expected": "load"
+                })
+            })
+            .collect(),
+    );
+    let result = page
+        .evaluate_runtime_expression_with_await_async(&dynamic_probe(&cases, false), true)
         .await?;
     assert_integrity_results(result, &cases);
     Ok(())

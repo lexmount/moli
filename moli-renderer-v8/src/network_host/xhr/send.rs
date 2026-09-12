@@ -405,8 +405,7 @@ fn send_synchronous_network_xhr(
     let result = result.and_then(|response| {
         crate::network_host::validate_fetch_response_security_policy_with_body(
             &prepared.document_url,
-            &response.final_url,
-            &response.headers,
+            &response.head(),
             response.body_bytes(),
             RequestMode::Cors,
             prepared.credentials_mode,
@@ -419,8 +418,7 @@ fn send_synchronous_network_xhr(
         Ok(response) => {
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.document_url,
-                &response.final_url,
-                &response.headers,
+                &response.head(),
                 prepared.credentials_mode,
             );
             host.record_subresource_network(

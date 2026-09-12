@@ -101,7 +101,7 @@ pub(super) fn request_cache_control_requires_validation(
     request: &Request,
     request_url: &Url,
 ) -> bool {
-    outgoing_request_headers_for_url(config, request, request_url, &[], None)
+    outgoing_request_headers_for_url(config, request, request_url, None)
         .iter()
         .any(|(name, value)| request_header_requires_validation(name, value))
 }

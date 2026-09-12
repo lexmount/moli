@@ -727,8 +727,7 @@ fn start_worker_module_graph_fetch(
                 }
                 crate::network_host::validate_fetch_response_security_policy(
                     &request_initiator_url,
-                    &response.final_url,
-                    &response.headers,
+                    &response.head(),
                     moli_fetch::RequestMode::Cors,
                     request_credentials_mode,
                     Default::default(),

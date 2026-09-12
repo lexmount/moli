@@ -24,7 +24,8 @@ use tokio_rustls::{
 use url::Url;
 
 use crate::{
-    FetchCancelHandle, FetchClient, FetchClientHandle, FetchConfig, Request, RequestCredentialsMode,
+    FetchCancelHandle, FetchClient, FetchClientHandle, FetchConfig, RedirectInfo, RedirectSource,
+    Request, RequestCredentialsMode, RequestMode,
 };
 
 use super::support::unique_test_cache_dir;
@@ -310,14 +311,14 @@ async fn tls_client_certificate_isolated_on_reused_connections() -> Result<()> {
 }
 
 #[tokio::test]
-async fn tls_client_certificate_uses_current_redirect_origin() -> Result<()> {
+async fn tls_client_certificate_preserves_cross_origin_redirect_taint() -> Result<()> {
     let credentials = TlsCredentials::new()?;
     let server = TlsServer::spawn(&credentials).await?;
     for transport in Transport::ALL {
         for (mode, expected_authentication) in [
             (RequestCredentialsMode::Include, [true, true, true]),
             (RequestCredentialsMode::Omit, [false, false, false]),
-            (RequestCredentialsMode::SameOrigin, [true, false, true]),
+            (RequestCredentialsMode::SameOrigin, [true, false, false]),
         ] {
             let client = FetchClient::new(
                 &credentials.fetch_config(),
@@ -325,6 +326,7 @@ async fn tls_client_certificate_uses_current_redirect_origin() -> Result<()> {
             );
             let request = Request::get(server.url.join("/redirect-cross")?.as_str())?
                 .with_initiator_url(&server.url)
+                .with_request_mode(RequestMode::Cors)
                 .with_credentials_mode(mode);
             transport.fetch(&client, request).await?;
             let observed = std::mem::take(&mut *server.requests.lock());
@@ -348,6 +350,58 @@ async fn tls_client_certificate_uses_current_redirect_origin() -> Result<()> {
             }
             assert!(client.shutdown().is_clean());
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tls_client_certificate_preserves_service_worker_redirect_taint() -> Result<()> {
+    let credentials = TlsCredentials::new()?;
+    let server = TlsServer::spawn(&credentials).await?;
+    let mut cross_origin = server.url.clone();
+    cross_origin.set_host(Some("localhost"))?;
+    for transport in Transport::ALL {
+        let client = FetchClient::new(
+            &credentials.fetch_config(),
+            new_shared_browser_cookie_store(),
+        );
+        // Populate an authenticated keep-alive connection before handing a
+        // redirected same-origin-credentials request to this same endpoint.
+        transport
+            .fetch(&client, Request::get(server.url.as_str())?)
+            .await?;
+        let request = Request::get(server.url.as_str())?
+            .with_initiator_url(&server.url)
+            .with_request_mode(RequestMode::Cors)
+            .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+            .with_redirect_chain(vec![RedirectInfo {
+                source: RedirectSource::ServiceWorker,
+                from_url: cross_origin.clone(),
+                to_url: server.url.clone(),
+                status: 302,
+                headers: vec![("Location".to_owned(), server.url.to_string())],
+                network_extra_info_available: false,
+                request_extra_info: None,
+                response_extra_info: None,
+                redirect_has_extra_info: false,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            }]);
+        transport.fetch(&client, request).await?;
+        let observed = std::mem::take(&mut *server.requests.lock());
+        assert_eq!(observed.len(), 2, "{transport:?}");
+        assert_eq!(
+            observed[0].client_certificates.as_slice(),
+            std::slice::from_ref(&credentials.client_certificate)
+        );
+        assert!(
+            observed[1].client_certificates.is_empty(),
+            "{transport:?}: {observed:?}"
+        );
+        assert_ne!(observed[0].connection_id, observed[1].connection_id);
+        assert!(client.shutdown().is_clean());
     }
     Ok(())
 }

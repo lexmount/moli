@@ -235,7 +235,7 @@ pub(super) fn spawn_network_fetch(
     let cancel_handle = FetchCancelHandle::new();
     let requires_preflight = prepared.request_mode != moli_fetch::RequestMode::NoCors
         && crate::network_host::cors_preflight_request_headers(
-            &prepared.document_url,
+            !moli_url::same_origin(&prepared.document_url, &prepared.resolved_url),
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,

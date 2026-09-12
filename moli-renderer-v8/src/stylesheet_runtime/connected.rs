@@ -2196,11 +2196,7 @@ fn connected_link_readiness_request(
 fn connected_link_origin_clean_from_service_worker_filter(
     response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 ) -> bool {
-    match response_filter {
-        Some(AsyncSubresourceFetchResponseFilter::Opaque)
-        | Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect) => false,
-        None => true,
-    }
+    response_filter.is_none_or(|filter| filter.is_readable())
 }
 
 fn link_crossorigin_credentials_mode(cross_origin: Option<&str>) -> RequestCredentialsMode {
@@ -2218,11 +2214,8 @@ fn connected_link_load_event_successful(
     response: &crate::protocol_types::NavigationResponse,
     response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 ) -> bool {
-    match response_filter {
-        Some(AsyncSubresourceFetchResponseFilter::Opaque)
-        | Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect) => true,
-        None => (200..=299).contains(&response.status),
-    }
+    response_filter.is_some_and(|filter| !filter.is_readable())
+        || (200..=299).contains(&response.status)
 }
 
 async fn fetch_connected_link_readiness_with_request(

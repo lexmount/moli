@@ -696,10 +696,9 @@ fn send_synchronous_worker_xhr(
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
                 return;
             }
-            if let Err(message) = validate_cors_response(
+            if let Err(message) = crate::network_host::validate_cors_response_chain(
                 &prepared.document_url,
-                &response_head.final_url,
-                &response_head.headers,
+                &response_head,
                 prepared.credentials_mode,
             ) {
                 record_worker_subresource_failure(
@@ -1069,10 +1068,9 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            match validate_cors_response(
+            match crate::network_host::validate_cors_response_chain(
                 &pending.document_url,
-                &response_head.final_url,
-                &response_head.headers,
+                &response_head,
                 pending.credentials_mode,
             ) {
                 Ok(()) => {
@@ -1106,8 +1104,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                             }
                             response_head.headers = filter_cors_exposed_response_headers(
                                 &pending.document_url,
-                                &response_head.final_url,
-                                &response_head.headers,
+                                &response_head,
                                 pending.credentials_mode,
                             );
                             apply_xhr_response_body_source(scope, xhr, response_head, body);

@@ -77,7 +77,7 @@ fn vary_request_header_value(
     normalized_name: &str,
 ) -> Option<String> {
     let explicit_value = || {
-        outgoing_request_headers_for_url(config, request, request_url, &[], None)
+        outgoing_request_headers_for_url(config, request, request_url, None)
             .into_iter()
             .rev()
             .find(|(name, _)| name.eq_ignore_ascii_case(normalized_name))

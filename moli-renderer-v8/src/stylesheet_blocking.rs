@@ -296,7 +296,7 @@ fn stylesheet_terminal_from_response(
             } => Err(format!(
                 "failed to fetch stylesheet `{request_url}`: CORS response is opaque"
             )),
-            StylesheetResponseProvenance::ServiceWorker { filter: None } => Ok(()),
+            StylesheetResponseProvenance::ServiceWorker { .. } => Ok(()),
             StylesheetResponseProvenance::Network => crate::network_host::validate_cors_response(
                 document_url,
                 &response.final_url,

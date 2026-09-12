@@ -90,6 +90,7 @@ fn configure_service_worker_network_fallback_request(
         .with_initiator_url(&job.network_context.document_url)
         .with_request_mode(job.request_mode)
         .with_credentials_mode(job.credentials_mode)
+        .with_redirect_chain(job.redirect_chain.clone())
         .with_redirect_mode(if service_worker_fetch_is_navigation_request(job) {
             moli_fetch::RequestRedirectMode::Follow
         } else {
@@ -302,14 +303,13 @@ impl ServiceWorkerRuntimeService {
                 return;
             }
         };
-        crate::network_host::spawn_async_subresource_fetch_with_redirect_chain(
+        crate::network_host::spawn_async_subresource_fetch(
             job.resource_task_runner.clone(),
             job.completion_tx,
             request_client,
             request,
             Some(job.cancel_handle),
             job.cors_preflight_request_headers,
-            job.redirect_chain,
             job.internal_id,
             job.network_context,
             job.request_url,
@@ -333,7 +333,6 @@ impl ServiceWorkerRuntimeService {
             }
         };
         let cancel_handle = job.cancel_handle.clone();
-        let redirect_chain = job.redirect_chain.clone();
         let document_url = job.network_context.document_url.clone();
         let request_mode = job.request_mode;
         let credentials_mode = job.credentials_mode;
@@ -347,13 +346,7 @@ impl ServiceWorkerRuntimeService {
             };
             let result = match result {
                 Ok(response) => {
-                    let mut head = response.head();
-                    if !redirect_chain.is_empty() {
-                        let mut combined_redirect_chain = redirect_chain;
-                        combined_redirect_chain.extend(head.redirect_chain);
-                        head.redirect_chain = combined_redirect_chain;
-                        head.redirected = true;
-                    }
+                    let head = response.head();
                     // This is a network response after a synthetic redirect,
                     // not a worker-produced readable Response. Authorize CORS
                     // before the direct consumer can trust an absent filter.
@@ -431,6 +424,10 @@ impl ServiceWorkerRuntimeService {
                 job.completion_tx.clone(),
                 AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
                     AsyncSubresourceStreamingStarted {
+                        skip_fetch_security_validation: true,
+                        response_filter: service_worker_response_type_filter(
+                            &started.response_head.response_type,
+                        ),
                         internal_id: job.internal_id,
                         request_url: job.request_url.clone(),
                         request_method: job.request_method.clone(),
@@ -836,14 +833,12 @@ fn validate_service_worker_fetch_response_body_security_policy(
         return Ok(());
     }
 
-    crate::network_host::validate_fetch_response_security_policy_with_body(
+    validate_service_worker_fetch_response_head_security_policy(job, final_url, &response.headers)?;
+    crate::network_host::validate_opaque_response_blocking_with_body(
         &job.network_context.document_url,
         final_url,
         &response.headers,
         &response.body,
-        job.request_mode,
-        job.credentials_mode,
-        job.network_context.policy_context,
     )
 }
 
@@ -923,12 +918,23 @@ fn service_worker_fetch_response_rejection(
 fn service_worker_fetch_response_filter(
     response: &ServiceWorkerFetchResponse,
 ) -> Option<AsyncSubresourceFetchResponseFilter> {
-    match response.response_type.as_str() {
+    if is_redirect_status(response.status)
+        && !matches!(response.response_type.as_str(), "opaque" | "opaqueredirect")
+    {
+        Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+    } else {
+        service_worker_response_type_filter(&response.response_type)
+    }
+}
+
+fn service_worker_response_type_filter(
+    response_type: &str,
+) -> Option<AsyncSubresourceFetchResponseFilter> {
+    match response_type {
+        "basic" => Some(AsyncSubresourceFetchResponseFilter::Basic),
+        "cors" => Some(AsyncSubresourceFetchResponseFilter::Cors),
         "opaque" => Some(AsyncSubresourceFetchResponseFilter::Opaque),
         "opaqueredirect" => Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
-        _ if is_redirect_status(response.status) => {
-            Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
-        }
         _ => None,
     }
 }

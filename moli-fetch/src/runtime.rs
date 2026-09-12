@@ -903,7 +903,6 @@ impl RuntimeOwner {
             &self.config,
             &prepared_request.request,
             &job.current_url,
-            &job.redirect_chain,
             cookie_header.as_deref(),
             job.http_version,
             // Buffered transfers are now the auth/compatibility fallback and
@@ -924,7 +923,7 @@ impl RuntimeOwner {
             )
         });
         attach_next_request_extra_info(
-            &mut job.redirect_chain,
+            &mut job.request.redirect_chain,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1076,7 +1075,6 @@ impl RuntimeOwner {
             &self.config,
             &prepared_request.request,
             &job.current_url,
-            &job.redirect_chain,
             cookie_header.as_deref(),
             job.http_version,
             None,
@@ -1094,7 +1092,7 @@ impl RuntimeOwner {
             )
         });
         attach_next_request_extra_info(
-            &mut job.redirect_chain,
+            &mut job.request.redirect_chain,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1108,7 +1106,7 @@ impl RuntimeOwner {
             job.current_cookie_context.clone(),
             request_cookie_report.clone(),
             credentials_allowed,
-            job.redirect_chain.clone(),
+            job.request.redirect_chain.clone(),
             request_extra_info.clone(),
             cache_plan,
         );
@@ -1271,7 +1269,6 @@ impl RuntimeOwner {
             &self.config,
             &prepared_request.request,
             &job.current_url,
-            &job.redirect_chain,
             cookie_header.as_deref(),
             job.http_version,
             stale_cached_lookup
@@ -1291,7 +1288,7 @@ impl RuntimeOwner {
             )
         });
         attach_next_request_extra_info(
-            &mut job.redirect_chain,
+            &mut job.request.redirect_chain,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1305,7 +1302,7 @@ impl RuntimeOwner {
             job.current_cookie_context.clone(),
             request_cookie_report.clone(),
             credentials_allowed,
-            job.redirect_chain.clone(),
+            job.request.redirect_chain.clone(),
             request_extra_info.clone(),
             cache_plan,
             stale_cached_lookup.is_some(),
@@ -1402,7 +1399,7 @@ impl RuntimeOwner {
             if let Some(response) = easy.as_mut().and_then(take_failed_proxy_connect_response) {
                 let response = proxy_connect_raw_response(
                     &job.current_url,
-                    &job.redirect_chain,
+                    &job.request.redirect_chain,
                     request_cookie_report,
                     response,
                 );
@@ -1443,7 +1440,7 @@ impl RuntimeOwner {
                     &job.request.url,
                     &upgraded_url,
                 );
-                job.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -1498,7 +1495,8 @@ impl RuntimeOwner {
                 url = %job.current_url,
                 "restarting navigation before response commit for missing Critical-CH headers"
             );
-            job.redirect_chain
+            job.request
+                .redirect_chain
                 .push(critical_client_hint_restart_redirect_info(
                     response.final_url.clone(),
                     network_response_extra_info(
@@ -1531,7 +1529,7 @@ impl RuntimeOwner {
             && job.request.follow_redirects
         {
             let redirect_has_extra_info = request_extra_info.is_some() && !response.from_cache;
-            job.redirect_chain.push(RedirectInfo {
+            job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: response.final_url.clone(),
                 to_url: next_url.clone(),
@@ -1566,8 +1564,8 @@ impl RuntimeOwner {
             return Ok(JobOutcome::Retry(Box::new(job)));
         }
 
-        response.redirected = !job.redirect_chain.is_empty();
-        response.redirect_chain = job.redirect_chain;
+        response.redirected = !job.request.redirect_chain.is_empty();
+        response.redirect_chain = job.request.redirect_chain;
         Ok(JobOutcome::Complete(
             job.response_tx,
             Box::new(CompletedBufferedResponse::Raw(response)),
@@ -1637,7 +1635,8 @@ impl RuntimeOwner {
                     collector.take_cookie_set_reports(),
                 )
             };
-            job.redirect_chain
+            job.request
+                .redirect_chain
                 .push(critical_client_hint_restart_redirect_info(
                     job.current_url.clone(),
                     network_response_extra_info(
@@ -1729,7 +1728,7 @@ impl RuntimeOwner {
                     &job.request.url,
                     &upgraded_url,
                 );
-                job.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -1819,7 +1818,7 @@ impl RuntimeOwner {
                 tracing::debug!(url = %job.current_url, "failed to store streaming redirect response in disk cache: {error}");
             }
             let redirect_has_extra_info = request_extra_info.is_some();
-            job.redirect_chain.push(RedirectInfo {
+            job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
@@ -1947,7 +1946,8 @@ impl RuntimeOwner {
                     collector.take_cookie_set_reports(),
                 )
             };
-            job.redirect_chain
+            job.request
+                .redirect_chain
                 .push(critical_client_hint_restart_redirect_info(
                     job.current_url.clone(),
                     network_response_extra_info(
@@ -2039,7 +2039,7 @@ impl RuntimeOwner {
                     &job.request.url,
                     &upgraded_url,
                 );
-                job.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -2200,7 +2200,7 @@ impl RuntimeOwner {
                     tracing::debug!(url = %job.current_url, "failed to store raw streaming redirect response in disk cache: {error}");
                 }
                 let redirect_has_extra_info = request_extra_info.is_some();
-                job.redirect_chain.push(RedirectInfo {
+                job.request.redirect_chain.push(RedirectInfo {
                     source: crate::RedirectSource::Network,
                     from_url: final_url,
                     to_url: next_url.clone(),
@@ -2273,8 +2273,8 @@ impl RuntimeOwner {
                     headers,
                     request_cookie_report,
                     cookie_set_reports,
-                    redirected: !job.redirect_chain.is_empty(),
-                    redirect_chain: job.redirect_chain,
+                    redirected: !job.request.redirect_chain.is_empty(),
+                    redirect_chain: job.request.redirect_chain,
                     from_cache: false,
                     negotiated_http_version,
                     network_request_extra_info: request_extra_info,
@@ -2341,7 +2341,7 @@ impl RuntimeOwner {
         if let Some(next_url) = next_url
             && job.request.follow_redirects
         {
-            job.redirect_chain.push(RedirectInfo {
+            job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
@@ -2403,7 +2403,7 @@ impl RuntimeOwner {
         if let Some(next_url) = next_url
             && job.request.follow_redirects
         {
-            job.redirect_chain.push(RedirectInfo {
+            job.request.redirect_chain.push(RedirectInfo {
                 source: crate::RedirectSource::Network,
                 from_url: final_url,
                 to_url: next_url.clone(),
@@ -2448,7 +2448,6 @@ struct RuntimeJob {
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
-    redirect_chain: Vec<RedirectInfo>,
     redirect_count: usize,
     origin_key: Option<CurlOriginKey>,
     response_tx: RuntimeResponseTx,
@@ -2468,9 +2467,8 @@ impl RuntimeJob {
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.cookie_context.clone(),
+            redirect_count: request.redirect_count(),
             request,
-            redirect_chain: Vec::new(),
-            redirect_count: 0,
             origin_key,
             response_tx,
             cancel_handle,
@@ -2485,7 +2483,6 @@ struct StreamingRuntimeJob {
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
-    redirect_chain: Vec<RedirectInfo>,
     redirect_count: usize,
     origin_key: Option<CurlOriginKey>,
     started_tx: Option<oneshot::Sender<Result<StreamingHtmlResponseStart>>>,
@@ -2510,9 +2507,8 @@ impl StreamingRuntimeJob {
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.cookie_context.clone(),
+            redirect_count: request.redirect_count(),
             request,
-            redirect_chain: Vec::new(),
-            redirect_count: 0,
             origin_key,
             started_tx: Some(started_tx),
             body_tx: Some(body_tx),
@@ -2530,7 +2526,6 @@ struct StreamingRawRuntimeJob {
     request: Request,
     current_url: Url,
     current_cookie_context: NetworkCookieRequestContext,
-    redirect_chain: Vec<RedirectInfo>,
     redirect_count: usize,
     origin_key: Option<CurlOriginKey>,
     started_tx: Option<oneshot::Sender<Result<StreamingHtmlResponseStart>>>,
@@ -2555,9 +2550,8 @@ impl StreamingRawRuntimeJob {
         Self {
             current_url: request.url.clone(),
             current_cookie_context: request.cookie_context.clone(),
+            redirect_count: request.redirect_count(),
             request,
-            redirect_chain: Vec::new(),
-            redirect_count: 0,
             origin_key,
             started_tx: Some(started_tx),
             body_tx: Some(body_tx),
@@ -2857,8 +2851,8 @@ fn complete_cached_streaming_html_job(
     cached: CachedStreamingResponseLookup,
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
-    let redirected = !job.redirect_chain.is_empty();
-    let redirect_chain = job.redirect_chain.clone();
+    let redirected = !job.request.redirect_chain.is_empty();
+    let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
         final_url,
         status,
@@ -2977,8 +2971,8 @@ fn complete_cached_streaming_raw_job(
     request_cookie_report: Option<StoredCookieQueryReport>,
 ) {
     job.cancel_handle.mark_response_terminal();
-    let redirected = !job.redirect_chain.is_empty();
-    let redirect_chain = job.redirect_chain.clone();
+    let redirected = !job.request.redirect_chain.is_empty();
+    let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
         final_url,
         status,
@@ -3327,7 +3321,9 @@ fn attach_next_request_extra_info(
     request_cookie_report: Option<StoredCookieQueryReport>,
     request_extra_info: Option<&NetworkRequestExtraInfo>,
 ) {
-    if let Some(previous_redirect) = redirect_chain.last_mut() {
+    if let Some(previous_redirect) = redirect_chain.last_mut()
+        && previous_redirect.source != crate::RedirectSource::ServiceWorker
+    {
         previous_redirect.request_cookie_report = request_cookie_report;
         previous_redirect.request_extra_info = request_extra_info.cloned();
     }
@@ -3475,7 +3471,7 @@ fn complete_streaming_proxy_connect_response(
 ) {
     let start = proxy_connect_response_start(
         &job.current_url,
-        &job.redirect_chain,
+        &job.request.redirect_chain,
         request_cookie_report,
         response,
     );
@@ -3500,7 +3496,7 @@ fn complete_raw_streaming_proxy_connect_response(
 ) {
     let start = proxy_connect_response_start(
         &job.current_url,
-        &job.redirect_chain,
+        &job.request.redirect_chain,
         request_cookie_report,
         response,
     );
@@ -3570,7 +3566,7 @@ fn fail_streaming_job_with_easy(
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
-        &job.redirect_chain,
+        &job.request.redirect_chain,
         error,
     );
     if let Some(easy) = easy.as_mut()
@@ -3608,7 +3604,7 @@ fn fail_raw_streaming_job_with_easy(
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
-        &job.redirect_chain,
+        &job.request.redirect_chain,
         error,
     );
     job.cancel_handle.mark_response_terminal();

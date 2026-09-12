@@ -33,7 +33,7 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    spawn_async_subresource_fetch, spawn_async_subresource_fetch_with_redirect_chain,
+    spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
@@ -145,6 +145,7 @@ pub(crate) use self::response::{
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,
+    build_fetch_response_object_from_stream_for_request_mode_with_filter,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
@@ -158,6 +159,7 @@ pub(crate) use self::response::{
     validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
+    validate_opaque_response_blocking_with_body,
 };
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,

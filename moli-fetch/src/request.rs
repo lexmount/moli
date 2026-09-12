@@ -9,10 +9,12 @@ use moli_cookie_jar::{
     NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata, redirect_types_for_request,
     site_context_downgrade_type,
 };
-use moli_url::same_origin;
+use moli_url::{origin_ascii_serialization, same_origin};
 use url::Url;
 
-use crate::{FetchConfig, network_fetch_result::NetworkObservationRecorder};
+use crate::{
+    FetchConfig, RedirectInfo, RedirectSource, network_fetch_result::NetworkObservationRecorder,
+};
 
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -33,6 +35,7 @@ pub struct Request {
     pub request_mode: RequestMode,
     pub redirect_mode: RequestRedirectMode,
     pub credentials_mode: RequestCredentialsMode,
+    pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
     auth: Option<RequestAuth>,
     pub cookie_context: NetworkCookieRequestContext,
@@ -383,6 +386,7 @@ impl Request {
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
@@ -410,6 +414,7 @@ impl Request {
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
@@ -458,6 +463,7 @@ impl Request {
             request_mode: RequestMode::Cors,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::subresource(method),
@@ -634,6 +640,64 @@ impl Request {
         self
     }
 
+    /// Continues a fetch at `url` with redirects already followed by its caller.
+    /// Keep synthetic redirects too: their URLs affect Origin and credentials
+    /// even though their response headers are not subject to network CORS checks.
+    pub fn with_redirect_chain(mut self, redirect_chain: Vec<RedirectInfo>) -> Self {
+        self.redirect_chain = redirect_chain;
+        self
+    }
+
+    pub fn redirect_chain(&self) -> &[RedirectInfo] {
+        &self.redirect_chain
+    }
+
+    /// Records a followed redirect. The caller controls method and current URL
+    /// updates so this also supports transports that retain the original URL.
+    pub fn record_redirect(&mut self, redirect: RedirectInfo) {
+        self.redirect_chain.push(redirect);
+    }
+
+    pub fn redirect_count(&self) -> usize {
+        self.redirect_chain
+            .iter()
+            .filter(|redirect| redirect.source != RedirectSource::Internal)
+            .count()
+    }
+
+    /// Whether the URL list has left the initiating origin. For subresource
+    /// fetches, returning to that origin cannot restore basic response tainting.
+    pub fn has_cross_origin_url(&self, request_url: &Url) -> bool {
+        self.cookie_context
+            .initiator_url
+            .as_ref()
+            .is_some_and(|initiator| {
+                !same_origin(initiator, request_url)
+                    || !same_origin(initiator, &self.url)
+                    || self.redirect_chain.iter().any(|redirect| {
+                        !same_origin(initiator, &redirect.from_url)
+                            || !same_origin(initiator, &redirect.to_url)
+                    })
+            })
+    }
+
+    /// Fetch's serialized request origin, including redirect taint. A first
+    /// same-origin-to-cross-origin hop retains the origin; crossing origins
+    /// again after leaving it serializes as null.
+    pub fn serialized_origin(&self) -> String {
+        let Some(initiator) = self.cookie_context.initiator_url.as_ref() else {
+            return "null".to_owned();
+        };
+        if self.redirect_chain.iter().any(|redirect| {
+            !same_origin(&redirect.from_url, &redirect.to_url)
+                && !same_origin(initiator, &redirect.from_url)
+        }) {
+            "null".to_owned()
+        } else {
+            origin_ascii_serialization(initiator)
+        }
+    }
+
     pub fn with_network_partition_key(mut self, key: Option<String>) -> Self {
         if let Some(serialized_key) = key.as_deref() {
             self.cookie_context.browser_context = self
@@ -654,11 +718,7 @@ impl Request {
         match self.credentials_mode {
             RequestCredentialsMode::Include => true,
             RequestCredentialsMode::Omit => false,
-            RequestCredentialsMode::SameOrigin => self
-                .cookie_context
-                .initiator_url
-                .as_ref()
-                .is_none_or(|initiator_url| same_origin(initiator_url, request_url)),
+            RequestCredentialsMode::SameOrigin => !self.has_cross_origin_url(request_url),
         }
     }
 
