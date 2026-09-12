@@ -1824,6 +1824,8 @@ fn cache_entry_matches_query(
         return false;
     }
     query.ignore_vary
+        // Opaque public headers are empty even though Cache retains the internal head.
+        || matches!(entry.response.head.metadata.response_type.as_str(), "opaque" | "opaqueredirect")
         || cached_response_vary_matches_request(
             &entry.response.head.headers,
             &entry.request.headers,
@@ -2177,6 +2179,7 @@ fn load_storage_bucket_cache_file(
                     .map(|url| url.parse())
                     .collect::<std::result::Result<_, _>>()?,
                 redirected: entry.redirected,
+                cors_exposed_header_names: None,
             };
             let body = BASE64_STANDARD
                 .decode(entry.body_base64.as_bytes())
@@ -2965,7 +2968,8 @@ mod tests {
                                     .parse()
                                     .expect("valid response URL")
                             ],
-                            redirected: false
+                            redirected: false,
+                            cors_exposed_header_names: None,
                         },
                         status: 200,
                         status_text: "OK".to_owned(),
@@ -3051,7 +3055,8 @@ mod tests {
                                     .parse()
                                     .expect("valid response URL")
                             ],
-                            redirected: false
+                            redirected: false,
+                            cors_exposed_header_names: None,
                         },
                         status: 200,
                         status_text: "OK".to_owned(),
@@ -3292,6 +3297,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 201,
                 status_text: "Created".to_owned(),
@@ -3342,6 +3348,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3403,6 +3410,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 201,
                 status_text: "Created".to_owned(),
@@ -3462,6 +3470,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3559,6 +3568,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3628,6 +3638,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3642,6 +3653,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3732,6 +3744,7 @@ mod tests {
                     response: StorageBucketCachedResponse {
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                cors_exposed_header_names: None,
                                 response_type: (response_type.to_owned())
                                     .parse()
                                     .expect("valid response type"),
@@ -3850,7 +3863,8 @@ mod tests {
                                         .parse()
                                         .expect("valid response URL")
                                 ],
-                                redirected: false
+                                redirected: false,
+                                cors_exposed_header_names: None,
                             },
                             status: 200,
                             status_text: "OK".to_owned(),
@@ -4093,7 +4107,8 @@ mod tests {
                                     response_type: moli_fetch_types::FetchResponseType::Default,
                                     timing_allow_passed: true,
                                     url_list: Vec::new(),
-                                    redirected: false
+                                    redirected: false,
+                                    cors_exposed_header_names: None,
                                 },
                                 status: 200,
                                 status_text: "OK".to_owned(),
@@ -4191,6 +4206,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 202,
                 status_text: "Accepted".to_owned(),
@@ -4273,6 +4289,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -4287,6 +4304,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 201,
                 status_text: "Created".to_owned(),
@@ -4376,6 +4394,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 206,
                 status_text: "Partial Content".to_owned(),
@@ -4433,6 +4452,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -4493,6 +4513,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: Vec::new(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -4861,6 +4882,7 @@ mod tests {
                             .expect("valid response URL"),
                     ],
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),

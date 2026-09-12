@@ -930,10 +930,7 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
-            if matches!(
-                pending.info.resource_type,
-                SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) && !started.response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
+            if pending.info.resource_type == SubresourceResourceType::Xhr && !started.response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.request_origin,
                     &observable_head,
