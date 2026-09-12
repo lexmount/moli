@@ -9,7 +9,7 @@ use std::{
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use moli_v8_platform::{
-    ProcessEnvironmentChange, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
+    ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
 };
 use parking_lot::Mutex;
 
@@ -423,7 +423,7 @@ impl RendererInspectorIoIngress {
             })
     }
 
-    pub(crate) fn claim_environment_change(&self) -> Option<ProcessEnvironmentChange> {
+    pub(crate) fn claim_environment_invalidation(&self) -> Option<ProcessEnvironmentInvalidation> {
         self.shared.state.lock().environment_notifications.take()
     }
 
@@ -827,17 +827,17 @@ mod tests {
         ingress.begin_session_detach(agent, command.ticket().session());
         let notifier = ingress.environment_notifier();
         for _ in 0..1_000 {
-            notifier.notify(ProcessEnvironmentChange::LocaleChanged);
-            notifier.notify(ProcessEnvironmentChange::TimezoneChanged);
+            notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
+            notifier.notify(ProcessEnvironmentInvalidation::DateTime);
         }
         // A nested pause can receive these without releasing the active
         // command slot or creating another Inspector session.
         assert!(ingress.claim_for_pause().is_none());
         assert_eq!(
-            ingress.claim_environment_change(),
-            Some(ProcessEnvironmentChange::LocaleChanged)
+            ingress.claim_environment_invalidation(),
+            Some(ProcessEnvironmentInvalidation::LocaleAndDateTime)
         );
-        assert_eq!(ingress.claim_environment_change(), None);
+        assert_eq!(ingress.claim_environment_invalidation(), None);
         drop(guard);
         ingress.finish_session_detach(agent, command.ticket().session());
     }
@@ -846,10 +846,10 @@ mod tests {
     fn closed_isolate_discards_queued_and_late_environment_notifications() {
         let ingress = ingress();
         let notifier = ingress.environment_notifier();
-        notifier.notify(ProcessEnvironmentChange::LocaleChanged);
+        notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
         ingress.close("isolate disposed");
-        notifier.notify(ProcessEnvironmentChange::TimezoneChanged);
-        assert_eq!(ingress.claim_environment_change(), None);
+        notifier.notify(ProcessEnvironmentInvalidation::DateTime);
+        assert_eq!(ingress.claim_environment_invalidation(), None);
         assert!(!ingress.shared.state.lock().has_ready());
     }
 

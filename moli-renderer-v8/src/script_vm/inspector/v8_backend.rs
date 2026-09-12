@@ -73,7 +73,7 @@ struct RendererInspectorSessionExecutorLocal {
 }
 
 enum RendererInspectorNestedCommand {
-    Environment(moli_v8_platform::ProcessEnvironmentChange),
+    EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
     Main(RendererInspectorMainCommand),
     Io(RendererInspectorIoCommand),
 }
@@ -175,8 +175,10 @@ impl RendererInspectorSessionExecutorLocal {
             // These are actual posted owner tasks, not an environment-version
             // check. Service them in both pause modes, before a following
             // Inspector observation; they never execute page JavaScript.
-            if let Some(change) = self.target.io_ref().claim_environment_change() {
-                return Some(RendererInspectorNestedCommand::Environment(change));
+            if let Some(invalidation) = self.target.io_ref().claim_environment_invalidation() {
+                return Some(RendererInspectorNestedCommand::EnvironmentInvalidation(
+                    invalidation,
+                ));
             }
             let command = match pause_loop_policy {
                 crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
@@ -219,10 +221,10 @@ impl RendererInspectorSessionExecutorLocal {
             command
         }) {
             match command {
-                RendererInspectorNestedCommand::Environment(change) => {
+                RendererInspectorNestedCommand::EnvironmentInvalidation(invalidation) => {
                     let isolate = unsafe { &mut *self.isolate.get() };
                     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
-                    change.notify_isolate(isolate);
+                    invalidation.notify_isolate(isolate);
                 }
                 RendererInspectorNestedCommand::Main(command) => {
                     self.dispatch_main_command(context_group_id, command);

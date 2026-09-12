@@ -25,7 +25,7 @@ mod cpu_tracing;
 mod environment;
 
 pub use environment::{
-    ProcessEnvironmentChange, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
+    ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
     ProcessEnvironmentOwner,
 };
 
@@ -338,7 +338,7 @@ impl V8PlatformIsolateRegistration {
         // Bootstrap may have primed caches before registration. Register first,
         // then reset once: changes before registration are read from ICU, and
         // changes racing this reset already have an owner notification queued.
-        ProcessEnvironmentChange::LocaleChanged.notify_isolate(isolate);
+        ProcessEnvironmentInvalidation::LocaleAndDateTime.notify_isolate(isolate);
         Self {
             isolate_ptr: AtomicCell::new(isolate_ptr),
             generation,
@@ -589,7 +589,7 @@ mod tests {
             };
 
             owner.unregister();
-            notifier.notify(ProcessEnvironmentChange::LocaleChanged);
+            notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
             assert_eq!(
                 notifications.take(),
                 None,

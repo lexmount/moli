@@ -3,9 +3,9 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use super::ProcessEnvironmentChange;
+use super::ProcessEnvironmentInvalidation;
 
-const TIMEZONE: u8 = 1;
+const DATE_TIME: u8 = 1;
 const LOCALE: u8 = 2;
 const CLOSED: u8 = 4;
 
@@ -26,18 +26,18 @@ impl ProcessEnvironmentNotifications {
     }
 
     pub fn has_pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) & (LOCALE | TIMEZONE) != 0
+        self.pending.load(Ordering::Acquire) & (LOCALE | DATE_TIME) != 0
     }
 
     /// Claim only the work published so far. A concurrent publication either
     /// joins this batch or remains pending for the next owner turn; it cannot
     /// be cleared by finishing the current notification.
-    pub fn take(&self) -> Option<ProcessEnvironmentChange> {
+    pub fn take(&self) -> Option<ProcessEnvironmentInvalidation> {
         let pending = self.pending.fetch_and(CLOSED, Ordering::AcqRel);
         if pending & LOCALE != 0 {
-            Some(ProcessEnvironmentChange::LocaleChanged)
-        } else if pending & TIMEZONE != 0 {
-            Some(ProcessEnvironmentChange::TimezoneChanged)
+            Some(ProcessEnvironmentInvalidation::LocaleAndDateTime)
+        } else if pending & DATE_TIME != 0 {
+            Some(ProcessEnvironmentInvalidation::DateTime)
         } else {
             None
         }
@@ -49,10 +49,10 @@ impl ProcessEnvironmentNotifications {
         self.pending.store(CLOSED, Ordering::Release);
     }
 
-    fn publish(&self, change: ProcessEnvironmentChange) -> bool {
-        let bits = match change {
-            ProcessEnvironmentChange::LocaleChanged => LOCALE | TIMEZONE,
-            ProcessEnvironmentChange::TimezoneChanged => TIMEZONE,
+    fn publish(&self, invalidation: ProcessEnvironmentInvalidation) -> bool {
+        let bits = match invalidation {
+            ProcessEnvironmentInvalidation::LocaleAndDateTime => LOCALE | DATE_TIME,
+            ProcessEnvironmentInvalidation::DateTime => DATE_TIME,
         };
         self.pending
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
@@ -74,14 +74,14 @@ pub struct ProcessEnvironmentNotifier {
 impl ProcessEnvironmentNotifier {
     /// Post a cache invalidation outside a process configuration transaction.
     /// A burst schedules a wake only on the idle-to-pending transition.
-    pub fn notify(&self, change: ProcessEnvironmentChange) {
-        if self.publish(change) {
+    pub fn notify(&self, invalidation: ProcessEnvironmentInvalidation) {
+        if self.publish(invalidation) {
             self.wake();
         }
     }
 
-    pub(super) fn publish(&self, change: ProcessEnvironmentChange) -> bool {
-        self.notifications.publish(change)
+    pub(super) fn publish(&self, invalidation: ProcessEnvironmentInvalidation) -> bool {
+        self.notifications.publish(invalidation)
     }
 
     pub(super) fn wake(&self) {
@@ -98,7 +98,7 @@ impl ProcessEnvironmentNotifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
+    use ProcessEnvironmentInvalidation::{DateTime, LocaleAndDateTime};
     use std::sync::atomic::AtomicUsize;
 
     #[test]
@@ -110,15 +110,15 @@ mod tests {
             count.fetch_add(1, Ordering::Relaxed);
         });
         for _ in 0..10_000 {
-            notifier.notify(TimezoneChanged);
-            notifier.notify(LocaleChanged);
+            notifier.notify(DateTime);
+            notifier.notify(LocaleAndDateTime);
         }
         assert_eq!(wakes.load(Ordering::Relaxed), 1);
-        assert_eq!(notifications.take(), Some(LocaleChanged));
+        assert_eq!(notifications.take(), Some(LocaleAndDateTime));
         assert_eq!(notifications.take(), None);
-        notifier.notify(TimezoneChanged);
+        notifier.notify(DateTime);
         assert_eq!(wakes.load(Ordering::Relaxed), 2);
-        assert_eq!(notifications.take(), Some(TimezoneChanged));
+        assert_eq!(notifications.take(), Some(DateTime));
     }
 
     #[test]
@@ -126,19 +126,19 @@ mod tests {
         let notifications = ProcessEnvironmentNotifications::default();
         let (wake_tx, wake_rx) = std::sync::mpsc::channel();
         let notifier = notifications.notifier(move || wake_tx.send(()).unwrap());
-        notifier.notify(LocaleChanged);
+        notifier.notify(LocaleAndDateTime);
         wake_rx.try_recv().unwrap();
         let applying = notifications.take().unwrap();
         // The first invalidation has been claimed but has not finished applying.
-        notifier.notify(TimezoneChanged);
-        assert_eq!(applying, LocaleChanged);
+        notifier.notify(DateTime);
+        assert_eq!(applying, LocaleAndDateTime);
         wake_rx.try_recv().unwrap();
-        assert_eq!(notifications.take(), Some(TimezoneChanged));
+        assert_eq!(notifications.take(), Some(DateTime));
         assert_eq!(notifications.take(), None);
     }
 
     #[test]
-    fn concurrent_publication_and_claim_never_lose_either_axis() {
+    fn concurrent_publication_and_claim_never_lose_either_invalidation_class() {
         let notifications = ProcessEnvironmentNotifications::default();
         let barrier = std::sync::Barrier::new(2);
         let mut outcomes = Vec::new();
@@ -146,12 +146,12 @@ mod tests {
             scope.spawn(|| {
                 for _ in 0..1_000 {
                     barrier.wait();
-                    notifications.publish(LocaleChanged);
+                    notifications.publish(LocaleAndDateTime);
                     barrier.wait();
                 }
             });
             for _ in 0..1_000 {
-                notifications.publish(TimezoneChanged);
+                notifications.publish(DateTime);
                 barrier.wait();
                 let first = notifications.take();
                 barrier.wait();
@@ -162,10 +162,10 @@ mod tests {
         // Check after both threads finish so a regression cannot strand the
         // producer at a barrier while the assertion unwinds the consumer.
         for (first, second, pending) in outcomes {
-            assert!(first == Some(LocaleChanged) || second == Some(LocaleChanged));
+            assert!(first == Some(LocaleAndDateTime) || second == Some(LocaleAndDateTime));
             assert!(
                 first.is_some(),
-                "the earlier timezone must also be consumed"
+                "the earlier date-time invalidation must also be consumed"
             );
             assert!(!pending);
         }
@@ -176,14 +176,14 @@ mod tests {
         let notifications = ProcessEnvironmentNotifications::default();
         let (wake_tx, wake_rx) = std::sync::mpsc::channel();
         let notifier = notifications.notifier(move || wake_tx.send(()).unwrap());
-        assert!(notifier.publish(TimezoneChanged));
-        assert!(!notifier.publish(LocaleChanged));
+        assert!(notifier.publish(DateTime));
+        assert!(!notifier.publish(LocaleAndDateTime));
         notifier.wake();
         wake_rx.try_recv().unwrap();
-        assert_eq!(notifications.take(), Some(LocaleChanged));
-        notifier.notify(TimezoneChanged);
+        assert_eq!(notifications.take(), Some(LocaleAndDateTime));
+        notifier.notify(DateTime);
         wake_rx.try_recv().unwrap();
-        assert_eq!(notifications.take(), Some(TimezoneChanged));
+        assert_eq!(notifications.take(), Some(DateTime));
         notifier.wake(); // An old delayed wake carries no configuration value.
         assert!(wake_rx.try_recv().is_err());
     }
@@ -198,7 +198,7 @@ mod tests {
             scope.spawn(|| {
                 for mailbox in &notifications {
                     barrier.wait();
-                    mailbox.publish(LocaleChanged);
+                    mailbox.publish(LocaleAndDateTime);
                     barrier.wait();
                 }
             });
@@ -210,7 +210,7 @@ mod tests {
         });
         for mailbox in notifications {
             assert_eq!(mailbox.take(), None);
-            assert!(!mailbox.publish(TimezoneChanged));
+            assert!(!mailbox.publish(DateTime));
             assert_eq!(mailbox.take(), None);
         }
     }
@@ -219,12 +219,12 @@ mod tests {
     fn disposal_cancels_delayed_wakes_and_cannot_be_reopened() {
         let notifications = ProcessEnvironmentNotifications::default();
         let notifier = notifications.notifier(|| panic!("closed mailbox woke its owner"));
-        assert!(notifier.publish(LocaleChanged));
+        assert!(notifier.publish(LocaleAndDateTime));
         let delayed = notifier.clone();
         notifications.close();
         delayed.wake();
-        for change in [LocaleChanged, TimezoneChanged] {
-            delayed.notify(change);
+        for invalidation in [LocaleAndDateTime, DateTime] {
+            delayed.notify(invalidation);
         }
         assert_eq!(notifications.take(), None);
         assert!(!notifications.has_pending());

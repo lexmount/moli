@@ -19,21 +19,24 @@ pub use notifications::{ProcessEnvironmentNotifications, ProcessEnvironmentNotif
 
 static ENVIRONMENT: OnceLock<Mutex<Environment>> = OnceLock::new();
 
-/// A committed change to the renderer-process defaults, delivered as owner
-/// work rather than checked at every V8 entry. Unconsumed changes are merged;
-/// only the isolate's owner may apply them, including in a nested
-/// Inspector pause loop. It carries no isolate pointer or configuration lease.
+/// Which native V8 caches must be refreshed against the current ICU defaults.
+/// This carries no configuration value or chronological change record: pending
+/// invalidations can be merged because ICU already holds the latest defaults.
+/// Only the isolate's owner may apply it, including in a nested Inspector pause
+/// loop. It carries no isolate pointer or configuration lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessEnvironmentChange {
-    LocaleChanged,
-    TimezoneChanged,
+pub enum ProcessEnvironmentInvalidation {
+    /// Refresh locale-dependent caches as well as Date/Intl date-time caches.
+    LocaleAndDateTime,
+    /// Refresh Date/Intl date-time caches without resetting the default locale.
+    DateTime,
 }
 
-impl ProcessEnvironmentChange {
+impl ProcessEnvironmentInvalidation {
     /// Notify native V8 caches on the entered isolate's owner thread. Locale
     /// changes also invalidate cached Date locale formatters, as in Blink.
     pub fn notify_isolate(self, isolate: &mut v8::Isolate) {
-        if self == Self::LocaleChanged {
+        if self == Self::LocaleAndDateTime {
             isolate.locale_configuration_change_notification();
         }
         // Redetect would overwrite the emulated ICU timezone with the host zone.
@@ -114,7 +117,7 @@ impl ProcessEnvironmentOwner {
             owner: self.id,
             value: value.to_owned(),
         });
-        publish_change(state, ProcessEnvironmentChange::LocaleChanged);
+        publish_invalidation(state, ProcessEnvironmentInvalidation::LocaleAndDateTime);
         Ok(())
     }
 
@@ -147,7 +150,7 @@ impl ProcessEnvironmentOwner {
             owner: self.id,
             value: value.to_owned(),
         });
-        publish_change(state, ProcessEnvironmentChange::TimezoneChanged);
+        publish_invalidation(state, ProcessEnvironmentInvalidation::DateTime);
         Ok(())
     }
 
@@ -220,12 +223,12 @@ fn release(owner: EnvironmentOwnerId) {
         debug_assert!(restored, "the original ICU timezone must be restorable");
         state.timezone = None;
     }
-    publish_change(
+    publish_invalidation(
         state,
         if locale {
-            ProcessEnvironmentChange::LocaleChanged
+            ProcessEnvironmentInvalidation::LocaleAndDateTime
         } else {
-            ProcessEnvironmentChange::TimezoneChanged
+            ProcessEnvironmentInvalidation::DateTime
         },
     );
 }
@@ -240,15 +243,18 @@ fn release(owner: EnvironmentOwnerId) {
 /// Owner observation boundaries consume pending work first; already-running JS
 /// may use old caches until the next notification/interrupt opportunity, as with
 /// Blink's asynchronous Worker notifications.
-fn publish_change(
+fn publish_invalidation(
     state: parking_lot::MutexGuard<'_, Environment>,
-    change: ProcessEnvironmentChange,
+    invalidation: ProcessEnvironmentInvalidation,
 ) {
     let owners: Vec<_> = registered_isolate_owners()
         .into_iter()
         .map(|owner| {
             let wake = owner.registration.generation.is_active()
-                && owner.registration.environment_notifications.publish(change);
+                && owner
+                    .registration
+                    .environment_notifications
+                    .publish(invalidation);
             (owner, wake)
         })
         .collect();
@@ -340,7 +346,7 @@ mod tests {
             assert!(rx.try_recv().is_err());
             assert_eq!(
                 notifications.take(),
-                Some(ProcessEnvironmentChange::LocaleChanged)
+                Some(ProcessEnvironmentInvalidation::LocaleAndDateTime)
             );
             owner.set_locale(Some("fr_FR")).unwrap();
             owner.set_timezone(Some("Europe/Paris")).unwrap();
@@ -355,7 +361,7 @@ mod tests {
             rx.try_recv().unwrap();
             assert_eq!(
                 notifications.take(),
-                Some(ProcessEnvironmentChange::LocaleChanged)
+                Some(ProcessEnvironmentInvalidation::LocaleAndDateTime)
             );
             owner.release();
             assert!(rx.try_recv().is_err());

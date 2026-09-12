@@ -79,7 +79,7 @@ unsafe extern "C" fn dispatch_worker_inspector_interrupt(
 pub(crate) type WorkerInspectorTaskMode = CdpInspectorTaskMode;
 
 pub(crate) enum WorkerInspectorTask {
-    EnvironmentChanged(moli_v8_platform::ProcessEnvironmentChange),
+    EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
     DispatchProtocolMessage {
         inspector_session_id: Option<String>,
         raw_json: String,
@@ -131,8 +131,10 @@ struct WorkerInspectorTaskRunnerState {
 struct WorkerInspectorTaskRunnerShared {
     state: Mutex<WorkerInspectorTaskRunnerState>,
     environment_notifications: ProcessEnvironmentNotifications,
-    // Interrupt/pause consumption must not clear this bit: a fallback owner
-    // message can still be in the channel while JS processes many interrupts.
+    // Tracks an outstanding fallback WorkerMessage::RunEnvironmentNotification,
+    // not whether the mailbox contains an invalidation. Only consumption of
+    // that owner message disarms it; interrupt/pause consumption must not,
+    // otherwise repeated interrupts can flood the ordinary Worker channel.
     environment_owner_wake_armed: AtomicBool,
     pause_work: Condvar,
     wake_tx: mpsc::UnboundedSender<WorkerMessage>,
@@ -213,23 +215,25 @@ impl WorkerInspectorTaskRunner {
         self.shared.pause_work.notify_one();
     }
 
+    /// Called only when consuming the fallback owner message. Disarm before
+    /// taking the mailbox so a racing publication can arm the next owner wake.
     pub(crate) fn claim_environment_for_owner(
         &self,
-    ) -> Option<moli_v8_platform::ProcessEnvironmentChange> {
+    ) -> Option<moli_v8_platform::ProcessEnvironmentInvalidation> {
         self.shared
             .environment_owner_wake_armed
             .store(false, Ordering::Release);
-        self.claim_environment_change()
+        self.claim_environment_invalidation()
     }
 
     fn claim_environment_task(&self) -> Option<WorkerInspectorTask> {
-        self.claim_environment_change()
-            .map(WorkerInspectorTask::EnvironmentChanged)
+        self.claim_environment_invalidation()
+            .map(WorkerInspectorTask::EnvironmentInvalidation)
     }
 
-    pub(crate) fn claim_environment_change(
+    pub(crate) fn claim_environment_invalidation(
         &self,
-    ) -> Option<moli_v8_platform::ProcessEnvironmentChange> {
+    ) -> Option<moli_v8_platform::ProcessEnvironmentInvalidation> {
         self.shared.environment_notifications.take()
     }
 
@@ -636,13 +640,13 @@ mod tests {
 
     #[test]
     fn environment_bursts_and_interrupt_consumption_keep_the_owner_wake_bounded() {
-        use moli_v8_platform::ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
+        use moli_v8_platform::ProcessEnvironmentInvalidation::{DateTime, LocaleAndDateTime};
 
         let (runner, mut wake_rx) = runner();
         let notifier = runner.environment_notifier();
         for _ in 0..10_000 {
-            notifier.notify(TimezoneChanged);
-            notifier.notify(LocaleChanged);
+            notifier.notify(DateTime);
+            notifier.notify(LocaleAndDateTime);
         }
         assert!(matches!(
             wake_rx.try_recv(),
@@ -654,32 +658,34 @@ mod tests {
         // Simulate JS repeatedly accepting V8 interrupts while the ordinary
         // owner loop has not handled the already-posted fallback wake.
         for _ in 0..1_000 {
-            notifier.notify(LocaleChanged);
+            notifier.notify(LocaleAndDateTime);
             assert!(matches!(
                 runner.claim_interrupt_task(),
-                Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+                Some(WorkerInspectorTask::EnvironmentInvalidation(
+                    LocaleAndDateTime
+                ))
             ));
         }
         assert!(wake_rx.try_recv().is_err());
         assert!(runner.claim_environment_for_owner().is_none());
-        notifier.notify(TimezoneChanged);
+        notifier.notify(DateTime);
         assert!(matches!(
             wake_rx.try_recv(),
             Ok(super::WorkerMessage::RunEnvironmentNotification)
         ));
         assert!(matches!(
             runner.claim_environment_for_owner(),
-            Some(TimezoneChanged)
+            Some(DateTime)
         ));
         assert!(wake_rx.try_recv().is_err());
     }
 
     #[test]
     fn pending_environment_does_not_consume_an_ordinary_command_wake() {
-        use moli_v8_platform::ProcessEnvironmentChange::LocaleChanged;
+        use moli_v8_platform::ProcessEnvironmentInvalidation::LocaleAndDateTime;
         let (runner, mut wake_rx) = runner();
         let _command = append_protocol(&runner, 1, "Debugger.resume");
-        runner.environment_notifier().notify(LocaleChanged);
+        runner.environment_notifier().notify(LocaleAndDateTime);
         assert!(matches!(
             wake_rx.try_recv(),
             Ok(super::WorkerMessage::RunInspectorTask(
@@ -694,26 +700,31 @@ mod tests {
             wake_rx.try_recv(),
             Ok(super::WorkerMessage::RunEnvironmentNotification)
         ));
-        assert_eq!(runner.claim_environment_for_owner(), Some(LocaleChanged));
+        assert_eq!(
+            runner.claim_environment_for_owner(),
+            Some(LocaleAndDateTime)
+        );
         assert!(wake_rx.try_recv().is_err());
     }
 
     #[test]
     fn environment_notifications_merge_before_pause_commands_and_are_discarded_on_disposal() {
-        use moli_v8_platform::ProcessEnvironmentChange::{LocaleChanged, TimezoneChanged};
+        use moli_v8_platform::ProcessEnvironmentInvalidation::{DateTime, LocaleAndDateTime};
 
         let (runner, _wake_rx) = runner();
         let notifier = runner.environment_notifier();
         let _first = append_protocol(&runner, 1, "Debugger.pause");
-        notifier.notify(LocaleChanged);
+        notifier.notify(LocaleAndDateTime);
         let _second = append_protocol(&runner, 2, "Debugger.resume");
-        notifier.notify(TimezoneChanged);
+        notifier.notify(DateTime);
         assert!(runner.begin_pause_loop());
         // The pause claims one merged invalidation ahead of queued commands,
         // without a session or ordinary Worker-loop turn.
         assert!(matches!(
             runner.wait_for_pause_task(),
-            Some(WorkerInspectorTask::EnvironmentChanged(LocaleChanged))
+            Some(WorkerInspectorTask::EnvironmentInvalidation(
+                LocaleAndDateTime
+            ))
         ));
         assert!(matches!(
             runner.wait_for_pause_task(),
@@ -723,9 +734,9 @@ mod tests {
         assert!(matches!(runner.wait_for_pause_task(),
             Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Debugger.resume")));
-        notifier.notify(TimezoneChanged);
+        notifier.notify(DateTime);
         runner.dispose("worker teardown");
-        notifier.notify(LocaleChanged);
+        notifier.notify(LocaleAndDateTime);
         assert!(
             runner
                 .claim_task(WorkerInspectorTaskMode::Interrupt)

@@ -1012,10 +1012,10 @@ async fn run_worker_pre_bootstrap_debugger_pause(
         }
         match rx.recv().await {
             Some(WorkerMessage::RunEnvironmentNotification) => {
-                if let Some(change) = inspector_task_runner.claim_environment_for_owner() {
+                if let Some(invalidation) = inspector_task_runner.claim_environment_for_owner() {
                     // Cache invalidation is control work, not a JS turn or a
                     // reason to run microtasks while bootstrap is paused.
-                    change.notify_isolate(worker_isolate.worker_isolate_mut());
+                    invalidation.notify_isolate(worker_isolate.worker_isolate_mut());
                 }
             }
             Some(WorkerMessage::RunInspectorTask(mode)) => {
@@ -2678,8 +2678,8 @@ async fn worker_main(
                 }
             }
             WorkerLoopWake::Message(Some(WorkerMessage::RunEnvironmentNotification)) => {
-                if let Some(change) = inspector_task_runner.claim_environment_for_owner() {
-                    change.notify_isolate(worker_isolate.worker_isolate_mut());
+                if let Some(invalidation) = inspector_task_runner.claim_environment_for_owner() {
+                    invalidation.notify_isolate(worker_isolate.worker_isolate_mut());
                 }
             }
             WorkerLoopWake::Message(Some(WorkerMessage::RunInspectorTask(mode))) => {

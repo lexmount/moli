@@ -203,7 +203,7 @@ fn emulation_locale_fallback_preserves_native_observation_order() {
 #[test]
 fn process_environment_defaults_do_not_read_array_prototype() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://intl-private-arguments.test/");
+    let mut vm = new_storage_test_vm("https://intl-array-prototype.test/");
     environment.set_locale(Some("fr_FR")).unwrap();
     environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(
@@ -228,46 +228,6 @@ fn process_environment_defaults_do_not_read_array_prototype() {
         .unwrap(),
         "true"
     );
-}
-
-#[test]
-fn process_environment_preserves_native_primitive_options_and_defaults() {
-    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://intl-primitive-options.test/");
-    environment.set_timezone(Some("Europe/Paris")).unwrap();
-    assert_eq!(vm.eval(r#"JSON.stringify((() => {
-      const date = new Date('2024-01-01T00:00:00Z');
-      const options = [42, true, '', Symbol(), 1n];
-      const zones = options.every(value =>
-        new Intl.DateTimeFormat('en-US', value).resolvedOptions().timeZone === 'Europe/Paris');
-      const dates = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].every(method =>
-        options.every(value => date[method]('en-US', value) === date[method]('en-US', {timeZone: 'Europe/Paris'})));
-      let nullRejected = false;
-      try {new Intl.DateTimeFormat('en-US', null);} catch (error) {nullRejected = error instanceof TypeError;}
-      return [zones, dates, nullRejected];
-    })())"#).unwrap(), "[true,true,true]");
-}
-
-#[test]
-fn emulation_date_time_first_legacy_hyphens_are_not_timezone_offsets() {
-    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://date-time-first.test/");
-    for timezone in ["Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        environment.set_timezone(Some(timezone)).unwrap();
-        assert_eq!(
-            vm.eval(
-                r#"JSON.stringify([
-          '00:00:00 Jan-01-2024', '00:00:00 01-01-2024',
-          '00:00 Jan-01-2024', '00:00:00.000 Jan-01-2024',
-          '00:00:00 January-01-2024', '00:00:00 Jan-01-2024 (PST)'
-        ].map(input => [Date.parse(input) === +new Date(2024, 0, 1),
-          +new Date(input) === +new Date(2024, 0, 1)]))"#
-            )
-            .unwrap(),
-            "[[true,true],[true,true],[true,true],[true,true],[true,true],[true,true]]",
-            "{timezone}"
-        );
-    }
 }
 
 #[test]
@@ -357,9 +317,9 @@ fn process_environment_preserves_native_date_and_intl_coercion() {
 }
 
 #[test]
-fn process_environment_preserves_native_options_with_inherited_setters() {
+fn process_environment_preserves_native_datetime_options() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://date-intl-inherited-options.test/");
+    let mut vm = new_storage_test_vm("https://native-datetime-options.test/");
     environment.set_timezone(Some("Europe/Paris")).unwrap();
     let result = vm
         .eval(
@@ -367,22 +327,39 @@ fn process_environment_preserves_native_options_with_inherited_setters() {
       const keys = ['get', 'timeZone'];
       const before = keys.map(key => Object.getOwnPropertyDescriptor(Object.prototype, key));
       const sentinel = {};
-      // Changing native defaults must not add observable property writes to
-      // option handling, including frozen options and inherited accessors.
+      const date = new Date('2024-01-01T00:00:00Z');
+      const methods = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'];
+      const frozen = Object.freeze({timeZone: undefined});
+      const noGetter = Object.defineProperty({}, 'timeZone', {get: undefined});
+      const receivers = [];
+      const accessor = Object.freeze({get timeZone() {
+        receivers.push(this === accessor); return undefined;
+      }});
+      const cases = [
+        ['undefined', undefined], ['empty-object', {}], ['number', 42],
+        ['boolean', true], ['string', ''], ['symbol', Symbol()], ['bigint', 1n],
+        ['frozen', frozen], ['getterless', noGetter], ['accessor', accessor],
+        ['inherited-setter', Object.create({set timeZone(value) { throw sentinel; }})],
+        ['explicit', {timeZone: 'UTC'}, 'UTC'],
+        ['frozen-explicit', Object.freeze({timeZone: 'UTC'}), 'UTC']
+      ];
       try {
+        // Native option reads must not introduce writes through inherited setters.
         for (const key of keys) Object.defineProperty(Object.prototype, key, {
           set() { throw sentinel; }, configurable: true
         });
-        const date = new Date('2024-01-01T00:00:00Z');
-        const frozen = Object.freeze({timeZone: undefined});
-        const explicit = {timeZone: 'Europe/Paris'};
-        return [
-          new Intl.DateTimeFormat('en-US').resolvedOptions().timeZone,
-          new Intl.DateTimeFormat('en-US', frozen).resolvedOptions().timeZone,
-          ...['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].map(method =>
-            date[method]('en-US') === date[method]('en-US', explicit) &&
-            date[method]('en-US', frozen) === date[method]('en-US', explicit))
-        ];
+        const rows = cases.map(([name, options, zone = 'Europe/Paris']) => [name, [
+          new Intl.DateTimeFormat('en-US', options).resolvedOptions().timeZone === zone,
+          ...methods.map(method =>
+            date[method]('en-US', options) === date[method]('en-US', {timeZone: zone}))
+        ]]);
+        let nullRejected = false;
+        try {new Intl.DateTimeFormat('en-US', null);}
+        catch (error) {nullRejected = error instanceof TypeError;}
+        rows.push(['null-rejected', [nullRejected]],
+          ['getter-receivers', [receivers.length > 0 && receivers.every(value => value)]],
+          ['frozen-unmodified', [frozen.timeZone === undefined]]);
+        return rows;
       } finally {
         keys.forEach((key, index) => {
           if (before[index]) Object.defineProperty(Object.prototype, key, before[index]);
@@ -392,7 +369,14 @@ fn process_environment_preserves_native_options_with_inherited_setters() {
     })())"#,
         )
         .unwrap();
-    assert_eq!(result, r#"["Europe/Paris","Europe/Paris",true,true,true]"#);
+    let rows: Vec<(String, Vec<bool>)> = serde_json::from_str(&result).unwrap();
+    assert_eq!(rows.len(), 16);
+    for (name, checks) in rows {
+        assert!(
+            !checks.is_empty() && checks.iter().all(|passed| *passed),
+            "native options case {name}: {checks:?}"
+        );
+    }
 }
 
 #[test]
@@ -459,6 +443,9 @@ fn emulation_date_local_grammar_and_coercion_preserve_native_contracts() {
             .eval(
                 r#"(() => {
           const inputs = [
+            ['00:00:00 Jan-01-2024', 1], ['00:00:00 01-01-2024', 1],
+            ['00:00 Jan-01-2024', 1], ['00:00:00.000 Jan-01-2024', 1],
+            ['00:00:00 January-01-2024', 1], ['00:00:00 Jan-01-2024 (PST)', 1],
             ['Tue Jan 02 2024 00:00:00', 2], ['Thu Jan 04 2024 00:00:00', 4],
             ['Sat Jan 06 2024 00:00:00', 6], ['Jan 02 2024 (PST)', 2],
             ['Jan 02 2024 (PST (ignored)', 2], [' 2024-01-02 ', 2],
@@ -529,34 +516,6 @@ fn emulation_timezone_does_not_change_option_get_order_or_exceptions() {
     assert_eq!(vm.eval(probe).unwrap(), baseline);
     environment.set_timezone(None).unwrap();
     assert_eq!(vm.eval(probe).unwrap(), baseline);
-}
-
-#[test]
-fn emulation_timezone_preserves_frozen_options_and_original_getter_receivers() {
-    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
-    let mut vm = new_storage_test_vm("https://frozen-intl-options.test/");
-    environment.set_timezone(Some("Europe/Paris")).unwrap();
-    let result = vm.eval(r#"(() => {
-      const date = new Date('2024-01-01T00:00:00Z');
-      const frozen = Object.freeze({timeZone: undefined});
-      const noGetter = Object.defineProperty({}, 'timeZone', {get: undefined});
-      let receiver;
-      const accessor = Object.freeze({get timeZone() { receiver = this; return undefined; }});
-      const methods = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'];
-      return JSON.stringify([
-        new Intl.DateTimeFormat('en-US', frozen).resolvedOptions().timeZone,
-        new Intl.DateTimeFormat('en-US', noGetter).resolvedOptions().timeZone,
-        new Intl.DateTimeFormat('en-US', accessor).resolvedOptions().timeZone,
-        receiver === accessor,
-        ...methods.map(method => date[method]('en-US', frozen) === date[method]('en-US', {timeZone: 'Europe/Paris'})),
-        new Intl.DateTimeFormat('en-US', Object.freeze({timeZone: 'UTC'})).resolvedOptions().timeZone,
-        frozen.timeZone === undefined
-      ]);
-    })()"#).unwrap();
-    assert_eq!(
-        result,
-        r#"["Europe/Paris","Europe/Paris","Europe/Paris",true,true,true,true,"UTC",true]"#
-    );
 }
 
 #[test]

@@ -564,13 +564,15 @@ impl WorkerRuntimeInspector {
         // Owner messages for the two Inspector modes use separate queues. An
         // already-published notification must also precede DontInterrupt work
         // if that wake is selected before the environment fallback message.
-        if !matches!(task, WorkerInspectorTask::EnvironmentChanged(_))
-            && let Some(change) = self.task_runner.claim_environment_change()
+        if !matches!(task, WorkerInspectorTask::EnvironmentInvalidation(_))
+            && let Some(invalidation) = self.task_runner.claim_environment_invalidation()
         {
-            change.notify_isolate(isolate);
+            invalidation.notify_isolate(isolate);
         }
         match task {
-            WorkerInspectorTask::EnvironmentChanged(change) => change.notify_isolate(isolate),
+            WorkerInspectorTask::EnvironmentInvalidation(invalidation) => {
+                invalidation.notify_isolate(isolate)
+            }
             WorkerInspectorTask::DispatchProtocolMessage {
                 inspector_session_id,
                 raw_json,
