@@ -484,6 +484,7 @@ impl NativeModuleGraphFetchRequest {
                         &request_origin,
                         &head,
                         request_mode,
+                        moli_fetch::RequestRedirectMode::Follow,
                     ).is_none();
                     if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
