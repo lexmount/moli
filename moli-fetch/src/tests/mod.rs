@@ -1276,7 +1276,8 @@ fn web_bot_auth_resigns_restarts_redirects_and_subresources() -> Result<()> {
         Vec::new(),
     )?
     .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
-    .with_initiator_url(&final_url);
+    .with_initiator_url(&final_url)
+    .with_request_origin(moli_url::WebOrigin::from_url(&final_url));
     assert_eq!(
         fetch_response_for_test(&client, subresource)?.body_text(),
         "asset"
@@ -2483,7 +2484,8 @@ fn fetch_client_cache_vary_referer_partitions_hits() {
             Request::new("GET", &server.url(), None, Vec::new())
                 .unwrap()
                 .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
-                .with_initiator_url(referrer),
+                .with_initiator_url(referrer)
+                .with_request_origin(moli_url::WebOrigin::from_url(referrer)),
         )
         .unwrap()
     };
@@ -2677,7 +2679,8 @@ fn critical_client_hints_restart_navigation_before_exposing_the_first_response()
     let navigation_url = Url::parse(&server.url())?;
     let subresource = Request::new("POST", &server.url(), Some("probe".to_owned()), Vec::new())?
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
-        .with_initiator_url(&navigation_url);
+        .with_initiator_url(&navigation_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&navigation_url));
     let subresource = fetch_response_for_test(&client, subresource)?;
     assert_eq!(subresource.body_text(), "subresource");
 
@@ -3074,6 +3077,7 @@ fn fetch_client_stylesheet_referrer_policy_uses_vary_referer_on_cache_hits() {
             },
         )
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
     };
 
     let first = fetch_with_config_for_test(&config, request("origin")).unwrap();
@@ -3231,6 +3235,7 @@ fn fetch_client_skips_stylesheet_cache_for_vary_origin() {
             .with_request_mode(RequestMode::Cors)
             .with_credentials_mode(RequestCredentialsMode::SameOrigin)
             .with_initiator_url(&initiator)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator))
     };
 
     let first = fetch_with_config_for_test(&config, request()).unwrap();
@@ -4009,7 +4014,8 @@ fn fetch_response_stores_partitioned_cookie_under_request_top_level_site() -> Re
     let response = fetch_response_for_test(
         &client,
         Request::new("GET", request_url.as_str(), None, Vec::new())?
-            .with_initiator_url(&first_top_level),
+            .with_initiator_url(&first_top_level)
+            .with_request_origin(moli_url::WebOrigin::from_url(&first_top_level)),
     )?;
 
     assert_eq!(response.status, 200);
@@ -4291,7 +4297,8 @@ fn fetch_client_cache_revalidates_same_document_reload() {
         Request::get(&server.url())
             .unwrap()
             .with_browser_navigation_kind(BrowserNavigationRequestKind::Reload)
-            .with_initiator_url(&reload_url),
+            .with_initiator_url(&reload_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&reload_url)),
     )
     .unwrap();
 
@@ -4333,7 +4340,8 @@ fn fetch_client_cache_immutable_ignores_same_document_reload_validation_when_fre
         Request::get(&server.url())
             .unwrap()
             .with_browser_navigation_kind(BrowserNavigationRequestKind::Reload)
-            .with_initiator_url(&reload_url),
+            .with_initiator_url(&reload_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&reload_url)),
     )
     .unwrap();
 
@@ -4369,7 +4377,8 @@ fn fetch_client_cache_immutable_revalidates_after_expiry() {
         Request::get(&server.url())
             .unwrap()
             .with_browser_navigation_kind(BrowserNavigationRequestKind::Reload)
-            .with_initiator_url(&reload_url),
+            .with_initiator_url(&reload_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&reload_url)),
     )
     .unwrap();
 

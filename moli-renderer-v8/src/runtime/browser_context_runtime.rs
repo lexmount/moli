@@ -1160,7 +1160,8 @@ mod tests {
         let submit_error = stale_client
             .fetch_raw_stream_with_cancel(
                 Request::get("http://127.0.0.1:9/post-shutdown")
-                    .expect("test request should build"),
+                    .expect("test request should build")
+                    .with_request_origin(moli_url::WebOrigin::Opaque),
                 FetchCancelHandle::new(),
             )
             .await

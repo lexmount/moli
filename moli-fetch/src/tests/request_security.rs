@@ -56,6 +56,26 @@ fn synthetic_redirect(from: &Url, to: &Url) -> RedirectInfo {
 }
 
 #[tokio::test]
+async fn plain_http_requests_do_not_infer_browser_origin_from_referrer() -> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("http"); 3]);
+    let url = Url::parse(&server.url())?;
+    let referrer = Url::parse("http://other.test/page")?;
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for transport in Transport::ALL {
+        let request = Request::new_bytes("GET", url.as_str(), None, Vec::new())?
+            .with_initiator_url(&referrer);
+        assert!(request.request_origin().is_none());
+        transport.fetch(&client, request).await?;
+    }
+    assert_eq!(server.hits(), 3);
+    for request in server.requests() {
+        assert!(!request.to_ascii_lowercase().contains("\r\norigin:"));
+    }
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
 async fn same_origin_mode_blocks_cross_origin_before_every_transport() -> Result<()> {
     let server = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::ok("forbidden").with_header("Access-Control-Allow-Origin", "*"),
@@ -66,7 +86,9 @@ async fn same_origin_mode_blocks_cross_origin_before_every_transport() -> Result
             let mut request =
                 Request::get(&server.url())?.with_request_mode(RequestMode::SameOrigin);
             if let Some(origin) = origin {
-                request = request.with_initiator_url(&origin);
+                request = request
+                    .with_initiator_url(&origin)
+                    .with_request_origin(moli_url::WebOrigin::from_url(&origin));
             }
             let error = transport.fetch(&client, request).await.unwrap_err();
             assert!(
@@ -98,6 +120,9 @@ async fn same_origin_mode_checks_redirects_in_every_transport() -> Result<()> {
         let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
         let request = Request::get(&server.url())?
             .with_initiator_url(&Url::parse(&server.origin())?)
+            .with_request_origin(moli_url::WebOrigin::from_url(&Url::parse(
+                &server.origin(),
+            )?))
             .with_request_mode(RequestMode::SameOrigin);
         transport.fetch(&client, request.clone()).await?;
         let error = transport.fetch(&client, request).await.unwrap_err();
@@ -123,6 +148,7 @@ async fn same_origin_mode_rejects_inherited_cross_origin_history() -> Result<()>
     let url = Url::parse(&server.url())?;
     let request = Request::get_with_url(url.clone())
         .with_initiator_url(&url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&url))
         .with_request_mode(RequestMode::SameOrigin)
         .with_redirect_chain(vec![synthetic_redirect(
             &Url::parse("http://other.test/start")?,
@@ -174,6 +200,7 @@ async fn cors_redirect_rejection_never_contacts_next_hop() -> Result<()> {
                 FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
             let request = Request::get(&server.url())?
                 .with_initiator_url(&origin)
+                .with_request_origin(moli_url::WebOrigin::from_url(&origin))
                 .with_request_mode(RequestMode::Cors)
                 .with_credentials_mode(credentials);
             let error = transport.fetch(&client, request).await.unwrap_err();
@@ -209,6 +236,7 @@ async fn cors_redirect_validates_the_origin_before_recording_the_hop() -> Result
                 FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
             let request = Request::get(&server.url())?
                 .with_initiator_url(&origin)
+                .with_request_origin(moli_url::WebOrigin::from_url(&origin))
                 .with_request_mode(RequestMode::Cors)
                 .with_credentials_mode(credentials);
             transport.fetch(&client, request).await?;
@@ -245,6 +273,7 @@ async fn cors_redirect_inherits_synthetic_redirect_taint_without_checking_synthe
             let url = Url::parse(&server.url())?;
             let request = Request::get_with_url(url.clone())
                 .with_initiator_url(&url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&url))
                 .with_request_mode(RequestMode::Cors)
                 .with_credentials_mode(RequestCredentialsMode::SameOrigin)
                 .with_redirect_chain(vec![synthetic_redirect(
@@ -293,6 +322,7 @@ async fn cached_redirects_enforce_cors_and_same_origin_before_follow() -> Result
             };
             let request = Request::get(&server.url())?
                 .with_initiator_url(&origin)
+                .with_request_origin(moli_url::WebOrigin::from_url(&origin))
                 .with_request_mode(RequestMode::NoCors);
             let client = FetchClient::new(&config, new_shared_browser_cookie_store());
             transport.fetch(&client, request.clone()).await?;
@@ -321,5 +351,40 @@ async fn cached_redirects_enforce_cors_and_same_origin_before_follow() -> Result
             fs::remove_dir_all(cache_dir)?;
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_request_origin_controls_every_transport_independently_of_initiator_url()
+-> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("allowed"); 3]);
+    let url = Url::parse(&server.url())?;
+    let unrelated = Url::parse("http://unrelated.test/base/")?;
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for transport in Transport::ALL {
+        let opaque = Request::get_with_url(url.clone())
+            .with_initiator_url(&url)
+            .with_request_origin(moli_url::WebOrigin::Opaque)
+            .with_request_mode(RequestMode::SameOrigin)
+            .with_credentials_mode(RequestCredentialsMode::SameOrigin);
+        assert!(!opaque.allows_credentials_for_url(&url));
+        assert_eq!(opaque.serialized_origin(), "null");
+        let error = transport.fetch(&client, opaque).await.unwrap_err();
+        assert!(
+            error.to_string().contains("same-origin request mode"),
+            "{error:#}"
+        );
+        let allowed = Request::get_with_url(url.clone())
+            .with_initiator_url(&unrelated)
+            .with_request_origin((&url).into())
+            .with_request_mode(RequestMode::SameOrigin);
+        transport.fetch(&client, allowed).await?;
+    }
+    assert_eq!(
+        server.hits(),
+        3,
+        "only requests with the matching origin are dispatched"
+    );
+    server.shutdown();
     Ok(())
 }

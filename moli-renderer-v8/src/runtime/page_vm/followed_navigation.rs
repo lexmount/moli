@@ -469,6 +469,7 @@ fn build_followed_location_navigation_request(
             .with_top_level_navigation_cookie_context()
             .with_browser_navigation_kind(browser_navigation_kind)
             .with_initiator_url(initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
     })
 }
 

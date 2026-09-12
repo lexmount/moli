@@ -9,12 +9,20 @@ use moli_cookie_jar::{
     NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata, redirect_types_for_request,
     site_context_downgrade_type,
 };
-use moli_url::same_origin;
+use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
 use crate::{
     FetchConfig, FetchUrlList, RedirectInfo, network_fetch_result::NetworkObservationRecorder,
 };
+
+/// Plain HTTP exchanges and browser Fetch requests have different security
+/// contracts. A browser request always carries its environment's origin.
+#[derive(Debug, Clone)]
+enum RequestContext {
+    Http,
+    Browser(WebOrigin),
+}
 
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -30,6 +38,7 @@ pub struct Request {
     pub browser_request_metadata: Option<BrowserRequestMetadata>,
     browser_navigation_kind: BrowserNavigationRequestKind,
     infer_referrer_from_initiator: bool,
+    context: RequestContext,
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
     pub request_mode: RequestMode,
@@ -366,6 +375,8 @@ impl RequestAuth {
 }
 
 impl Request {
+    /// Constructs a plain HTTP GET. Browser callers must supply an environment
+    /// origin using `new_browser` or `with_request_origin`.
     pub fn get(raw_url: &str) -> Result<Self> {
         let url = Url::parse(raw_url)
             .with_context(|| anyhow!("failed to parse request url `{raw_url}`"))?;
@@ -382,6 +393,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            context: RequestContext::Http,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -396,6 +408,7 @@ impl Request {
         })
     }
 
+    /// Constructs a plain HTTP GET from an already parsed URL.
     pub fn get_with_url(url: Url) -> Self {
         Self {
             url,
@@ -410,6 +423,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            context: RequestContext::Http,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
@@ -438,6 +452,8 @@ impl Request {
         )
     }
 
+    /// Constructs a plain HTTP request without browser origin policy.
+    /// Browser callers use `new_browser_bytes` instead.
     pub fn new_bytes(
         method: &str,
         raw_url: &str,
@@ -446,7 +462,16 @@ impl Request {
     ) -> Result<Self> {
         let url = Url::parse(raw_url)
             .with_context(|| anyhow!("failed to parse request url `{raw_url}`"))?;
-        Ok(Self {
+        Ok(Self::new_http_with_url(method, url, body, request_headers))
+    }
+
+    fn new_http_with_url(
+        method: &str,
+        url: Url,
+        body: Option<Vec<u8>>,
+        request_headers: Vec<(String, String)>,
+    ) -> Self {
+        Self {
             url,
             method: method.to_owned(),
             body,
@@ -459,6 +484,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
+            context: RequestContext::Http,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Cors,
@@ -470,7 +496,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::subresource(method),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
-        })
+        }
     }
 
     pub fn with_min_request_timeout(mut self, minimum_request_timeout: Duration) -> Self {
@@ -627,6 +653,49 @@ impl Request {
         self
     }
 
+    /// Constructs a browser Fetch request with an explicit environment origin.
+    /// URL resolution and referrer/cookie context are supplied independently.
+    pub fn new_browser_bytes(
+        method: &str,
+        raw_url: &str,
+        body: Option<Vec<u8>>,
+        headers: Vec<(String, String)>,
+        origin: WebOrigin,
+    ) -> Result<Self> {
+        Ok(Self::new_bytes(method, raw_url, body, headers)?.with_request_origin(origin))
+    }
+
+    pub fn new_browser(
+        method: &str,
+        url: Url,
+        body: Option<Vec<u8>>,
+        headers: Vec<(String, String)>,
+        origin: WebOrigin,
+    ) -> Self {
+        Self::new_http_with_url(method, url, body, headers).with_request_origin(origin)
+    }
+
+    /// Explicitly enters browser Fetch semantics. Setting an initiator/referrer
+    /// URL alone never supplies a browser origin.
+    pub fn with_request_origin(mut self, origin: WebOrigin) -> Self {
+        self.context = RequestContext::Browser(origin);
+        self
+    }
+
+    pub fn request_origin(&self) -> Option<&WebOrigin> {
+        match &self.context {
+            RequestContext::Http => None,
+            RequestContext::Browser(origin) => Some(origin),
+        }
+    }
+
+    /// Renderer entry points require browser semantics even when the request
+    /// happens to use a mode that would not otherwise run a CORS check.
+    pub fn browser_origin(&self) -> Result<&WebOrigin> {
+        self.request_origin()
+            .context("browser fetch requires an explicit environment origin")
+    }
+
     pub fn apply_redirect_status(&mut self, status: u16) {
         if redirect_status_rewrites_to_get(status, &self.method) {
             self.method = "GET".to_owned();
@@ -659,6 +728,15 @@ impl Request {
         self.redirect_chain.push(redirect);
     }
 
+    /// Follows an authorized redirect without rebuilding the Fetch request.
+    pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
+        self.validate_request_mode_for_url(&redirect.to_url)?;
+        self.apply_redirect_status(redirect.status);
+        self.url = redirect.to_url.clone();
+        self.record_redirect(redirect);
+        Ok(())
+    }
+
     pub fn redirect_count(&self) -> usize {
         self.url_list(&self.url).redirect_count()
     }
@@ -673,9 +751,7 @@ impl Request {
             return Ok(());
         }
         let origin = self
-            .cookie_context
-            .initiator_url
-            .as_ref()
+            .request_origin()
             .context("same-origin request mode requires an initiating origin")?;
         self.url_list(request_url)
             .validate_request_mode(self.request_mode, origin)
@@ -694,7 +770,7 @@ impl Request {
         {
             return Ok(());
         }
-        let Some(origin) = self.cookie_context.initiator_url.as_ref() else {
+        let Some(origin) = self.request_origin() else {
             // Standalone HTTP clients have no browser request origin.
             return Ok(());
         };
@@ -712,23 +788,20 @@ impl Request {
     /// Whether the URL list has left the initiating origin. For subresource
     /// fetches, returning to that origin cannot restore basic response tainting.
     pub fn has_cross_origin_url(&self, request_url: &Url) -> bool {
-        self.cookie_context
-            .initiator_url
-            .as_ref()
-            .is_some_and(|initiator| {
-                !same_origin(initiator, &self.url)
-                    || self.url_list(request_url).has_cross_origin_url(initiator)
-            })
+        self.request_origin().is_some_and(|origin| {
+            !origin.same_origin(&(&self.url).into())
+                || self.url_list(request_url).has_cross_origin_url(origin)
+        })
     }
 
     /// Fetch's serialized request origin, including redirect taint. A first
     /// same-origin-to-cross-origin hop retains the origin; crossing origins
     /// again after leaving it serializes as null.
     pub fn serialized_origin(&self) -> String {
-        let Some(initiator) = self.cookie_context.initiator_url.as_ref() else {
+        let Some(origin) = self.request_origin() else {
             return "null".to_owned();
         };
-        self.url_list(&self.url).serialized_origin(initiator)
+        self.url_list(&self.url).serialized_origin(origin)
     }
 
     pub fn with_network_partition_key(mut self, key: Option<String>) -> Self {
@@ -753,6 +826,29 @@ impl Request {
             RequestCredentialsMode::Omit => false,
             RequestCredentialsMode::SameOrigin => !self.has_cross_origin_url(request_url),
         }
+    }
+
+    /// Cookie policy uses the environment origin, independently of the URL used
+    /// to produce Referer. Adapt tuple origins to the cookie layer's URL-based
+    /// initiator API without replacing the request's referrer context.
+    pub(crate) fn network_cookie_context(&self) -> NetworkCookieRequestContext {
+        let mut context = self.cookie_context.clone();
+        if let Some(WebOrigin::Tuple(origin)) = self.request_origin() {
+            let origin_url =
+                Url::parse(origin.ascii_serialization()).expect("a tuple origin is a valid URL");
+            if context
+                .initiator_url
+                .as_ref()
+                .is_none_or(|url| !same_origin(url, &origin_url))
+            {
+                // Keep the embedding page's site-for-cookies/partition.
+                let browser_context = context.browser_context.clone();
+                context = context.with_initiator_url(&self.url, &origin_url);
+                context.browser_context = browser_context;
+                context = context.recompute_site_context_for_request(&self.url);
+            }
+        }
+        context
     }
 
     pub fn auth(&self) -> Option<&RequestAuth> {

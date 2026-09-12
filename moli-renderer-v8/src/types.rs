@@ -505,6 +505,7 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
     pub(super) load: crate::network::loads::ResourceLoadLease,
     pub(super) execution_context: PendingSubresourceExecutionContext,
@@ -631,6 +632,7 @@ impl SubresourcePolicyContext {
 
 #[derive(Clone, Debug)]
 pub(super) struct AsyncSubresourceNetworkContext {
+    pub(super) request_origin: moli_url::WebOrigin,
     pub(super) frame_id: Option<String>,
     pub(super) document_url: Url,
     pub(super) resource_type: SubresourceResourceType,

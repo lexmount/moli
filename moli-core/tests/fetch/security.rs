@@ -15,6 +15,7 @@ struct IncomingRequest {
     method: String,
     path: String,
     origin: Option<String>,
+    cookie: Option<String>,
 }
 
 struct SecurityServers {
@@ -61,7 +62,10 @@ impl SecurityServers {
                                 let origin = text.lines().filter_map(|line| line.split_once(':'))
                                     .find(|(key, _)| key.eq_ignore_ascii_case("Origin"))
                                     .map(|(_, value)| value.trim().to_owned());
-                                let request = IncomingRequest { method, path, origin };
+                                let cookie = text.lines().filter_map(|line| line.split_once(':'))
+                                    .find(|(key, _)| key.eq_ignore_ascii_case("Cookie"))
+                                    .map(|(_, value)| value.trim().to_owned());
+                                let request = IncomingRequest { method, path, origin, cookie };
                                 let (status, headers, body) = fixture_response(&request);
                                 requests.lock().push(request);
                                 let response = format!("HTTP/1.1 {status} Fixture\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
@@ -96,8 +100,20 @@ fn fixture_response(request: &IncomingRequest) -> (u16, String, String) {
     if url.path() == "/page" {
         return (
             200,
-            "Content-Type: text/html\r\n".to_owned(),
+            "Content-Type: text/html\r\nSet-Cookie: originSession=present; Path=/; SameSite=Lax\r\n".to_owned(),
             "<!doctype html><body>fetch security</body>".to_owned(),
+        );
+    }
+    if url.path() == "/blob-creator" {
+        return (
+            200,
+            "Content-Type: text/html\r\n".to_owned(),
+            r#"<!doctype html><script>
+            const blob = URL.createObjectURL(new Blob(['foreign']));
+            fetch(blob, {mode: 'same-origin'}).then(response => response.text()).then(text =>
+                parent.postMessage({blob, text}, '*'));
+        </script>"#
+                .to_owned(),
         );
     }
     if url.path() == "/sw.js" {
@@ -443,5 +459,88 @@ async fn text_track_without_crossorigin_blocks_cross_origin_before_network() -> 
             .iter()
             .any(|request| request.path == "/track.vtt?cors")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn window_and_worker_same_origin_mode_checks_blob_before_local_resolution() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let expression = format!(
+        "({})({})",
+        include_str!("fixtures/blob-origin.js"),
+        json!(server.cross)
+    );
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(&expression, true)
+            .await?,
+    )?;
+    assert_eq!(
+        observed,
+        json!({
+            "creator": "foreign",
+            "window-foreign": "TypeError", "window-local": "local", "window-data": "data",
+            "worker-foreign": "TypeError", "worker-local": "local", "worker-data": "data"
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn srcdoc_fetch_uses_inherited_or_opaque_origin_independently_of_base_url() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let expression = format!(
+        "({})({})",
+        include_str!("fixtures/srcdoc-origin.js"),
+        json!(server.cross)
+    );
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(&expression, true)
+            .await?,
+    )?;
+    assert_eq!(
+        observed,
+        json!({
+            "inherited": {"relative":"TypeError", "home":"ok", "redirect":"TypeError", "blob":"local", "data":"data", "cors":"ok", "preflight":"ok"},
+            "opaque": {"relative":"TypeError", "home":"TypeError", "redirect":"TypeError", "blob":"TypeError", "data":"data", "cors":"ok", "preflight":"ok"},
+            "topBase":"TypeError"
+        })
+    );
+    let requests = server.requests.lock();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.starts_with("/forbidden-")),
+        "{requests:?}"
+    );
+    let home = requests
+        .iter()
+        .find(|request| request.path == "/allowed-home")
+        .expect("same-origin control");
+    assert_eq!(
+        home.cookie.as_deref(),
+        Some("originSession=present"),
+        "{home:?}"
+    );
+    for (kind, expected_origin) in [("inherited", server.origin.as_str()), ("opaque", "null")] {
+        for (method, path) in [
+            ("GET", format!("/cors-{kind}")),
+            ("OPTIONS", format!("/preflight-{kind}")),
+            ("PUT", format!("/preflight-{kind}")),
+        ] {
+            let request = requests
+                .iter()
+                .find(|request| request.method == method && request.path == path)
+                .expect("expected allowed request");
+            assert_eq!(
+                request.origin.as_deref(),
+                Some(expected_origin),
+                "{request:?}"
+            );
+        }
+    }
     Ok(())
 }

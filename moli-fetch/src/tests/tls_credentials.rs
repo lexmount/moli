@@ -254,6 +254,7 @@ async fn tls_client_certificate_respects_credentials_in_every_transport() -> Res
             );
             let request = Request::get(server.url.as_str())?
                 .with_initiator_url(initiator)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator))
                 .with_credentials_mode(mode);
             transport.fetch(&client, request).await?;
             let observed = server.requests.lock().pop().unwrap();
@@ -291,6 +292,7 @@ async fn tls_client_certificate_isolated_on_reused_connections() -> Result<()> {
         ] {
             let request = Request::get(server.url.as_str())?
                 .with_initiator_url(initiator)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator))
                 .with_credentials_mode(mode);
             transport.fetch(&client, request).await?;
         }
@@ -330,6 +332,7 @@ async fn tls_client_certificate_preserves_cross_origin_redirect_taint() -> Resul
             );
             let request = Request::get(server.url.join("/redirect-cross")?.as_str())?
                 .with_initiator_url(&server.url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&server.url))
                 .with_request_mode(RequestMode::Cors)
                 .with_credentials_mode(mode);
             transport.fetch(&client, request).await?;
@@ -376,6 +379,7 @@ async fn tls_client_certificate_preserves_service_worker_redirect_taint() -> Res
             .await?;
         let request = Request::get(server.url.as_str())?
             .with_initiator_url(&server.url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&server.url))
             .with_request_mode(RequestMode::Cors)
             .with_credentials_mode(RequestCredentialsMode::SameOrigin)
             .with_redirect_chain(vec![RedirectInfo {

@@ -564,6 +564,7 @@ impl JsContextHost {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
@@ -584,6 +585,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin,
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_fetch(fetch_context),
@@ -621,6 +623,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -656,6 +659,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -689,6 +693,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -725,6 +730,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -760,6 +766,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -796,6 +803,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(
@@ -826,6 +834,7 @@ impl JsContextHost {
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
@@ -850,6 +859,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin,
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_fetch(fetch_context),
@@ -902,6 +912,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load: load.clone(),
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),
@@ -954,6 +965,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1023,6 +1035,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1138,6 +1151,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1192,6 +1206,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1230,6 +1245,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_network_only(
@@ -1267,6 +1283,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_document_network_only(
@@ -1302,6 +1319,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_network_only(
@@ -1339,6 +1357,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_document_network_only(
@@ -1377,6 +1396,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),
@@ -1411,6 +1431,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1448,6 +1469,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),

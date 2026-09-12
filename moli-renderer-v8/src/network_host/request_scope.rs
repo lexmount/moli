@@ -13,6 +13,7 @@ pub(in crate::network_host) fn observe_subresource_request_cookie_report(
     let request = Request::new(method, request_url.as_str(), None, Vec::new())
         .ok()?
         .with_initiator_url(document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(document_url))
         .with_credentials_mode(credentials_mode);
     if !request.allows_credentials_for_url(request_url) {
         return None;

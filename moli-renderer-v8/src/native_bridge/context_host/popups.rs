@@ -2153,18 +2153,23 @@ impl JsContextHost {
             self.next_lightweight_popup_document_load_id.wrapping_add(1);
         let target = LightweightPopupDocumentFetchTarget::new(load_id, task);
         let local_snapshot = self.materialize_local_child_snapshot_for_url(&target_url);
-        let resource_loader = if local_snapshot.is_none() {
+        let (resource_loader, request_origin) = if local_snapshot.is_none() {
             let source_owner = self.current_lightweight_popup_document_owner(popup_id)?;
             let initiating_loader = self.document_resource_loader_for_window_owner(
                 super::WindowDocumentOwner::LightweightPopup(source_owner),
             )?;
-            Some(crate::network::navigation::NavigationResourceLoader::new(
-                initiating_loader.request_client().clone(),
-                target_url.clone(),
-                initiating_loader.task_runner(),
-            ))
+            let origin =
+                moli_url::WebOrigin::from_serialized(initiating_loader.fetch_context().origin());
+            (
+                Some(crate::network::navigation::NavigationResourceLoader::new(
+                    initiating_loader.request_client().clone(),
+                    target_url.clone(),
+                    initiating_loader.task_runner(),
+                )),
+                origin,
+            )
         } else {
-            None
+            (None, moli_url::WebOrigin::Opaque)
         };
         self.pending_lightweight_popup_document_loads.insert(
             load_id,
@@ -2218,6 +2223,7 @@ impl JsContextHost {
                 let response = task_resource_loader
                     .fetch(
                         Request::get_with_url(target_url.clone())
+                            .with_request_origin(request_origin)
                             .with_page_network_policy()
                             .with_top_level_navigation_cookie_context(),
                     )
@@ -3137,6 +3143,7 @@ impl JsContextHost {
             .ok()?
             .with_page_network_policy()
             .with_initiator_url(&continuation.document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&continuation.document_url))
             .with_script_fetch_metadata(Default::default());
         Some((loader, request))
     }

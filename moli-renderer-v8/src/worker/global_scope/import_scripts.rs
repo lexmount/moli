@@ -158,7 +158,9 @@ pub(super) fn fetch_worker_import_source_blocking(
         .with_network_partition_key(network_partition_key);
     let request_initiator_url = initiator_url.clone();
     if let Some(ref initiator_url) = request_initiator_url {
-        request = request.with_initiator_url(initiator_url);
+        request = request
+            .with_initiator_url(initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
     }
     if let Some(referrer_policy) = referrer_policy {
         request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {

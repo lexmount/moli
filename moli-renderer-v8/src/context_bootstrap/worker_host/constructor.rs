@@ -867,7 +867,8 @@ fn materialize_nested_worker_script_source(
         .map_err(|error| error.to_string())?
         .with_page_network_policy()
         .with_network_partition_key(context.network_policy.network_partition_key.clone())
-        .with_initiator_url(&context.base_url);
+        .with_initiator_url(&context.base_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&context.base_url));
     let response = loader
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)

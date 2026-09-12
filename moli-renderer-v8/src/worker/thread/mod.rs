@@ -665,6 +665,7 @@ fn start_worker_module_graph_fetch(
     }
     fetch_request = fetch_request
         .with_initiator_url(request.initiator_url())
+        .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
         .with_credentials_mode(request.credentials_mode());
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();

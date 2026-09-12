@@ -667,7 +667,8 @@ mod tests {
         let callback_runtime = old_runtime.clone();
         let (callback_tx, callback_rx) = std_mpsc::channel();
         client.fetch_text_callback(
-            Request::get(&format!("http://{addr}/callback"))?,
+            Request::get(&format!("http://{addr}/callback"))?
+                .with_request_origin(moli_url::WebOrigin::Opaque),
             move |result| {
                 let thread_name = std::thread::current()
                     .name()
@@ -775,7 +776,8 @@ mod tests {
         let client = ResourceRequestClient::from_browser_resource_runtime(old_runtime.clone());
         let mut response = client
             .fetch_raw_stream_with_cancel(
-                Request::get(&format!("http://{addr}/stream"))?,
+                Request::get(&format!("http://{addr}/stream"))?
+                    .with_request_origin(moli_url::WebOrigin::Opaque),
                 FetchCancelHandle::new(),
             )
             .await?;

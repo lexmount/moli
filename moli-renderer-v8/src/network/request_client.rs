@@ -1052,6 +1052,7 @@ impl ResourceRequestClient {
     }
 
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
+        request.browser_origin()?;
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
             request = request.with_browser_site_context(browser_site_context.clone());
         }

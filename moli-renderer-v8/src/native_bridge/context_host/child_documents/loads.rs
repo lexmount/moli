@@ -430,6 +430,7 @@ impl JsContextHost {
                         ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
                     send_content_security_policy_reports(
                         pending.resource_loader.request_client(),
+                        moli_url::WebOrigin::from_url(&loaded.final_url),
                         &fields,
                         &violation.report_uri_endpoints,
                         &violation.report_to_endpoints,

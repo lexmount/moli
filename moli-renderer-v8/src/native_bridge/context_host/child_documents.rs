@@ -37,6 +37,7 @@ fn configure_child_document_navigation_request(
         .with_browser_site_context(browser_context.clone())
         .with_subframe_navigation_cookie_context()
         .with_initiator_url(initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
 }
 
 #[derive(Debug, Clone)]

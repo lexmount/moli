@@ -1,5 +1,5 @@
 use moli_cookie_jar::same_site_urls;
-use moli_url::{origin_ascii_serialization, same_origin};
+use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
 use crate::{RedirectInfo, RedirectSource, RequestMode};
@@ -28,14 +28,18 @@ impl<'a> FetchUrlList<'a> {
     }
 
     /// Returning to the initiating origin cannot restore basic response tainting.
-    pub fn has_cross_origin_url(self, origin: &Url) -> bool {
-        self.urls().any(|url| !same_origin(origin, url))
+    pub fn has_cross_origin_url(self, origin: &WebOrigin) -> bool {
+        self.urls().any(|url| !origin.same_origin(&url.into()))
     }
 
     /// Enforces same-origin mode before dispatch, including after redirects.
     /// Main fetch permits data URLs regardless of mode. CORS response checks
     /// are separate: permission from a server cannot relax same-origin mode.
-    pub fn validate_request_mode(self, mode: RequestMode, origin: &Url) -> Result<(), String> {
+    pub fn validate_request_mode(
+        self,
+        mode: RequestMode,
+        origin: &WebOrigin,
+    ) -> Result<(), String> {
         if mode == RequestMode::SameOrigin
             && self.current_url.scheme() != "data"
             && self.has_cross_origin_url(origin)
@@ -54,14 +58,14 @@ impl<'a> FetchUrlList<'a> {
 
     /// A first hop out of the initiating origin retains that origin. Crossing
     /// origins from an already cross-origin URL serializes the origin as null.
-    pub fn serialized_origin(self, origin: &Url) -> String {
+    pub fn serialized_origin(self, origin: &WebOrigin) -> String {
         if self.redirects.iter().any(|redirect| {
             !same_origin(&redirect.from_url, &redirect.to_url)
-                && !same_origin(origin, &redirect.from_url)
+                && !origin.same_origin(&(&redirect.from_url).into())
         }) {
             "null".to_owned()
         } else {
-            origin_ascii_serialization(origin)
+            origin.ascii_serialization().to_owned()
         }
     }
 

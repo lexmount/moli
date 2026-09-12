@@ -250,6 +250,10 @@ impl DocumentResourceLoader {
         &self.request_client
     }
 
+    pub(crate) fn fetch_context(&self) -> DocumentFetchContext {
+        self.authority.lifecycle.lock().context.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn owner(&self) -> crate::native_bridge::WindowDocumentOwner {
         self.authority.lifecycle.lock().context.owner()

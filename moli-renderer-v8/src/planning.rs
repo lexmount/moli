@@ -345,6 +345,7 @@ pub(crate) fn external_script_request(
         .expect("prepared script url should already be parsed")
         .with_page_network_policy()
         .with_initiator_url(&script.initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&script.initiator_url))
         .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Script)
         .with_credentials_mode(external_script_credentials_mode(
             script.kind,

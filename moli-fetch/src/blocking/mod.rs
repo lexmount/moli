@@ -14,7 +14,7 @@ use moli_cookie_jar::{
     NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookieQueryReport,
     StoredCookieSetReport, same_site_urls,
 };
-use moli_url::{is_potentially_trustworthy_url, tuple_origin_url};
+use moli_url::is_potentially_trustworthy_url;
 use moli_url_policy::ensure_http_network_transport_url;
 use tracing::debug;
 use url::Url;
@@ -398,6 +398,7 @@ fn append_browser_subresource_headers(
 }
 
 fn request_origin_header_value(request: &Request, request_url: &Url) -> Option<String> {
+    request.request_origin()?;
     if !matches!(request_url.scheme(), "http" | "https") {
         return None;
     }
@@ -405,8 +406,7 @@ fn request_origin_header_value(request: &Request, request_url: &Url) -> Option<S
         request.method.eq_ignore_ascii_case("GET") || request.method.eq_ignore_ascii_case("HEAD");
     if safe_method
         && (request.request_mode != crate::RequestMode::Cors
-            || (request.cookie_context.initiator_url.is_some()
-                && !request.has_cross_origin_url(request_url)))
+            || !request.has_cross_origin_url(request_url))
     {
         return None;
     }
@@ -460,15 +460,19 @@ fn append_browser_storage_access_header(
 }
 
 fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
+    if request.is_navigation_request() && request.cookie_context.initiator_url.is_none() {
+        return "none".to_owned();
+    }
+    let Some(origin) = request.request_origin() else {
         return "none".to_owned();
     };
-    let initiator_url =
-        tuple_origin_url(initiator_url).unwrap_or(std::borrow::Cow::Borrowed(initiator_url));
+    let Ok(initiator_url) = Url::parse(origin.ascii_serialization()) else {
+        return "cross-site".to_owned();
+    };
     let urls = request.url_list(request_url);
-    if !urls.has_cross_origin_url(initiator_url.as_ref()) {
+    if !urls.has_cross_origin_url(origin) {
         "same-origin".to_owned()
-    } else if urls.has_cross_site_url(initiator_url.as_ref()) {
+    } else if urls.has_cross_site_url(&initiator_url) {
         "cross-site".to_owned()
     } else {
         "same-site".to_owned()
@@ -1240,10 +1244,13 @@ mod tests {
             let request_url = url(case.request_url);
             let mut request = Request::new(case.method, case.request_url, None, Vec::new())
                 .unwrap()
+                .with_request_origin(moli_url::WebOrigin::Opaque)
                 .with_request_mode(case.mode)
                 .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
             if let Some(initiator) = case.initiator {
-                request = request.with_initiator_url(&url(initiator));
+                request = request
+                    .with_initiator_url(&url(initiator))
+                    .with_request_origin(moli_url::WebOrigin::from_url(&url(initiator)));
             }
 
             let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
@@ -1268,6 +1275,7 @@ mod tests {
         )
         .unwrap()
         .with_initiator_url(&url("https://app.test/page"))
+        .with_request_origin(moli_url::WebOrigin::from_url(&url("https://app.test/page")))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
         let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
@@ -1287,10 +1295,15 @@ mod tests {
         let request_url = url("https://app.test/submit");
         let request = Request::new("POST", request_url.as_str(), None, Vec::new())
             .unwrap()
+            .with_request_origin(moli_url::WebOrigin::Opaque)
             .with_top_level_navigation_cookie_context();
 
         let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
         assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+        assert_eq!(
+            header_value(&headers, "sec-fetch-site").as_deref(),
+            Some("none")
+        );
     }
 
     #[test]
@@ -1302,6 +1315,7 @@ mod tests {
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let redirect_chain = vec![redirect(&original_url, &redirected_url)];
         let request = request.with_redirect_chain(redirect_chain);
@@ -1331,6 +1345,7 @@ mod tests {
         )
         .unwrap()
         .with_initiator_url(&initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
         let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
@@ -1354,6 +1369,7 @@ mod tests {
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let redirect_chain = vec![redirect(&original_url, &redirected_url)];
         let request = request.with_redirect_chain(redirect_chain);
@@ -1377,6 +1393,7 @@ mod tests {
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let redirect_chain = vec![
             redirect(&original_url, &intermediate_url),
@@ -1404,6 +1421,7 @@ mod tests {
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let redirect_chain = vec![
             redirect(&original_url, &cross_site_url),
@@ -1431,6 +1449,7 @@ mod tests {
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let redirect_chain = vec![
             redirect(&original_url, &cross_site_redirect_url),
@@ -1481,6 +1500,7 @@ mod tests {
             let request = Request::new(method, target, None, Vec::new())
                 .unwrap()
                 .with_initiator_url(&initiator)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator))
                 .with_request_mode(mode);
             assert_eq!(request.browser_request_metadata(), None);
             let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
@@ -1500,6 +1520,7 @@ mod tests {
             .unwrap()
             .with_request_mode(RequestMode::NoCors)
             .with_initiator_url(&url("https://app.test/page"))
+            .with_request_origin(moli_url::WebOrigin::from_url(&url("https://app.test/page")))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
 
         let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
@@ -1517,6 +1538,7 @@ mod tests {
         let request = Request::new("GET", request_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&url("https://page.test/"))
+            .with_request_origin(moli_url::WebOrigin::from_url(&url("https://page.test/")))
             .with_subframe_navigation_cookie_context();
 
         let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
@@ -1566,6 +1588,9 @@ mod tests {
         let request = Request::new("POST", request_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&url("https://frame.test/challenge"))
+            .with_request_origin(moli_url::WebOrigin::from_url(&url(
+                "https://frame.test/challenge",
+            )))
             .with_site_for_cookies_url(&url("https://page.test/"))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
             .with_credentials_mode(crate::RequestCredentialsMode::Include)
@@ -1590,6 +1615,9 @@ mod tests {
         let request = Request::new("POST", request_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&url("https://frame.test/challenge"))
+            .with_request_origin(moli_url::WebOrigin::from_url(&url(
+                "https://frame.test/challenge",
+            )))
             .with_site_for_cookies_url(&url("https://page.test/"))
             .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
             .with_credentials_mode(crate::RequestCredentialsMode::SameOrigin)
@@ -1611,6 +1639,9 @@ mod tests {
         let request = Request::new("POST", request_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&url("http://frame.test/challenge"))
+            .with_request_origin(moli_url::WebOrigin::from_url(&url(
+                "http://frame.test/challenge",
+            )))
             .with_site_for_cookies_url(&url("http://page.test/"))
             .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
             .with_credentials_mode(crate::RequestCredentialsMode::Include);

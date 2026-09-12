@@ -8,6 +8,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     pub(super) csp_report_context: crate::network_host::WindowCspReportRequestContext,
     pub(super) document_url: url::Url,
+    pub(super) request_origin: moli_url::WebOrigin,
     pub(super) network_partition_key: Option<String>,
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
@@ -51,8 +52,14 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let resource_loader = host
         .document_resource_loader_for_window_owner(document_target.owner())
         .ok_or_else(|| "fetch: Document resource loader is unavailable".to_owned())?;
-    let (frame_id, document_url) = subresource_request_scope_for_owner(scope, host, request_scope)
+    let (frame_id, mut base_url) = subresource_request_scope_for_owner(scope, host, request_scope)
         .ok_or_else(|| "fetch: Window execution context owner is retired".to_owned())?;
+    let context = resource_loader.fetch_context();
+    let document_url = context.document_url().clone();
+    let request_origin = moli_url::WebOrigin::from_serialized(context.origin());
+    if request_scope == crate::native_bridge::OwnerDispatchScope::Top {
+        base_url = host.document_base_url_for_handle(host.document_handle());
+    }
     let connect_policy = host
         .document_connect_policy_snapshot_for_owner(request_scope)
         .ok_or_else(|| "fetch: document policy context is unavailable".to_owned())?;
@@ -69,7 +76,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     }
     let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
-    let resolved_url = resolve_context_url(&document_url, &parsed.url, None)?;
+    let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
 
     Ok(PreparedWindowFetchRequest {
         frame_id,
@@ -78,6 +85,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         connect_policy,
         csp_report_context,
         document_url,
+        request_origin,
         network_partition_key,
         document_referrer_policy,
         policy_context,

@@ -353,6 +353,7 @@ impl NativeModuleGraphFetchRequest {
             .expect("module graph URL should already be parsed")
             .with_page_network_policy()
             .with_initiator_url(&self.initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&self.initiator_url))
             .with_credentials_mode(self.fetch_metadata.credentials_mode)
             .with_script_fetch_metadata(self.fetch_metadata.request_metadata.clone());
         Ok(match self.kind {

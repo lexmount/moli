@@ -590,6 +590,7 @@ fn append_content_security_policy_report_requests(
 
 pub(crate) fn send_content_security_policy_reports(
     loader: &ResourceRequestClient,
+    origin: moli_url::WebOrigin,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
     report_uri_endpoints: &[String],
     report_to_endpoints: &[String],
@@ -597,7 +598,10 @@ pub(crate) fn send_content_security_policy_reports(
     for request in
         content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
     {
-        send_content_security_policy_report_request(loader, request);
+        send_content_security_policy_report_request(
+            loader,
+            request.with_request_origin(origin.clone()),
+        );
     }
 }
 

@@ -2155,7 +2155,8 @@ fn connected_link_readiness_request(
     let request = moli_fetch::Request::new("GET", url.as_str(), None, vec![])
         .expect("preload-like link url should already be parsed")
         .with_page_network_policy()
-        .with_initiator_url(document_url);
+        .with_initiator_url(document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(document_url));
     let mut request = request
         .with_request_mode(options.request_mode)
         .with_credentials_mode(options.credentials_mode);
@@ -4787,6 +4788,7 @@ mod tests {
         let script_request = moli_fetch::Request::new("GET", script_url.as_str(), None, vec![])?
             .with_page_network_policy()
             .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .with_credentials_mode(module_script_credentials_mode(
                 metadata.cross_origin.as_deref(),
             ))

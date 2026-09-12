@@ -24,6 +24,12 @@ pub enum WebOrigin {
 }
 
 impl WebOrigin {
+    /// Reads a captured environment origin; `null` remains opaque rather than
+    /// being replaced with the environment's URL or its URL-resolution base.
+    pub fn from_serialized(origin: &str) -> Self {
+        Url::parse(origin).map_or(Self::Opaque, |url| Self::from_url(&url))
+    }
+
     pub fn from_url(url: &Url) -> Self {
         let Some(origin_url) = tuple_origin_url(url) else {
             return Self::Opaque;
@@ -62,6 +68,18 @@ impl WebOrigin {
             (Self::Tuple(left), Self::Tuple(right)) => left == right,
             _ => false,
         }
+    }
+}
+
+impl From<&Url> for WebOrigin {
+    fn from(url: &Url) -> Self {
+        Self::from_url(url)
+    }
+}
+
+impl From<&WebOrigin> for WebOrigin {
+    fn from(origin: &WebOrigin) -> Self {
+        origin.clone()
     }
 }
 

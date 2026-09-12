@@ -220,6 +220,7 @@ fn stylesheet_readiness_request(
         .expect("stylesheet url should already be parsed")
         .with_page_network_policy()
         .with_initiator_url(document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(document_url))
         .with_resource_type(resource_type);
     let captured_fetch_priority =
         moli_fetch::FetchPriorityHint::from_attribute(options.fetch_priority());
@@ -265,7 +266,9 @@ enum StylesheetResponseProvenance {
 impl StylesheetResponseProvenance {
     fn is_cors_same_origin(self, document_url: &Url, head: &moli_fetch::ResponseHead) -> bool {
         match self {
-            Self::Network => !head.url_list().has_cross_origin_url(document_url),
+            Self::Network => !head
+                .url_list()
+                .has_cross_origin_url(&moli_url::WebOrigin::from_url(document_url)),
             Self::ServiceWorker { filter } => !matches!(
                 filter,
                 Some(

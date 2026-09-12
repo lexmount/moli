@@ -720,7 +720,6 @@ pub(crate) struct ServiceWorkerFetchCompletion {
 pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) internal_id: u64,
     pub(crate) request: ServiceWorkerFetchRequest,
-    pub(crate) request_body_text: Option<String>,
     pub(crate) cors_preflight_request_headers: Vec<(String, String)>,
     pub(crate) request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     pub(crate) network_context: AsyncSubresourceNetworkContext,

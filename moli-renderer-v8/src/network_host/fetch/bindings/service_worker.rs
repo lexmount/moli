@@ -36,13 +36,16 @@ pub(super) fn dispatch_service_worker_fetch(
     let cancel_handle = FetchCancelHandle::new();
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: prepared.frame_id.clone(),
+        request_origin: prepared.request_origin.clone(),
         document_url: prepared.document_url.clone(),
         resource_type: SubresourceResourceType::Fetch,
         policy_context: prepared.policy_context,
     };
     let requires_preflight = prepared.request_mode == moli_fetch::RequestMode::Cors
         && crate::network_host::cors_preflight_request_headers(
-            !moli_url::same_origin(&prepared.document_url, &prepared.resolved_url),
+            !prepared
+                .request_origin
+                .same_origin(&(&prepared.resolved_url).into()),
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
@@ -58,6 +61,7 @@ pub(super) fn dispatch_service_worker_fetch(
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
+        prepared.request_origin.clone(),
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {
@@ -98,7 +102,6 @@ pub(super) fn dispatch_service_worker_fetch(
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id,
         request,
-        request_body_text: request_body_text.clone(),
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
         request_cookie_report,
         network_context,

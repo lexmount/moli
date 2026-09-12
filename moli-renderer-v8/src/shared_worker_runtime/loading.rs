@@ -564,6 +564,7 @@ fn shared_worker_script_request(
                 .with_credentials_mode(request_policy.credentials_mode)
                 .with_page_network_policy()
                 .with_initiator_url(initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
                 .with_network_partition_key(request_policy.network_partition_key.clone())
                 .with_script_fetch_metadata(ScriptFetchRequestMetadata {
                     document_referrer_policy: request_policy.document_referrer_policy.clone(),

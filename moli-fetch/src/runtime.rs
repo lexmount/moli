@@ -2475,7 +2475,7 @@ impl RuntimeJob {
         let origin_key = origin_key(&request);
         Self {
             current_url: request.url.clone(),
-            current_cookie_context: request.cookie_context.clone(),
+            current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
             request,
             origin_key,
@@ -2515,7 +2515,7 @@ impl StreamingRuntimeJob {
         let origin_key = origin_key(&request);
         Self {
             current_url: request.url.clone(),
-            current_cookie_context: request.cookie_context.clone(),
+            current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
             request,
             origin_key,
@@ -2558,7 +2558,7 @@ impl StreamingRawRuntimeJob {
         let origin_key = origin_key(&request);
         Self {
             current_url: request.url.clone(),
-            current_cookie_context: request.cookie_context.clone(),
+            current_cookie_context: request.network_cookie_context(),
             redirect_count: request.redirect_count(),
             request,
             origin_key,

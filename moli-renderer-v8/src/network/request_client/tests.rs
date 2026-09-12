@@ -31,6 +31,26 @@ use crate::network::{BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRoo
 use crate::protocol_types::OptionalResourceFetchMask;
 use crate::types::SubresourceResourceType;
 
+// These transport/cache tests use browser navigation semantics; origin policy
+// tests below construct their own explicit origin.
+fn browser_navigation_request(url: &str) -> Result<Request> {
+    Ok(Request::get(url)?.with_request_origin(moli_url::WebOrigin::Opaque))
+}
+
+#[test]
+fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let url = Url::parse("https://example.test/")?;
+    let http = Request::get_with_url(url.clone()).with_initiator_url(&url);
+    assert!(http.request_origin().is_none());
+    let error = owner.handle().apply_network_policy(http).unwrap_err();
+    assert!(error.to_string().contains("explicit environment origin"));
+
+    let browser = Request::new_browser("GET", url.clone(), None, Vec::new(), (&url).into());
+    owner.handle().apply_network_policy(browser)?;
+    Ok(())
+}
+
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -137,7 +157,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let registrar = root.registrar();
     let old_runtime = binding.current();
     let client = ResourceRequestClient::from_browser_resource_runtime(old_runtime.clone());
-    let request = Request::get("https://cache.test/last-chunk.css")?
+    let request = browser_navigation_request("https://cache.test/last-chunk.css")?
         .with_resource_type(RequestResourceType::CssStyleSheet);
     let cache_key = raw_subresource_memory_cache_key(&request)
         .expect("stylesheet request should use the raw subresource memory cache");
@@ -253,7 +273,7 @@ async fn dropping_cacheable_stream_stalled_between_chunks_cancels_real_fetch_and
     let old_runtime = binding.current();
     let client = ResourceRequestClient::from_browser_resource_runtime(old_runtime.clone());
     let cancel_handle = FetchCancelHandle::new();
-    let request = Request::get(&format!("http://{addr}/stalled.css"))?
+    let request = browser_navigation_request(&format!("http://{addr}/stalled.css"))?
         .with_resource_type(RequestResourceType::CssStyleSheet);
     assert!(
         raw_subresource_memory_cache_key(&request).is_some(),
@@ -344,7 +364,7 @@ fn merge_loader_network_policy_headers_uses_header_name_keys_and_request_order()
         ("X-Test".to_owned(), "context".to_owned()),
         ("Accept".to_owned(), "text/html".to_owned()),
     ]);
-    let mut request = Request::get("https://example.test/headers")
+    let mut request = browser_navigation_request("https://example.test/headers")
         .unwrap()
         .with_page_network_policy();
     request.request_headers = vec![
@@ -497,10 +517,38 @@ fn loader_image_compatibility_switch_preserves_other_resource_bits() {
 }
 
 #[test]
+fn memory_caches_partition_explicit_origin_independently_of_referrer() -> Result<()> {
+    let url = Url::parse("https://scripts.test/app.js")?;
+    let origin = moli_url::WebOrigin::from_url(&url);
+    let request = Request::new_browser("GET", url.clone(), None, Vec::new(), origin)
+        .with_initiator_url(&url)
+        .with_resource_type(RequestResourceType::CssStyleSheet)
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let opaque = request
+        .clone()
+        .with_request_origin(moli_url::WebOrigin::Opaque);
+    let no_cors = request
+        .clone()
+        .with_request_mode(moli_fetch::RequestMode::NoCors);
+    for other in [opaque, no_cors] {
+        assert_ne!(
+            super::script_text_cache_key(&request),
+            super::script_text_cache_key(&other)
+        );
+        assert_ne!(
+            raw_subresource_memory_cache_key(&request),
+            raw_subresource_memory_cache_key(&other)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn script_text_memory_cache_key_partitions_credentials_and_cookie_context() -> Result<()> {
     let url = Url::parse("https://scripts.test/app.js")?;
     let base_request = || {
-        Request::get_with_url(url.clone())
+        browser_navigation_request(url.as_str())
+            .unwrap()
             .with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
     };
 
@@ -603,7 +651,7 @@ async fn streaming_fetch_commits_set_cookie_before_body_completion() -> Result<(
         &FetchConfig::default(),
         Arc::clone(&cookie_store),
     )?;
-    let request = Request::get(&format!("http://{addr}/stream"))?;
+    let request = browser_navigation_request(&format!("http://{addr}/stream"))?;
     let mut response = loader
         .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
         .await?;
@@ -660,7 +708,7 @@ async fn dropping_streaming_response_cancels_the_source_transfer() -> Result<()>
     });
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
-    let request = Request::get(&format!("http://{addr}/stream"))?;
+    let request = browser_navigation_request(&format!("http://{addr}/stream"))?;
     let mut response = loader
         .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
         .await?;
@@ -700,10 +748,10 @@ async fn text_stream_fetch_uses_disk_cache_for_safe_gets() -> Result<()> {
     let url = format!("http://{addr}/cacheable.txt");
 
     let first = loader
-        .fetch_text_stream(Request::get(&url)?.with_page_network_policy())
+        .fetch_text_stream(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
     let second = loader
-        .fetch_text_stream(Request::get(&url)?.with_page_network_policy())
+        .fetch_text_stream(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
 
     assert_eq!(first.body_text(), "cached-renderer-text-stream");
@@ -741,7 +789,7 @@ async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_he
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/app.js");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
         })
     };
@@ -793,7 +841,7 @@ async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
     let peer = loader.fork_with_isolated_page_network_policy();
     let url = format!("http://{addr}/app.js");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request
                 .with_page_network_policy()
                 .with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
@@ -853,8 +901,8 @@ async fn unique_script_text_fetches_stay_within_one_loader_memory_budget() -> Re
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     for index in 0..SCRIPT_COUNT {
         let url = format!("http://{addr}/script-{index}.js");
-        let request =
-            Request::get(&url)?.with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+        let request = browser_navigation_request(&url)?
+            .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
         let response = loader.fetch_cacheable_script_text_stream(request).await?;
         assert_eq!(response.body_bytes().len(), SCRIPT_BYTES);
     }
@@ -900,7 +948,7 @@ async fn stylesheet_text_stream_uses_shared_memory_resource_cache_without_http_c
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/cached.css");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request
                 .with_page_network_policy()
                 .with_resource_type(RequestResourceType::CssStyleSheet)
@@ -924,7 +972,7 @@ async fn text_stream_fetch_handles_local_data_stylesheet_urls() -> Result<()> {
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let response = loader
         .fetch_text_stream(
-            Request::get("data:text/css,:root%7Bbackground:green%7D")?
+            browser_navigation_request("data:text/css,:root%7Bbackground:green%7D")?
                 .with_page_network_policy()
                 .with_resource_type(RequestResourceType::CssStyleSheet),
         )
@@ -974,7 +1022,7 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/module.js");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
         })
     };
@@ -1048,7 +1096,7 @@ async fn script_text_fetch_respects_configured_request_timeout() -> Result<()> {
     let mut config = FetchConfig::default();
     config.set_request_timeout_ms(100);
     let loader = ResourceRequestClient::new(&config)?;
-    let request = Request::get(&format!("http://{addr}/slow-script.js"))?
+    let request = browser_navigation_request(&format!("http://{addr}/slow-script.js"))?
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
     let error = timeout(
         Duration::from_secs(2),
@@ -1091,10 +1139,10 @@ async fn compatibility_fetch_uses_streaming_disk_cache_for_safe_gets() -> Result
     let url = format!("http://{addr}/cacheable.txt");
 
     let first = loader
-        .fetch(Request::get(&url)?.with_page_network_policy())
+        .fetch(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
     let second = loader
-        .fetch(Request::get(&url)?.with_page_network_policy())
+        .fetch(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
 
     assert_eq!(first.body_text(), "cached-renderer-compat-fetch");
@@ -1128,10 +1176,10 @@ async fn compatibility_raw_fetch_uses_streaming_disk_cache_for_safe_gets() -> Re
     let url = format!("http://{addr}/cacheable.bin");
 
     let first = loader
-        .fetch_raw(Request::get(&url)?.with_page_network_policy())
+        .fetch_raw(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
     let second = loader
-        .fetch_raw(Request::get(&url)?.with_page_network_policy())
+        .fetch_raw(browser_navigation_request(&url)?.with_page_network_policy())
         .await?;
 
     assert_eq!(first.body_bytes(), b"cached-renderer-compat-raw\xff");
@@ -1168,7 +1216,7 @@ async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_d
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/cached.png");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request
                 .with_page_network_policy()
                 .with_resource_type(RequestResourceType::Image)
@@ -1243,7 +1291,7 @@ async fn cache_bypass_replaces_raw_subresource_memory_entry() -> Result<()> {
     let peer = loader.fork_with_isolated_page_network_policy();
     let url = format!("http://{addr}/cached.png");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request
                 .with_page_network_policy()
                 .with_resource_type(RequestResourceType::Image)
@@ -1318,7 +1366,7 @@ async fn browser_fetch_raw_stream_uses_shared_memory_resource_cache_without_http
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/cached-fetch.txt");
     let request = || {
-        Request::get(&url).map(|request| {
+        browser_navigation_request(&url).map(|request| {
             request
                 .with_page_network_policy()
                 .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
@@ -1446,12 +1494,14 @@ async fn loader_applies_network_policy_only_to_opt_in_requests() -> Result<()> {
     loader.set_extra_http_headers(&[("x-cdp-test".to_owned(), "loader-policy".to_owned())]);
 
     let plain = loader
-        .fetch(Request::get(&format!("http://{addr}/plain"))?)
+        .fetch(browser_navigation_request(&format!("http://{addr}/plain"))?)
         .await?;
     assert_eq!(plain.body_text(), "plain:");
 
     let opt_in = loader
-        .fetch(Request::get(&format!("http://{addr}/optin"))?.with_page_network_policy())
+        .fetch(
+            browser_navigation_request(&format!("http://{addr}/optin"))?.with_page_network_policy(),
+        )
         .await?;
     assert_eq!(opt_in.body_text(), "optin:loader-policy");
 
@@ -1500,20 +1550,23 @@ async fn loader_opt_in_network_policy_enforces_blocked_and_offline() -> Result<(
     let blocked_url = format!("http://{addr}/blocked");
     loader.set_blocked_url_patterns(std::slice::from_ref(&blocked_url));
     let blocked = loader
-        .fetch(Request::get(&blocked_url)?.with_page_network_policy())
+        .fetch(browser_navigation_request(&blocked_url)?.with_page_network_policy())
         .await
         .unwrap_err()
         .to_string();
     assert!(blocked.contains("net::ERR_BLOCKED_BY_CLIENT"));
 
     let plain = loader
-        .fetch(Request::get(&format!("http://{addr}/plain"))?)
+        .fetch(browser_navigation_request(&format!("http://{addr}/plain"))?)
         .await?;
     assert_eq!(plain.body_text(), "reachable");
 
     loader.set_network_offline(true);
     let offline = loader
-        .fetch(Request::get(&format!("http://{addr}/offline"))?.with_page_network_policy())
+        .fetch(
+            browser_navigation_request(&format!("http://{addr}/offline"))?
+                .with_page_network_policy(),
+        )
         .await
         .unwrap_err()
         .to_string();

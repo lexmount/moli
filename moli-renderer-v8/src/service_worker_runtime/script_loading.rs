@@ -197,6 +197,7 @@ pub(super) fn load_service_worker_script_source_for_params(
         .with_cache_mode(params.cache_mode)
         .with_page_network_policy()
         .with_initiator_url(&params.document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&params.document_url))
         .with_script_fetch_metadata(ScriptFetchRequestMetadata {
             ..ScriptFetchRequestMetadata::default()
         });
@@ -329,6 +330,7 @@ fn load_imported_script_resource_for_update_check(
         .with_cache_mode(cache_mode)
         .with_page_network_policy()
         .with_initiator_url(initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
         .with_script_fetch_metadata(ScriptFetchRequestMetadata {
             ..ScriptFetchRequestMetadata::default()
         });

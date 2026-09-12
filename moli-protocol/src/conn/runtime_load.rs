@@ -3013,16 +3013,27 @@ impl CdpConnection {
             return Err("Network emulation offline".to_owned());
         }
 
-        let mut request = Request::new_bytes(method, raw_url, body, request_headers)
-            .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
-            .with_top_level_navigation_cookie_context()
-            .with_page_network_policy()
-            .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
+        let mut request = Request::new_browser_bytes(
+            method,
+            raw_url,
+            body,
+            request_headers,
+            load_inputs
+                .navigation_initiator_url
+                .as_ref()
+                .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+        )
+        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_top_level_navigation_cookie_context()
+        .with_page_network_policy()
+        .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
         if !load_inputs.infer_navigation_referrer {
             request = request.without_inferred_referrer();
         }
         if let Some(initiator_url) = load_inputs.navigation_initiator_url.as_ref() {
-            request = request.with_initiator_url(initiator_url);
+            request = request
+                .with_initiator_url(initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
         }
         request.set_auth(Some(auth.into()));
 
@@ -3094,16 +3105,27 @@ impl CdpConnection {
             return Err("Network emulation offline".to_owned());
         }
 
-        let mut request = Request::new_bytes(method, raw_url, body, request_headers)
-            .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
-            .with_top_level_navigation_cookie_context()
-            .with_page_network_policy()
-            .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
+        let mut request = Request::new_browser_bytes(
+            method,
+            raw_url,
+            body,
+            request_headers,
+            load_inputs
+                .navigation_initiator_url
+                .as_ref()
+                .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+        )
+        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_top_level_navigation_cookie_context()
+        .with_page_network_policy()
+        .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
         if !load_inputs.infer_navigation_referrer {
             request = request.without_inferred_referrer();
         }
         if let Some(initiator_url) = load_inputs.navigation_initiator_url.as_ref() {
-            request = request.with_initiator_url(initiator_url);
+            request = request
+                .with_initiator_url(initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
         }
         request.set_auth(auth.map(Into::into));
 

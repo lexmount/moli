@@ -414,9 +414,17 @@ impl CdpConnection {
         request.request_headers = owner.request_headers;
         request = request
             .with_top_level_navigation_cookie_context()
-            .with_page_network_policy();
+            .with_page_network_policy()
+            .with_request_origin(
+                owner
+                    .initiator_url
+                    .as_ref()
+                    .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+            );
         if let Some(ref initiator_url) = owner.initiator_url {
-            request = request.with_initiator_url(initiator_url);
+            request = request
+                .with_initiator_url(initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
         }
 
         let loader = self.ensure_resource_request_client()?.clone();

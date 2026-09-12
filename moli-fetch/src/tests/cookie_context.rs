@@ -53,6 +53,7 @@ fn browser_site_context_overlay_downgrades_but_never_relaxes_same_site_context()
     let computed = Request::new("GET", child_url.as_str(), None, vec![])
         .unwrap()
         .with_initiator_url(&child_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&child_url))
         .with_browser_site_context(browser_context.clone());
     assert!(
         computed.cookie_context.site_context.is_cross_site(),
@@ -65,6 +66,7 @@ fn browser_site_context_overlay_downgrades_but_never_relaxes_same_site_context()
     let explicitly_cross_site = Request::new("GET", child_url.as_str(), None, vec![])
         .unwrap()
         .with_initiator_url(&child_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&child_url))
         .with_cross_site_cookie_context()
         .with_browser_site_context(same_site_browser_context);
     assert!(
@@ -84,7 +86,8 @@ fn request_credentials_mode_controls_cross_origin_cookie_access() {
 
     let default_request = Request::new("GET", same_origin_url.as_str(), None, vec![])
         .unwrap()
-        .with_initiator_url(&initiator_url);
+        .with_initiator_url(&initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url));
     assert_eq!(
         default_request.credentials_mode,
         RequestCredentialsMode::Include
@@ -94,6 +97,7 @@ fn request_credentials_mode_controls_cross_origin_cookie_access() {
     let same_origin_request = Request::new("GET", same_origin_url.as_str(), None, vec![])
         .unwrap()
         .with_initiator_url(&initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin);
     assert!(same_origin_request.allows_credentials_for_url(&same_origin_url));
     assert!(!same_origin_request.allows_credentials_for_url(&cross_origin_url));
@@ -101,6 +105,7 @@ fn request_credentials_mode_controls_cross_origin_cookie_access() {
     let omit_request = Request::new("GET", same_origin_url.as_str(), None, vec![])
         .unwrap()
         .with_initiator_url(&initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
         .with_credentials_mode(RequestCredentialsMode::Omit);
     assert!(!omit_request.allows_credentials_for_url(&same_origin_url));
 }
@@ -202,7 +207,10 @@ fn request_with_initiator_url_marks_cross_site_subresource_requests() {
     let response_url = Url::parse("https://example.com/app/index.html").unwrap();
     let request = Request::new("GET", "https://example.com/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://other.test/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://other.test/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://other.test/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -237,7 +245,10 @@ fn request_with_initiator_url_treats_same_scheme_subdomains_as_same_site() {
     let response_url = Url::parse("https://sub.example.com/app/index.html").unwrap();
     let request = Request::new("GET", "https://sub.example.com/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -262,7 +273,10 @@ fn request_with_initiator_url_treats_same_scheme_sibling_subdomains_as_same_site
     let response_url = Url::parse("https://api.example.com/app/index.html").unwrap();
     let request = Request::new("GET", "https://api.example.com/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://www.example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://www.example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://www.example.com/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -295,7 +309,10 @@ fn request_with_initiator_url_respects_public_suffix_boundaries() {
     let response_url = Url::parse("https://foo.co.uk/app/index.html").unwrap();
     let request = Request::new("GET", "https://foo.co.uk/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://bar.co.uk/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://bar.co.uk/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://bar.co.uk/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -334,7 +351,10 @@ fn request_with_initiator_url_treats_multi_label_registrable_domains_as_same_sit
     let response_url = Url::parse("https://api.example.co.uk/app/index.html").unwrap();
     let request = Request::new("GET", "https://api.example.co.uk/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://www.example.co.uk/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://www.example.co.uk/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://www.example.co.uk/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -361,7 +381,10 @@ fn request_with_initiator_url_treats_multi_label_registrable_domains_as_same_sit
 fn request_with_initiator_url_tracks_schemeless_and_schemeful_site_context_separately() {
     let request = Request::new("GET", "https://example.com/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("http://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("http://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("http://example.com/index.html").unwrap(),
+        ));
 
     assert_eq!(
         request.cookie_context.site_context.context,
@@ -485,7 +508,10 @@ fn request_with_cross_scheme_initiator_uses_schemeful_cross_site_semantics() {
     let response_url = Url::parse("https://example.com/app/index.html").unwrap();
     let request = Request::new("GET", "https://example.com/app/panel", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("http://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("http://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("http://example.com/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -526,7 +552,10 @@ fn request_effective_cookie_context_recomputes_same_site_for_redirect_targets() 
     let redirected_url = Url::parse("https://other.test/app/panel").unwrap();
     let request = Request::new("GET", "https://example.com/start", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -566,7 +595,10 @@ fn request_effective_cookie_context_marks_cross_site_redirect_downgrade_in_repor
     let response_url = Url::parse("https://other.test/app/index.html").unwrap();
     let request = Request::new("GET", "https://example.com/start", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
     let mut jar = BrowserCookieStore::default();
 
     jar.store_response_headers(
@@ -621,7 +653,10 @@ fn request_effective_cookie_context_marks_cross_site_redirect_downgrade_in_repor
 fn request_effective_cookie_context_records_strict_to_lax_redirect_downgrade() {
     let request = Request::get("https://same.test/app/panel")
         .unwrap()
-        .with_initiator_url(&Url::parse("https://same.test/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://same.test/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://same.test/index.html").unwrap(),
+        ));
 
     let redirected_context =
         request.effective_cookie_context(&Url::parse("https://cross.test/app/panel").unwrap());
@@ -664,7 +699,10 @@ fn request_effective_cookie_context_records_strict_to_lax_redirect_downgrade() {
 fn request_effective_cookie_context_tracks_schemeful_only_redirect_downgrade() {
     let request = Request::get("https://example.com/app/panel")
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
 
     let redirected_context =
         request.effective_cookie_context(&Url::parse("http://example.com/app/panel").unwrap());
@@ -714,7 +752,10 @@ fn redirect_chain_cookie_context_preserves_cross_site_downgrade_across_later_sam
     let final_url = Url::parse("https://same.test/final").unwrap();
     let request = Request::new("GET", "https://same.test/start", None, Vec::new())
         .unwrap()
-        .with_initiator_url(&Url::parse("https://same.test/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://same.test/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://same.test/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -757,7 +798,10 @@ fn top_level_request_with_initiator_url_uses_cross_site_lax_navigation_semantics
     let response_url = Url::parse("https://other.test/app/index.html").unwrap();
     let request = Request::get("https://other.test/app/panel")
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
 
     {
         let mut jar = cookie_store.lock();
@@ -792,7 +836,10 @@ fn top_level_post_with_initiator_url_uses_lax_method_unsafe_context() {
     let request = Request::new("POST", "https://other.test/app/panel", None, vec![])
         .unwrap()
         .with_top_level_navigation_cookie_context()
-        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/index.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/index.html").unwrap(),
+        ));
 
     let effective_context = request.effective_cookie_context(&request.url);
 

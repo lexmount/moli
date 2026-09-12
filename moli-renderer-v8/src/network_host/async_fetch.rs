@@ -400,8 +400,10 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
-    if let Some(initiator_url) = request.cookie_context.initiator_url.clone()
-        && request.request_mode == RequestMode::Cors
+    let request_origin = request
+        .browser_origin()
+        .map_err(|error| error.to_string())?;
+    if request.request_mode == RequestMode::Cors
         && let Some(preflight_headers) = cors_preflight_request_headers(
             request.has_cross_origin_url(&request.url),
             &request.url,
@@ -410,16 +412,23 @@ async fn run_cors_preflight_if_needed(
         )
     {
         let observable_preflight_headers = preflight_headers.clone();
-        let mut preflight_request =
-            Request::new("OPTIONS", request.url.as_str(), None, preflight_headers)
-                .map_err(|error| format!("cors preflight: failed to build request: {error}"))?
-                // Preflight performs one HTTP exchange; a redirect is a
-                // non-ok response, never another OPTIONS request.
-                .with_redirect_mode(RequestRedirectMode::Manual)
-                .with_initiator_url(&initiator_url)
-                .with_credentials_mode(RequestCredentialsMode::SameOrigin)
-                .with_redirect_chain(request.redirect_chain().to_vec())
-                .with_network_partition_key(request.network_partition_key().map(str::to_owned));
+        let mut preflight_request = Request::new_browser_bytes(
+            "OPTIONS",
+            request.url.as_str(),
+            None,
+            preflight_headers,
+            request_origin.clone(),
+        )
+        .map_err(|error| format!("cors preflight: failed to build request: {error}"))?
+        // Preflight performs one HTTP exchange; a redirect is a
+        // non-ok response, never another OPTIONS request.
+        .with_redirect_mode(RequestRedirectMode::Manual)
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_redirect_chain(request.redirect_chain().to_vec())
+        .with_network_partition_key(request.network_partition_key().map(str::to_owned));
+        if let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() {
+            preflight_request = preflight_request.with_initiator_url(initiator_url);
+        }
         if let Some(metadata) = request.browser_request_metadata() {
             preflight_request = preflight_request.with_browser_request_metadata(metadata);
         } else {
@@ -794,6 +803,9 @@ mod tests {
             request_headers.clone(),
         )?
         .with_initiator_url(&Url::parse("https://origin.test/page")?)
+        .with_request_origin(moli_url::WebOrigin::from_url(&Url::parse(
+            "https://origin.test/page",
+        )?))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
         let mut redirects = ManualCorsRedirectState::new(request, request_headers);
 
@@ -835,13 +847,23 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn cors_preflight_uses_streaming_head_response() -> Result<()> {
+    async fn cors_preflight_uses_streaming_head_response_without_a_referrer_url() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let server = tokio::spawn(async move {
             let (mut preflight, _) = listener.accept().await.unwrap();
             let preflight_request = read_http_request_text(&mut preflight).await.unwrap();
             assert!(preflight_request.starts_with("OPTIONS /resource HTTP/1.1"));
+            assert!(
+                preflight_request
+                    .to_ascii_lowercase()
+                    .contains("\r\norigin: http://origin.test\r\n")
+            );
+            assert!(
+                !preflight_request
+                    .to_ascii_lowercase()
+                    .contains("\r\nreferer:")
+            );
             assert!(
                 preflight_request
                     .to_ascii_lowercase()
@@ -870,6 +892,11 @@ mod tests {
             let (mut actual, _) = listener.accept().await.unwrap();
             let actual_request = read_http_request_text(&mut actual).await.unwrap();
             assert!(actual_request.starts_with("PUT /resource HTTP/1.1"));
+            assert!(
+                actual_request
+                    .to_ascii_lowercase()
+                    .contains("\r\norigin: http://origin.test\r\n")
+            );
             let body = "ok";
             let response = format!(
                 concat!(
@@ -894,7 +921,9 @@ mod tests {
             None,
             vec![("X-Test".to_owned(), "yes".to_owned())],
         )?
-        .with_initiator_url(&Url::parse("http://origin.test/page")?)
+        .with_request_origin(moli_url::WebOrigin::from_url(&Url::parse(
+            "http://origin.test/page",
+        )?))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
 
@@ -992,6 +1021,7 @@ mod tests {
             request_headers.clone(),
         )?
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
@@ -1076,6 +1106,7 @@ mod tests {
         let request_headers = vec![("Content-Type".to_owned(), "custom/type".to_owned())];
         let request = Request::new("GET", request_url.as_str(), None, request_headers.clone())?
             .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .with_credentials_mode(RequestCredentialsMode::SameOrigin)
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
 
@@ -1089,6 +1120,7 @@ mod tests {
             73,
             AsyncSubresourceNetworkContext {
                 frame_id: Some("FRAME-1".to_owned()),
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url: document_url.clone(),
                 resource_type: SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
@@ -1187,6 +1219,9 @@ mod tests {
         let source_url = Url::parse(&format!("http://{addr}/synthetic"))?;
         let request = Request::get(target_url.as_str())?
             .with_initiator_url(&Url::parse(&format!("http://{addr}/page"))?)
+            .with_request_origin(moli_url::WebOrigin::from_url(&Url::parse(&format!(
+                "http://{addr}/page"
+            ))?))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let initial_redirect_chain = vec![RedirectInfo {
             source: moli_fetch::RedirectSource::ServiceWorker,
@@ -1214,6 +1249,9 @@ mod tests {
             74,
             AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(
+                    &(Url::parse(&format!("http://{addr}/page"))?),
+                ),
                 document_url: Url::parse(&format!("http://{addr}/page"))?,
                 resource_type: SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
@@ -1290,6 +1328,7 @@ mod tests {
         let loader = loader_owner.handle();
         let request_url = Url::parse(&format!("http://{addr}/xhr"))?;
         let request = Request::get(request_url.as_str())?
+            .with_request_origin(moli_url::WebOrigin::from_url(&request_url))
             .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
         spawn_async_subresource_fetch(
@@ -1302,6 +1341,9 @@ mod tests {
             41,
             AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(
+                    &(Url::parse("http://origin.test/page")?),
+                ),
                 document_url: Url::parse("http://origin.test/page")?,
                 resource_type: SubresourceResourceType::Xhr,
                 policy_context: Default::default(),
@@ -1393,6 +1435,7 @@ mod tests {
             request_headers.clone(),
         )?
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
         assert!(browser_request_needs_manual_preflight_redirects(
             &request,
@@ -1409,6 +1452,7 @@ mod tests {
             42,
             AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url,
                 resource_type: SubresourceResourceType::Xhr,
                 policy_context: Default::default(),
@@ -1557,6 +1601,7 @@ mod tests {
             request_headers.clone(),
         )?
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
 
@@ -1570,6 +1615,7 @@ mod tests {
             43,
             AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url: document_url.clone(),
                 resource_type: SubresourceResourceType::Xhr,
                 policy_context: Default::default(),

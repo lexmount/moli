@@ -42,6 +42,10 @@ use tokio::{
 };
 use url::Url;
 
+fn browser_navigation_request(url: &str) -> Result<Request> {
+    Ok(Request::get(url)?.with_request_origin(moli_url::WebOrigin::Opaque))
+}
+
 #[test]
 fn browser_clone_keeps_shared_renderer_and_fetch_owners_live_after_source_drop() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
@@ -2082,7 +2086,7 @@ async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> R
     let deadline = FetchDeadline::new(Duration::from_millis(600))?;
     let fetched = browser
         .fetch_request_document_allow_http_error_with_wait_until_deadline(
-            Request::get(&server.url("/static"))?,
+            browser_navigation_request(&server.url("/static"))?,
             RenderedDomWaitUntil::Load,
             deadline,
             RawDocumentFetchPolicy::Materialize,
@@ -2147,7 +2151,7 @@ async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline()
         let started = std::time::Instant::now();
         let fetched = browser
             .fetch_request_document_allow_http_error_with_wait_until_deadline(
-                Request::get(&server.url(path))?,
+                browser_navigation_request(&server.url(path))?,
                 wait_until,
                 deadline,
                 RawDocumentFetchPolicy::Materialize,
@@ -2240,7 +2244,7 @@ async fn best_effort_readiness_does_not_soften_a_base_lifecycle_timeout() -> Res
         let started = std::time::Instant::now();
         let error = browser
             .fetch_request_document_allow_http_error_with_wait_until(
-                Request::get(&server.url("/wait-until-slow-static"))?,
+                browser_navigation_request(&server.url("/wait-until-slow-static"))?,
                 wait_until,
                 Duration::from_millis(200),
             )
@@ -3547,7 +3551,7 @@ async fn renderer_owner_create_page_command_produces_page() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
 
-    let request = Request::get(&server.url("/static"))?;
+    let request = browser_navigation_request(&server.url("/static"))?;
     let requested_url = request.url.clone();
     let response = browser.resource_request_client().fetch(request).await?;
     let (response_head, response_body) = response.into_text_parts();
@@ -3609,7 +3613,7 @@ async fn renderer_owner_created_page_runs_common_page_commands() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
 
-    let request = Request::get(&server.url("/static"))?;
+    let request = browser_navigation_request(&server.url("/static"))?;
     let requested_url = request.url.clone();
     let response = browser.resource_request_client().fetch(request).await?;
     let (response_head, response_body) = response.into_text_parts();
@@ -4595,7 +4599,7 @@ async fn renderer_owner_created_page_runs_runtime_protocol_commands() -> Result<
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
 
-    let request = Request::get(&server.url("/static"))?;
+    let request = browser_navigation_request(&server.url("/static"))?;
     let response = browser.resource_request_client().fetch(request).await?;
     let (response_head, response_body) = response.into_text_parts();
     let create_page_request = renderer_owner.build_create_html_page_request(
@@ -4660,7 +4664,7 @@ async fn renderer_owner_created_page_runs_document_start_commands() -> Result<()
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
 
-    let request = Request::get(&server.url("/static"))?;
+    let request = browser_navigation_request(&server.url("/static"))?;
     let response = browser.resource_request_client().fetch(request).await?;
     let (response_head, response_body) = response.into_text_parts();
     let create_page_request = renderer_owner.build_create_html_page_request(
@@ -5427,7 +5431,7 @@ async fn renderer_owner_created_page_runs_subresource_interception_commands() ->
         .set_renderer_output_transport_sender(output_tx);
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
 
-    let request = Request::get(&server.url("/static"))?;
+    let request = browser_navigation_request(&server.url("/static"))?;
     let requested_url = request.url.clone();
     let response = browser.resource_request_client().fetch(request).await?;
     let (response_head, response_body) = response.into_text_parts();

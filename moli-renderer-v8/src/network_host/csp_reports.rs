@@ -197,6 +197,7 @@ fn send_content_security_policy_report_request(
 
     let request = request
         .with_initiator_url(&request_context.document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&request_context.document_url))
         .with_network_partition_key(request_context.network_partition_key.clone())
         .with_subframe_context(request_context.frame_id.is_some());
     let info = report_subresource_fetch_info(
@@ -311,11 +312,11 @@ fn dispatch_service_worker_content_security_policy_report(
             request.priority_hints.fetch_priority,
             service_worker_fetch_request_metadata(&request),
         ),
-        request_body_text: request_body_text.clone(),
         cors_preflight_request_headers: Vec::new(),
         request_cookie_report: info.request_cookie_report.clone(),
         network_context: AsyncSubresourceNetworkContext {
             frame_id: info.frame_id.clone(),
+            request_origin: moli_url::WebOrigin::from_url(&info.document_url),
             document_url: info.document_url.clone(),
             resource_type: SubresourceResourceType::CspReport,
             policy_context: request_context.policy_context,
@@ -376,6 +377,7 @@ fn spawn_content_security_policy_report_fetch(
         internal_id,
         AsyncSubresourceNetworkContext {
             frame_id: info.frame_id,
+            request_origin: moli_url::WebOrigin::from_url(&info.document_url),
             document_url: info.document_url,
             resource_type: SubresourceResourceType::CspReport,
             policy_context: request_context.policy_context,

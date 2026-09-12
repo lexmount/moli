@@ -78,6 +78,7 @@ pub(crate) fn start_scanned_image_preload(
     let request = match Request::new("GET", request_url.as_str(), None, request_headers) {
         Ok(request) => request
             .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .with_resource_type(RequestResourceType::Image)
             .with_page_network_policy()
             .with_request_mode(RequestMode::NoCors)
@@ -272,6 +273,7 @@ pub(crate) fn start_image_element_resource_fetch(
     let request = Request::new("GET", request_url.as_str(), None, request_headers.clone())
         .map_err(|error| error.to_string())?
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_resource_type(RequestResourceType::Image)
         .with_page_network_policy()
         .with_request_mode(request_mode)
@@ -325,11 +327,11 @@ pub(crate) fn start_image_element_resource_fetch(
                 request.priority_hints.fetch_priority,
                 service_worker_fetch_request_metadata(&request),
             ),
-            request_body_text: None,
             cors_preflight_request_headers: Vec::new(),
             request_cookie_report,
             network_context: AsyncSubresourceNetworkContext {
                 frame_id,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url,
                 resource_type: SubresourceResourceType::Image,
                 policy_context,
@@ -390,6 +392,7 @@ pub(crate) fn start_image_element_resource_fetch(
         internal_id,
         AsyncSubresourceNetworkContext {
             frame_id,
+            request_origin: moli_url::WebOrigin::from_url(&document_url),
             document_url,
             resource_type: SubresourceResourceType::Image,
             policy_context,

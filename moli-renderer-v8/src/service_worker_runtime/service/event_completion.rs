@@ -509,7 +509,7 @@ pub(super) fn service_worker_fetch_diagnostic_from_job_result(
                 final_url: response
                     .final_url
                     .as_ref()
-                    .unwrap_or(&job.request_url)
+                    .unwrap_or(&job.request.url)
                     .as_str()
                     .to_owned(),
                 status: response.status,
@@ -527,10 +527,10 @@ pub(super) fn service_worker_fetch_diagnostic_from_job_result(
     crate::runtime::RendererServiceWorkerFetchDiagnostic {
         internal_id: job.internal_id,
         document_url: job.network_context.document_url.as_str().to_owned(),
-        request_url: job.request_url.as_str().to_owned(),
-        method: job.request_method.clone(),
-        request_headers: job.request_headers.clone(),
-        request_body: job.request_body.clone(),
+        request_url: job.request.url.as_str().to_owned(),
+        method: job.request.method.clone(),
+        request_headers: job.request.request_headers.clone(),
+        request_body: request_body_text(&job.request.body),
         destination: service_worker_fetch_diagnostic_destination(job.network_context.resource_type)
             .to_owned(),
         result,

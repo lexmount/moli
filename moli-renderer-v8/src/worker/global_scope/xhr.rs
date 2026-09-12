@@ -544,6 +544,7 @@ fn send_synchronous_worker_xhr(
             let mut request = request
                 .with_page_network_policy()
                 .with_initiator_url(&prepared.document_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&prepared.document_url))
                 .with_credentials_mode(prepared.credentials_mode)
                 .with_network_partition_key(state.borrow().network_partition_key.clone())
                 .with_browser_request_metadata(BrowserRequestMetadata::Xhr);

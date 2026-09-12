@@ -69,6 +69,7 @@ impl ScriptVm {
         let request = Request::new("GET", url.as_str(), None, Vec::new())
             .expect("a parsed DevTools resource URL should remain valid")
             .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .without_inferred_referrer()
             .with_request_mode(RequestMode::NoCors)
             .with_credentials_mode(credentials_mode)

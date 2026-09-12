@@ -946,20 +946,28 @@ impl NavigationEngine {
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
-        let mut request = Request::new_bytes(method, raw_url, body, request_headers)
-            .map(|request| {
-                let request = request.with_top_level_navigation_cookie_context();
-                let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
-                if !infer_referrer_from_initiator {
-                    request = request.without_inferred_referrer();
-                }
-                if let Some(initiator_url) = initiator_url {
-                    request.with_initiator_url(initiator_url)
-                } else {
-                    request
-                }
-            })
-            .context("failed to build request")?;
+        let mut request = Request::new_browser_bytes(
+            method,
+            raw_url,
+            body,
+            request_headers,
+            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+        )
+        .map(|request| {
+            let request = request.with_top_level_navigation_cookie_context();
+            let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
+            if !infer_referrer_from_initiator {
+                request = request.without_inferred_referrer();
+            }
+            if let Some(initiator_url) = initiator_url {
+                request
+                    .with_initiator_url(initiator_url)
+                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+            } else {
+                request
+            }
+        })
+        .context("failed to build request")?;
         request.set_auth(auth.map(Into::into));
         let navigation_loader = self.navigation_resource_loader(
             cookie_store,
@@ -1012,20 +1020,28 @@ impl NavigationEngine {
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationStreamingRawResponse> {
-        let mut request = Request::new_bytes(method, raw_url, body, request_headers)
-            .map(|request| {
-                let request = request.with_top_level_navigation_cookie_context();
-                let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
-                if !infer_referrer_from_initiator {
-                    request = request.without_inferred_referrer();
-                }
-                if let Some(initiator_url) = initiator_url {
-                    request.with_initiator_url(initiator_url)
-                } else {
-                    request
-                }
-            })
-            .context("failed to build request")?;
+        let mut request = Request::new_browser_bytes(
+            method,
+            raw_url,
+            body,
+            request_headers,
+            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+        )
+        .map(|request| {
+            let request = request.with_top_level_navigation_cookie_context();
+            let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
+            if !infer_referrer_from_initiator {
+                request = request.without_inferred_referrer();
+            }
+            if let Some(initiator_url) = initiator_url {
+                request
+                    .with_initiator_url(initiator_url)
+                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+            } else {
+                request
+            }
+        })
+        .context("failed to build request")?;
         request.set_auth(auth.map(Into::into));
         let navigation_loader =
             self.navigation_resource_loader(cookie_store, request.url.clone(), cancel_handle)?;

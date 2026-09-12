@@ -262,6 +262,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
+    if let Err(message) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
+        .validate_request_mode(prepared.request_mode, &prepared.request_origin)
+    {
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
@@ -302,10 +309,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     }
 
     match resolve_local_fetch(host, &prepared) {
-        Ok(Some((document_url, response))) => {
+        Ok(Some(response)) => {
             let response_obj = build_fetch_response_object_for_request_mode(
                 scope,
-                &document_url,
+                &prepared.request_origin,
                 prepared.request_mode,
                 response,
             );

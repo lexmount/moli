@@ -49,6 +49,7 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
     let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
     send_content_security_policy_reports(
         request_client.request_client(),
+        moli_url::WebOrigin::from_serialized(&violation.document_uri),
         &fields,
         &violation.report_uri_endpoints,
         &violation.report_to_endpoints,
@@ -152,6 +153,7 @@ fn send_worker_content_security_policy_report_for_state(
     };
     let request = request
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_network_partition_key(network_partition_key.clone())
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
     let Some(load) = loader.register_load(
@@ -381,11 +383,11 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
             is_reload: false,
             metadata: request_metadata,
         },
-        request_body_text: request_body.clone(),
         cors_preflight_request_headers: Vec::new(),
         request_cookie_report: None,
         network_context: AsyncSubresourceNetworkContext {
             frame_id: None,
+            request_origin: moli_url::WebOrigin::from_url(&document_url),
             document_url: document_url.clone(),
             resource_type: SubresourceResourceType::CspReport,
             policy_context,
@@ -548,6 +550,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     ) {
         Ok(request) => request
             .with_initiator_url(&pending.document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&pending.document_url))
             .with_resource_type(RequestResourceType::CspReport)
             .with_request_mode(pending.request.request_mode)
             .with_credentials_mode(pending.request.credentials_mode)

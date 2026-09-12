@@ -71,6 +71,7 @@ pub(super) fn dispatch_service_worker_xhr(
     let cancel_handle = FetchCancelHandle::new();
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: prepared.frame_id.clone(),
+        request_origin: moli_url::WebOrigin::from_url(&prepared.document_url),
         document_url: prepared.document_url.clone(),
         resource_type: SubresourceResourceType::Xhr,
         policy_context: prepared.policy_context,
@@ -114,7 +115,6 @@ pub(super) fn dispatch_service_worker_xhr(
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id,
         request,
-        request_body_text: request_body_text.clone(),
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
         request_cookie_report,
         network_context,
@@ -303,6 +303,7 @@ pub(super) fn spawn_network_xhr_fetch(
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)
+    .with_request_origin(moli_url::WebOrigin::from_url(&prepared.document_url))
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
@@ -317,6 +318,7 @@ pub(super) fn spawn_network_xhr_fetch(
     );
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: prepared.frame_id.clone(),
+        request_origin: moli_url::WebOrigin::from_url(&prepared.document_url),
         document_url: prepared.document_url.clone(),
         resource_type: SubresourceResourceType::Xhr,
         policy_context: prepared.policy_context,

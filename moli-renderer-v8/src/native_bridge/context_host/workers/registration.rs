@@ -1433,6 +1433,7 @@ async fn fetch_worker_script_source(
         .with_page_network_policy()
         .with_network_partition_key(network_partition_key.clone())
         .with_initiator_url(initiator_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
         .with_credentials_mode(match script_kind {
             WorkerScriptKind::Classic => moli_fetch::RequestCredentialsMode::SameOrigin,
             WorkerScriptKind::Module => module_credentials_mode,

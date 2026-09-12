@@ -111,6 +111,7 @@ pub(crate) fn start_media_element_resource_fetch(
     let request = Request::new("GET", request_url.as_str(), None, Vec::new())
         .map_err(|error| error.to_string())?
         .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_resource_type(RequestResourceType::Media)
         .with_page_network_policy()
         .with_request_mode(request_mode)
@@ -169,11 +170,11 @@ pub(crate) fn start_media_element_resource_fetch(
                 request.priority_hints.fetch_priority,
                 service_worker_fetch_request_metadata(&request),
             ),
-            request_body_text: None,
             cors_preflight_request_headers: Vec::new(),
             request_cookie_report,
             network_context: AsyncSubresourceNetworkContext {
                 frame_id,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url,
                 resource_type,
                 policy_context,
@@ -213,6 +214,7 @@ pub(crate) fn start_media_element_resource_fetch(
         internal_id,
         AsyncSubresourceNetworkContext {
             frame_id,
+            request_origin: moli_url::WebOrigin::from_url(&document_url),
             document_url,
             resource_type,
             policy_context,

@@ -30,10 +30,10 @@ fn service_worker_redirect_target(
     else {
         return Ok(None);
     };
-    if job.redirect_count >= MAX_SERVICE_WORKER_SYNTHETIC_REDIRECTS {
+    if job.request.redirect_count() >= MAX_SERVICE_WORKER_SYNTHETIC_REDIRECTS {
         return Err(format!(
             "redirect limit exceeded for {}",
-            response.final_url.as_ref().unwrap_or(&job.request_url)
+            response.final_url.as_ref().unwrap_or(&job.request.url)
         ));
     }
     if let Ok(url) = Url::parse(location) {
@@ -53,60 +53,41 @@ fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchReque
     ServiceWorkerFetchRequest {
         client_id: job.client_id,
         resulting_client_id: job.resulting_client_id,
-        url: job.request_url.clone(),
-        method: job.request_method.clone(),
-        headers: job.request_headers.clone(),
-        body: job.request_body_bytes.clone(),
+        url: job.request.url.clone(),
+        method: job.request.method.clone(),
+        headers: job.request.request_headers.clone(),
+        body: job.request.body.clone(),
         destination: job.destination,
-        request_mode: job.request_mode,
-        credentials_mode: job.credentials_mode,
-        redirect_mode: job.redirect_mode,
-        priority: job.priority,
+        request_mode: job.request.request_mode,
+        credentials_mode: job.request.credentials_mode,
+        redirect_mode: job.request.redirect_mode,
+        priority: job.request.priority_hints.fetch_priority,
         is_reload: job.is_reload,
         metadata: job.metadata.clone(),
     }
 }
 
-fn service_worker_network_fallback_request_for_job(
+pub(super) fn service_worker_network_fallback_request_for_job(
     job: &ServiceWorkerFetchJob,
-) -> Result<moli_fetch::Request, String> {
-    let request = moli_fetch::Request::new_bytes(
-        &job.request_method,
-        job.request_url.as_str(),
-        job.request_body_bytes.clone(),
-        job.request_headers.clone(),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(configure_service_worker_network_fallback_request(
-        job, request,
-    ))
-}
-
-fn configure_service_worker_network_fallback_request(
-    job: &ServiceWorkerFetchJob,
-    request: moli_fetch::Request,
 ) -> moli_fetch::Request {
-    let mut request = request
-        .with_initiator_url(&job.network_context.document_url)
-        .with_request_mode(job.request_mode)
-        .with_credentials_mode(job.credentials_mode)
-        .with_redirect_chain(job.redirect_chain.clone())
-        .with_redirect_mode(if service_worker_fetch_is_navigation_request(job) {
-            moli_fetch::RequestRedirectMode::Follow
-        } else {
-            job.redirect_mode
-        })
-        .with_fetch_priority_hint(job.priority)
+    let mut request = job
+        .request
+        .clone()
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
         ))
         .with_subframe_context(job.network_context.frame_id.is_some());
     if service_worker_fetch_is_navigation_request(job) {
+        let initiator_url = request.cookie_context.initiator_url.clone();
+        request = request.with_redirect_mode(moli_fetch::RequestRedirectMode::Follow);
         request = if job.network_context.frame_id.is_some() {
             request.with_subframe_navigation_cookie_context()
         } else {
             request.with_top_level_navigation_cookie_context()
         };
+        if let Some(initiator_url) = initiator_url {
+            request = request.with_initiator_url(&initiator_url);
+        }
     }
     if job.network_context.resource_type == crate::types::SubresourceResourceType::EventSource {
         request = request
@@ -124,13 +105,13 @@ fn service_worker_fetch_stream_response_head(
         final_url: response_head
             .final_url
             .clone()
-            .unwrap_or_else(|| job.request_url.clone()),
+            .unwrap_or_else(|| job.request.url.clone()),
         status: response_head.status,
         headers: response_head.headers.clone(),
         request_cookie_report: job.request_cookie_report.clone(),
         cookie_set_reports: Vec::new(),
-        redirected: response_head.redirected || !job.redirect_chain.is_empty(),
-        redirect_chain: job.redirect_chain.clone(),
+        redirected: response_head.redirected || !job.request.redirect_chain().is_empty(),
+        redirect_chain: job.request.redirect_chain().to_vec(),
         from_cache: false,
         negotiated_http_version: None,
     }
@@ -140,7 +121,7 @@ fn service_worker_fetch_can_forward_stream(
     job: &ServiceWorkerFetchJob,
     response_head: &MaterializedServiceWorkerFetchResponseHead,
 ) -> Result<bool, String> {
-    let final_url = response_head.final_url.as_ref().unwrap_or(&job.request_url);
+    let final_url = response_head.final_url.as_ref().unwrap_or(&job.request.url);
     validate_service_worker_fetch_response_head_security_policy(
         job,
         final_url,
@@ -168,41 +149,25 @@ fn apply_service_worker_synthetic_redirect(
 ) -> Result<(), String> {
     let from_url = response
         .final_url
-        .unwrap_or_else(|| job.request_url.clone());
-    job.redirect_chain.push(moli_fetch::RedirectInfo {
-        source: moli_fetch::RedirectSource::ServiceWorker,
-        from_url,
-        to_url: next_url.clone(),
-        status: response.status,
-        headers: response.headers,
-        network_extra_info_available: false,
-        request_extra_info: None,
-        response_extra_info: None,
-        redirect_has_extra_info: false,
-        request_cookie_report: job.request_cookie_report.take(),
-        cookie_set_reports: Vec::new(),
-        from_cache: false,
-        negotiated_http_version: None,
-    });
-    job.redirect_count += 1;
-
-    let mut request = moli_fetch::Request::new_bytes(
-        &job.request_method,
-        job.request_url.as_str(),
-        job.request_body_bytes.clone(),
-        job.request_headers.clone(),
-    )
-    .map_err(|error| error.to_string())?;
-    request.apply_redirect_status(response.status);
-    job.request_method = request.method;
-    job.request_headers = request.request_headers;
-    job.request_body_bytes = request.body;
-    job.request_body = job
-        .request_body_bytes
-        .as_ref()
-        .map(|body| String::from_utf8_lossy(body).into_owned());
-    job.cors_preflight_request_headers = job.request_headers.clone();
-    job.request_url = next_url;
+        .unwrap_or_else(|| job.request.url.clone());
+    job.request
+        .follow_redirect(moli_fetch::RedirectInfo {
+            source: moli_fetch::RedirectSource::ServiceWorker,
+            from_url,
+            to_url: next_url.clone(),
+            status: response.status,
+            headers: response.headers,
+            network_extra_info_available: false,
+            request_extra_info: None,
+            response_extra_info: None,
+            redirect_has_extra_info: false,
+            request_cookie_report: job.request_cookie_report.take(),
+            cookie_set_reports: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        })
+        .map_err(|error| error.to_string())?;
+    job.cors_preflight_request_headers = job.request.request_headers.clone();
     Ok(())
 }
 
@@ -229,10 +194,6 @@ impl ServiceWorkerRuntimeService {
         let completion_tx =
             crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
-        let request_body_text = request
-            .body
-            .as_ref()
-            .map(|body| String::from_utf8_lossy(body).into_owned());
         let dispatch = ServiceWorkerFetchDispatch {
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
@@ -250,11 +211,14 @@ impl ServiceWorkerRuntimeService {
                 is_reload: false,
                 metadata: service_worker_fetch_request_metadata(request),
             },
-            request_body_text,
             cors_preflight_request_headers: Vec::new(),
             request_cookie_report: None,
             network_context: crate::types::AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: request
+                    .browser_origin()
+                    .map_err(|error| error.to_string())?
+                    .clone(),
                 document_url: request.url.clone(),
                 resource_type: crate::types::SubresourceResourceType::Script,
                 policy_context: Default::default(),
@@ -283,7 +247,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
         job.cancel_pending_navigation_preload();
         if let Some(completion_tx) = job.direct_completion_tx.take() {
-            if job.redirect_count != 0 {
+            if job.request.redirect_count() != 0 {
                 self.dispatch_direct_fetch_network_fallback(job, completion_tx);
                 return;
             }
@@ -291,18 +255,7 @@ impl ServiceWorkerRuntimeService {
             return;
         }
         let request_client = job.request_client.clone();
-        let request = match moli_fetch::Request::new_bytes(
-            &job.request_method,
-            job.request_url.as_str(),
-            job.request_body_bytes.clone(),
-            job.request_headers.clone(),
-        ) {
-            Ok(request) => configure_service_worker_network_fallback_request(&job, request),
-            Err(error) => {
-                self.complete_fetch_with_failure(job, error.to_string());
-                return;
-            }
-        };
+        let request = service_worker_network_fallback_request_for_job(&job);
         crate::network_host::spawn_async_subresource_fetch(
             job.resource_task_runner.clone(),
             job.completion_tx,
@@ -312,10 +265,10 @@ impl ServiceWorkerRuntimeService {
             job.cors_preflight_request_headers,
             job.internal_id,
             job.network_context,
-            job.request_url,
-            job.request_method,
-            job.request_headers,
-            job.request_body,
+            job.request.url,
+            job.request.method,
+            job.request.request_headers,
+            request_body_text(&job.request.body),
         );
     }
 
@@ -325,17 +278,18 @@ impl ServiceWorkerRuntimeService {
         completion_tx: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
     ) {
         let request_client = job.request_client.clone();
-        let request = match service_worker_network_fallback_request_for_job(&job) {
-            Ok(request) => request,
-            Err(message) => {
-                let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
+        let request = service_worker_network_fallback_request_for_job(&job);
+        let cancel_handle = job.cancel_handle.clone();
+        let request_origin = match request.browser_origin() {
+            Ok(origin) => origin.clone(),
+            Err(error) => {
+                let _ =
+                    completion_tx.send(ServiceWorkerDirectFetchResult::Failure(error.to_string()));
                 return;
             }
         };
-        let cancel_handle = job.cancel_handle.clone();
-        let document_url = job.network_context.document_url.clone();
-        let request_mode = job.request_mode;
-        let credentials_mode = job.credentials_mode;
+        let request_mode = job.request.request_mode;
+        let credentials_mode = job.request.credentials_mode;
         job.resource_task_runner.spawn(async move {
             let result = match request_client
                 .fetch_raw_stream_with_cancel(request, cancel_handle)
@@ -352,7 +306,7 @@ impl ServiceWorkerRuntimeService {
                     // before the direct consumer can trust an absent filter.
                     if request_mode == moli_fetch::RequestMode::Cors
                         && let Err(message) = crate::network_host::validate_cors_response_chain(
-                            &document_url,
+                            &request_origin,
                             &head,
                             credentials_mode,
                         )
@@ -362,7 +316,7 @@ impl ServiceWorkerRuntimeService {
                         return;
                     }
                     let response_filter = crate::network_host::network_response_filter(
-                        &document_url,
+                        &request_origin,
                         &head,
                         request_mode,
                     );
@@ -429,10 +383,10 @@ impl ServiceWorkerRuntimeService {
                             &started.response_head.response_type,
                         ),
                         internal_id: job.internal_id,
-                        request_url: job.request_url.clone(),
-                        request_method: job.request_method.clone(),
-                        request_headers: job.request_headers.clone(),
-                        request_body: job.request_body.clone(),
+                        request_url: job.request.url.clone(),
+                        request_method: job.request.method.clone(),
+                        request_headers: job.request.request_headers.clone(),
+                        request_body: request_body_text(&job.request.body),
                         body_source_id: started.body_source_id,
                         network_request_headers: None,
                         head: service_worker_fetch_stream_response_head(
@@ -585,10 +539,10 @@ impl ServiceWorkerRuntimeService {
             }
         }
         if is_redirect_status(response.status)
-            && job.redirect_mode != moli_fetch::RequestRedirectMode::Manual
+            && job.request.redirect_mode != moli_fetch::RequestRedirectMode::Manual
         {
             match service_worker_redirect_target(&job, &response) {
-                Ok(Some(next_url)) => match job.redirect_mode {
+                Ok(Some(next_url)) => match job.request.redirect_mode {
                     moli_fetch::RequestRedirectMode::Error => {
                         self.complete_fetch_with_network_failure(
                             job,
@@ -636,7 +590,7 @@ impl ServiceWorkerRuntimeService {
         let final_url = response
             .final_url
             .clone()
-            .unwrap_or_else(|| job.request_url.clone());
+            .unwrap_or_else(|| job.request.url.clone());
         if let Err(message) =
             validate_service_worker_fetch_response_security_policy(&job, &response, &final_url)
         {
@@ -651,8 +605,8 @@ impl ServiceWorkerRuntimeService {
                 headers: response.headers,
                 request_cookie_report: job.request_cookie_report,
                 cookie_set_reports: Vec::new(),
-                redirected: response.redirected || !job.redirect_chain.is_empty(),
-                redirect_chain: job.redirect_chain,
+                redirected: response.redirected || !job.request.redirect_chain().is_empty(),
+                redirect_chain: job.request.redirect_chain().to_vec(),
                 from_cache: false,
                 negotiated_http_version: None,
             },
@@ -682,10 +636,10 @@ impl ServiceWorkerRuntimeService {
             .completion_tx
             .send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id: job.internal_id,
-                request_url: job.request_url,
-                request_method: job.request_method,
-                request_headers: job.request_headers,
-                request_body: job.request_body,
+                request_url: job.request.url,
+                request_method: job.request.method,
+                request_headers: job.request.request_headers,
+                request_body: request_body_text(&job.request.body),
                 response_status_text: Some(response.status_text),
                 skip_fetch_security_validation: true,
                 response_filter,
@@ -735,10 +689,10 @@ impl ServiceWorkerRuntimeService {
             .completion_tx
             .send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id: job.internal_id,
-                request_url: job.request_url,
-                request_method: job.request_method,
-                request_headers: job.request_headers,
-                request_body: job.request_body,
+                request_url: job.request.url,
+                request_method: job.request.method,
+                request_headers: job.request.request_headers,
+                request_body: request_body_text(&job.request.body),
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
@@ -811,7 +765,7 @@ fn validate_service_worker_fetch_response_security_policy(
 fn service_worker_fetch_response_requires_body_security_policy(
     job: &ServiceWorkerFetchJob,
 ) -> bool {
-    job.request_mode == moli_fetch::RequestMode::NoCors
+    job.request.request_mode == moli_fetch::RequestMode::NoCors
         && matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::Fetch
@@ -824,7 +778,7 @@ fn validate_service_worker_fetch_response_body_security_policy(
     response: &ServiceWorkerFetchResponse,
     final_url: &Url,
 ) -> Result<(), String> {
-    if job.request_mode != moli_fetch::RequestMode::NoCors
+    if job.request.request_mode != moli_fetch::RequestMode::NoCors
         || !matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::Fetch
@@ -836,7 +790,9 @@ fn validate_service_worker_fetch_response_body_security_policy(
 
     validate_service_worker_fetch_response_head_security_policy(job, final_url, &response.headers)?;
     crate::network_host::validate_opaque_response_blocking_with_body(
-        &job.network_context.document_url,
+        job.request
+            .browser_origin()
+            .map_err(|error| error.to_string())?,
         final_url,
         &response.headers,
         &response.body,
@@ -848,7 +804,7 @@ fn validate_service_worker_fetch_response_head_security_policy(
     final_url: &Url,
     headers: &[(String, String)],
 ) -> Result<(), String> {
-    if job.request_mode != moli_fetch::RequestMode::NoCors
+    if job.request.request_mode != moli_fetch::RequestMode::NoCors
         || matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::WebSocket
@@ -857,17 +813,17 @@ fn validate_service_worker_fetch_response_head_security_policy(
         return Ok(());
     }
 
-    crate::network_host::validate_cross_origin_resource_policy(
-        &job.network_context.document_url,
-        final_url,
-        headers,
-    )?;
+    let origin = job
+        .request
+        .browser_origin()
+        .map_err(|error| error.to_string())?;
+    crate::network_host::validate_cross_origin_resource_policy(origin, final_url, headers)?;
     crate::network_host::validate_cross_origin_embedder_and_document_isolation_policy(
-        &job.network_context.document_url,
+        origin,
         final_url,
         headers,
-        job.request_mode,
-        job.credentials_mode,
+        job.request.request_mode,
+        job.request.credentials_mode,
         job.network_context
             .policy_context
             .cross_origin_embedder_policy,
@@ -883,7 +839,7 @@ fn service_worker_fetch_response_rejection(
         "error" => {
             return Some("FetchEvent.respondWith rejected an error Response".to_owned());
         }
-        "cors" if job.request_mode == moli_fetch::RequestMode::SameOrigin => {
+        "cors" if job.request.request_mode == moli_fetch::RequestMode::SameOrigin => {
             return Some(
                 "FetchEvent.respondWith rejected a cors Response for a same-origin request"
                     .to_owned(),
@@ -892,14 +848,16 @@ fn service_worker_fetch_response_rejection(
         "opaque" => {
             if let Some(message) =
                 crate::service_worker_runtime::service_worker_opaque_response_rejection(
-                    job.request_mode,
+                    job.request.request_mode,
                     job.destination,
                 )
             {
                 return Some(message);
             }
         }
-        "opaqueredirect" if job.redirect_mode != moli_fetch::RequestRedirectMode::Manual => {
+        "opaqueredirect"
+            if job.request.redirect_mode != moli_fetch::RequestRedirectMode::Manual =>
+        {
             return Some(
                 "FetchEvent.respondWith rejected an opaqueredirect Response for a request whose redirect mode is not manual"
                     .to_owned(),
@@ -907,7 +865,7 @@ fn service_worker_fetch_response_rejection(
         }
         _ => {}
     }
-    if response.redirected && job.redirect_mode != moli_fetch::RequestRedirectMode::Follow {
+    if response.redirected && job.request.redirect_mode != moli_fetch::RequestRedirectMode::Follow {
         return Some(
             "FetchEvent.respondWith rejected a redirected Response for a request whose redirect mode is not follow"
                 .to_owned(),
@@ -1181,28 +1139,34 @@ mod tests {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                request: {
+                    let origin = moli_url::WebOrigin::from_url(&document_url);
+                    let initiator = (document_url).clone();
+                    moli_fetch::Request::new_browser(
+                        "GET",
+                        request_url.clone(),
+                        None,
+                        vec![("accept".to_owned(), "text/plain".to_owned())],
+                        origin,
+                    )
+                    .with_initiator_url(&initiator)
+                    .with_request_mode(request_mode)
+                    .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                    .with_redirect_mode(redirect_mode)
+                    .with_fetch_priority_hint(None)
+                },
                 internal_id,
                 owner: Some(ServiceWorkerRunOwner::new(version_id, run.clone())),
-                request_url: request_url.clone(),
-                request_method: "GET".to_owned(),
-                request_headers: vec![("accept".to_owned(), "text/plain".to_owned())],
-                request_body: None,
-                request_body_bytes: None,
                 cors_preflight_request_headers: Vec::new(),
                 client_id,
                 resulting_client_id: None,
                 destination,
                 is_reload: false,
                 metadata: Default::default(),
-                request_mode,
-                credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                redirect_mode,
-                priority: None,
-                redirect_chain: Vec::new(),
-                redirect_count: 0,
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&document_url),
                     document_url,
                     resource_type,
                     policy_context: Default::default(),
@@ -1261,8 +1225,7 @@ mod tests {
             .remove(&event_id)
             .expect("EventSource service worker fetch job");
 
-        let request = service_worker_network_fallback_request_for_job(&job)
-            .expect("EventSource fallback request");
+        let request = service_worker_network_fallback_request_for_job(&job);
         assert_eq!(
             request.browser_request_metadata(),
             Some(moli_fetch::BrowserRequestMetadata::EventSource)
@@ -1899,21 +1862,21 @@ mod tests {
             .expect("redirected fetch job should be pending");
         assert_eq!(redirected_job.internal_id, 312);
         assert_eq!(
-            redirected_job.request_url,
+            redirected_job.request.url,
             url("https://example.test/app/next.txt")
         );
-        assert_eq!(redirected_job.redirect_count, 1);
-        assert_eq!(redirected_job.redirect_chain.len(), 1);
+        assert_eq!(redirected_job.request.redirect_count(), 1);
+        assert_eq!(redirected_job.request.redirect_chain().len(), 1);
         assert_eq!(
-            redirected_job.redirect_chain[0].source,
+            redirected_job.request.redirect_chain()[0].source,
             moli_fetch::RedirectSource::ServiceWorker
         );
         assert_eq!(
-            redirected_job.redirect_chain[0].from_url,
+            redirected_job.request.redirect_chain()[0].from_url,
             url("https://example.test/app/data.txt")
         );
         assert_eq!(
-            redirected_job.redirect_chain[0].to_url,
+            redirected_job.request.redirect_chain()[0].to_url,
             url("https://example.test/app/next.txt")
         );
     }
@@ -1924,31 +1887,37 @@ mod tests {
         let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = url("https://example.test/app/post");
         let mut job = ServiceWorkerFetchJob {
+            request: {
+                let origin = moli_url::WebOrigin::from_url(&request_url);
+                let initiator = request_url.clone();
+                moli_fetch::Request::new_browser(
+                    "POST",
+                    request_url.clone(),
+                    Some(b"payload".to_vec()),
+                    vec![
+                        ("content-type".to_owned(), "text/plain".to_owned()),
+                        ("x-keep".to_owned(), "yes".to_owned()),
+                    ],
+                    origin,
+                )
+                .with_initiator_url(&initiator)
+                .with_request_mode(moli_fetch::RequestMode::Cors)
+                .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                .with_fetch_priority_hint(None)
+            },
             internal_id: 312,
             owner: Some(ServiceWorkerRunOwner::fresh(ServiceWorkerVersionId(1))),
-            request_url: request_url.clone(),
-            request_method: "POST".to_owned(),
-            request_headers: vec![
-                ("content-type".to_owned(), "text/plain".to_owned()),
-                ("x-keep".to_owned(), "yes".to_owned()),
-            ],
-            request_body: Some("payload".to_owned()),
-            request_body_bytes: Some(b"payload".to_vec()),
             cors_preflight_request_headers: Vec::new(),
             client_id: ServiceWorkerClientId::from_u64_for_test(0),
             resulting_client_id: None,
             destination: ServiceWorkerRequestDestination::Empty,
             is_reload: false,
             metadata: Default::default(),
-            request_mode: moli_fetch::RequestMode::Cors,
-            credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-            redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-            priority: None,
-            redirect_chain: Vec::new(),
-            redirect_count: 0,
             request_cookie_report: None,
             network_context: AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(&request_url),
                 document_url: request_url.clone(),
                 resource_type: crate::types::SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
@@ -1961,6 +1930,14 @@ mod tests {
             streaming_body_source_id: None,
             direct_completion_tx: None,
         };
+        let origin = moli_url::WebOrigin::from_url(&url("https://initiator.test/"));
+        job.request = job
+            .request
+            .with_request_origin(origin.clone())
+            .with_cache_mode(moli_fetch::RequestCacheMode::Validate)
+            .with_network_partition_key(Some("partition".to_owned()))
+            .without_inferred_referrer()
+            .with_fetch_priority_hint(Some(moli_fetch::FetchPriorityHint::High));
         let response = ServiceWorkerFetchResponse {
             final_url: Some(request_url.clone()),
             response_type: "default".to_owned(),
@@ -1978,20 +1955,41 @@ mod tests {
             .expect("synthetic redirect should apply");
 
         assert_eq!(next_url, url("https://example.test/app/next"));
-        assert_eq!(job.request_url, next_url);
-        assert_eq!(job.request_method, "GET");
-        assert_eq!(job.request_body, None);
-        assert_eq!(job.request_body_bytes, None);
+        assert_eq!(job.request.url, next_url);
+        assert_eq!(job.request.method, "GET");
+        assert_eq!(request_body_text(&job.request.body), None);
+        assert_eq!(job.request.body, None);
         assert_eq!(
-            job.request_headers,
+            job.request.request_headers,
             vec![("x-keep".to_owned(), "yes".to_owned())]
         );
-        assert_eq!(job.cors_preflight_request_headers, job.request_headers);
-        assert_eq!(job.redirect_count, 1);
-        assert_eq!(job.redirect_chain.len(), 1);
-        assert_eq!(job.redirect_chain[0].from_url, request_url);
-        assert_eq!(job.redirect_chain[0].to_url, next_url);
-        assert_eq!(job.redirect_chain[0].status, 303);
+        assert_eq!(
+            job.cors_preflight_request_headers,
+            job.request.request_headers
+        );
+        assert_eq!(job.request.redirect_count(), 1);
+        assert_eq!(job.request.redirect_chain().len(), 1);
+        assert_eq!(job.request.redirect_chain()[0].from_url, request_url);
+        assert_eq!(job.request.redirect_chain()[0].to_url, next_url);
+        assert_eq!(job.request.redirect_chain()[0].status, 303);
+
+        let fallback = service_worker_network_fallback_request_for_job(&job);
+        assert_eq!(fallback.url, next_url);
+        assert_eq!(fallback.method, "GET");
+        assert_eq!(fallback.body, None);
+        assert_eq!(fallback.request_headers, job.request.request_headers);
+        assert!(fallback.browser_origin().unwrap().same_origin(&origin));
+        assert_eq!(
+            fallback.cache_mode(),
+            moli_fetch::RequestCacheMode::Validate
+        );
+        assert_eq!(fallback.network_partition_key(), Some("partition"));
+        assert!(!fallback.infers_referrer_from_initiator());
+        assert_eq!(
+            fallback.priority_hints.fetch_priority,
+            Some(moli_fetch::FetchPriorityHint::High)
+        );
+        assert_eq!(fallback.redirect_count(), 1);
     }
 
     #[test]
@@ -2093,14 +2091,17 @@ mod tests {
             .expect("redirected fetch job should be pending");
         assert_eq!(redirected_job.internal_id, 337);
         assert_eq!(
-            redirected_job.request_url,
+            redirected_job.request.url,
             url("https://redirect-source.test/resources/blank.html")
         );
-        assert_eq!(redirected_job.redirect_count, 1);
-        assert_eq!(redirected_job.redirect_chain.len(), 1);
-        assert_eq!(redirected_job.redirect_chain[0].from_url, response_url);
+        assert_eq!(redirected_job.request.redirect_count(), 1);
+        assert_eq!(redirected_job.request.redirect_chain().len(), 1);
         assert_eq!(
-            redirected_job.redirect_chain[0].to_url,
+            redirected_job.request.redirect_chain()[0].from_url,
+            response_url
+        );
+        assert_eq!(
+            redirected_job.request.redirect_chain()[0].to_url,
             url("https://redirect-source.test/resources/blank.html")
         );
     }
@@ -2671,7 +2672,7 @@ mod tests {
                 .policy_context
                 .cross_origin_embedder_policy =
                 crate::cross_origin_isolation::CrossOriginEmbedderPolicy::Credentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::SameOrigin;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::SameOrigin;
         }
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
@@ -2724,7 +2725,7 @@ mod tests {
                 .policy_context
                 .cross_origin_embedder_policy =
                 crate::cross_origin_isolation::CrossOriginEmbedderPolicy::Credentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
         }
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
@@ -2839,7 +2840,7 @@ mod tests {
                 .expect("pending fetch job should exist");
             job.network_context.policy_context.document_isolation_policy =
                 crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::SameOrigin;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::SameOrigin;
         }
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
@@ -2890,7 +2891,7 @@ mod tests {
                 .expect("pending fetch job should exist");
             job.network_context.policy_context.document_isolation_policy =
                 crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
         }
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
@@ -3015,7 +3016,7 @@ mod tests {
                 .policy_context
                 .cross_origin_embedder_policy =
                 crate::cross_origin_isolation::CrossOriginEmbedderPolicy::Credentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
         }
 
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
@@ -3079,7 +3080,7 @@ mod tests {
                 .expect("pending fetch job should exist");
             job.network_context.policy_context.document_isolation_policy =
                 crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless;
-            job.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
+            job.request.credentials_mode = moli_fetch::RequestCredentialsMode::Include;
         }
 
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
@@ -3326,11 +3327,30 @@ mod tests {
             .pending_fetch_jobs
             .remove(&event_id)
             .expect("active fetch job");
-        job.request_url =
+        job.request.url =
             Url::parse(&format!("http://{address}/fallback")).expect("fallback request URL");
         job.network_context.document_url =
             Url::parse(&format!("http://{address}/page")).expect("fallback document URL");
-        job.redirect_count = 1;
+        job.network_context.request_origin = (&job.network_context.document_url).into();
+        job.request = job
+            .request
+            .with_initiator_url(&job.network_context.document_url)
+            .with_request_origin(job.network_context.request_origin.clone());
+        job.request.record_redirect(moli_fetch::RedirectInfo {
+            source: moli_fetch::RedirectSource::ServiceWorker,
+            from_url: job.network_context.document_url.clone(),
+            to_url: job.request.url.clone(),
+            status: 302,
+            headers: Vec::new(),
+            network_extra_info_available: false,
+            request_extra_info: None,
+            response_extra_info: None,
+            redirect_has_extra_info: false,
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        });
         job.direct_completion_tx = Some(direct_completion_tx);
 
         // This test intentionally calls from a plain test thread. The

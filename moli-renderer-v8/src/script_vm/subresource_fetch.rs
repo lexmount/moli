@@ -1112,6 +1112,7 @@ impl ScriptVm {
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
+            request_origin,
             info,
             load,
             execution_context,
@@ -1174,6 +1175,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    request_origin,
                                     info,
                                     load,
                                     execution_context,
@@ -1228,6 +1230,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    request_origin,
                                     info,
                                     load,
                                     execution_context,
@@ -1291,6 +1294,7 @@ impl ScriptVm {
                 let request_body = body.unwrap_or_else(|| info.request_body.clone());
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let pending = PendingSubresourceFetchState {
+                    request_origin,
                     info,
                     load,
                     execution_context,
@@ -1337,6 +1341,7 @@ impl ScriptVm {
                 );
             }
             continuation => PendingSubresourceFetchState {
+                request_origin,
                 info,
                 load,
                 execution_context,
@@ -1407,6 +1412,7 @@ impl ScriptVm {
             request_headers.clone(),
         )?
         .with_initiator_url(&pending.info.document_url)
+        .with_request_origin(pending.request_origin.clone())
         .with_request_mode(pending.request_mode)
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
@@ -1497,6 +1503,7 @@ impl ScriptVm {
             request_headers.clone(),
         )?
         .with_initiator_url(&pending.info.document_url)
+        .with_request_origin(pending.request_origin.clone())
         .with_resource_type(moli_fetch::RequestResourceType::CspReport)
         .with_request_mode(pending.request_mode)
         .with_credentials_mode(pending.credentials_mode)
@@ -1530,11 +1537,11 @@ impl ScriptVm {
                 request.priority_hints.fetch_priority,
                 crate::service_worker_runtime::service_worker_fetch_request_metadata(&request),
             ),
-            request_body_text: request_body.clone(),
             cors_preflight_request_headers: Vec::new(),
             request_cookie_report,
             network_context: crate::types::AsyncSubresourceNetworkContext {
                 frame_id,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url,
                 resource_type: SubresourceResourceType::CspReport,
                 policy_context,
@@ -1675,6 +1682,9 @@ impl ScriptVm {
             original_request_headers.clone(),
         )?
         .with_initiator_url(&pending_fetch.info.document_url)
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &pending_fetch.info.document_url,
+        ))
         .with_request_mode(pending_fetch.request_mode)
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
@@ -1921,6 +1931,7 @@ impl ScriptVm {
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
+            request_origin,
             info,
             load,
             execution_context,
@@ -2072,6 +2083,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                request_origin,
                 info,
                 load,
                 execution_context,
@@ -2112,6 +2124,7 @@ impl ScriptVm {
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
+            request_origin,
             info,
             load,
             execution_context,
@@ -2435,6 +2448,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                request_origin,
                 info,
                 load,
                 execution_context,
@@ -3130,7 +3144,7 @@ impl ScriptVm {
                 }
                 if !skip_fetch_security_validation {
                     crate::network_host::validate_fetch_response_security_policy_with_body(
-                        &pending.info.document_url,
+                        &pending.request_origin,
                         &response.head(),
                         response.body_bytes(),
                         pending.request_mode,
@@ -3302,7 +3316,7 @@ impl ScriptVm {
                             (!skip_fetch_security_validation)
                                 .then(|| {
                                     crate::network_host::validate_fetch_response_security_policy_with_body(
-                                        &pending.info.document_url,
+                                        &pending.request_origin,
                                         &response.head(),
                                         response.body_bytes(),
                                         pending.request_mode,
@@ -3585,7 +3599,7 @@ impl ScriptVm {
                         | SubresourceResourceType::Xhr
                 ) {
                     let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
-                        &pending.info.document_url,
+                        &pending.request_origin,
                         &response.head(),
                         response.body_bytes(),
                         pending.request_mode,
@@ -3682,7 +3696,7 @@ impl ScriptVm {
                     ) && !response_filter.is_some_and(|filter| filter.is_readable()) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
-                                &pending.info.document_url,
+                                &pending.request_origin,
                                 &observable_response.head(),
                                 pending.credentials_mode,
                             );
@@ -3707,7 +3721,7 @@ impl ScriptVm {
                             let response_obj =
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
-                                    &pending.info.document_url,
+                                    &pending.request_origin,
                                     pending.request_mode,
                                     head,
                                     body,
@@ -4373,7 +4387,7 @@ impl ScriptVm {
                         return None;
                     }
                     crate::network_host::validate_fetch_response_security_policy(
-                        &pending.info.document_url,
+                        &pending.request_origin,
                         &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
@@ -4577,7 +4591,7 @@ impl ScriptVm {
                 )
                 .then(|| {
                     crate::network_host::validate_fetch_response_security_policy(
-                        &pending.info.document_url,
+                        &pending.request_origin,
                         &started.head,
                         pending.request_mode,
                         pending.credentials_mode,
@@ -4768,7 +4782,7 @@ impl ScriptVm {
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
             ) && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
-                    &pending.info.document_url,
+                    &pending.request_origin,
                     &observable_head,
                     pending.credentials_mode,
                 );
@@ -4858,7 +4872,7 @@ impl ScriptVm {
                     let resolver = v8::Local::new(scope, resolver);
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
                         scope,
-                        &pending.info.document_url,
+                        &pending.request_origin,
                         pending.request_mode,
                         observable_head,
                         started.body_source_id,

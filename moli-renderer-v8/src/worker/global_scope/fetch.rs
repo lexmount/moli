@@ -161,8 +161,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let (result, network_request_headers) = if matches!(resolved_url.scheme(), "blob" | "data")
+        let (result, network_request_headers) = if let Err(message) =
+            moli_fetch::FetchUrlList::new(&resolved_url, &[])
+                .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
+            (Err(message), None)
+        } else if matches!(resolved_url.scheme(), "blob" | "data") {
             (
                 local_url_response(&resolved_url)
                     .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
@@ -176,7 +180,13 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 // as `Content-Type:` so the HTTP stack does not synthesize its own upload default.
                 headers.push(("Content-Type".to_owned(), String::new()));
             }
-            match Request::new_bytes(&method, resolved_url.as_str(), body, headers) {
+            match Request::new_browser_bytes(
+                &method,
+                resolved_url.as_str(),
+                body,
+                headers,
+                moli_url::WebOrigin::from_url(&document_url),
+            ) {
                 Ok(request) => {
                     let mut request = request
                         .with_initiator_url(&document_url)
@@ -386,7 +396,6 @@ fn spawn_worker_fetch_service_worker(
     suppress_default_content_type: bool,
 ) {
     let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
-    let request_body_text = request_body_text(&body);
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id: u64::from(fetch_id),
         request: ServiceWorkerFetchRequest {
@@ -404,11 +413,11 @@ fn spawn_worker_fetch_service_worker(
             is_reload: false,
             metadata: request_metadata.clone(),
         },
-        request_body_text,
         cors_preflight_request_headers: headers.clone(),
         request_cookie_report: None,
         network_context: AsyncSubresourceNetworkContext {
             frame_id: None,
+            request_origin: moli_url::WebOrigin::from_url(&document_url),
             document_url: document_url.clone(),
             resource_type: SubresourceResourceType::Fetch,
             policy_context,
@@ -506,26 +515,31 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
         let cors_preflight_request_headers = headers.clone();
-        let request =
-            Request::new_bytes(&method, resolved_url.as_str(), body, headers).map(|request| {
-                let mut request = request
-                    .with_initiator_url(&document_url)
-                    .with_credentials_mode(credentials_mode)
-                    .with_network_partition_key(network_partition_key.clone())
-                    .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
-                if let Some(referrer_policy) = referrer_policy {
-                    request = request.with_script_fetch_metadata(
-                        moli_fetch::ScriptFetchRequestMetadata {
-                            document_referrer_policy: Some(referrer_policy),
-                            ..moli_fetch::ScriptFetchRequestMetadata::default()
-                        },
-                    );
-                }
-                if let Some(auth) = auth {
-                    request = request.with_auth(auth.into());
-                }
-                request
-            });
+        let request = Request::new_browser_bytes(
+            &method,
+            resolved_url.as_str(),
+            body,
+            headers,
+            moli_url::WebOrigin::from_url(&document_url),
+        )
+        .map(|request| {
+            let mut request = request
+                .with_initiator_url(&document_url)
+                .with_credentials_mode(credentials_mode)
+                .with_network_partition_key(network_partition_key.clone())
+                .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+            if let Some(referrer_policy) = referrer_policy {
+                request =
+                    request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
+                        document_referrer_policy: Some(referrer_policy),
+                        ..moli_fetch::ScriptFetchRequestMetadata::default()
+                    });
+            }
+            if let Some(auth) = auth {
+                request = request.with_auth(auth.into());
+            }
+            request
+        });
 
         let (result, network_request_headers) = match request {
             Ok(request)
@@ -2038,6 +2052,13 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             SubresourceResourceType::Fetch,
             message.clone(),
         );
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
+    if let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+        .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
+    {
         rv.set(make_rejected_promise(scope, &message).into());
         return;
     }

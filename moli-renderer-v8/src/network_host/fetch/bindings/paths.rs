@@ -26,6 +26,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.csp_report_context,
         prepared.credentials_mode,
         prepared.request_mode,
+        prepared.request_origin.clone(),
         prepared.network_partition_key,
         prepared.policy_context,
         PendingSubresourceFetchInfo {
@@ -141,7 +142,7 @@ pub(super) fn reject_bad_port_fetch(
 pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
-) -> Result<Option<(url::Url, Response)>, String> {
+) -> Result<Option<Response>, String> {
     let Some(response) = local_url_response(&prepared.resolved_url) else {
         if prepared.resolved_url.scheme() != "blob" {
             return Ok(None);
@@ -159,7 +160,6 @@ pub(super) fn resolve_local_fetch(
         ));
         return Err(message);
     };
-    let document_url = prepared.document_url.clone();
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
             prepared.frame_id.clone(),
@@ -185,7 +185,7 @@ pub(super) fn resolve_local_fetch(
         .with_from_cache(response.from_cache)
         .with_negotiated_http_version(response.negotiated_http_version),
     );
-    Ok(Some((document_url, response)))
+    Ok(Some(response))
 }
 
 pub(super) fn spawn_network_fetch(
@@ -195,13 +195,13 @@ pub(super) fn spawn_network_fetch(
     prepared: PreparedWindowFetchRequest,
 ) -> Result<u64, String> {
     let loader = prepared.resource_loader.request_client().clone();
-    let mut request = Request::new_bytes(
+    let mut request = Request::new_browser(
         &prepared.method,
-        prepared.resolved_url.as_str(),
+        prepared.resolved_url.clone(),
         prepared.body.clone(),
         prepared.request_headers.clone(),
+        prepared.request_origin.clone(),
     )
-    .map_err(|error| error.to_string())?
     .with_initiator_url(&prepared.document_url)
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
@@ -228,6 +228,7 @@ pub(super) fn spawn_network_fetch(
     );
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: prepared.frame_id.clone(),
+        request_origin: prepared.request_origin.clone(),
         document_url: prepared.document_url.clone(),
         resource_type: SubresourceResourceType::Fetch,
         policy_context: prepared.policy_context,
@@ -235,7 +236,9 @@ pub(super) fn spawn_network_fetch(
     let cancel_handle = FetchCancelHandle::new();
     let requires_preflight = prepared.request_mode == moli_fetch::RequestMode::Cors
         && crate::network_host::cors_preflight_request_headers(
-            !moli_url::same_origin(&prepared.document_url, &prepared.resolved_url),
+            !prepared
+                .request_origin
+                .same_origin(&(&prepared.resolved_url).into()),
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
@@ -250,6 +253,7 @@ pub(super) fn spawn_network_fetch(
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
+        prepared.request_origin.clone(),
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {

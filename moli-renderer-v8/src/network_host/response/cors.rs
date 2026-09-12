@@ -2,7 +2,7 @@ use moli_fetch::validate_cors_response_for_origin;
 
 use moli_cookie_jar::same_site_urls;
 use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
-use moli_url::{origin_ascii_serialization, same_origin};
+use moli_url::WebOrigin;
 use moli_web_mime::{
     response_header_value, response_header_values, should_opaque_response_be_blocked_by_orb,
     should_opaque_response_be_blocked_by_orb_with_body,
@@ -44,17 +44,19 @@ pub(crate) fn is_cors_policy_failure_message(message: &str) -> bool {
 /// Once CORS-tainted, a redirect across origins changes the request origin to
 /// null, even when the final URL returns to the initiating document's origin.
 pub(crate) fn validate_cors_response_chain(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     for (index, redirect) in head.redirect_chain.iter().enumerate() {
         // This response precedes the redirect: only earlier hops contribute to
         // the Origin that was sent for it.
         let urls = moli_fetch::FetchUrlList::new(&redirect.from_url, &head.redirect_chain[..index]);
-        if redirect.source == RedirectSource::Network && urls.has_cross_origin_url(document_url) {
+        if redirect.source == RedirectSource::Network && urls.has_cross_origin_url(&request_origin)
+        {
             validate_cors_response_for_origin(
-                &urls.serialized_origin(document_url),
+                &urls.serialized_origin(&request_origin),
                 &redirect.headers,
                 credentials_mode,
             )?;
@@ -62,10 +64,10 @@ pub(crate) fn validate_cors_response_chain(
     }
     let urls = head.url_list();
     if matches!(head.final_url.scheme(), "http" | "https")
-        && urls.has_cross_origin_url(document_url)
+        && urls.has_cross_origin_url(&request_origin)
     {
         validate_cors_response_for_origin(
-            &urls.serialized_origin(document_url),
+            &urls.serialized_origin(&request_origin),
             &head.headers,
             credentials_mode,
         )?;
@@ -74,21 +76,22 @@ pub(crate) fn validate_cors_response_chain(
 }
 
 pub(crate) fn validate_fetch_response_security_policy(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     head.url_list()
-        .validate_request_mode(request_mode, document_url)?;
+        .validate_request_mode(request_mode, &request_origin)?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(document_url, &head.final_url, &head.headers)?;
+        validate_cross_origin_resource_policy(&request_origin, &head.final_url, &head.headers)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
-            document_url,
+            &request_origin,
             &head.final_url,
             &head.headers,
             request_mode,
@@ -96,22 +99,23 @@ pub(crate) fn validate_fetch_response_security_policy(
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
         )?;
-        validate_opaque_response_blocking(document_url, &head.final_url, &head.headers)
+        validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
     } else {
-        validate_cors_response_chain(document_url, head, credentials_mode)
+        validate_cors_response_chain(&request_origin, head, credentials_mode)
     }
 }
 
 pub(crate) fn validate_fetch_response_security_policy_with_body(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     response_body: &[u8],
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     validate_fetch_response_security_policy_with_body_classified(
-        document_url,
+        &request_origin,
         head,
         response_body,
         request_mode,
@@ -122,24 +126,25 @@ pub(crate) fn validate_fetch_response_security_policy_with_body(
 }
 
 pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     response_body: &[u8],
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), FetchResponseSecurityViolation> {
+    let request_origin = request_origin.into();
     head.url_list()
-        .validate_request_mode(request_mode, document_url)
+        .validate_request_mode(request_mode, &request_origin)
         .map_err(FetchResponseSecurityViolation::Rejected)?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(document_url, &head.final_url, &head.headers)
+        validate_cross_origin_resource_policy(&request_origin, &head.final_url, &head.headers)
             .map_err(FetchResponseSecurityViolation::Rejected)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
-            document_url,
+            &request_origin,
             &head.final_url,
             &head.headers,
             request_mode,
@@ -149,25 +154,26 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
         )
         .map_err(FetchResponseSecurityViolation::Rejected)?;
         validate_opaque_response_blocking_with_body(
-            document_url,
+            &request_origin,
             &head.final_url,
             &head.headers,
             response_body,
         )
         .map_err(FetchResponseSecurityViolation::OpaqueResponseBlocked)
     } else {
-        validate_cors_response_chain(document_url, head, credentials_mode)
+        validate_cors_response_chain(&request_origin, head, credentials_mode)
             .map_err(FetchResponseSecurityViolation::Rejected)
     }
 }
 
 pub(crate) fn validate_opaque_response_blocking(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, String)],
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     if !matches!(response_url.scheme(), "http" | "https")
-        || same_origin(document_url, response_url)
+        || request_origin.same_origin(&response_url.into())
         || !should_opaque_response_be_blocked_by_orb(response_headers)
     {
         return Ok(());
@@ -175,18 +181,19 @@ pub(crate) fn validate_opaque_response_blocking(
 
     Err(format!(
         "OpaqueResponseBlocking check failed: {} cannot load {response_url} as an opaque no-cors response",
-        origin_ascii_serialization(document_url)
+        request_origin.ascii_serialization()
     ))
 }
 
 pub(crate) fn validate_opaque_response_blocking_with_body(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, String)],
     response_body: &[u8],
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     if !matches!(response_url.scheme(), "http" | "https")
-        || same_origin(document_url, response_url)
+        || request_origin.same_origin(&response_url.into())
         || !should_opaque_response_be_blocked_by_orb_with_body(response_headers, response_body)
     {
         return Ok(());
@@ -194,21 +201,22 @@ pub(crate) fn validate_opaque_response_blocking_with_body(
 
     Err(format!(
         "OpaqueResponseBlocking check failed: {} cannot load {response_url} as an opaque no-cors response",
-        origin_ascii_serialization(document_url)
+        request_origin.ascii_serialization()
     ))
 }
 
 #[cfg(test)]
 fn validate_cross_origin_embedder_policy(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, String)],
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     embedder_policy: CrossOriginEmbedderPolicy,
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     validate_cross_origin_embedder_and_document_isolation_policy(
-        document_url,
+        &request_origin,
         response_url,
         response_headers,
         request_mode,
@@ -219,7 +227,7 @@ fn validate_cross_origin_embedder_policy(
 }
 
 pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, String)],
     request_mode: RequestMode,
@@ -227,15 +235,16 @@ pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
     embedder_policy: CrossOriginEmbedderPolicy,
     document_isolation_policy: DocumentIsolationPolicy,
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     if request_mode != RequestMode::NoCors
         || !matches!(response_url.scheme(), "http" | "https")
-        || same_origin(document_url, response_url)
+        || request_origin.same_origin(&response_url.into())
     {
         return Ok(());
     }
 
     let request_includes_credentials =
-        request_includes_credentials(document_url, response_url, credentials_mode);
+        request_includes_credentials(&request_origin, response_url, credentials_mode);
     let requires_corp_due_to_coep = match embedder_policy {
         CrossOriginEmbedderPolicy::None => false,
         CrossOriginEmbedderPolicy::RequireCorp => true,
@@ -265,17 +274,17 @@ pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
     else {
         return Err(format!(
             "{policy_label} check failed: requires Cross-Origin-Resource-Policy for {} to load {response_url}",
-            origin_ascii_serialization(document_url)
+            request_origin.ascii_serialization()
         ));
     };
     let policy = policy.trim().to_ascii_lowercase();
     match policy.as_str() {
         "same-origin" | "same-site" | "cross-origin" => {
-            validate_cross_origin_resource_policy(document_url, response_url, response_headers)
+            validate_cross_origin_resource_policy(&request_origin, response_url, response_headers)
         }
         _ => Err(format!(
             "{policy_label} check failed: treats invalid Cross-Origin-Resource-Policy `{policy}` as same-origin for {} to load {response_url}",
-            origin_ascii_serialization(document_url)
+            request_origin.ascii_serialization()
         )),
     }
 }
@@ -304,22 +313,24 @@ fn defaulted_corp_policy_label(
 }
 
 fn request_includes_credentials(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     credentials_mode: RequestCredentialsMode,
 ) -> bool {
+    let request_origin = request_origin.into();
     match credentials_mode {
         RequestCredentialsMode::Include => true,
         RequestCredentialsMode::Omit => false,
-        RequestCredentialsMode::SameOrigin => same_origin(document_url, response_url),
+        RequestCredentialsMode::SameOrigin => request_origin.same_origin(&response_url.into()),
     }
 }
 
 pub(crate) fn validate_cross_origin_resource_policy(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, String)],
 ) -> Result<(), String> {
+    let request_origin = request_origin.into();
     if !matches!(response_url.scheme(), "http" | "https") {
         return Ok(());
     }
@@ -329,8 +340,9 @@ pub(crate) fn validate_cross_origin_resource_policy(
     };
     let policy = policy.trim().to_ascii_lowercase();
     let allowed = match policy.as_str() {
-        "same-origin" => same_origin(document_url, response_url),
-        "same-site" => same_site_urls(document_url, response_url, true),
+        "same-origin" => request_origin.same_origin(&response_url.into()),
+        "same-site" => url::Url::parse(request_origin.ascii_serialization())
+            .is_ok_and(|origin| same_site_urls(&origin, response_url, true)),
         "cross-origin" => true,
         _ => true,
     };
@@ -339,7 +351,7 @@ pub(crate) fn validate_cross_origin_resource_policy(
     }
     Err(format!(
         "Cross-Origin-Resource-Policy check failed: `{policy}` does not allow {} to load {response_url}",
-        origin_ascii_serialization(document_url)
+        request_origin.ascii_serialization()
     ))
 }
 
@@ -437,12 +449,13 @@ pub(crate) fn validate_cors_preflight_response(
 }
 
 pub(crate) fn filter_cors_exposed_response_headers(
-    document_url: &url::Url,
+    request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
 ) -> Vec<(String, String)> {
+    let request_origin = request_origin.into();
     let response_headers = &head.headers;
-    if !head.url_list().has_cross_origin_url(document_url) {
+    if !head.url_list().has_cross_origin_url(&request_origin) {
         return response_headers.to_vec();
     }
     if !matches!(head.final_url.scheme(), "http" | "https") {
@@ -509,6 +522,7 @@ fn parsed_header_name(name: &str) -> Option<http::HeaderName> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moli_url::origin_ascii_serialization;
 
     fn url(value: &str) -> url::Url {
         url::Url::parse(value).expect("valid URL")

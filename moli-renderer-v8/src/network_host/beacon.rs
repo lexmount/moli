@@ -130,6 +130,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         match Request::new_bytes("POST", resolved_url.as_str(), body, request_headers.clone()) {
             Ok(request) => request
                 .with_initiator_url(&document_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
                 .with_resource_type(RequestResourceType::Beacon)
                 .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Beacon)
                 .with_request_mode(RequestMode::NoCors)
@@ -145,6 +146,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     let cancel_handle = FetchCancelHandle::new();
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: info.frame_id.clone(),
+        request_origin: moli_url::WebOrigin::from_url(&info.document_url),
         document_url: info.document_url.clone(),
         resource_type: info.resource_type,
         policy_context: Default::default(),
@@ -261,6 +263,7 @@ pub(crate) fn send_link_audit_ping(
     ) {
         Ok(request) => request
             .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .with_resource_type(RequestResourceType::Ping)
             .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Ping)
             .with_request_mode(RequestMode::NoCors)
@@ -276,6 +279,7 @@ pub(crate) fn send_link_audit_ping(
     let cancel_handle = FetchCancelHandle::new();
     let network_context = AsyncSubresourceNetworkContext {
         frame_id: info.frame_id.clone(),
+        request_origin: moli_url::WebOrigin::from_url(&info.document_url),
         document_url: info.document_url.clone(),
         resource_type: info.resource_type,
         policy_context: Default::default(),

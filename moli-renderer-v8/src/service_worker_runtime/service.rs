@@ -326,6 +326,11 @@ impl std::fmt::Debug for ServiceWorkerRuntimeService {
     }
 }
 
+fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
+    body.as_ref()
+        .map(|body| String::from_utf8_lossy(body).into_owned())
+}
+
 impl ServiceWorkerRuntimeService {
     pub(super) fn downgrade(&self) -> WeakServiceWorkerRuntimeService {
         WeakServiceWorkerRuntimeService {
@@ -923,28 +928,28 @@ mod tests {
         cancel_handle: moli_fetch::FetchCancelHandle,
     ) -> ServiceWorkerFetchJob {
         ServiceWorkerFetchJob {
+            request: {
+                let origin = moli_url::WebOrigin::from_url(&document_url);
+                let initiator = (document_url).clone();
+                moli_fetch::Request::new_browser("GET", request_url, None, Vec::new(), origin)
+                    .with_initiator_url(&initiator)
+                    .with_request_mode(moli_fetch::RequestMode::Cors)
+                    .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                    .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                    .with_fetch_priority_hint(None)
+            },
             internal_id,
             owner: Some(test_run_owner(version_id, run)),
-            request_url,
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
-            request_body: None,
-            request_body_bytes: None,
             cors_preflight_request_headers: Vec::new(),
             client_id,
             resulting_client_id: None,
             destination: ServiceWorkerRequestDestination::Empty,
             is_reload: false,
             metadata: Default::default(),
-            request_mode: moli_fetch::RequestMode::Cors,
-            credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-            redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-            priority: None,
-            redirect_chain: Vec::new(),
-            redirect_count: 0,
             request_cookie_report: None,
             network_context: AsyncSubresourceNetworkContext {
                 frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
                 document_url,
                 resource_type: crate::types::SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
@@ -4249,28 +4254,34 @@ mod tests {
                 state.pending_fetch_jobs.insert(
                     event_id,
                     ServiceWorkerFetchJob {
+                        request: {
+                            let origin = moli_url::WebOrigin::from_url(&request_url);
+                            let initiator = request_url.clone();
+                            moli_fetch::Request::new_browser(
+                                "GET",
+                                request_url.clone(),
+                                None,
+                                Vec::new(),
+                                origin,
+                            )
+                            .with_initiator_url(&initiator)
+                            .with_request_mode(moli_fetch::RequestMode::Cors)
+                            .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                            .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                            .with_fetch_priority_hint(None)
+                        },
                         internal_id: event_id.as_u64(),
                         owner: Some(ServiceWorkerRunOwner::new(version_id, run)),
-                        request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
-                        request_body: None,
-                        request_body_bytes: None,
                         cors_preflight_request_headers: Vec::new(),
                         client_id: ServiceWorkerClientId::from_u64_for_test(0),
                         resulting_client_id: None,
                         destination: ServiceWorkerRequestDestination::Empty,
                         is_reload: false,
                         metadata: Default::default(),
-                        request_mode: moli_fetch::RequestMode::Cors,
-                        credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                        priority: None,
-                        redirect_chain: Vec::new(),
-                        redirect_count: 0,
                         request_cookie_report: None,
                         network_context: AsyncSubresourceNetworkContext {
                             frame_id: None,
+                            request_origin: moli_url::WebOrigin::from_url(&request_url),
                             document_url: request_url.clone(),
                             resource_type: crate::types::SubresourceResourceType::Fetch,
                             policy_context: Default::default(),
@@ -4715,28 +4726,34 @@ self.addEventListener("message", event => {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    request: {
+                        let origin = moli_url::WebOrigin::from_url(&document_url);
+                        let initiator = (document_url).clone();
+                        moli_fetch::Request::new_browser(
+                            "GET",
+                            request_url.clone(),
+                            None,
+                            Vec::new(),
+                            origin,
+                        )
+                        .with_initiator_url(&initiator)
+                        .with_request_mode(moli_fetch::RequestMode::Cors)
+                        .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                        .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                        .with_fetch_priority_hint(None)
+                    },
                     internal_id: 131,
                     owner: Some(test_run_owner(version_id, &run)),
-                    request_url: request_url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    request_body: None,
-                    request_body_bytes: None,
                     cors_preflight_request_headers: Vec::new(),
                     client_id: ServiceWorkerClientId::from_u64_for_test(0),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,
                     metadata: Default::default(),
-                    request_mode: moli_fetch::RequestMode::Cors,
-                    credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    priority: None,
-                    redirect_chain: Vec::new(),
-                    redirect_count: 0,
                     request_cookie_report: None,
                     network_context: AsyncSubresourceNetworkContext {
                         frame_id: None,
+                        request_origin: moli_url::WebOrigin::from_url(&document_url),
                         document_url,
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
@@ -7185,11 +7202,11 @@ self.addEventListener("message", event => {
                     is_reload: false,
                     metadata: Default::default(),
                 },
-                request_body_text: None,
                 cors_preflight_request_headers: Vec::new(),
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&document_url),
                     document_url,
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
@@ -8371,28 +8388,34 @@ self.addEventListener("message", event => {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    request: {
+                        let origin = moli_url::WebOrigin::from_url(&document_url);
+                        let initiator = document_url.clone();
+                        moli_fetch::Request::new_browser(
+                            "GET",
+                            request_url.clone(),
+                            None,
+                            Vec::new(),
+                            origin,
+                        )
+                        .with_initiator_url(&initiator)
+                        .with_request_mode(moli_fetch::RequestMode::Cors)
+                        .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                        .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                        .with_fetch_priority_hint(None)
+                    },
                     internal_id: 41,
                     owner: Some(test_run_owner(version_id, &run)),
-                    request_url: request_url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    request_body: None,
-                    request_body_bytes: None,
                     cors_preflight_request_headers: Vec::new(),
                     client_id: ServiceWorkerClientId::from_u64_for_test(0),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,
                     metadata: Default::default(),
-                    request_mode: moli_fetch::RequestMode::Cors,
-                    credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    priority: None,
-                    redirect_chain: Vec::new(),
-                    redirect_count: 0,
                     request_cookie_report: None,
                     network_context: AsyncSubresourceNetworkContext {
                         frame_id: None,
+                        request_origin: moli_url::WebOrigin::from_url(&document_url),
                         document_url: document_url.clone(),
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
@@ -9174,11 +9197,11 @@ self.addEventListener("message", event => {
                     is_reload: false,
                     metadata: Default::default(),
                 },
-                request_body_text: None,
                 cors_preflight_request_headers: Vec::new(),
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&document_url),
                     document_url: document_url.clone(),
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
@@ -9267,11 +9290,11 @@ self.addEventListener("message", event => {
                     is_reload: false,
                     metadata: Default::default(),
                 },
-                request_body_text: None,
                 cors_preflight_request_headers: Vec::new(),
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&document_url),
                     document_url: document_url.clone(),
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
@@ -9438,11 +9461,11 @@ self.addEventListener("message", event => {
                     is_reload: false,
                     metadata: Default::default(),
                 },
-                request_body_text: None,
                 cors_preflight_request_headers: Vec::new(),
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&worker_script_url),
                     document_url: worker_script_url,
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
@@ -9547,11 +9570,11 @@ self.addEventListener("message", event => {
                     is_reload: false,
                     metadata: Default::default(),
                 },
-                request_body_text: None,
                 cors_preflight_request_headers: Vec::new(),
                 request_cookie_report: None,
                 network_context: AsyncSubresourceNetworkContext {
                     frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&document_url),
                     document_url: document_url.clone(),
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
@@ -9631,28 +9654,34 @@ self.addEventListener("message", event => {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    request: {
+                        let origin = moli_url::WebOrigin::from_url(&document_url);
+                        let initiator = (document_url).clone();
+                        moli_fetch::Request::new_browser(
+                            "GET",
+                            request_url,
+                            None,
+                            Vec::new(),
+                            origin,
+                        )
+                        .with_initiator_url(&initiator)
+                        .with_request_mode(moli_fetch::RequestMode::Cors)
+                        .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                        .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                        .with_fetch_priority_hint(None)
+                    },
                     internal_id: 90,
                     owner: Some(test_run_owner(version_id, &run)),
-                    request_url,
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    request_body: None,
-                    request_body_bytes: None,
                     cors_preflight_request_headers: Vec::new(),
                     client_id: ServiceWorkerClientId::from_u64_for_test(0),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,
                     metadata: Default::default(),
-                    request_mode: moli_fetch::RequestMode::Cors,
-                    credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    priority: None,
-                    redirect_chain: Vec::new(),
-                    redirect_count: 0,
                     request_cookie_report: None,
                     network_context: AsyncSubresourceNetworkContext {
                         frame_id: None,
+                        request_origin: moli_url::WebOrigin::from_url(&document_url),
                         document_url,
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
@@ -9762,28 +9791,34 @@ self.addEventListener("message", event => {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    request: {
+                        let origin = moli_url::WebOrigin::from_url(&document_url);
+                        let initiator = (document_url).clone();
+                        moli_fetch::Request::new_browser(
+                            "GET",
+                            request_url,
+                            None,
+                            Vec::new(),
+                            origin,
+                        )
+                        .with_initiator_url(&initiator)
+                        .with_request_mode(moli_fetch::RequestMode::Cors)
+                        .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                        .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                        .with_fetch_priority_hint(None)
+                    },
                     internal_id: 77,
                     owner: Some(test_run_owner(version_id, &run)),
-                    request_url,
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    request_body: None,
-                    request_body_bytes: None,
                     cors_preflight_request_headers: Vec::new(),
                     client_id: ServiceWorkerClientId::from_u64_for_test(0),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,
                     metadata: Default::default(),
-                    request_mode: moli_fetch::RequestMode::Cors,
-                    credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    priority: None,
-                    redirect_chain: Vec::new(),
-                    redirect_count: 0,
                     request_cookie_report: None,
                     network_context: AsyncSubresourceNetworkContext {
                         frame_id: None,
+                        request_origin: moli_url::WebOrigin::from_url(&document_url),
                         document_url,
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
@@ -10299,28 +10334,34 @@ self.addEventListener("message", event => {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    request: {
+                        let origin = moli_url::WebOrigin::from_url(&document_url);
+                        let initiator = (document_url).clone();
+                        moli_fetch::Request::new_browser(
+                            "GET",
+                            request_url.clone(),
+                            None,
+                            Vec::new(),
+                            origin,
+                        )
+                        .with_initiator_url(&initiator)
+                        .with_request_mode(moli_fetch::RequestMode::Cors)
+                        .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                        .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                        .with_fetch_priority_hint(None)
+                    },
                     internal_id: 91,
                     owner: Some(test_run_owner(active_version_id, &active_run)),
-                    request_url: request_url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    request_body: None,
-                    request_body_bytes: None,
                     cors_preflight_request_headers: Vec::new(),
                     client_id: ServiceWorkerClientId::from_u64_for_test(0),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,
                     metadata: Default::default(),
-                    request_mode: moli_fetch::RequestMode::Cors,
-                    credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                    priority: None,
-                    redirect_chain: Vec::new(),
-                    redirect_count: 0,
                     request_cookie_report: None,
                     network_context: AsyncSubresourceNetworkContext {
                         frame_id: None,
+                        request_origin: moli_url::WebOrigin::from_url(&document_url),
                         document_url,
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
@@ -11916,28 +11957,34 @@ self.addEventListener("message", event => {
                 state.pending_fetch_jobs.insert(
                     event_id,
                     ServiceWorkerFetchJob {
+                        request: {
+                            let origin = moli_url::WebOrigin::from_url(&document_url);
+                            let initiator = document_url.clone();
+                            moli_fetch::Request::new_browser(
+                                "GET",
+                                request_url.clone(),
+                                None,
+                                Vec::new(),
+                                origin,
+                            )
+                            .with_initiator_url(&initiator)
+                            .with_request_mode(moli_fetch::RequestMode::Cors)
+                            .with_credentials_mode(moli_fetch::RequestCredentialsMode::SameOrigin)
+                            .with_redirect_mode(moli_fetch::RequestRedirectMode::Follow)
+                            .with_fetch_priority_hint(None)
+                        },
                         internal_id,
                         owner: Some(test_run_owner(active_version_id, &active_run)),
-                        request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
-                        request_body: None,
-                        request_body_bytes: None,
                         cors_preflight_request_headers: Vec::new(),
                         client_id: ServiceWorkerClientId::from_u64_for_test(0),
                         resulting_client_id: None,
                         destination: ServiceWorkerRequestDestination::Empty,
                         is_reload: false,
                         metadata: Default::default(),
-                        request_mode: moli_fetch::RequestMode::Cors,
-                        credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-                        priority: None,
-                        redirect_chain: Vec::new(),
-                        redirect_count: 0,
                         request_cookie_report: None,
                         network_context: AsyncSubresourceNetworkContext {
                             frame_id: None,
+                            request_origin: moli_url::WebOrigin::from_url(&document_url),
                             document_url: document_url.clone(),
                             resource_type: crate::types::SubresourceResourceType::Fetch,
                             policy_context: Default::default(),

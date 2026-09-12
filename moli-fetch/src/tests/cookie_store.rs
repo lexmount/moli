@@ -276,7 +276,6 @@ fn outgoing_request_headers_skip_manual_cookie_when_store_cookie_exists() {
         vec![
             ("Cookie".to_owned(), "sid=server".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
-            ("Origin".to_owned(), "null".to_owned()),
         ]
     );
 }
@@ -302,7 +301,6 @@ fn outgoing_request_headers_include_default_config_headers() {
             ("X-Test".to_owned(), "one".to_owned()),
             ("X-Trace".to_owned(), "two".to_owned()),
             ("X-Request".to_owned(), "three".to_owned()),
-            ("Origin".to_owned(), "null".to_owned()),
         ]
     );
 }
@@ -321,7 +319,6 @@ fn outgoing_request_headers_skip_default_cookie_when_store_cookie_exists() {
         vec![
             ("Cookie".to_owned(), "sid=server".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
-            ("Origin".to_owned(), "null".to_owned()),
         ]
     );
 }
@@ -340,7 +337,6 @@ fn outgoing_request_headers_keep_default_cookie_without_store_cookie() {
         vec![
             ("Cookie".to_owned(), "manual=1".to_owned()),
             ("X-Test".to_owned(), "ok".to_owned()),
-            ("Origin".to_owned(), "null".to_owned()),
         ]
     );
 }
@@ -388,7 +384,6 @@ fn outgoing_request_headers_preserve_duplicate_default_headers_in_order() {
             ("X-Test".to_owned(), "one".to_owned()),
             ("X-Test".to_owned(), "two".to_owned()),
             ("X-Test".to_owned(), "three".to_owned()),
-            ("Origin".to_owned(), "null".to_owned()),
         ]
     );
 }
@@ -396,7 +391,11 @@ fn outgoing_request_headers_preserve_duplicate_default_headers_in_order() {
 fn top_level_navigation_request(request_url: &str, initiator_url: Option<&str>) -> Request {
     let request = Request::get(request_url).unwrap();
     if let Some(initiator_url) = initiator_url {
-        request.with_initiator_url(&Url::parse(initiator_url).unwrap())
+        request
+            .with_initiator_url(&Url::parse(initiator_url).unwrap())
+            .with_request_origin(moli_url::WebOrigin::from_url(
+                &Url::parse(initiator_url).unwrap(),
+            ))
     } else {
         request
     }
@@ -570,7 +569,10 @@ fn generic_subresource_requests_do_not_inherit_browser_headers_without_metadata(
     let config = FetchConfig::default();
     let request = Request::new("GET", "https://example.com/app.js", None, vec![])
         .unwrap()
-        .with_initiator_url(&Url::parse("https://example.com/docs").unwrap());
+        .with_initiator_url(&Url::parse("https://example.com/docs").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs").unwrap(),
+        ));
 
     let headers = outgoing_request_headers(&config, &request, None);
 
@@ -596,6 +598,9 @@ fn browser_fetch_and_xhr_subresource_headers_match_chromium_same_origin_shape() 
             .with_initiator_url(
                 &Url::parse("https://example.com/docs/page.html?x=1#section").unwrap(),
             )
+            .with_request_origin(moli_url::WebOrigin::from_url(
+                &Url::parse("https://example.com/").unwrap(),
+            ))
             .with_browser_request_metadata(metadata);
 
         let headers = outgoing_request_headers(&config, &request, None);
@@ -635,6 +640,9 @@ fn browser_audio_worklet_subresource_headers_use_audioworklet_destination() {
     let request = Request::new("GET", "https://example.com/worklet.js", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
         .with_browser_request_metadata(BrowserRequestMetadata::AudioWorklet);
 
     let headers = outgoing_request_headers(&config, &request, None);
@@ -662,6 +670,9 @@ fn browser_media_subresource_headers_preserve_audio_video_destinations() {
         let request = Request::new("GET", "https://cdn.example/media", None, vec![])
             .unwrap()
             .with_initiator_url(&Url::parse("https://example.com/page").unwrap())
+            .with_request_origin(moli_url::WebOrigin::from_url(
+                &Url::parse("https://example.com/page").unwrap(),
+            ))
             .with_request_mode(RequestMode::NoCors)
             .with_resource_type(RequestResourceType::Media)
             .with_browser_request_metadata(metadata);
@@ -681,6 +692,9 @@ fn browser_image_subresource_headers_use_image_accept_and_destination() {
     let request = Request::new("GET", "https://cdn.example/hero.png", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/page").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/page").unwrap(),
+        ))
         .with_request_mode(RequestMode::NoCors)
         .with_resource_type(RequestResourceType::Image)
         .with_browser_request_metadata(BrowserRequestMetadata::Image);
@@ -702,6 +716,9 @@ fn browser_font_subresource_headers_use_cors_font_destination() {
     let request = Request::new("GET", "https://cdn.example/demo.woff2", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/page").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/page").unwrap(),
+        ))
         .with_request_mode(RequestMode::Cors)
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_resource_type(RequestResourceType::Font)
@@ -725,6 +742,9 @@ fn browser_text_track_headers_use_vtt_accept_and_track_destination() {
     let request = Request::new("GET", "https://cdn.example/captions.vtt", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://cdn.example/page").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://cdn.example/page").unwrap(),
+        ))
         .with_request_mode(RequestMode::SameOrigin)
         .with_resource_type(RequestResourceType::TextTrack)
         .with_browser_request_metadata(BrowserRequestMetadata::TextTrack);
@@ -749,6 +769,9 @@ fn browser_json_module_subresource_headers_use_json_destination() {
     let request = Request::new("GET", "https://example.com/data.json", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
         .with_browser_request_metadata(BrowserRequestMetadata::JsonModule);
 
     let headers = outgoing_request_headers(&config, &request, None);
@@ -769,6 +792,9 @@ fn browser_manifest_subresource_headers_match_chromium() {
     let request = Request::new("GET", "https://example.com/app.webmanifest", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
         .with_request_mode(RequestMode::Cors)
         .with_credentials_mode(RequestCredentialsMode::Omit)
         .with_resource_type(RequestResourceType::Manifest)
@@ -792,6 +818,9 @@ fn browser_style_module_subresource_headers_use_style_destination() {
     let request = Request::new("GET", "https://example.com/sheet.css", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
         .with_browser_request_metadata(BrowserRequestMetadata::StyleModule);
 
     let headers = outgoing_request_headers(&config, &request, None);
@@ -813,6 +842,7 @@ fn browser_stylesheet_subresource_headers_follow_request_mode() {
     let plain = Request::new("GET", "https://cdn.example.test/plain.css", None, vec![])
         .unwrap()
         .with_initiator_url(&initiator)
+        .with_request_origin(moli_url::WebOrigin::from_url(&initiator))
         .with_request_mode(crate::RequestMode::NoCors)
         .with_browser_request_metadata(BrowserRequestMetadata::Style);
     let anonymous = Request::new(
@@ -823,6 +853,7 @@ fn browser_stylesheet_subresource_headers_follow_request_mode() {
     )
     .unwrap()
     .with_initiator_url(&initiator)
+    .with_request_origin(moli_url::WebOrigin::from_url(&initiator))
     .with_request_mode(crate::RequestMode::Cors)
     .with_credentials_mode(crate::RequestCredentialsMode::SameOrigin)
     .with_browser_request_metadata(BrowserRequestMetadata::Style);
@@ -860,6 +891,9 @@ fn browser_fetch_subresource_headers_use_cross_site_sec_fetch_site_when_needed()
     let request = Request::new("GET", "https://www.zhihu.com/api/v4/feed", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://sub.example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://sub.example.com/docs/page.html").unwrap(),
+        ))
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
 
     let headers = outgoing_request_headers(&config, &request, None);
@@ -883,6 +917,9 @@ fn browser_fetch_subresource_headers_use_request_mode_for_sec_fetch_mode() {
     let request = Request::new("GET", "https://www.zhihu.com/api/v4/feed", None, vec![])
         .unwrap()
         .with_initiator_url(&Url::parse("https://sub.example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://sub.example.com/docs/page.html").unwrap(),
+        ))
         .with_request_mode(RequestMode::NoCors)
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
 
@@ -904,6 +941,9 @@ fn browser_beacon_subresource_headers_use_no_cors_shape() {
     )
     .unwrap()
     .with_initiator_url(&Url::parse("https://sub.example.com/docs/page.html").unwrap())
+    .with_request_origin(moli_url::WebOrigin::from_url(
+        &Url::parse("https://sub.example.com/docs/page.html").unwrap(),
+    ))
     .with_resource_type(crate::RequestResourceType::Beacon)
     .with_request_mode(RequestMode::NoCors)
     .with_browser_request_metadata(BrowserRequestMetadata::Beacon);
@@ -933,6 +973,9 @@ fn browser_ping_subresource_headers_use_no_cors_shape() {
     )
     .unwrap()
     .with_initiator_url(&Url::parse("https://sub.example.com/docs/page.html").unwrap())
+    .with_request_origin(moli_url::WebOrigin::from_url(
+        &Url::parse("https://sub.example.com/docs/page.html").unwrap(),
+    ))
     .with_resource_type(crate::RequestResourceType::Ping)
     .with_request_mode(RequestMode::NoCors)
     .with_browser_request_metadata(BrowserRequestMetadata::Ping);
@@ -956,6 +999,9 @@ fn explicit_navigation_headers_override_browser_defaults() {
     let mut request = Request::get("https://example.com/docs")
         .unwrap()
         .with_initiator_url(&Url::parse("https://example.com/source").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/source").unwrap(),
+        ))
         .with_top_level_navigation_cookie_context();
     request.request_headers = vec![
         ("Accept-Language".to_owned(), "zh-CN,zh;q=0.9".to_owned()),
@@ -1000,6 +1046,9 @@ fn script_request_with_referrer_policies(
     Request::new("GET", request_url, None, request_headers)
         .unwrap()
         .with_initiator_url(&Url::parse(initiator_url).unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse(initiator_url).unwrap(),
+        ))
         .with_script_fetch_metadata(ScriptFetchRequestMetadata {
             referrer_policy: referrer_policy.map(str::to_owned),
             document_referrer_policy: document_referrer_policy.map(str::to_owned),

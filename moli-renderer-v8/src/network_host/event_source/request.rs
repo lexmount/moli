@@ -295,6 +295,7 @@ pub(crate) fn start_event_source_request<'s>(
         registered.internal_id,
         crate::types::AsyncSubresourceNetworkContext {
             frame_id: prepared.frame_id,
+            request_origin: moli_url::WebOrigin::from_url(&prepared.document_url),
             document_url: prepared.document_url,
             resource_type: SubresourceResourceType::EventSource,
             policy_context: prepared.policy_context,
@@ -405,11 +406,11 @@ fn dispatch_service_worker_event_source<'s>(
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id: registered.internal_id,
         request,
-        request_body_text: None,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
         request_cookie_report: prepared.request_cookie_report.clone(),
         network_context: crate::types::AsyncSubresourceNetworkContext {
             frame_id: prepared.frame_id.clone(),
+            request_origin: moli_url::WebOrigin::from_url(&prepared.document_url),
             document_url: prepared.document_url.clone(),
             resource_type: SubresourceResourceType::EventSource,
             policy_context: prepared.policy_context,
@@ -450,6 +451,7 @@ fn build_event_source_request(prepared: &PreparedEventSourceRequest) -> Result<R
     .map(|request| {
         request
             .with_initiator_url(&prepared.document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&prepared.document_url))
             .with_request_mode(RequestMode::Cors)
             .with_credentials_mode(prepared.credentials_mode)
             .with_network_partition_key(prepared.network_partition_key.clone())
