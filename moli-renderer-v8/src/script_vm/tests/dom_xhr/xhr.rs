@@ -221,6 +221,7 @@ fn pending_fetch_continuation<'s>(
                 dispatch_scope,
             )
             .expect("test Fetch should capture its CSP report context"),
+            moli_fetch::RequestRedirectMode::Follow,
         ),
     )
 }
@@ -3424,6 +3425,7 @@ fn install_streaming_fetch_response_fixture(
                     scope,
                     &document_url,
                     crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         method: "GET",
                         mode: moli_fetch::RequestMode::Cors,
                     },

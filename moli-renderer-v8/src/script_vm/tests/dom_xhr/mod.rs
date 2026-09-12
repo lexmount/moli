@@ -12,6 +12,7 @@ mod misc;
 mod null_body;
 mod open_validation;
 mod query_realms;
+mod redirect_filter;
 mod response_type;
 mod shadow_dom;
 mod streaming_failure;
