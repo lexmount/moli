@@ -8,7 +8,9 @@ mod timeout;
 use super::*;
 
 pub(crate) use self::abort::{apply_xhr_abort, finish_xhr_abort};
-pub(crate) use self::failure::{apply_xhr_failure, throw_synchronous_xhr_failure};
+pub(crate) use self::failure::{
+    apply_xhr_failure, apply_xhr_streaming_failure, throw_synchronous_xhr_failure,
+};
 pub(super) use self::pending::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
 pub(in crate::network_host::xhr) use self::progress::clear_xhr_progress_throttle;
 pub(super) use self::response::apply_xhr_response_pending_body;
