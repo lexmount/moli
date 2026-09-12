@@ -6,6 +6,7 @@ mod dom;
 mod file_input;
 mod forms;
 mod misc;
+mod null_body;
 mod open_validation;
 mod query_realms;
 mod response_type;

@@ -2880,8 +2880,14 @@ async fn worker_xmlhttprequest_uses_worker_script_base_url_and_event_target_list
 #[tokio::test]
 async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() {
     ensure_v8();
-    let mut handle = spawn_worker_with_request_client_and_network_policy(
-        r#"
+    for (status, expected_text) in [
+        (200, "fulfilled-worker-xhr"),
+        (204, ""),
+        (205, ""),
+        (304, ""),
+    ] {
+        let mut handle = spawn_worker_with_request_client_and_network_policy(
+            r#"
         onmessage = () => {
             const xhr = new XMLHttpRequest();
             xhr.onloadend = () => {
@@ -2897,54 +2903,55 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
             xhr.send("payload");
         };
         "#
-        .into(),
-        "http://example.test/worker/main.js".into(),
-        ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader"),
-        WorkerNetworkPolicy {
-            network_partition_key: Some("credentialless-worker-xhr".to_owned()),
-            ..WorkerNetworkPolicy::default()
-        },
-    );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
-    handle.post_message(serialize_test_string("go"));
+            .into(),
+            "http://example.test/worker/main.js".into(),
+            ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader"),
+            WorkerNetworkPolicy {
+                network_partition_key: Some("credentialless-worker-xhr".to_owned()),
+                ..WorkerNetworkPolicy::default()
+            },
+        );
+        handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
-        panic!("expected worker xhr pause, got {pending:?}");
-    };
-    assert!(pending.info.network_request_handle.is_none());
-    assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
-    assert_eq!(
-        pending.info.url.as_str(),
-        "http://example.test/intercepted-worker-xhr"
-    );
-    assert_eq!(pending.info.request_body.as_deref(), Some("payload"));
-    assert_eq!(
-        pending.network_partition_key.as_deref(),
-        Some("credentialless-worker-xhr")
-    );
+        let pending = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for worker xhr pause")
+            .expect("worker channel closed");
+        let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+            panic!("expected worker xhr pause, got {pending:?}");
+        };
+        assert!(pending.info.network_request_handle.is_none());
+        assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
+        assert_eq!(
+            pending.info.url.as_str(),
+            "http://example.test/intercepted-worker-xhr"
+        );
+        assert_eq!(pending.info.request_body.as_deref(), Some("payload"));
+        assert_eq!(
+            pending.network_partition_key.as_deref(),
+            Some("credentialless-worker-xhr")
+        );
 
-    let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
-    handle.fulfill_pending_xhr(
-        request,
-        204,
-        vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
-            (
-                "x-worker-xhr-intercept".to_owned(),
-                "request-stage".to_owned(),
-            ),
-        ],
-        RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
-    );
+        let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
+        handle.fulfill_pending_xhr(
+            request,
+            status,
+            vec![
+                ("content-type".to_owned(), "text/plain".to_owned()),
+                (
+                    "x-worker-xhr-intercept".to_owned(),
+                    "request-stage".to_owned(),
+                ),
+            ],
+            RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
+        );
 
-    assert_eq!(
-        recv_post_json(&mut handle).await,
-        r#"{"readyState":4,"status":204,"header":"request-stage","text":"fulfilled-worker-xhr"}"#
-    );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recv_post_json(&mut handle).await).unwrap(),
+            serde_json::json!({"readyState":4,"status":status,"header":"request-stage","text":expected_text})
+        );
+    }
 }
 
 #[tokio::test]
