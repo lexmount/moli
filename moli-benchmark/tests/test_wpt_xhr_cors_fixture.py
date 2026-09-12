@@ -12,6 +12,8 @@ from moli_benchmark.wpt_cross.server import WptFixtureServer
 
 
 RESOURCE = "/xhr/resources/corsenabled.py"
+PUT_RESOURCE = "/xhr/resources/access-control-basic-put-allow.py"
+STAR_RESOURCE = "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py"
 
 
 class XhrCorsFixtureTests(unittest.TestCase):
@@ -96,6 +98,122 @@ class XhrCorsFixtureTests(unittest.TestCase):
             with self.subTest(resource=resource):
                 status, _, _ = self.request(server, resource=resource)
                 self.assertEqual(status, 404)
+
+    def test_put_preflight_and_upload_preserve_origin_and_bytes(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for origin in ("https://caller.test", "null", ""):
+            with self.subTest(origin=origin):
+                status, headers, body = self.request(
+                    server, "OPTIONS", headers={"Origin": origin}, resource=PUT_RESOURCE
+                )
+                self.assertEqual((status, body), (200, b""))
+                self.assertEqual(headers["Content-Type"], "text/plain")
+                self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
+                self.assertEqual(headers["Access-Control-Allow-Credentials"], "true")
+                self.assertEqual(headers["Access-Control-Allow-Methods"], "PUT")
+                self.assertIsNone(headers["Access-Control-Allow-Headers"])
+                payload = b"PUT \x00\xff body"
+                status, headers, body = self.request(
+                    server, "PUT", body=payload, headers={"Origin": origin},
+                    resource=PUT_RESOURCE,
+                )
+                self.assertEqual((status, body),
+                                 (200, b"PASS: Cross-domain access allowed.\n" + payload))
+                self.assertEqual(headers["Content-Type"], "text/plain")
+                self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
+                self.assertEqual(headers["Access-Control-Allow-Credentials"], "true")
+                self.assertIsNone(headers["Access-Control-Allow-Methods"])
+
+    def test_put_fixture_missing_origin_matches_upstream_failure(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for method in ("OPTIONS", "PUT"):
+            with self.subTest(method=method):
+                status, headers, _ = self.request(server, method, resource=PUT_RESOURCE)
+                self.assertEqual(status, 500)
+                self.assertIsNone(headers["Access-Control-Allow-Origin"])
+
+    def test_put_fixture_reports_other_methods_without_cors_headers(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for method in ("GET", "HEAD", "POST", "DELETE", "FOO"):
+            with self.subTest(method=method):
+                status, headers, body = self.request(server, method, resource=PUT_RESOURCE)
+                expected = b"Wrong method: " + method.encode("ascii")
+                self.assertEqual((status, body),
+                                 (200, b"" if method == "HEAD" else expected))
+                self.assertEqual(headers["Content-Length"], str(len(expected)))
+                self.assertIsNone(headers["Access-Control-Allow-Origin"])
+
+    def test_wildcard_preflight_and_actual_request_have_distinct_headers(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        status, headers, body = self.request(server, "OPTIONS", resource=STAR_RESOURCE)
+        self.assertEqual((status, body), (200, b""))
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+        self.assertEqual(headers["Access-Control-Allow-Headers"], "*")
+        self.assertIsNone(headers["Access-Control-Allow-Methods"])
+        self.assertIsNone(headers["Access-Control-Allow-Credentials"])
+        self.assertIsNone(headers["Content-Type"])
+        for value in ("foobar", "0"):
+            with self.subTest(value=value):
+                status, headers, body = self.request(
+                    server, headers={"x-test": value}, resource=STAR_RESOURCE
+                )
+                self.assertEqual((status, body), (200, b"PASS"))
+                self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+                self.assertEqual(headers["Content-Type"], "text/plain")
+                self.assertIsNone(headers["Access-Control-Allow-Headers"])
+
+    def test_wildcard_fixture_rejects_missing_or_empty_test_header(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for request_headers in ({}, {"X-Test": ""}):
+            with self.subTest(headers=request_headers):
+                status, headers, body = self.request(
+                    server, headers=request_headers, resource=STAR_RESOURCE
+                )
+                self.assertEqual((status, body), (400, b""))
+                self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+                self.assertIsNone(headers["Content-Type"])
+
+    def test_wildcard_fixture_other_methods_have_no_cors_grants(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for method in ("HEAD", "POST", "PUT", "DELETE", "FOO"):
+            with self.subTest(method=method):
+                status, headers, body = self.request(
+                    server, method, headers={"X-Test": "foobar"}, resource=STAR_RESOURCE
+                )
+                self.assertEqual((status, body), (200, b""))
+                self.assertIsNone(headers["Access-Control-Allow-Origin"])
+                self.assertIsNone(headers["Content-Type"])
+
+    def test_preflight_fixtures_require_exact_resource_paths(self) -> None:
+        server = self.stack.enter_context(WptFixtureServer(self.root))
+        for resource in (PUT_RESOURCE, STAR_RESOURCE):
+            for wrong in (resource + "2", resource + ".js", "/wrong" + resource):
+                with self.subTest(path=wrong):
+                    status, _, _ = self.request(server, resource=wrong)
+                    self.assertEqual(status, 404)
+
+    def test_preflight_case_selection_rejects_unsupported_dependencies(self) -> None:
+        for resource in (PUT_RESOURCE, STAR_RESOURCE):
+            name = Path(resource).name
+            sources = {
+                f"xhr/absolute-{name}.html": f"fetch('{resource}');",
+                f"xhr/relative-{name}.html": f"fetch('resources/{name}');",
+                f"xhr/nested/relative-{name}.html": f"fetch('../resources/{name}?x=1');",
+                f"xhr/unknown-{name}.html": f"fetch('{resource}'); fetch('unknown.py');",
+                f"xhr/wrong-{name}.html": f"fetch('{name}');",
+            }
+            for path, script in sources.items():
+                target = self.root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('<script src="/resources/testharness.js"></script><script>'
+                                  + script + '</script>')
+        selected = enumerate_cases(self.root, dir_prefixes=("xhr",))
+        expected = sorted(
+            f"xhr/{prefix}{Path(resource).name}.html"
+            for resource in (PUT_RESOURCE, STAR_RESOURCE)
+            for prefix in ("absolute-", "relative-", "nested/relative-")
+        )
+        self.assertEqual([case.case_path for case in selected], expected)
 
     def test_case_selection_recognizes_relative_and_absolute_references(self) -> None:
         sources = {
