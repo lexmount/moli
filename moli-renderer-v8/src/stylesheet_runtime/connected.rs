@@ -2174,7 +2174,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
             Ok(Some(response)) => {
                 let response_filter = response.response_filter;
                 let origin_clean =
-                    connected_link_origin_clean_from_service_worker_filter(response_filter);
+                    connected_link_origin_clean_from_service_worker_filter(response_filter.clone());
                 let response = *response.response;
                 let load_event_successful =
                     connected_link_load_event_successful(&response, response_filter);
