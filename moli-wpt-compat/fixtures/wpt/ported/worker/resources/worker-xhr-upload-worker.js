@@ -43,15 +43,19 @@ self.onmessage = function (event) {
   };
   xhr.onloadend = function () {
     xhrEvents.push("loadend");
-    postMessage({
-      kind,
-      status: xhr.status,
-      response: xhr.response,
-      uploadEvents,
-      uploadOrder,
-      xhrEvents,
-    });
-    close();
+    // An abort from the final upload progress callback fires XHR loadend
+    // before the upload's remaining events. Collect after that task finishes.
+    setTimeout(() => {
+      postMessage({
+        kind,
+        status: xhr.status,
+        response: xhr.response,
+        uploadEvents,
+        uploadOrder,
+        xhrEvents,
+      });
+      close();
+    }, 0);
   };
   xhr.open("POST", "/wpt/runtime/xhr/echo-body");
   xhr.responseType = "json";

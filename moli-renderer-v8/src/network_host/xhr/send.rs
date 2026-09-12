@@ -101,7 +101,6 @@ pub(super) fn xhr_send_callback<'s>(
         if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
             return;
         }
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
         if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
             return;
         }
@@ -286,6 +285,7 @@ pub(crate) fn dispatch_xhr_loadstart(
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     // The XHR loadstart listener can abort before upload.loadstart runs.
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
+    set_xhr_state_number(scope, xhr, XHR_UPLOAD_LOADED_SLOT, 0.0);
     xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
     if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
         return false;
@@ -294,37 +294,6 @@ pub(crate) fn dispatch_xhr_loadstart(
         xhr_dispatch_upload_progress_event(scope, xhr, "loadstart", 0.0, send_body.len() as f64);
     }
     !xhr_is_aborted(scope, xhr) && !xhr_open_generation_changed(scope, xhr, open_generation)
-}
-
-pub(crate) fn dispatch_xhr_upload_complete(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    send_body: Option<&[u8]>,
-) {
-    let Some(send_body) = send_body else {
-        return;
-    };
-    let total = send_body.len() as f64;
-    for event_type in ["progress", "load", "loadend"] {
-        if xhr_is_aborted(scope, xhr) {
-            set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-            return;
-        }
-        xhr_dispatch_upload_progress_event(scope, xhr, event_type, total, total);
-    }
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-}
-
-pub(crate) fn dispatch_xhr_upload_abort_if_in_progress(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-) {
-    if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT).unwrap_or(false) {
-        return;
-    }
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-    xhr_dispatch_upload_progress_event(scope, xhr, "abort", 0.0, 0.0);
-    xhr_dispatch_upload_progress_event(scope, xhr, "loadend", 0.0, 0.0);
 }
 
 fn send_synchronous_network_xhr(

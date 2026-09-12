@@ -3750,6 +3750,96 @@ async fn worker_xhr_upload_listener_preflight_survives_sync_and_interception() {
 }
 
 #[tokio::test]
+async fn worker_xhr_partial_upload_can_abort_or_reopen_without_stale_completion() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    ensure_v8();
+    for reopen in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let total = 16 * 1024 * 1024;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let head = read_http_request_head(&mut socket).await.unwrap();
+            assert!(head.starts_with("POST /upload HTTP/1.1"));
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut bytes = 0;
+            let mut chunk = [0; 65536];
+            while let Ok(count) = socket.read(&mut chunk).await {
+                if count == 0 {
+                    break;
+                }
+                bytes += count;
+            }
+            if reopen {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let head = read_http_request_head(&mut socket).await.unwrap();
+                assert!(head.starts_with("GET /replacement HTTP/1.1"));
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+            }
+            bytes
+        });
+        let mut config = FetchConfig::default();
+        config.set_http_no_proxy(Some("*".to_owned()));
+        let loader = ResourceRequestClient::new(&config).unwrap();
+        let mut handle = spawn_worker_with_request_client(
+            format!(
+                r#"
+            const xhr = new XMLHttpRequest();
+            const events = [];
+            let partial = null;
+            for (const type of ["loadstart", "progress", "load", "loadend", "abort", "error"]) {{
+                xhr.upload.addEventListener(type, e => events.push([type, e.loaded, e.total, e.lengthComputable]));
+            }}
+            xhr.upload.onprogress = e => {{
+                if (!partial && e.loaded > 0 && e.loaded < e.total) {{
+                    partial = [e.loaded, e.total];
+                    if ({reopen}) {{ xhr.open("GET", "/replacement"); xhr.send(); }}
+                    else xhr.abort();
+                }}
+            }};
+            xhr.onloadend = () => {{ postMessage({{status: xhr.status, partial, events}}); close(); }};
+            xhr.open("POST", "/upload");
+            xhr.send("x".repeat({total}));
+            postMessage(events.map(e => e[0]));
+        "#
+            ),
+            format!("{origin}/worker.js"),
+            loader,
+        );
+        assert_eq!(recv_post_json(&mut handle).await, "[\"loadstart\"]");
+        let result: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(result["status"], if reopen { 200 } else { 0 });
+        assert_eq!(result["partial"][1], total);
+        let loaded = result["partial"][0].as_u64().unwrap();
+        assert!(loaded > 0 && loaded < total as u64);
+        let events = result["events"].as_array().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|event| event[0] == "load" || event[0] == "error")
+        );
+        let aborts: Vec<_> = events.iter().filter(|event| event[0] == "abort").collect();
+        let ends: Vec<_> = events
+            .iter()
+            .filter(|event| event[0] == "loadend")
+            .collect();
+        assert_eq!(aborts.len(), usize::from(!reopen));
+        assert_eq!(ends.len(), usize::from(!reopen));
+        if !reopen {
+            assert_eq!(*aborts[0], serde_json::json!(["abort", 0, 0, false]));
+            assert_eq!(*ends[0], serde_json::json!(["loadend", 0, 0, false]));
+        }
+        assert!(timeout(TIMEOUT, server).await.unwrap().unwrap() < total as usize);
+    }
+}
+
+#[tokio::test]
 async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(

@@ -2631,6 +2631,7 @@ struct ActiveRawStreamingTransferContext {
 struct FetchTransferHandler {
     response: FetchResponseCollector,
     network_observation_recorder: Option<NetworkObservationRecorder>,
+    upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
 }
 
@@ -2657,6 +2658,7 @@ impl FetchTransferHandler {
         Self {
             response,
             network_observation_recorder: None,
+            upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
         }
     }
@@ -2707,7 +2709,9 @@ impl FetchTransferHandler {
         &mut self,
         network_observation_recorder: Option<NetworkObservationRecorder>,
         capture_proxy_connect_response: bool,
+        upload_observer: Option<crate::UploadObserver>,
     ) {
+        self.upload_observer = upload_observer;
         self.network_observation_recorder = network_observation_recorder;
         self.proxy_connect_response_recorder
             .begin_transfer(capture_proxy_connect_response);
@@ -2750,7 +2754,7 @@ impl Handler for FetchTransferHandler {
     }
 
     fn progress(&mut self, dltotal: f64, dlnow: f64, ultotal: f64, ulnow: f64) -> bool {
-        match &mut self.response {
+        let keep_going = match &mut self.response {
             FetchResponseCollector::Buffered(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
             }
@@ -2760,7 +2764,11 @@ impl Handler for FetchTransferHandler {
             FetchResponseCollector::StreamingRaw(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
             }
+        };
+        if keep_going && let Some(observer) = &self.upload_observer {
+            observer.bytes_sent(ulnow as u64);
         }
+        keep_going
     }
 
     fn debug(&mut self, kind: InfoType, data: &[u8]) {
@@ -2769,6 +2777,9 @@ impl Handler for FetchTransferHandler {
                 let is_proxy_connect = self
                     .proxy_connect_response_recorder
                     .record_outgoing_header_block(data);
+                if !is_proxy_connect && let Some(observer) = &self.upload_observer {
+                    observer.request_headers_sent();
+                }
                 if !is_proxy_connect
                     && let Some(recorder) = self.network_observation_recorder.as_ref()
                 {
@@ -2790,12 +2801,17 @@ fn configure_network_observation(
     capture_proxy_connect_response: bool,
 ) -> Result<()> {
     let recorder = request.network_observation_recorder().cloned();
-    let verbose = recorder.is_some() || capture_proxy_connect_response;
+    let upload_observer = request
+        .body
+        .as_ref()
+        .and(request.upload_observer())
+        .cloned();
+    let verbose = recorder.is_some() || capture_proxy_connect_response || upload_observer.is_some();
     if let Some(recorder) = recorder.as_ref() {
         recorder.set_current_request_cookie_report(request_cookie_report.cloned());
     }
     easy.get_mut()
-        .begin_transfer(recorder, capture_proxy_connect_response);
+        .begin_transfer(recorder, capture_proxy_connect_response, upload_observer);
     easy.verbose(verbose)
         .context("failed to configure curl network observation")
 }

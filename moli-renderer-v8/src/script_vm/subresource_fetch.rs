@@ -4034,6 +4034,8 @@ impl ScriptVm {
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
         }
+        let request =
+            crate::network_host::observe_async_xhr_upload(request, &completion_tx, internal_id);
         task_runner.spawn(async move {
             let result = if let Some(result) = local_response {
                 result.map(crate::protocol_types::NavigationResponse::from)
@@ -4358,6 +4360,9 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
+                self.apply_async_xhr_upload_event(internal_id, event)
+            }
             AsyncSubresourceFetchEvent::Completion(completion) => {
                 self.complete_async_subresource_fetch_body(*completion)
             }
@@ -4384,6 +4389,52 @@ impl ScriptVm {
         };
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
+    }
+
+    fn apply_async_xhr_upload_event(
+        &mut self,
+        internal_id: u64,
+        event: moli_fetch::UploadEvent,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let context_host = self._context_host.clone();
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let Some((xhr, execution)) = context_host
+                    .borrow()
+                    .xhr_upload_delivery(scope, internal_id)
+                else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                let Some(context) = execution.context_global() else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                let context = v8::Local::new(scope, context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                if execution.window_realm_binding().is_some_and(|binding| {
+                    crate::native_bridge::current_runtime_observable_context_token(scope)
+                        != Some(binding.realm_token())
+                        || !binding.is_current(&context_host.borrow())
+                }) {
+                    let _ = context_host
+                        .borrow_mut()
+                        .abort_subresource_fetch(internal_id);
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                }
+                let dispatch_scope = execution.dispatch_scope();
+                let previous =
+                    enter_subresource_owner_async_scope(&context_host, scope, dispatch_scope);
+                let current =
+                    crate::network_host::apply_xhr_upload_event(scope, xhr, internal_id, event);
+                defer_subresource_owner_async_scope(&context_host, scope, dispatch_scope, previous);
+                if !current {
+                    let _ = context_host
+                        .borrow_mut()
+                        .abort_subresource_fetch(internal_id);
+                }
+                Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+            })
     }
 
     pub(crate) fn async_subresource_fetch_event_target_is_current(
@@ -6315,6 +6366,11 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::Upload { internal_id, .. } => AsyncSubresourceTraceFields {
+            event_kind: Some("upload"),
+            internal_id: Some(*internal_id),
+            ..AsyncSubresourceTraceFields::default()
+        },
         AsyncSubresourceFetchEvent::Completion(completion) => AsyncSubresourceTraceFields {
             event_kind: Some("completion"),
             internal_id: Some(completion.internal_id),

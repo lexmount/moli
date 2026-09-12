@@ -1521,6 +1521,9 @@ impl JsContextHost {
         use crate::types::AsyncSubresourceFetchEventTarget;
 
         match target {
+            AsyncSubresourceFetchEventTarget::Upload { internal_id } => {
+                self.pending_xhr_for_upload(internal_id).is_some()
+            }
             AsyncSubresourceFetchEventTarget::Completion { internal_id } => {
                 self.pending_subresource_fetches.contains_key(&internal_id)
                     || self.running_subresource_fetches.contains_key(&internal_id)
@@ -1542,6 +1545,58 @@ impl JsContextHost {
                 .is_some_and(|state| state.body_source_id == body_source_id),
             AsyncSubresourceFetchEventTarget::ObservedNetworkRecord => true,
         }
+    }
+
+    fn pending_xhr_for_upload(&self, internal_id: u64) -> Option<&PendingSubresourceFetchState> {
+        let pending = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })
+            .or_else(|| {
+                self.streaming_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })?;
+        pending.continuation.is_window_xhr().then_some(pending)
+    }
+
+    pub(crate) fn xhr_upload_delivery<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        internal_id: u64,
+    ) -> Option<(
+        v8::Local<'s, v8::Object>,
+        crate::types::PendingSubresourceExecutionContext,
+    )> {
+        let pending = self.pending_xhr_for_upload(internal_id)?;
+        if let Some(target) = pending.execution_context.window_request_target()
+            && !self
+                .window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())
+        {
+            return None;
+        }
+        let PendingSubresourceContinuation::Xhr { xhr, .. } = &pending.continuation else {
+            return None;
+        };
+        use crate::types::PendingSubresourceExecutionContext;
+        let execution = match &pending.execution_context {
+            PendingSubresourceExecutionContext::Window(binding) => {
+                PendingSubresourceExecutionContext::Window(binding.clone())
+            }
+            PendingSubresourceExecutionContext::Adapter {
+                dispatch_scope,
+                context,
+            } => PendingSubresourceExecutionContext::Adapter {
+                dispatch_scope: *dispatch_scope,
+                context: context.clone(),
+            },
+            _ => return None,
+        };
+        Some((v8::Local::new(scope, xhr), execution))
     }
 
     pub(crate) fn take_pending_subresource_fetch(

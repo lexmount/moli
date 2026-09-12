@@ -36,7 +36,8 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata, fetch_cors_script_text,
-    spawn_async_subresource_fetch, spawn_async_subresource_fetch_with_redirect_chain,
+    observe_async_xhr_upload, spawn_async_subresource_fetch,
+    spawn_async_subresource_fetch_with_redirect_chain,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
@@ -186,7 +187,7 @@ pub(crate) use self::xhr::{
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
-    capture_xhr_upload_listener_flag, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
+    apply_xhr_upload_event, capture_xhr_upload_listener_flag, dispatch_xhr_loadstart,
     finalize_xml_http_request_event_target_realm_bindings, finish_xhr_abort,
     install_progress_event_template_bindings, install_window_xml_http_request_template_bindings,
     install_xml_http_request_bindings, install_xml_http_request_event_target_bindings,

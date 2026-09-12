@@ -70,7 +70,7 @@ use runtime_inspector::WorkerRuntimeInspector;
 
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
-    WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
+    WorkerWebCryptoCompletion, WorkerXhrEvent, close_worker_owned_broadcast_channels,
     close_worker_owned_message_ports, continue_pending_worker_csp_report,
     continue_pending_worker_fetch, continue_pending_worker_fetch_response,
     continue_pending_worker_xhr, continue_pending_worker_xhr_response,
@@ -86,7 +86,7 @@ use super::global_scope::{
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
+    drain_worker_xhr_event, fail_pending_worker_csp_report, fail_pending_worker_fetch,
     fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
     fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
     fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
@@ -1589,8 +1589,7 @@ async fn worker_main(
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
         mpsc::unbounded_channel::<WorkerFetchEvent>();
-    let (xhr_completion_tx, mut xhr_completion_rx) =
-        mpsc::unbounded_channel::<WorkerXhrCompletion>();
+    let (xhr_completion_tx, mut xhr_completion_rx) = mpsc::unbounded_channel::<WorkerXhrEvent>();
     let (module_graph_fetch_tx, mut module_graph_fetch_rx) =
         mpsc::unbounded_channel::<WorkerModuleGraphFetchCompletion>();
     let (module_evaluation_tx, mut module_evaluation_rx) =
@@ -1969,7 +1968,7 @@ async fn worker_main(
         enum WorkerLoopWake {
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
-            Xhr(Option<WorkerXhrCompletion>),
+            Xhr(Option<WorkerXhrEvent>),
             ModuleGraphFetch(Option<Box<WorkerModuleGraphFetchCompletion>>),
             ModuleEvaluation(Option<WorkerModuleEvaluationCompletion>),
             ModuleRuntime,
@@ -3015,7 +3014,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                drain_worker_xhr_completion(scope, &state, completion);
+                drain_worker_xhr_event(scope, &state, completion);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

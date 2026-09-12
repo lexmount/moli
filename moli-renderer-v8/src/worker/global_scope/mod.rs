@@ -71,13 +71,13 @@ use crate::network_host::{
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
     XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
     XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
-    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout,
+    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, apply_xhr_upload_event,
     browser_request_needs_manual_preflight_redirects,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     capture_xhr_upload_listener_flag, close_pending_network_body_stream,
-    cors_request_origin_after_redirects, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
+    cors_request_origin_after_redirects, dispatch_xhr_loadstart,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
@@ -1234,6 +1234,14 @@ pub(super) struct PausedWorkerSubresourceResponse {
     pub(super) body: SubresourceResponseBody,
 }
 
+pub(super) enum WorkerXhrEvent {
+    Upload {
+        xhr_id: u32,
+        event: moli_fetch::UploadEvent,
+    },
+    Completion(Box<WorkerXhrCompletion>),
+}
+
 pub(super) struct WorkerXhrCompletion {
     pub(super) xhr_id: u32,
     pub(super) network_request_headers: Option<Vec<(String, String)>>,
@@ -1544,7 +1552,7 @@ pub(crate) struct WorkerGlobalState {
     /// Fetch id counter.
     pub(super) next_fetch_id: u32,
     /// Async XHR completions routed back onto the worker event loop.
-    pub(super) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrCompletion>,
+    pub(super) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrEvent>,
     /// In-flight worker XHR requests keyed by internal id.
     pub(super) pending_xhrs: HashMap<u32, PendingWorkerXhr>,
     /// Worker XHR id counter.

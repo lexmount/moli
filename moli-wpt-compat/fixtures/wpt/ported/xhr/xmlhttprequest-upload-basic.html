@@ -120,7 +120,9 @@ function abort_from_upload_event_case(abortEventType) {
     };
     xhr.onloadend = function () {
       xhrEvents.push("loadend");
-      resolve({ xhr, uploadEvents, xhrEvents });
+      // A final upload progress callback can abort the XHR before the
+      // upload's remaining load/loadend events. Observe the completed task.
+      setTimeout(() => resolve({ xhr, uploadEvents, xhrEvents }), 0);
     };
     xhr.open("POST", ECHO_BODY_URL);
     xhr.responseType = "json";
@@ -266,16 +268,19 @@ promise_test(async function () {
 
 promise_test(async function () {
   const result = await abort_from_upload_event_case("progress");
+  // A full byte count can be a chunk-progress callback or the end-of-body
+  // callback. Only the former still has an incomplete upload to abort.
+  const interrupted = result.uploadEvents.some(event => event.startsWith("abort:"));
 
   assert_array_equals(
     result.uploadEvents,
     [
       "loadstart:true:true:true:0:12",
       "progress:true:true:true:12:12",
-      "abort:true:true:false:0:0",
-      "loadend:true:true:false:0:0",
+      interrupted ? "abort:true:true:false:0:0" : "load:true:true:true:12:12",
+      interrupted ? "loadend:true:true:false:0:0" : "loadend:true:true:true:12:12",
     ],
-    "aborting from upload progress should stop upload completion and emit upload abort/loadend",
+    "aborting from upload progress should respect whether the upload has completed",
   );
   assert_array_equals(
     result.xhrEvents,

@@ -22,6 +22,7 @@ mod runtime;
 mod streaming_response;
 #[cfg(test)]
 mod tests;
+mod upload;
 mod url_pattern;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -73,4 +74,5 @@ pub use runtime::{
     FetchRuntimeIdentity, FetchRuntimeJoinReport, FetchRuntimeJoinStatus, FetchRuntimePanicReport,
 };
 pub use streaming_response::{StreamingHtmlResponse, StreamingRawResponse};
+pub use upload::{UploadEvent, UploadObserver};
 pub use url_pattern::url_pattern_matches;

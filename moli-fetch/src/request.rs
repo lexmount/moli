@@ -40,6 +40,7 @@ pub struct Request {
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
+    upload_observer: Option<crate::UploadObserver>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,6 +393,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            upload_observer: None,
         })
     }
 
@@ -421,6 +423,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            upload_observer: None,
         }
     }
 
@@ -471,6 +474,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::subresource(method),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            upload_observer: None,
         })
     }
 
@@ -608,6 +612,15 @@ impl Request {
 
     pub fn uses_page_network_policy(&self) -> bool {
         self.use_page_network_policy
+    }
+
+    pub fn with_upload_observer(mut self, observer: crate::UploadObserver) -> Self {
+        self.upload_observer = Some(observer);
+        self
+    }
+
+    pub fn upload_observer(&self) -> Option<&crate::UploadObserver> {
+        self.upload_observer.as_ref()
     }
 
     pub(crate) fn with_network_observation_recorder(

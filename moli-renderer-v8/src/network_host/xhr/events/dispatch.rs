@@ -140,19 +140,42 @@ pub(crate) fn xhr_dispatch_upload_progress_event(
     loaded: f64,
     total: f64,
 ) {
+    xhr_dispatch_upload_progress_events(scope, xhr, &[event_type], loaded, total);
+}
+
+pub(crate) fn xhr_dispatch_upload_progress_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    event_types: &[&str],
+    loaded: f64,
+    total: f64,
+) {
     if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false) {
         return;
     }
     let Some(upload) = xhr_upload_object(scope, xhr) else {
         return;
     };
-    if !xhr_has_event_observers(scope, upload, event_type) {
-        return;
+    // The listener flag is tested once on entry to the event algorithm, even
+    // when an earlier event reopens the XHR and resets its request state.
+    for event_type in event_types {
+        if scope.is_execution_terminating() {
+            return;
+        }
+        if !xhr_has_event_observers(scope, upload, event_type) {
+            continue;
+        }
+        let event = super::progress::make_progress_event(
+            scope,
+            event_type,
+            upload,
+            total > 0.0,
+            loaded,
+            total,
+        );
+        let handler_name = format!("on{event_type}");
+        xhr_invoke_handler(scope, upload, &handler_name, event);
     }
-    let event =
-        super::progress::make_progress_event(scope, event_type, upload, total > 0.0, loaded, total);
-    let handler_name = format!("on{event_type}");
-    xhr_invoke_handler(scope, upload, &handler_name, event);
 }
 
 fn local_object_in_scope<'s>(

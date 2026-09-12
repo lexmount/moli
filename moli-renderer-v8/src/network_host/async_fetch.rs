@@ -607,6 +607,28 @@ pub(crate) fn spawn_async_subresource_fetch(
     );
 }
 
+pub(crate) fn observe_async_xhr_upload(
+    request: Request,
+    completion_tx: &RendererResourceCompletionSender,
+    internal_id: u64,
+) -> Request {
+    let mut request = request;
+    if request.browser_request_metadata() == Some(BrowserRequestMetadata::Xhr)
+        && request.upload_observer().is_none()
+        && let Some(body) = request.body.as_ref()
+    {
+        let upload_tx = completion_tx.clone();
+        let observer = moli_fetch::UploadObserver::new(body.len() as u64, move |event| {
+            let _ = upload_tx.send_async_subresource_event(AsyncSubresourceFetchEvent::Upload {
+                internal_id,
+                event,
+            });
+        });
+        request = request.with_upload_observer(observer);
+    }
+    request
+}
+
 pub(crate) fn spawn_async_subresource_fetch_with_redirect_chain(
     task_runner: crate::network::RendererResourceTaskRunner,
     completion_tx: RendererResourceCompletionSender,
@@ -622,6 +644,7 @@ pub(crate) fn spawn_async_subresource_fetch_with_redirect_chain(
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
 ) {
+    let request = observe_async_xhr_upload(request, &completion_tx, internal_id);
     task_runner.spawn(async move {
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
@@ -1577,6 +1600,7 @@ mod tests {
         head_sent_rx
             .await
             .expect("server should publish the response head and first bytes");
+        expect_upload_completion(&mut queue, 42).await?;
         let body_source_id = match tokio::time::timeout(
             Duration::from_secs(2),
             next_async_subresource_event(&mut queue),
@@ -1738,6 +1762,7 @@ mod tests {
         head_sent_rx
             .await
             .expect("server should publish the redirected final response head");
+        expect_upload_completion(&mut queue, 43).await?;
         match next_async_subresource_event(&mut queue).await? {
             AsyncSubresourceFetchEvent::ObservedNetworkRecord(record) => {
                 assert_eq!(record.document_url(), &document_url);
@@ -1786,5 +1811,28 @@ mod tests {
         assert_eq!(body, b"hello-xhr");
         server.await?;
         Ok(())
+    }
+    async fn expect_upload_completion(
+        queue: &mut RendererResourceCompletionTestHarness,
+        expected_id: u64,
+    ) -> anyhow::Result<()> {
+        loop {
+            match next_async_subresource_event(queue).await? {
+                AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
+                    assert_eq!(internal_id, expected_id);
+                    match event {
+                        moli_fetch::UploadEvent::Progress { loaded, total } => {
+                            assert_eq!(total, 7);
+                            assert!(loaded > 0 && loaded <= total);
+                        }
+                        moli_fetch::UploadEvent::Complete { loaded, total } => {
+                            assert_eq!((loaded, total), (7, 7));
+                            return Ok(());
+                        }
+                    }
+                }
+                other => anyhow::bail!("expected upload before response headers: {other:?}"),
+            }
+        }
     }
 }
