@@ -81,8 +81,8 @@ async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
                 postMessage({ events, readyState: xhr.readyState, status: xhr.status });
                 close();
             };
-            xhr.open("GET", URL);
-            xhr.send();
+            xhr.open("POST", URL);
+            xhr.send("payload");
             events.push("returned:" + xhr.readyState);
             queueMicrotask(() => {
                 events.push("microtask");
@@ -96,9 +96,9 @@ async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
             result,
             serde_json::json!({
                 "events": [
-                    "state:1", "xhr:loadstart:0:0:false",
-                    "returned:1", "microtask", "state:4",
-                    "xhr:error:0:0:false", "late-error-listener",
+                    "state:1", "xhr:loadstart:0:0:false", "upload:loadstart:0:7:true",
+                    "returned:1", "microtask", "state:4", "upload:error:0:0:false",
+                    "upload:loadend:0:0:false", "xhr:error:0:0:false", "late-error-listener",
                     "xhr:loadend:0:0:false"
                 ],
                 "readyState": 4, "status": 0
@@ -132,8 +132,8 @@ async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
                         target.addEventListener(type, () => events.push(
                             `${target === xhr ? 'xhr' : 'upload'}:${type}`));
                 }
-                xhr.open("GET", URL);
-                xhr.send();
+                xhr.open("POST", URL);
+                xhr.send("payload");
                 const returnedState = xhr.readyState;
                 function cancel() {
                     if (ACTION === "reopen") xhr.open("GET", "data:text/plain,reopened");
@@ -158,7 +158,7 @@ async fn worker_xhr_early_failure_can_abort_or_reopen_before_delivery() {
             let events = if action == "reopen" {
                 vec![]
             } else {
-                vec!["xhr:abort", "xhr:loadend"]
+                vec!["upload:abort", "upload:loadend", "xhr:abort", "xhr:loadend"]
             };
             assert_eq!(
                 result,
@@ -219,9 +219,9 @@ async fn worker_xhr_early_failure_still_throws_for_synchronous_requests() {
             for (const target of [xhr, xhr.upload])
                 for (const type of ["loadstart", "progress", "error", "abort", "load", "loadend"])
                     target.addEventListener(type, () => events.push(type));
-            xhr.open("GET", URL, false);
+            xhr.open("POST", URL, false);
             let exception = null;
-            try { xhr.send(); }
+            try { xhr.send("payload"); }
             catch (error) { exception = { name: error.name, domException: error instanceof DOMException }; }
             postMessage({ exception, events, readyState: xhr.readyState, status: xhr.status });
             close();
