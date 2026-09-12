@@ -2944,6 +2944,93 @@ fn match_media_uses_desktop_viewport_and_input_capabilities() {
     );
 }
 
+#[test]
+fn match_media_keeps_gecko_device_pixel_ratio_queries_unknown() {
+    let mut vm = new_storage_test_vm("https://media-feature-surface.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const unknown = [
+    '(-moz-device-pixel-ratio)',
+    '(-moz-device-pixel-ratio: 1)',
+    '(min--moz-device-pixel-ratio: 0)',
+    '(max--moz-device-pixel-ratio: 2)',
+    '(-moz-device-pixel-ratio >= 0)',
+    '(0 <= -moz-device-pixel-ratio <= 2)',
+    'not (-moz-device-pixel-ratio: 2)',
+    'not all and (-moz-device-pixel-ratio: 2)',
+    '(min--moz-device-pixel-ratio: 0) and (min-width: 0px)'
+  ];
+  const supported = [
+    '(-webkit-device-pixel-ratio: 1)',
+    '(-webkit-min-device-pixel-ratio: 0)',
+    '(-webkit-max-device-pixel-ratio: 2)',
+    '(resolution: 1dppx)',
+    '(min-resolution: 0dppx)',
+    '(min--moz-device-pixel-ratio: 0), (min-width: 0px)'
+  ];
+  return JSON.stringify({
+    unexpectedMatches: unknown.filter(query => matchMedia(query).matches),
+    unexpectedMisses: supported.filter(query => !matchMedia(query).matches),
+    unknownMediaText: matchMedia(unknown[2]).media
+  });
+})()
+"#,
+        )
+        .expect("media feature capability probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"unexpectedMatches":[],"unexpectedMisses":[],"unknownMediaText":"(min--moz-device-pixel-ratio: 0)"}"#
+    );
+}
+
+#[test]
+fn gecko_device_pixel_ratio_media_rules_do_not_apply_in_stylesheets_or_cssom() {
+    let mut vm = new_storage_test_vm("https://media-feature-cascade.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.createElement('html');
+  html.innerHTML = '<head></head><body><div id="probe">content</div></body>';
+  document.replaceChildren(html);
+  const style = document.createElement('style');
+  style.textContent = `
+    #probe { color: green; }
+    @media (min--moz-device-pixel-ratio: 0) and (min-width: 0px) {
+      #probe { color: red; }
+    }
+    @media not (-moz-device-pixel-ratio: 2) {
+      #probe { display: none; }
+    }
+  `;
+  document.head.appendChild(style);
+  const probe = document.getElementById('probe');
+  const read = () => [getComputedStyle(probe).color, getComputedStyle(probe).display];
+  const initial = read();
+  const media = style.sheet.cssRules[1].media;
+  media.mediaText = '(-webkit-min-device-pixel-ratio: 0)';
+  const webkit = read();
+  media.mediaText = '(min--moz-device-pixel-ratio: 0)';
+  const gecko = read();
+  media.mediaText = '(min--moz-device-pixel-ratio: 0), (min-resolution: 0dppx)';
+  const fallback = read();
+  return JSON.stringify({initial, webkit, gecko, fallback});
+})()
+"#,
+        )
+        .expect("stylesheet media feature cascade probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":["rgb(0, 128, 0)","block"],"webkit":["rgb(255, 0, 0)","block"],"gecko":["rgb(0, 128, 0)","block"],"fallback":["rgb(255, 0, 0)","block"]}"#
+    );
+}
+
 fn viewport_surface_800_600_on_1920_1080_screen() -> crate::protocol_types::ViewportSurface {
     crate::protocol_types::ViewportSurface {
         inner_width: 800,
