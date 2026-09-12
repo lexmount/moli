@@ -86,6 +86,8 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/content.py",
     "/xhr/resources/corsenabled.py",
+    "/xhr/resources/access-control-basic-put-allow.py",
+    "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
     "/xhr/resources/echo-content-type.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
@@ -2799,6 +2801,43 @@ def _make_handler(
                         ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
                         ("X-Request-Data", request_body.decode("latin-1")),
                     ])
+                elif path == "/xhr/resources/access-control-basic-put-allow.py":
+                    status, reason, body = 200, None, b""
+                    headers = [("Content-Type", "text/plain")]
+                    cache_control = None
+                    if self.command in {"OPTIONS", "PUT"}:
+                        origin = self.headers.get("Origin")
+                        if origin is None:
+                            raise ValueError("upstream handler requires Origin")
+                        headers.extend([
+                            ("Access-Control-Allow-Credentials", "true"),
+                            ("Access-Control-Allow-Origin", origin),
+                        ])
+                        if self.command == "OPTIONS":
+                            headers.append(("Access-Control-Allow-Methods", "PUT"))
+                        else:
+                            request_body = self._read_content_length_request_body()
+                            if request_body is None:
+                                return True
+                            upload_consumed = True
+                            body = b"PASS: Cross-domain access allowed.\n" + request_body
+                    else:
+                        body = b"Wrong method: " + self.command.encode("latin-1")
+                elif path == "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py":
+                    status, reason, headers, body = 200, None, [], b""
+                    cache_control = None
+                    if self.command == "OPTIONS":
+                        headers = [
+                            ("Access-Control-Allow-Origin", "*"),
+                            ("Access-Control-Allow-Headers", "*"),
+                        ]
+                    elif self.command == "GET":
+                        headers = [("Access-Control-Allow-Origin", "*")]
+                        if self.headers.get("X-Test"):
+                            headers.append(("Content-Type", "text/plain"))
+                            body = b"PASS"
+                        else:
+                            status = 400
                 elif path == "/xhr/resources/content.py":
                     params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
                     if "content" in params:
