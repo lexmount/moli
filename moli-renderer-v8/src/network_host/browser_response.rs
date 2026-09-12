@@ -71,7 +71,7 @@ pub(crate) fn local_url_response_with_blob_entry(
     method: &str,
     entry: Option<&CapturedBlobUrl>,
 ) -> Option<Result<Response, String>> {
-    match url.scheme() {
+    let result = match url.scheme() {
         "blob" if method != "GET" => {
             Some(Err(format!("blob URL fetch requires GET, got `{method}`")))
         }
@@ -86,7 +86,16 @@ pub(crate) fn local_url_response_with_blob_entry(
             Some(data_url_response(url).ok_or_else(|| format!("data URL `{url}` is invalid")))
         }
         _ => None,
-    }
+    }?;
+    Some(result.map(|response| {
+        if !response_has_null_body(method, response.head().status) {
+            return response;
+        }
+        // Apply the Fetch body filter before recording or delivering a local
+        // response, while preserving its status, MIME type and other headers.
+        let (head, _) = response.into_body();
+        Response::from_head_and_lossy_body_bytes(head, Vec::new())
+    }))
 }
 
 #[cfg(test)]
