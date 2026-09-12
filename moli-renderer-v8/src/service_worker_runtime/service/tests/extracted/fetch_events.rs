@@ -1145,8 +1145,10 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
     );
 
     assert!(
-        service
-            .mark_navigation_preload_response_started(event_id, &test_run_owner(version_id, &run),)
+        service.mark_navigation_preload_response_started(
+            event_id,
+            &test_run_owner(version_id, &run),
+        )
     );
     assert!(
         !navigation_preload_cancel_handle.is_cancelled(),
@@ -1157,6 +1159,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            cors_exposed_header_names: None,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
@@ -1454,6 +1457,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            cors_exposed_header_names: None,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

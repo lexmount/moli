@@ -119,6 +119,35 @@ fn fixture_response(request: &IncomingRequest) -> (u16, String, String) {
                 .to_owned(),
         );
     }
+    if url.path() == "/sandboxed-fetch-filter" {
+        return (
+            200,
+            "Content-Type: text/html\r\nContent-Security-Policy: sandbox allow-scripts\r\n"
+                .to_owned(),
+            r#"<!doctype html><script>
+            (async () => {
+                const results = [];
+                for (const mode of ['cors', 'no-cors']) {
+                    const response = await fetch('/fetch-filter-response', {mode});
+                    results.push({mode, type: response.type, status: response.status,
+                        visible: response.headers.get('x-visible'),
+                        private: response.headers.get('x-private'), body: await response.text()});
+                }
+                parent.postMessage(JSON.stringify(results), '*');
+            })().catch(error => parent.postMessage(JSON.stringify({error: String(error)}), '*'));
+            </script>"#
+                .to_owned(),
+        );
+    }
+    if url.path() == "/fetch-filter-response" {
+        return (
+            200,
+            format!(
+                "{cors}Content-Type: text/plain\r\nCache-Control: no-store\r\nCross-Origin-Resource-Policy: cross-origin\r\nAccess-Control-Expose-Headers: X-Visible\r\nX-Visible: visible\r\nX-Private: secret\r\n"
+            ),
+            "ok".to_owned(),
+        );
+    }
     if url.path() == "/sandboxed-preload" {
         return (
             200,
@@ -817,5 +846,49 @@ async fn csp_sandboxed_child_script_and_modulepreload_preserve_opaque_origin() -
             assert!(request.cookie.is_none(), "{request:?}");
         }
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn csp_sandboxed_fetch_keeps_cors_and_opaque_response_filters() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+                const frame = document.createElement('iframe');
+                const handler = event => {
+                    if (event.source !== frame.contentWindow) return;
+                    removeEventListener('message', handler);
+                    frame.remove();
+                    resolve(event.data);
+                };
+                addEventListener('message', handler);
+                frame.src = '/sandboxed-fetch-filter';
+                document.body.append(frame);
+            })"#,
+            true,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        observed,
+        json!([
+            {"mode":"cors", "type":"cors", "status":200, "visible":"visible", "private":null, "body":"ok"},
+            {"mode":"no-cors", "type":"opaque", "status":0, "visible":null, "private":null, "body":""}
+        ])
+    );
+    let requests = server.requests.lock();
+    let fetches = requests
+        .iter()
+        .filter(|request| request.path == "/fetch-filter-response")
+        .collect::<Vec<_>>();
+    assert_eq!(fetches.len(), 2, "{requests:?}");
+    assert_eq!(fetches[0].origin.as_deref(), Some("null"), "{fetches:?}");
+    assert!(
+        fetches.iter().all(|request| request.cookie.is_none()),
+        "{fetches:?}"
+    );
     Ok(())
 }

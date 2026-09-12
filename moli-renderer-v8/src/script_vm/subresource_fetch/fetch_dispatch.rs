@@ -642,7 +642,7 @@ impl ScriptVm {
                         record_started,
                     );
                     let mut observable_response = response;
-                    if pending.info.resource_type == SubresourceResourceType::Xhr && !response_filter.is_some_and(|filter| filter.is_readable()) {
+                    if pending.info.resource_type == SubresourceResourceType::Xhr && !response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
                                 &pending.request_origin,
@@ -665,13 +665,11 @@ impl ScriptVm {
                                 mode: pending.request_mode,
                                 redirect_mode,
                             };
-                            if !response_filter.is_some_and(|filter| filter.is_readable()) {
-                                head.headers = response_request.filter_response_headers(
-                                    &pending.request_origin,
-                                    &head,
-                                    pending.credentials_mode,
-                                );
-                            }
+                            let response_filter = response_filter.or_else(|| Some(response_request.network_response_filter(
+                                &pending.request_origin,
+                                &head,
+                                pending.credentials_mode,
+                            )));
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
