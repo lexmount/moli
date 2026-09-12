@@ -697,6 +697,11 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::Upload { internal_id, .. } => AsyncSubresourceTraceFields {
+            event_kind: Some("upload"),
+            internal_id: Some(*internal_id),
+            ..AsyncSubresourceTraceFields::default()
+        },
         AsyncSubresourceFetchEvent::Completion(completion) => AsyncSubresourceTraceFields {
             event_kind: Some("completion"),
             internal_id: Some(completion.internal_id),

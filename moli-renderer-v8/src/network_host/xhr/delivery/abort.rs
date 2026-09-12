@@ -16,7 +16,7 @@ pub(crate) fn finish_xhr_abort(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<
         set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
         super::prepare_xhr_request_error(scope, xhr);
         super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::Done);
-        super::super::send::dispatch_xhr_upload_abort_if_in_progress(scope, xhr);
+        super::super::upload::dispatch_xhr_upload_error_if_in_progress(scope, xhr, "abort");
         xhr_dispatch_progress_event(scope, xhr, "abort", 0.0, 0.0);
         xhr_dispatch_progress_event(scope, xhr, "loadend", 0.0, 0.0);
     }
@@ -35,7 +35,7 @@ pub(crate) fn apply_xhr_abort(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'
     clear_xhr_active_request(scope, xhr);
     set_xhr_ready_state(scope, xhr, XhrReadyState::Unsent);
     super::reset_xhr_response(scope, xhr);
-    super::super::send::dispatch_xhr_upload_abort_if_in_progress(scope, xhr);
+    super::super::upload::dispatch_xhr_upload_error_if_in_progress(scope, xhr, "abort");
     xhr_dispatch_progress_event(scope, xhr, "abort", 0.0, 0.0);
     xhr_dispatch_progress_event(scope, xhr, "loadend", 0.0, 0.0);
 }

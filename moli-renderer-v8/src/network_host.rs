@@ -41,7 +41,7 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata, fetch_cors_script_text,
-    spawn_async_subresource_fetch,
+    observe_async_xhr_upload, spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
@@ -193,9 +193,9 @@ pub(crate) use self::xhr::{
     XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
-    apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
+    apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout, apply_xhr_upload_event,
     begin_xhr_send, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_complete, finish_xhr_abort, install_progress_event_template_bindings,
+    finish_xhr_abort, install_progress_event_template_bindings,
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
     install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
     set_xhr_state_number, throw_synchronous_xhr_failure, xhr_author_request_headers,

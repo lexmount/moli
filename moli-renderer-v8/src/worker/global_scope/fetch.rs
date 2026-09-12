@@ -512,7 +512,7 @@ fn spawn_worker_fetch_service_worker(
 
 pub(in crate::worker) fn spawn_worker_xhr_network(
     load: ResourceLoadLease,
-    completion_tx: mpsc::UnboundedSender<WorkerXhrCompletion>,
+    completion_tx: mpsc::UnboundedSender<WorkerXhrEvent>,
     xhr_id: u32,
     cancel_handle: FetchCancelHandle,
     document_url: Url,
@@ -547,6 +547,13 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                 .with_network_partition_key(network_partition_key.clone())
                 .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
                 .with_use_cors_preflight(use_cors_preflight);
+            if let Some(body) = request.body.as_ref() {
+                let upload_tx = completion_tx.clone();
+                let observer = moli_fetch::UploadObserver::new(body.len() as u64, move |event| {
+                    let _ = upload_tx.send(WorkerXhrEvent::Upload { xhr_id, event });
+                });
+                request = request.with_upload_observer(observer);
+            }
             if let Some(referrer_policy) = referrer_policy {
                 request =
                     request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
@@ -622,11 +629,11 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             }
             Err(error) => (Err(format!("xhr: failed to build request: {error}")), None),
         };
-        let _ = completion_tx.send(WorkerXhrCompletion {
+        let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
             xhr_id,
             network_request_headers,
             result,
-        });
+        })));
     });
 }
 
@@ -1095,11 +1102,11 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
         }
         completion_tx
     };
-    let _ = completion_tx.send(WorkerXhrCompletion {
+    let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
-    });
+    })));
 }
 
 pub(in crate::worker) fn fail_pending_worker_xhr_auth(
@@ -1119,11 +1126,11 @@ pub(in crate::worker) fn fail_pending_worker_xhr_auth(
         }
         completion_tx
     };
-    let _ = completion_tx.send(WorkerXhrCompletion {
+    let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
-    });
+    })));
 }
 
 pub(in crate::worker) fn fulfill_pending_worker_xhr(
@@ -1159,11 +1166,13 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
             worker_response_from_body(request.url, response_code, response_headers, response_body);
         (completion_tx, response, xhr_id)
     };
-    let _ = completion.0.send(WorkerXhrCompletion {
-        xhr_id: completion.2,
-        network_request_headers: None,
-        result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
-    });
+    let _ = completion
+        .0
+        .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            xhr_id: completion.2,
+            network_request_headers: None,
+            result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
+        })));
 }
 
 pub(in crate::worker) fn continue_pending_worker_xhr_response(
@@ -1198,14 +1207,16 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
         }
         (completion_tx, response, xhr_id)
     };
-    let _ = completion.0.send(WorkerXhrCompletion {
-        xhr_id: completion.2,
-        network_request_headers: None,
-        result: Ok(WorkerXhrResponse::Streamed {
-            head: Box::new(completion.1.head),
-            body: completion.1.body,
-        }),
-    });
+    let _ = completion
+        .0
+        .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            xhr_id: completion.2,
+            network_request_headers: None,
+            result: Ok(WorkerXhrResponse::Streamed {
+                head: Box::new(completion.1.head),
+                body: completion.1.body,
+            }),
+        })));
 }
 
 pub(in crate::worker) fn fail_pending_worker_xhr_response(
@@ -1228,11 +1239,11 @@ pub(in crate::worker) fn fail_pending_worker_xhr_response(
         pending.paused_response = None;
         completion_tx
     };
-    let _ = completion_tx.send(WorkerXhrCompletion {
+    let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
-    });
+    })));
 }
 
 pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
@@ -1259,11 +1270,13 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
             worker_response_from_body(request.url, response_code, response_headers, response_body);
         (completion_tx, response, xhr_id)
     };
-    let _ = completion.0.send(WorkerXhrCompletion {
-        xhr_id: completion.2,
-        network_request_headers: None,
-        result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
-    });
+    let _ = completion
+        .0
+        .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            xhr_id: completion.2,
+            network_request_headers: None,
+            result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
+        })));
 }
 
 pub(in crate::worker) fn record_worker_websocket_subresource_failure(
