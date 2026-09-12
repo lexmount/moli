@@ -42,7 +42,19 @@ pub(super) fn advance_subresource_response(
     source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
-    // Preserve transport-refined snapshots, including cached/internal hops.
+    // Redirect request records describe the next hop's cookie decision,
+    // just as they do when the transport follows redirects internally.
+    if source == moli_fetch::RedirectSource::Network
+        && let Some(previous) = request.redirect_chain_mut().last_mut()
+        && previous.source == moli_fetch::RedirectSource::Network
+    {
+        previous.request_cookie_report = head.request_cookie_report.clone();
+        previous.request_extra_info = network_response_extra_info
+            .as_ref()
+            .map(|extra| extra.request_extra_info.clone());
+    }
+    // The single-hop transport refines request snapshots, including cache
+    // hits and internal redirects. Keep them when carrying the chain on.
     if source == moli_fetch::RedirectSource::Network {
         request.observe_redirect_requests(&head.redirect_chain);
     }
@@ -65,24 +77,19 @@ pub(super) fn advance_validated_subresource_response(
     source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
-    // Error mode rejects redirect statuses without consulting Location.
-    if request.redirect_mode() == RequestRedirectMode::Error {
-        if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
-            return Err(redirect_mode_error_message(&head.final_url));
-        }
+    if !is_redirect_status(head.status) {
         return Ok(SubresourceResponseTransition::FinalResponse);
     }
-
-    // Manual responses are filtered without following Location. Parsing it or
-    // applying the redirect limit would reject an otherwise valid response.
-    if request.redirect_mode() == RequestRedirectMode::Manual {
-        return Ok(if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
-            SubresourceResponseTransition::ManualResponse {
+    // Fetch selects manual/error handling from the status before parsing
+    // Location. A missing or invalid Location must not change those modes.
+    match request.redirect_mode() {
+        RequestRedirectMode::Error => return Err(redirect_mode_error_message(&head.final_url)),
+        RequestRedirectMode::Manual => {
+            return Ok(SubresourceResponseTransition::ManualResponse {
                 response_url: head.final_url,
-            }
-        } else {
-            SubresourceResponseTransition::FinalResponse
-        });
+            });
+        }
+        RequestRedirectMode::Follow => {}
     }
     let Some(next_url) = next_redirect_url(
         &head.final_url,
@@ -97,9 +104,12 @@ pub(super) fn advance_validated_subresource_response(
         return Err(format!("CORS redirect requires an HTTP(S) URL: {next_url}"));
     }
     if request.request_mode == RequestMode::Cors
-        && (!next_url.username().is_empty() || next_url.password().is_some())
+        && (!next_url.username().is_empty()
+            || next_url
+                .password()
+                .is_some_and(|password| !password.is_empty()))
         && request.request_origin().is_some_and(|origin| {
-            !origin.same_origin_url(&head.final_url) || !origin.same_origin_url(&next_url)
+            request.has_cross_origin_url(&head.final_url) || !origin.same_origin_url(&next_url)
         })
     {
         return Err("CORS redirect URL must not include credentials".to_owned());
@@ -127,4 +137,8 @@ pub(super) fn advance_validated_subresource_response(
 
 pub(super) fn redirect_mode_error_message(url: &url::Url) -> String {
     format!("redirect mode error blocked redirect from {url}")
+}
+
+pub(super) fn is_redirect_status(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
 }
