@@ -352,28 +352,8 @@ where
         sequence_iterator_from_method(scope, value, iterator_method, context)?;
     let mut values = Vec::new();
     while let Some(item) = sequence_iterator_next(scope, iterator, next_method, context)? {
-        let (converted, caught_exception) = {
-            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-            let mut conversion_scope = try_catch.init();
-            let converted = T::convert(&mut conversion_scope, item, context, options);
-            let caught_exception = conversion_scope
-                .has_caught()
-                .then(|| conversion_scope.exception())
-                .flatten()
-                .map(|exception| v8::Global::new(&conversion_scope, exception));
-            (converted, caught_exception)
-        };
-        match converted {
-            Ok(value) => values.push(value),
-            Err(error) => {
-                sequence_iterator_close_ignoring_errors(scope, iterator);
-                if let Some(exception) = caught_exception {
-                    let exception = v8::Local::new(scope, &exception);
-                    scope.throw_exception(exception);
-                }
-                return Err(error);
-            }
-        }
+        // WebIDL sequence conversion propagates errors without IteratorClose.
+        values.push(T::convert(scope, item, context, options)?);
     }
     Ok(Some(Sequence(values)))
 }
@@ -1161,27 +1141,6 @@ fn sequence_iterator_next<'s>(
     let value = property_result(scope, step, "value", context)?
         .ok_or_else(|| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("sequence")))?;
     Ok(Some(value))
-}
-
-fn sequence_iterator_close_ignoring_errors<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    iterator: v8::Local<'s, v8::Object>,
-) {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
-    let Some(return_key) = v8::String::new(&scope, "return") else {
-        return;
-    };
-    let Some(return_method) = iterator.get(&scope, return_key.into()) else {
-        return;
-    };
-    if return_method.is_null_or_undefined() {
-        return;
-    }
-    let Ok(return_method) = v8::Local::<v8::Function>::try_from(return_method) else {
-        return;
-    };
-    let _ = return_method.call(&scope, iterator.into(), &[]);
 }
 
 fn call_sequence_function<'s>(
