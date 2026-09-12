@@ -30,8 +30,22 @@ pub(super) fn xhr_open_callback<'s>(
     };
     let method = match normalize_request_method(&parsed.method) {
         Ok(method) => method,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
+        Err(RequestMethodError::InvalidToken) => {
+            throw_dom_exception(
+                scope,
+                "SyntaxError",
+                12,
+                "Failed to execute 'open' on 'XMLHttpRequest': The method is not a valid HTTP token.",
+            );
+            return;
+        }
+        Err(RequestMethodError::Forbidden) => {
+            throw_dom_exception(
+                scope,
+                "SecurityError",
+                18,
+                "Failed to execute 'open' on 'XMLHttpRequest': The method is forbidden.",
+            );
             return;
         }
     };
