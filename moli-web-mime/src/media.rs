@@ -1,5 +1,14 @@
 use crate::parse::{mime_essence, mime_parameter};
 
+mod codecs;
+use codecs::Codec;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaTrackKind {
+    Audio,
+    Video,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MediaMimeSupport {
     Unsupported,
@@ -21,24 +30,42 @@ pub fn media_mime_support(input: &str) -> MediaMimeSupport {
     let Some(mime) = mime_essence(input) else {
         return MediaMimeSupport::Unsupported;
     };
+    if let Some(codecs) = mime_parameter(input, "codecs") {
+        return if codecs
+            .split(',')
+            .all(|label| Codec::parse(label).is_some_and(|codec| codec.allowed_in(&mime)))
+        {
+            MediaMimeSupport::Probably
+        } else {
+            MediaMimeSupport::Unsupported
+        };
+    }
     match mime.as_str() {
-        "audio/mp3" | "audio/mpeg" | "audio/webm" | "audio/ogg" | "audio/wav" => {
+        "audio/mp3" | "audio/x-mp3" | "audio/mpeg" | "audio/aac" | "audio/flac" => {
             MediaMimeSupport::Probably
         }
-        "audio/aac" | "audio/flac" => MediaMimeSupport::Maybe,
-        "video/mp4" | "video/webm" | "video/ogg" => MediaMimeSupport::Probably,
+        "audio/webm" | "audio/ogg" | "audio/wav" | "audio/x-wav" | "audio/mp4" | "video/mp4"
+        | "video/webm" | "video/ogg" | "application/ogg" => MediaMimeSupport::Maybe,
         _ => MediaMimeSupport::Unsupported,
     }
 }
 
-pub fn is_media_source_type_supported(input: &str) -> bool {
-    if mime_essence(input).as_deref() != Some("video/mp4") {
+/// Unlike canPlayType, a decoding configuration describes a single track and
+/// cannot use an ambiguous container-only or multi-codec declaration.
+pub fn is_media_decoding_type_supported(input: &str, kind: MediaTrackKind) -> bool {
+    if media_mime_support(input) != MediaMimeSupport::Probably {
         return false;
     }
-    mime_parameter(input, "codecs").is_some_and(|codecs| {
-        codecs
-            .split(',')
-            .map(str::trim)
-            .any(|codec| codec.to_ascii_lowercase().starts_with("avc1."))
-    })
+    if let Some(label) = mime_parameter(input, "codecs") {
+        return Codec::parse(&label)
+            .is_some_and(|codec| codec.is_audio() == (kind == MediaTrackKind::Audio));
+    }
+    kind == MediaTrackKind::Audio
+}
+
+pub fn is_media_source_type_supported(input: &str) -> bool {
+    matches!(
+        mime_essence(input).as_deref(),
+        Some("audio/mpeg" | "audio/aac" | "audio/mp4" | "video/mp4" | "audio/webm" | "video/webm")
+    ) && media_mime_support(input) == MediaMimeSupport::Probably
 }
