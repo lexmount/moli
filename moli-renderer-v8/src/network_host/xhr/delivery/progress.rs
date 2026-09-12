@@ -61,7 +61,8 @@ pub(super) fn flush_xhr_streaming_progress(
     internal_id: u64,
 ) -> bool {
     if !xhr_stream_is_current(scope, xhr, internal_id) {
-        clear_xhr_progress_throttle(scope, xhr);
+        // open()/abort() retire the old progress state. A stale completion
+        // must not clear the timer or deferred progress of a newer request.
         return false;
     }
 
