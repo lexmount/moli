@@ -13,6 +13,7 @@ mod install;
 pub(super) use data_transfer::data_transfer_constructor_callback;
 pub(crate) use data_transfer::{
     apply_drag_modifier_drop_effect, build_data_transfer_object, is_branded_data_transfer_object,
+    readonly_data_transfer_for_input,
 };
 pub(crate) use data_transfer::{
     data_transfer_clear_data_callback, data_transfer_get_data_callback,

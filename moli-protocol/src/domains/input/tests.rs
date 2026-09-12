@@ -4,6 +4,7 @@ use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
 mod element_click;
+mod drop_events;
 mod keyboard_events;
 mod mouse_snapshot;
 mod text_control_compat;
