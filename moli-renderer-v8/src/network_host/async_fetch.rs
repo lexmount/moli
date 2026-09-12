@@ -544,6 +544,7 @@ async fn run_cors_preflight_if_needed(
             preflight_request_headers,
             preflight_response.status,
             &preflight_response.headers,
+            request.use_cors_preflight(),
         )?;
     }
     Ok(())
