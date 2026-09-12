@@ -2,6 +2,7 @@ use super::*;
 
 mod computed_style;
 mod cors_preflight;
+mod cors_response;
 mod cssom;
 mod dom;
 mod file_input;
