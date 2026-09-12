@@ -81,6 +81,8 @@ struct XmlHttpRequestStateDeclaration {
     send_flag: (),
     #[webapi(slot = XHR_UPLOAD_IN_PROGRESS_SLOT, init = false)]
     upload_in_progress: (),
+    #[webapi(slot = XHR_UPLOAD_LOADED_SLOT, init = 0.0)]
+    upload_loaded: (),
     #[webapi(slot = XHR_UPLOAD_LISTENER_SLOT, init = false)]
     upload_listener: (),
     #[webapi(slot = XHR_ACTIVE_INTERNAL_ID_SLOT, init = 0)]

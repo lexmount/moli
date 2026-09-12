@@ -5,6 +5,7 @@ mod mixed_transport;
 mod request_security;
 mod support;
 mod tls_credentials;
+mod upload;
 mod websocket_transport;
 
 use anyhow::{Context, Result};
