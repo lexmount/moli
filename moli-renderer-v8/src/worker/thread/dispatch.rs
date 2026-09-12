@@ -29,9 +29,8 @@ use crate::network_host::{
     close_pending_network_body_stream, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, materialize_response_object_body,
     materialize_response_object_body_with_chunk_callback,
-    materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, new_network_body_source_id,
-    set_request_destination_for_service_worker_fetch_event,
+    materialize_response_object_internal_head, materialized_body_bytes_from_value,
+    new_network_body_source_id, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
     set_request_reload_navigation_for_service_worker_fetch_event,
 };
@@ -3160,7 +3159,7 @@ fn service_worker_respond_with_settled<'s>(
         return;
     };
     let result = if fulfilled {
-        match materialize_response_object_head_for_service_worker_respond_with(
+        match materialize_response_object_internal_head(
             scope,
             args.get(0),
             "FetchEvent.respondWith",

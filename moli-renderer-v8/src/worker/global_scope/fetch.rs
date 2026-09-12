@@ -2631,8 +2631,13 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                     pending.request_mode,
                 );
             let mut observable_head = started.head.clone();
-            observable_head.headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+            observable_head.headers = crate::network_host::FetchResponseRequest {
+                method: &pending.request_method,
+                mode: pending.request_mode,
+                redirect_mode: pending.redirect_mode,
+            }
+            .filter_response_headers(
+                &request_origin,
                 &observable_head,
                 pending.credentials_mode,
             );
@@ -3044,8 +3049,14 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            let filtered_headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+            let request_origin = moli_url::WebOrigin::from_url(&pending.document_url);
+            let response_request = crate::network_host::FetchResponseRequest {
+                method: &pending.request_method,
+                mode: pending.request_mode,
+                redirect_mode: pending.redirect_mode,
+            };
+            let filtered_headers = response_request.filter_response_headers(
+                &request_origin,
                 &response_head,
                 pending.credentials_mode,
             );
@@ -3060,11 +3071,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_body_source_for_request_mode(
                         scope,
                         &pending.document_url,
-                        crate::network_host::FetchResponseRequest {
-                            method: &pending.request_method,
-                            mode: pending.request_mode,
-                            redirect_mode: pending.redirect_mode,
-                        },
+                        response_request,
                         head,
                         body,
                     )
@@ -3079,11 +3086,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_subresource_body_for_request_mode(
                         scope,
                         &pending.document_url,
-                        crate::network_host::FetchResponseRequest {
-                            method: &pending.request_method,
-                            mode: pending.request_mode,
-                            redirect_mode: pending.redirect_mode,
-                        },
+                        response_request,
                         head,
                         body,
                     )
