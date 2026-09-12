@@ -11,21 +11,6 @@ pub(in crate::context_bootstrap) fn callback_value_string(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-pub(in crate::context_bootstrap) fn callback_arg_url_like_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && let Some(href) = url_href_slot(scope, object)
-    {
-        return Some(href);
-    }
-    callback_value_string(scope, value)
-}
-
 pub(super) fn resolve_url_constructor_input(
     input: &str,
     base: Option<&str>,
