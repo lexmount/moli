@@ -8,6 +8,7 @@ mod file_input;
 mod forms;
 mod misc;
 mod no_cors_redirect;
+mod null_body;
 mod open_validation;
 mod query_realms;
 mod response_headers;
