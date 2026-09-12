@@ -20,6 +20,7 @@ struct NativeInputEventInit<'scope> {
     cancelable: bool,
     composed: bool,
     data: v8::Local<'scope, v8::Value>,
+    data_transfer: v8::Local<'scope, v8::Value>,
     input_type: v8::Local<'scope, v8::String>,
     is_composing: bool,
 }
@@ -34,12 +35,39 @@ pub(crate) fn construct_original_input_event<'s>(
         TextInputType::InsertText | TextInputType::InsertFromDrop => v8_string(scope, text)?.into(),
         _ => v8::null(scope).into(),
     };
+    construct_input_event(scope, event_type, input_type, data, v8::null(scope).into())
+}
+
+/// Rich editing carries a readable DataTransfer instead of a string. The caller
+/// retains the same transfer for both beforeinput and input.
+pub(crate) fn construct_original_drop_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    construct_input_event(
+        scope,
+        event_type,
+        TextInputType::InsertFromDrop,
+        v8::null(scope).into(),
+        data_transfer.into(),
+    )
+}
+
+fn construct_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    input_type: TextInputType,
+    data: v8::Local<'s, v8::Value>,
+    data_transfer: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let type_name: &'static str = input_type.into();
     let init = NativeInputEventInit::new(
         true,
         event_type == "beforeinput",
         true,
         data,
+        data_transfer,
         v8_string(scope, type_name)?,
         false,
     )

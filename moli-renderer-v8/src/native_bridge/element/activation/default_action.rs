@@ -1,6 +1,7 @@
 use crate::context_bootstrap::{
-    LocationNavigationKind, TextInputType, construct_original_input_event,
-    navigate_location_object_with_source_element, selection_value_for_window,
+    LocationNavigationKind, TextInputType, construct_original_drop_input_event,
+    construct_original_input_event, navigate_location_object_with_source_element,
+    readonly_data_transfer_for_input, selection_value_for_window,
 };
 use crate::dom::{
     forms::InputType,
@@ -617,15 +618,17 @@ pub(crate) fn select_contenteditable_contents(
     call_object_method(scope, selection, "addRange", &[range.into()]).is_some()
 }
 
-fn perform_contenteditable_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_contenteditable_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
     let Some(text) = data_transfer_text(scope, data_transfer) else {
         return false;
     };
+    let plaintext_only = element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"));
     let html = data_transfer_html(scope, data_transfer).filter(|html| !html.is_empty());
     if text.is_empty() && html.is_none() {
         return false;
@@ -633,37 +636,51 @@ fn perform_contenteditable_drop_default_action(
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(input_data_transfer) = readonly_data_transfer_for_input(scope, data_transfer) else {
+        return false;
+    };
+    let before_input = if plaintext_only {
+        construct_original_input_event(scope, "beforeinput", TextInputType::InsertFromDrop, &text)
+    } else {
+        construct_original_drop_input_event(scope, "beforeinput", input_data_transfer)
+    };
+    let Some(before_input) = before_input else {
         return false;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
     if event_default_prevented(scope, before_input) {
         return false;
     }
-    let Some(selection) = window_selection(scope) else {
-        return append_text_to_editing_host(scope, target, &text);
-    };
-    if let Some(html) = html
-        && replace_selected_dom_range_with_html(scope, target, selection, &html)
-    {
-        // HTML fragments are inserted as nodes, then the selection is collapsed after the fragment.
-    } else if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
-        if !replace_text_node_range(scope, node, start, end, &text) {
-            return false;
+    let inserted = if let Some(selection) = window_selection(scope) {
+        if !plaintext_only
+            && let Some(html) = html
+            && replace_selected_dom_range_with_html(scope, target, selection, &html)
+        {
+            true
+        } else if let Some((node, start, end)) = selected_text_node_range(scope, target, selection)
+        {
+            if !replace_text_node_range(scope, node, start, end, &text) {
+                return false;
+            }
+            let caret = start.saturating_add(text.chars().count()) as u32;
+            collapse_selection_to(scope, selection, node, caret);
+            true
+        } else {
+            replace_selected_dom_range(
+                scope,
+                target,
+                selection,
+                &text,
+                TextRangeInsertionMode::Replacement,
+            ) || append_text_to_editing_host(scope, target, &text)
         }
-        let caret = start.saturating_add(text.chars().count()) as u32;
-        collapse_selection_to(scope, selection, node, caret);
-    } else if !replace_selected_dom_range(
-        scope,
-        target,
-        selection,
-        &text,
-        TextRangeInsertionMode::Replacement,
-    ) && !append_text_to_editing_host(scope, target, &text)
-    {
+    } else {
+        append_text_to_editing_host(scope, target, &text)
+    };
+    if !inserted {
         return false;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
+    if let Some(event) = construct_original_drop_input_event(scope, "input", input_data_transfer) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     true
@@ -2228,11 +2245,11 @@ fn element_matches_fragment_target(element: &Element, fragment: &str) -> bool {
                 .is_some_and(|name| name == fragment))
 }
 
-pub(crate) fn perform_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(crate) fn perform_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
     let (is_file_input, allow_multiple, is_text_target, editing_host, focus_handle) = {
         let runtime = unsafe { &*runtime_ptr };

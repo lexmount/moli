@@ -119,8 +119,9 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    TextInputType, construct_original_event, construct_original_input_event,
-    construct_original_page_transition_event, construct_original_storage_event_utf16,
+    TextInputType, construct_original_drop_input_event, construct_original_event,
+    construct_original_input_event, construct_original_page_transition_event,
+    construct_original_storage_event_utf16,
 };
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
@@ -244,7 +245,9 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
-pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
+pub(crate) use self::file_api::{
+    apply_drag_modifier_drop_effect, build_data_transfer_object, readonly_data_transfer_for_input,
+};
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, flush_one_pending_file_reader,
     selected_file_from_object,

@@ -160,6 +160,7 @@ struct MessageEventInitDeclaration<'scope> {
 #[webapi(plain, data_properties, enumerable)]
 struct InputEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
+    data_transfer: v8::Local<'scope, v8::Value>,
     input_type: v8::Local<'scope, v8::String>,
     is_composing: bool,
 }
@@ -328,43 +329,52 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_drag_event<'s
     if !pointer::initialize_mouse_event(scope, event, init) {
         return false;
     }
-    let data_transfer = match init {
-        None => v8::null(scope).into(),
-        Some(init) => match webidl::property_result(
-            scope,
-            init,
-            "dataTransfer",
-            webidl::Context::member("DragEventInit", "dataTransfer"),
-        ) {
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return false;
-            }
-            Ok(None) => v8::null(scope).into(),
-            Ok(Some(value)) if value.is_null_or_undefined() => v8::null(scope).into(),
-            Ok(Some(value)) => {
-                let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-                    throw_type_error(
-                        scope,
-                        "Failed to construct 'DragEvent': member dataTransfer is not of type DataTransfer.",
-                    );
-                    return false;
-                };
-                if !is_branded_data_transfer_object(scope, object) {
-                    throw_type_error(
-                        scope,
-                        "Failed to construct 'DragEvent': member dataTransfer is not of type DataTransfer.",
-                    );
-                    return false;
-                }
-                value
-            }
-        },
+    let Some(data_transfer) = event_init_data_transfer(scope, init, "DragEvent") else {
+        return false;
     };
     DragEventInitDeclaration::new(data_transfer)
         .initialize(scope, event)
         .expect("DragEvent init declaration should initialize");
     true
+}
+
+fn event_init_data_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    init: Option<v8::Local<'s, v8::Object>>,
+    constructor: &'static str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let Some(init) = init else {
+        return Some(v8::null(scope).into());
+    };
+    let value = match webidl::property_result(
+        scope,
+        init,
+        "dataTransfer",
+        webidl::Context::member(constructor, "dataTransfer"),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    let Some(value) = value.filter(|value| !value.is_null_or_undefined()) else {
+        return Some(v8::null(scope).into());
+    };
+    if v8::Local::<v8::Object>::try_from(value)
+        .ok()
+        .is_some_and(|object| is_branded_data_transfer_object(scope, object))
+    {
+        Some(value)
+    } else {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to construct '{constructor}': member dataTransfer is not of type DataTransfer."
+            ),
+        );
+        None
+    }
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_clipboard_event<'s>(
@@ -492,15 +502,21 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_input_event<'
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
-) {
-    basic::initialize_ui_event(scope, event, init);
+) -> bool {
+    if !basic::initialize_ui_event(scope, event, init) {
+        return false;
+    }
     let data = init_value_property(scope, init, "data").unwrap_or_else(|| v8::null(scope).into());
+    let Some(data_transfer) = event_init_data_transfer(scope, init, "InputEvent") else {
+        return false;
+    };
     let input_type = init_string_property(scope, init, "inputType", "");
     let input_type_value = v8_string(scope, &input_type).expect("input event inputType");
     let is_composing = init_bool_property(scope, init, "isComposing", false);
-    InputEventInitDeclaration::new(data, input_type_value, is_composing)
+    InputEventInitDeclaration::new(data, data_transfer, input_type_value, is_composing)
         .initialize(scope, event)
         .expect("InputEvent init declaration should initialize");
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_event<'s>(

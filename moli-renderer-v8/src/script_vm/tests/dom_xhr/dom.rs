@@ -4362,16 +4362,16 @@ fn data_transfer_string_surface_and_drag_event_constructor_work() {
 }
 
 #[test]
-fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
+fn input_and_drag_event_data_transfer_init_enforce_nullable_interface_conversion() {
     let mut vm = new_storage_test_vm("https://drag-event-data-transfer-conversion.test/");
 
     let result = vm
         .eval(
             r#"
-(() => {
+JSON.stringify([DragEvent, InputEvent].map(EventConstructor => {
   const outcome = dataTransfer => {
     try {
-      new DragEvent('drop', { dataTransfer });
+      new EventConstructor('drop', { dataTransfer });
       return 'accepted';
     } catch (error) {
       return error.name;
@@ -4381,7 +4381,7 @@ fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
   const fakeTransfer = Object.create(DataTransfer.prototype);
   let getterError = 'missing';
   try {
-    new DragEvent('drop', {
+    new EventConstructor('drop', {
       get dataTransfer() {
         throw new RangeError('sentinel');
       }
@@ -4390,23 +4390,71 @@ fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
     getterError = `${error.name}:${error.message}`;
   }
   return [
-    new DragEvent('drop').dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: null }).dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: undefined }).dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: transfer }).dataTransfer === transfer,
+    new EventConstructor('drop').dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: null }).dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: undefined }).dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: transfer }).dataTransfer === transfer,
     outcome({}),
     outcome(fakeTransfer),
     outcome(1),
     getterError
   ].join('|');
-})()
+}))
 "#,
         )
         .expect("DragEvent dataTransfer conversion should evaluate");
 
     assert_eq!(
         result,
-        "true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel"
+        r#"["true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel","true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel"]"#
+    );
+}
+
+#[test]
+fn readonly_input_data_transfer_retains_native_items_after_source_changes() {
+    let mut vm = new_storage_test_vm("https://input-transfer-snapshot.test/");
+    vm.eval(
+        r#"
+        globalThis.sourceTransfer = new DataTransfer();
+        sourceTransfer.setData('text/plain', 'alpha');
+        globalThis.sourceItems = sourceTransfer.items;
+        globalThis.sourceFile = new File(['payload'], 'a.txt', {type: 'text/plain'});
+        sourceItems.add(sourceFile);
+        for (const key of ['getData', 'items', 'types', 'files', 'effectAllowed']) {
+            Object.defineProperty(sourceTransfer, key, {get() { throw new Error('page getter'); }});
+        }
+    "#,
+    )
+    .expect("source DataTransfer fixture");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let global = scope.get_current_context().global(scope);
+        let key = v8::String::new(scope, "sourceTransfer").unwrap();
+        let source = global.get(scope, key.into()).unwrap();
+        let source = v8::Local::<v8::Object>::try_from(source).unwrap();
+        let snapshot = crate::context_bootstrap::readonly_data_transfer_for_input(scope, source)
+            .expect("copy native DataTransfer state without page getters");
+        let key = v8::String::new(scope, "snapshotTransfer").unwrap();
+        assert_eq!(global.set(scope, key.into(), snapshot.into()), Some(true));
+        Ok(())
+    })
+    .expect("input transfer snapshot");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        sourceItems.clear();
+        sourceTransfer.setData('text/plain', 'beta');
+        const retainedFile = snapshotTransfer.items[1].getAsFile();
+        snapshotTransfer.items.clear();
+        snapshotTransfer.setData('text/plain', 'changed');
+        return [snapshotTransfer instanceof DataTransfer,
+            snapshotTransfer.getData('text/plain'), snapshotTransfer.types.join(','),
+            snapshotTransfer.items.length, snapshotTransfer.files.length,
+            retainedFile === sourceFile, snapshotTransfer.files[0] === sourceFile,
+            retainedFile.size, retainedFile.name].join('|');
+    })()"#
+        )
+        .expect("read-only retained payload"),
+        "true|alpha|text/plain,Files|2|1|true|true|7|a.txt"
     );
 }
 

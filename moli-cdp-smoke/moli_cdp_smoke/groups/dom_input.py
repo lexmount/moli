@@ -8,6 +8,7 @@ import urllib.parse
 from playwright.async_api import Error as PlaywrightError, expect
 
 from . import SmokeState
+from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 
 
@@ -193,6 +194,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
     await run_locator_composition_workflows(state)
     await run_keyboard_editing_workflows(state)
     await run_keypress_dispatch_workflow(state)
+    await run_drop_input_workflow(state)
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)

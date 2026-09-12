@@ -12,8 +12,16 @@ Moli. `Input.insertText` on input, textarea and contenteditable elements emits
 trusted `InputEvent` instances with `data`, `inputType` and `isComposing`;
 textarea Enter and text-control Backspace/Delete have null data and distinct
 operation types. `beforeinput` is cancelable; `input` is not. Both bubble and
-are composed. This does not claim coverage of IME composition or rich-text
-transfer/target-range semantics.
+are composed.
+
+The native drop checks use `Input.dispatchDragEvent` (dragEnter/dragOver/drop)
+and were also calibrated on that Chromium binary. Rich contenteditable edits
+carry null data and a read-only DataTransfer, shared by beforeinput/input and
+readable after dispatch. Text controls carry string data and null DataTransfer.
+For plaintext-only contenteditable, Chromium exposes text on beforeinput and
+the transfer on input. Cancellation and page-replaced InputEvent constructors
+are covered. These checks do not claim full drag-store lifecycle, IME or
+target-range support.
 
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the

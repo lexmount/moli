@@ -18,6 +18,7 @@ const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
 const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
+const DATA_TRANSFER_READ_ONLY_SLOT: &str = "__lmDataTransferReadOnly";
 const DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT: &str = "__lmDataTransferItemArray";
 const DATA_TRANSFER_ITEM_LIST_OWNER_SLOT: &str = "__lmDataTransferOwner";
 const DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT: &str = "__lmDataTransferItemListIndexedLength";
@@ -46,6 +47,8 @@ pub(super) const FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT: &str =
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DataTransfer, require_prototype)]
 struct DataTransferObjectDeclaration<'s> {
+    #[webapi(slot = DATA_TRANSFER_READ_ONLY_SLOT, constructor_default = false)]
+    read_only: bool,
     #[webapi(slot = DATA_TRANSFER_FILES_SLOT)]
     files: v8::Local<'s, v8::Object>,
     #[webapi(slot = DATA_TRANSFER_ITEMS_SLOT)]
@@ -429,6 +432,13 @@ fn data_transfer_effect_allowed<'s>(
     private_string_property(scope, object, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
 }
 
+fn data_transfer_can_write<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    private_bool_property(scope, object, DATA_TRANSFER_READ_ONLY_SLOT) == Some(false)
+}
+
 fn item_list_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item_list: v8::Local<'s, v8::Object>,
@@ -468,6 +478,11 @@ impl<'s> DataTransferItemStore<'s> {
         Self { item_list }
     }
 
+    fn can_write(self, scope: &mut v8::PinScope<'s, '_>) -> bool {
+        item_list_owner(scope, self.item_list)
+            .is_some_and(|owner| data_transfer_can_write(scope, owner))
+    }
+
     fn mutate<'a, T>(
         self,
         scope: &mut v8::PinScope<'s, 'a>,
@@ -476,6 +491,9 @@ impl<'s> DataTransferItemStore<'s> {
             v8::Local<'s, v8::Array>,
         ) -> DataTransferItemListMutation<T>,
     ) -> Option<T> {
+        if !self.can_write(scope) {
+            return None;
+        }
         let item_array = item_list_array(scope, self.item_list)?;
         let (value, changed) = match mutation(scope, item_array) {
             DataTransferItemListMutation::Unchanged(value) => (value, false),
@@ -776,6 +794,57 @@ pub(crate) fn build_data_transfer_object<'s>(
     );
 
     DataTransferItemStore::new(item_list).append_drag_data(scope, data)?;
+    Some(object)
+}
+
+/// Editing InputEvents keep their own readable data beyond the drag dispatch.
+/// Copy native item state, not page-visible getters or the mutable drag list.
+pub(crate) fn readonly_data_transfer_for_input<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let source_list = get_private_object(scope, source, DATA_TRANSFER_ITEMS_SLOT)?;
+    let source_items = item_list_array(scope, source_list)?;
+    let object = DataTransferShellDeclaration::default().bind(scope).ok()?;
+    let item_list = initialize_data_transfer_object(scope, object)?;
+    let effect = data_transfer_effect_allowed(scope, source)?;
+    set_private_string(scope, object, DATA_TRANSFER_EFFECT_ALLOWED_SLOT, &effect);
+    DataTransferItemStore::new(item_list).mutate(scope, |scope, items| {
+        for index in 0..source_items.length() {
+            let Some(item) = source_items
+                .get_index(scope, index)
+                .and_then(|item| v8::Local::<v8::Object>::try_from(item).ok())
+            else {
+                continue;
+            };
+            let mime_type = item_type(scope, item).unwrap_or_default();
+            let copy = if let Some(text) = item_string_value(scope, item) {
+                build_data_transfer_item_for_string(scope, &mime_type, &text)
+            } else if let Some(entry) = item_entry_object(scope, item) {
+                if let Some(file) = item_file_object(scope, item) {
+                    DataTransferFileItemObjectDeclaration::new(&mime_type, file, entry)
+                        .bind(scope)
+                        .ok()
+                } else {
+                    DataTransferDirectoryItemObjectDeclaration::new(entry)
+                        .bind(scope)
+                        .ok()
+                }
+            } else {
+                None
+            };
+            if let Some(copy) = copy {
+                let _ = append_item(scope, items, copy);
+            }
+        }
+        DataTransferItemListMutation::Changed(())
+    })?;
+    set_private_value(
+        scope,
+        object,
+        DATA_TRANSFER_READ_ONLY_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
     Some(object)
 }
 
@@ -1131,7 +1200,7 @@ fn data_transfer_effect_allowed_setter<'s>(
             return;
         }
     };
-    if valid_effect_allowed(&value) {
+    if valid_effect_allowed(&value) && data_transfer_can_write(scope, args.this()) {
         set_private_string(
             scope,
             args.this(),
@@ -1328,6 +1397,10 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
                 return;
             }
         };
+        if !store.can_write(scope) {
+            rv.set(v8::null(scope).into());
+            return;
+        }
         if store.contains_string_type(scope, &mime_type) {
             throw_dom_exception(
                 scope,
@@ -1339,6 +1412,10 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
         }
         build_data_transfer_item_for_string(scope, &mime_type, &data)
     } else {
+        if !store.can_write(scope) {
+            rv.set(v8::null(scope).into());
+            return;
+        }
         v8::Local::<v8::Object>::try_from(data)
             .ok()
             .filter(|file| selected_file_from_object(scope, *file).is_some())
@@ -1384,7 +1461,12 @@ pub(crate) fn data_transfer_item_list_remove_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferItemListRemoveArgs>(scope, &args) else {
         return;
     };
-    DataTransferItemStore::new(args.this()).remove(scope, parsed.index);
+    let store = DataTransferItemStore::new(args.this());
+    if !store.can_write(scope) {
+        throw_dom_exception(scope, "InvalidStateError", 11, "The list is not writable.");
+        return;
+    }
+    store.remove(scope, parsed.index);
 }
 
 pub(crate) fn data_transfer_item_list_clear_callback<'s>(

@@ -3,6 +3,7 @@ use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext};
 use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
+mod drop_events;
 mod keyboard_events;
 
 const INPUT_HIT_X: u32 = 20;
