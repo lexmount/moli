@@ -203,6 +203,21 @@ external endpoint or on non-Linux systems, protocol churn/navigation still run;
 the artifact explicitly reports that FD sampling was unavailable. CI uses the
 managed Linux server, so the resource assertions are mandatory there.
 
+The Chromium-calibrated `svg-indexeddb-startup` group covers the JSXGraph-style
+SVG feature check and drives IndexedDB through asynchronous versionchange requests,
+request-callback/microtask schema migration, commit, reopen, abort rollback
+and FIFO admission across all open/delete calls. The shared connection lifecycle
+fixture also checks database versus open-request transaction attachment during
+complete/abort, concurrent initial opens, deferred version resolution, blocked
+head isolation, versionchange microtask close, and queue recovery after abort
+or close. Rust and CDP use the same Chromium-calibrated expected result. Its application
+fixture deliberately contains hidden error messages from the beginning;
+success requires completed database work and the ready panel, not a large
+text dump. This distinction comes from the live sketchometry investigation:
+the IndexedDB factory was present, while a missing SVG feature-detection
+method and prematurely completed upgrade transactions prevented startup.
+Each smoke group gets its own Moli process.
+
 Covered well:
 
 - The default raw `debugger-breakpoints`, `runtime-exception`, and
@@ -427,6 +442,7 @@ Runner layout:
   coordinates, exact used frame viewport propagation, and Moli's nested-frame
   UA scrollbar routing boundary.
 - `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, detailed geolocation plus locale/timezone runtime overrides, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
+- `groups/font_face.py`: process-isolated FontFace payload validation contracts.
 - `groups/media_error.py`: process-isolated HTMLMediaElement MediaError lifecycle contracts.
 - `groups/target_semantics.py`: raw Target-domain identity, attachment,
   activation, visibility, and lifecycle contracts calibrated against Chromium.
@@ -501,7 +517,7 @@ uv run moli-cdp-smoke --group agent-episode
 uv run moli-cdp-smoke --group fetch-runtime-teardown
 uv run moli-cdp-smoke --group network-body-cache
 uv run moli-cdp-smoke --group dom-input,emulation-storage
-uv run moli-cdp-smoke --group media-error
+uv run moli-cdp-smoke --group font-face,media-error,emulation-storage --jobs 3
 uv run moli-cdp-smoke --group document-content
 uv run moli-cdp-smoke --group dom-snapshot
 uv run moli-cdp-smoke --group dom-whitespace

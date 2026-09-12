@@ -10,6 +10,7 @@ use super::{
 use crate::util::{new_null_prototype_object, private_key, set_private_value};
 
 mod backend;
+mod connection_queue;
 mod core;
 mod cursor;
 mod database;
@@ -26,6 +27,7 @@ mod typed_state;
 mod types;
 
 use self::backend::*;
+use self::connection_queue::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
@@ -56,9 +58,9 @@ pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
-pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>) {
-    flush_drain_blocked_open_requests_task(scope);
-}
+pub(crate) use self::connection_queue::{
+    SharedIndexedDbConnectionQueue, flush_indexed_db_connection_requests,
+};
 
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;
 pub(crate) use self::core::set_indexed_db_manager_for_context;

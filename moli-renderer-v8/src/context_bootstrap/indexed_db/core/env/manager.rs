@@ -6,6 +6,16 @@ use crate::context_bootstrap::indexed_db::WeakIndexedDbManager;
 #[derive(Clone, Debug)]
 pub(crate) struct IndexedDbManagerSlot(pub(crate) Option<WeakIndexedDbManager>);
 
+pub(in crate::context_bootstrap::indexed_db) fn weak_indexed_db_manager_for_context(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<WeakIndexedDbManager> {
+    scope
+        .get_current_context()
+        .get_slot::<IndexedDbManagerSlot>()?
+        .0
+        .clone()
+}
+
 pub(crate) fn set_indexed_db_manager_for_context(
     context: v8::Local<'_, v8::Context>,
     manager: Option<WeakIndexedDbManager>,

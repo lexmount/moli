@@ -7,6 +7,5 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>
     let Some(transaction) = indexed_db_transaction_task_transaction(scope, task) else {
         return;
     };
-    let _ = dispatch_idb_named_event(scope, transaction, "abort", |_, _| {});
-    release_indexed_db_transaction_dispatch_refs(scope, transaction);
+    dispatch_transaction_terminal(scope, transaction, "abort", false);
 }
