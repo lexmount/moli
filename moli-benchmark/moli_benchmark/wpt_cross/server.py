@@ -105,6 +105,7 @@ FETCH_PREFLIGHT_RESOURCE_PATHS = {
     "/fetch/api/resources/clean-stash.py",
 }
 FETCH_REDIRECT_RESOURCE_PATHS = {
+    "/common/redirect.py",
     "/fetch/api/resources/redirect.py",
     "/fetch/api/resources/redirect-empty-location.py",
 }
@@ -2311,10 +2312,7 @@ def _make_handler(
                     status_code=status_code,
                 )
                 return
-            if path in {
-                "/common/redirect.py",
-                "/common/redirect-opt-in.py",
-            }:
+            if path == "/common/redirect-opt-in.py":
                 redirect = _redirect_fixture_response(parsed.query)
                 if redirect is None:
                     self.send_error(400)
@@ -2324,11 +2322,8 @@ def _make_handler(
                     ("Cache-Control", "no-cache"),
                     ("Pragma", "no-cache"),
                     ("Location", location),
+                    ("Timing-Allow-Origin", "*"),
                 ]
-                if path == "/common/redirect-opt-in.py":
-                    redirect_headers.append(("Timing-Allow-Origin", "*"))
-                else:
-                    redirect_headers.append(("Access-Control-Allow-Origin", "*"))
                 self._send_bytes(
                     "text/plain; charset=utf-8",
                     b"",
@@ -3013,6 +3008,28 @@ def _make_handler(
                 )
                 return
             params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            if unquote(urlsplit(self.path).path) == "/common/redirect.py":
+                status = 302
+                try:
+                    status = int(params.get("status", ["302"])[0].encode("latin-1"))
+                except ValueError:
+                    pass
+                if "location" not in params:
+                    self.send_error(500)
+                    return
+                headers = [*connection_headers, ("Location", params["location"][0])]
+                origin = self.headers.get("Origin")
+                if "enable-cors" in params and origin:
+                    headers.extend([
+                        ("Content-Type", "text/plain"),
+                        ("Access-Control-Allow-Origin", origin),
+                        ("Access-Control-Allow-Credentials", "true"),
+                    ])
+                self._send_bytes(
+                    None, b"", emit_body=emit_body, status_code=status,
+                    extra_headers=headers, cache_control=None,
+                )
+                return
             stash_path = urlsplit(self.path).path
             headers = [*connection_headers, ("Content-Type", "text/plain"), ("Pragma", "no-cache")]
             if "Origin" in self.headers:
