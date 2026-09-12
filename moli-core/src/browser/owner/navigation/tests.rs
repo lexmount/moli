@@ -3266,6 +3266,173 @@ async fn browser_service_navigates_queries_replaces_and_closes_without_devtools(
 }
 
 #[tokio::test]
+async fn native_activation_survives_outgoing_document_retirement() {
+    activation_survives_document_retirement(false).await;
+}
+
+#[tokio::test]
+async fn native_activation_survives_selected_document_retirement() {
+    activation_survives_document_retirement(true).await;
+}
+
+async fn activation_survives_document_retirement(retire_selected: bool) {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, first) = context_with_contents(&service);
+    let first_document = navigate(&context, first, "data:text/html,first").await;
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    let peer_document = navigate(&context, peer, "data:text/html,peer").await;
+    browser
+        .activate_web_contents(first)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let retired = if retire_selected {
+        peer_document
+    } else {
+        first_document
+    };
+    let policy = context
+        .start_document_policy_update(
+            retired,
+            crate::browser::DocumentPolicyUpdate::CpuThrottlingRate(2.0),
+        )
+        .unwrap()
+        .wait()
+        .await;
+    let lifetime = context.observe_document_lifetime(retired).unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let (activation, closed) = browser
+        .execute(move |browser| {
+            let activation = browser.activate_web_contents(peer).unwrap();
+            // The spawned activation completion cannot run until this owner turn
+            // ends. Retire the real Document here, before either surface result
+            // can be applied, without a timing delay or production test hook.
+            let context = browser.context_mut(first.context()).unwrap();
+            let retirement = context.retire_document(retired.web_contents()).unwrap();
+            assert!(context.document(retired).is_err());
+            let (closed, completion) = oneshot::channel();
+            tokio::task::spawn_local(async move {
+                retirement.close().await;
+                let _ = closed.send(());
+            });
+            (activation, completion)
+        })
+        .unwrap();
+    let result = activation.wait().await;
+    closed.await.unwrap();
+    assert_eq!(lifetime.wait().await, DocumentRetirement::Superseded);
+    let event =
+        result.expect("retired surface work cannot fail a committed WebContents activation");
+    assert_eq!(
+        event.event,
+        BrowserEvent::WebContentsActivated {
+            web_contents: peer,
+            previous: Some(first),
+        }
+    );
+    let selection = context.selected_web_contents_snapshot().unwrap();
+    assert_eq!(selection.web_contents, peer);
+    assert_eq!(selection.sequence, event.sequence);
+    let mut occurrences = 0;
+    while let Ok(observed) = events.try_recv() {
+        if observed == event {
+            occurrences += 1;
+        }
+    }
+    assert_eq!(
+        occurrences, 1,
+        "activation publishes one committed occurrence"
+    );
+
+    let replacement = navigate(
+        &context,
+        retired.web_contents(),
+        "data:text/html,replacement",
+    )
+    .await;
+    assert_ne!(replacement, retired);
+    assert_eq!(context.selected_web_contents_handle(), Some(peer));
+    assert_eq!(
+        context.finish_document_policy_update(policy),
+        Err("Document changed".into()),
+        "ordinary Document policy completion must still reject a replacement"
+    );
+    assert!(context.start_capture_document_snapshot(retired).is_err());
+    assert_eq!(
+        context.document_handle(retired.web_contents()).unwrap(),
+        Some(replacement)
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_activation_completion_preserves_a_later_selection() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, first) = context_with_contents(&service);
+    let first_document = navigate(&context, first, "data:text/html,first").await;
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    let peer_document = navigate(&context, peer, "data:text/html,peer").await;
+    browser
+        .activate_web_contents(first)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let (earlier, later) = browser
+        .execute(move |browser| {
+            let earlier = browser.activate_web_contents(peer).unwrap();
+            let later = browser.activate_web_contents(first).unwrap();
+            (earlier, later)
+        })
+        .unwrap();
+    let later = later.wait().await.unwrap();
+    let earlier = earlier.wait().await.unwrap();
+    assert!(earlier.sequence < later.sequence);
+    assert_eq!(
+        earlier.event,
+        BrowserEvent::WebContentsActivated {
+            web_contents: peer,
+            previous: Some(first)
+        }
+    );
+    assert_eq!(
+        later.event,
+        BrowserEvent::WebContentsActivated {
+            web_contents: first,
+            previous: Some(peer)
+        }
+    );
+    assert_eq!(
+        context.selected_web_contents_snapshot().unwrap(),
+        crate::browser::WebContentsSelection {
+            web_contents: first,
+            sequence: later.sequence,
+        }
+    );
+    for (document, expected) in [
+        (first_document, "false,true"),
+        (peer_document, "true,false"),
+    ] {
+        assert_eq!(
+            context
+                .evaluate_document_expression_for_test(
+                    document,
+                    "[document.hidden, document.hasFocus()].join(',')",
+                    false
+                )
+                .await
+                .unwrap()["value"],
+            expected,
+            "late completion must not replay an earlier visibility update"
+        );
+    }
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_selection_updates_both_documents_without_replacing_them_or_their_policy() {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();
