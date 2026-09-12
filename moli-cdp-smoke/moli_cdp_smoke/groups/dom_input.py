@@ -12,6 +12,7 @@ from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..helpers import capture_layout
 from ..config import is_moli_browser
+from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..progress import await_with_progress
 
@@ -246,6 +247,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
         run_keypress_dispatch_workflow(state),
         timeout_seconds=30,
     )
+    await run_drop_input_workflow(state)
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)
