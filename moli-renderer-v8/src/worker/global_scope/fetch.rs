@@ -2692,6 +2692,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 pending.document_url.clone(),
                 pending.request_mode,
                 pending.request_method.clone(),
+                pending.redirect_mode,
                 observable_head,
             ))
         }
@@ -2707,8 +2708,14 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
-        response_input
+    if let Some((
+        resolver,
+        document_url,
+        request_mode,
+        request_method,
+        redirect_mode,
+        observable_head,
+    )) = response_input
     {
         let response_obj = build_fetch_response_object_from_stream_for_request_mode(
             scope,
@@ -2716,6 +2723,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             crate::network_host::FetchResponseRequest {
                 method: &request_method,
                 mode: request_mode,
+                redirect_mode,
             },
             observable_head,
             started.body_source_id,
@@ -3111,6 +3119,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         crate::network_host::FetchResponseRequest {
                             method: &pending.request_method,
                             mode: pending.request_mode,
+                            redirect_mode: pending.redirect_mode,
                         },
                         head,
                         body,
@@ -3129,6 +3138,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         crate::network_host::FetchResponseRequest {
                             method: &pending.request_method,
                             mode: pending.request_mode,
+                            redirect_mode: pending.redirect_mode,
                         },
                         head,
                         body,
