@@ -161,7 +161,8 @@ globalThis.__mediaCapabilitiesMimeRows = '[]';
         "contentType": "application/ogg; codecs=vorbis",
         "file": true,
         "rtp": true,
-        "unsupportedFile": true
+        "unsupportedFile": false,
+        "supportedFile": true
     },
     {
         "kind": "audio",
@@ -687,7 +688,10 @@ globalThis.__mediaCapabilitiesMimeRows = '[]';
                 boolean = typeof supported === 'boolean';
             } catch (caught) {error = caught instanceof TypeError ? 'TypeError' : String(caught);}
             const unsupported = type === 'webrtc' || spec.unsupportedFile;
-            rows.push({query: method + '/' + type, index, promise, error, supported, pass: promise && (valid ? error === null && boolean && (!unsupported || supported === false) : error === 'TypeError')});
+            // File and record queries share Moli's codec profile. Application
+            // Ogg/Vorbis is now recognized by that profile, so assert support.
+            const requiresSupport = spec.supportedFile && (type === 'file' || type === 'record');
+            rows.push({query: method + '/' + type, index, promise, error, supported, pass: promise && (valid ? error === null && boolean && (!unsupported || supported === false) && (!requiresSupport || supported === true) : error === 'TypeError')});
         }
     }
     globalThis.__mediaCapabilitiesMimeRows = JSON.stringify(rows);

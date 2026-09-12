@@ -607,7 +607,8 @@ fn zhihu_probe_window_capabilities_exist_on_global_scope() {
               openType: typeof open,
               mediaSourceType: typeof MediaSource,
               mediaSourceProbe: MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"'),
-              mediaSourceNope: MediaSource.isTypeSupported('video/webm; codecs="vp09.00.10.08"'),
+              mediaSourceVp9: MediaSource.isTypeSupported('video/webm; codecs="vp09.00.10.08"'),
+              mediaSourceNope: MediaSource.isTypeSupported('video/webm; codecs="not-a-codec"'),
               availLeft: screen.availLeft,
               availTop: screen.availTop
             })
@@ -617,7 +618,7 @@ fn zhihu_probe_window_capabilities_exist_on_global_scope() {
 
     assert_eq!(
         result,
-        r#"{"stopType":"function","printType":"function","openType":"function","mediaSourceType":"function","mediaSourceProbe":true,"mediaSourceNope":false,"availLeft":0,"availTop":0}"#
+        r#"{"stopType":"function","printType":"function","openType":"function","mediaSourceType":"function","mediaSourceProbe":true,"mediaSourceVp9":true,"mediaSourceNope":false,"availLeft":0,"availTop":0}"#
     );
 }
 #[test]

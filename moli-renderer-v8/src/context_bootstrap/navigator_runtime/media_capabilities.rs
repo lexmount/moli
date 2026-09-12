@@ -300,10 +300,12 @@ fn media_capabilities_decoding_info_callback<'s>(
             MediaConfigurationType::Decoding(configuration.decoding_type),
         )
     };
+    // This software profile predicts smooth decoding for recognized formats;
+    // it does not claim hardware-efficient video decoding.
     let info = MediaCapabilitiesDecodingInfo {
         info: MediaCapabilitiesInfo {
-            power_efficient: false,
-            smooth: false,
+            power_efficient: supported && configuration.media.video.is_none(),
+            smooth: supported,
             supported,
         },
         configuration,
@@ -523,12 +525,22 @@ fn configuration_supported(
     if configuration_type.is_webrtc() {
         return false;
     }
+    let supports_type = |content_type: &str, kind| match configuration_type {
+        MediaConfigurationType::Encoding(_) => {
+            moli_web_mime::media_mime_support(content_type)
+                != moli_web_mime::MediaMimeSupport::Unsupported
+        }
+        MediaConfigurationType::Decoding(decoding_type) => {
+            moli_web_mime::is_media_decoding_type_supported(content_type, kind)
+                && (decoding_type != MediaDecodingType::MediaSource
+                    || moli_web_mime::is_media_source_type_supported(content_type))
+        }
+    };
     configuration.audio.as_ref().is_none_or(|audio| {
-        moli_web_mime::media_mime_support(&audio.content_type)
-            != moli_web_mime::MediaMimeSupport::Unsupported
+        supports_type(&audio.content_type, moli_web_mime::MediaTrackKind::Audio)
+            && audio.spatial_rendering != Some(true)
     }) && configuration.video.as_ref().is_none_or(|video| {
-        moli_web_mime::media_mime_support(&video.content_type)
-            != moli_web_mime::MediaMimeSupport::Unsupported
+        supports_type(&video.content_type, moli_web_mime::MediaTrackKind::Video)
             && video_codec_color_supported(video)
     })
 }
