@@ -272,7 +272,7 @@ async fn fetch_stylesheet_readiness_with_request(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum StylesheetResponseProvenance {
     Network,
     ServiceWorker {
@@ -282,7 +282,7 @@ enum StylesheetResponseProvenance {
 
 impl StylesheetResponseProvenance {
     fn is_cors_same_origin(
-        self,
+        &self,
         request_origin: &moli_url::WebOrigin,
         request_url: &Url,
         head: &moli_fetch::ResponseHead,
@@ -321,7 +321,7 @@ fn stylesheet_terminal_from_response(
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
     let cors_usability =
-        (request_mode == moli_fetch::RequestMode::Cors).then(|| match response_provenance {
+        (request_mode == moli_fetch::RequestMode::Cors).then(|| match &response_provenance {
             StylesheetResponseProvenance::ServiceWorker {
                 filter:
                     Some(

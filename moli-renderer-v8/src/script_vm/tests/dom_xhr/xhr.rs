@@ -3069,6 +3069,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(&document_url),
@@ -3362,6 +3363,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
@@ -3530,6 +3532,7 @@ fn install_streaming_fetch_response_fixture(
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
+                    skip_fetch_security_validation: false,
                     pending: super::PendingSubresourceFetchState {
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
@@ -3635,6 +3638,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
+                        skip_fetch_security_validation: false,
                         pending: super::PendingSubresourceFetchState {
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
@@ -4268,6 +4272,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
+                    skip_fetch_security_validation: false,
                     pending: super::PendingSubresourceFetchState {
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(
