@@ -112,3 +112,11 @@ pub(in crate::worker) struct WorkerWebSocketState {
     pub(in crate::worker) load: Option<ResourceLoadLease>,
     pub(in crate::worker) handshake_recorded: bool,
 }
+
+pub(in crate::worker) enum WorkerXhrEvent {
+    Upload {
+        xhr_id: u32,
+        event: moli_fetch::UploadEvent,
+    },
+    Completion(Box<WorkerXhrCompletion>),
+}
