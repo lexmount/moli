@@ -838,7 +838,6 @@ fn request_clone_callback<'s>(
             };
         let headers =
             super::headers::build_headers_object_with_state(scope, &entries, guard, false);
-        super::headers::install_headers_object_methods(scope, headers);
         set_request_slot_value(scope, clone, REQUEST_HEADERS_SLOT, headers.into());
         let signal_source = request_slot_object(scope, this, REQUEST_SIGNAL_SLOT);
         let Some(signal) = new_abort_signal_for_request_with_source(scope, signal_source) else {

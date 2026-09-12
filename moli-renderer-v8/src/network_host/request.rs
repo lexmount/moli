@@ -4,7 +4,6 @@ mod input;
 
 use super::headers::{
     build_headers_object_with_state, filter_headers_for_guard, headers_entries_from_init,
-    install_headers_object_methods,
 };
 use super::*;
 

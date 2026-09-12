@@ -80,7 +80,6 @@ pub(super) fn install_response_headers(
     let entries = filter_headers_for_guard(&entries, HeadersGuard::Response);
     let headers_obj =
         build_headers_object_with_state(scope, &entries, HeadersGuard::Response, false);
-    install_headers_object_methods(scope, headers_obj);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
 }
 

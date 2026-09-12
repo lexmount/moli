@@ -7,7 +7,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Headers, prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Headers)]
 struct HeadersStorageDeclaration {
     #[webapi(slot = HEADERS_ENTRIES_SLOT)]
     entries: String,
