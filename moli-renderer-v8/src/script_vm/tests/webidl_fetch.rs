@@ -7036,6 +7036,117 @@ async fn form_data_and_url_search_params_for_each_use_callback_relevant_realm() 
 }
 
 #[test]
+fn request_and_response_headers_share_intrinsic_prototype_methods() {
+    let mut vm = new_storage_test_vm("https://headers-object-prototype.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const NativeHeaders = Headers;
+  const prototype = NativeHeaders.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Headers');
+  const nativeGet = prototype.get;
+  let lookups = 0;
+  Object.defineProperty(globalThis, 'Headers', {configurable: true, get() {
+    lookups++;
+    throw new Error('public Headers lookup');
+  }});
+  try {
+    const request = new Request('/request', {headers: {'x-test': 'request'}});
+    const streamRequest = new Request('/stream', {method: 'POST', duplex: 'half',
+      body: new ReadableStream({start(controller) {controller.close();}})});
+    const response = new Response('body', {headers: {'x-test': 'response'}});
+    const error = Response.error();
+    const redirect = Response.redirect('/target');
+    const holders = [request, request.clone(), streamRequest, streamRequest.clone(),
+      response, response.clone(), error, error.clone(), redirect, redirect.clone()];
+    const methods = ['get', 'has', 'getSetCookie', 'set', 'delete', 'append',
+      'keys', 'values', 'entries', 'forEach', Symbol.iterator];
+    for (const holder of holders) {
+      const headers = holder.headers;
+      check(headers === holder.headers, 'same Headers object');
+      check(Object.getPrototypeOf(headers) === prototype && headers instanceof NativeHeaders,
+        'intrinsic Headers prototype');
+      check(Object.prototype.toString.call(headers) === '[object Headers]', 'Headers class');
+      check(Reflect.ownKeys(headers).length === 0, 'no own methods');
+      for (const key of methods) check(headers[key] === prototype[key], String(key));
+    }
+    check(nativeGet.call(request.headers, 'x-test') === 'request', 'request entries');
+    check(nativeGet.call(response.headers, 'x-test') === 'response', 'response entries');
+    prototype.get = function() { return this; };
+    for (const holder of holders) check(holder.headers.get() === holder.headers,
+      'prototype method changes must remain observable');
+    const fresh = new Response('fresh').headers;
+    check(fresh.get() === fresh, 'new objects share updated prototype methods');
+    check(lookups === 0, 'factory must not consult replaced global');
+    return 'ok';
+  } finally {
+    prototype.get = nativeGet;
+    Object.defineProperty(globalThis, 'Headers', descriptor);
+  }
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[tokio::test]
+async fn response_headers_keep_receiver_realm_across_borrowed_getters_and_clones() {
+    let mut vm = new_storage_test_vm("https://headers-owner-realm.test/");
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || root.appendChild(document.createElement('body'));
+globalThis.headersFrame = document.createElement('iframe');
+body.appendChild(headersFrame);
+"#,
+    )
+    .unwrap();
+    assert_initial_about_blank_child_completed_synchronously_for_test(&mut vm, "Headers realm")
+        .await;
+    let _ = materialize_single_child_default_realm_for_test(&mut vm, "Headers realm");
+    let result = vm.eval(r#"
+(() => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const child = headersFrame.contentWindow;
+  const parentHeaders = Headers;
+  const childHeaders = child.Headers;
+  const parentResponse = new Response('parent', {headers: {'x-realm': 'parent'}});
+  const childResponse = new child.Response('child', {headers: {'x-realm': 'child'}});
+  const parentGetter = Object.getOwnPropertyDescriptor(Response.prototype, 'headers').get;
+  const childGetter = Object.getOwnPropertyDescriptor(child.Response.prototype, 'headers').get;
+  const descriptors = [globalThis, child].map(realm => Object.getOwnPropertyDescriptor(realm, 'Headers'));
+  for (const realm of [globalThis, child]) Object.defineProperty(realm, 'Headers', {
+    configurable: true, get() { throw new Error('public Headers lookup'); }
+  });
+  try {
+    for (const [response, clone, ctor, getter, value] of [
+      [parentResponse, child.Response.prototype.clone.call(parentResponse), parentHeaders, childGetter, 'parent'],
+      [childResponse, Response.prototype.clone.call(childResponse), childHeaders, parentGetter, 'child']
+    ]) {
+      check(getter.call(response) === response.headers, 'borrowed getter returns associated Headers');
+      for (const entry of [response, clone]) {
+        const headers = entry.headers;
+        check(Object.getPrototypeOf(headers) === ctor.prototype && headers instanceof ctor,
+          'Headers must use the response realm');
+        check(headers.get === ctor.prototype.get && Reflect.ownKeys(headers).length === 0,
+          'Headers must share realm prototype methods');
+        check(headers.get('x-realm') === value, 'cross-realm entries');
+        check(ctor.prototype.get.call(headers, 'x-realm') === value, 'branded receiver');
+      }
+    }
+    return 'ok';
+  } finally {
+    [globalThis, child].forEach((realm, index) => Object.defineProperty(realm, 'Headers', descriptors[index]));
+  }
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn headers_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://headers-prototype-methods.test/");
 
@@ -7170,7 +7281,7 @@ fn headers_methods_reject_incompatible_receivers() {
 }
 
 #[test]
-fn headers_declared_methods_preserve_descriptors_and_iterator_alias() {
+fn response_headers_inherit_declared_methods_and_iterator_alias() {
     let mut vm = new_storage_test_vm("https://headers-declared-methods.test/");
 
     let result = vm
@@ -7178,6 +7289,9 @@ fn headers_declared_methods_preserve_descriptors_and_iterator_alias() {
             r#"
 (() => {
   const headers = new Response(null, { headers: [['X-A', '1']] }).headers;
+  const prototype = Object.getPrototypeOf(headers);
+  if (prototype !== Headers.prototype) throw new Error('Headers must use the intrinsic prototype');
+  if (Reflect.ownKeys(headers).length !== 0) throw new Error('Headers methods must be inherited');
   const descriptors = [
     ['get', 1],
     ['has', 1],
@@ -7190,7 +7304,7 @@ fn headers_declared_methods_preserve_descriptors_and_iterator_alias() {
     ['entries', 0],
     ['forEach', 1],
   ].map(([name, expectedLength]) => {
-    const descriptor = Object.getOwnPropertyDescriptor(headers, name);
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     return [
       name,
       typeof descriptor?.value,
@@ -7202,7 +7316,7 @@ fn headers_declared_methods_preserve_descriptors_and_iterator_alias() {
       descriptor?.configurable,
     ].join(':');
   });
-  const iteratorDescriptor = Object.getOwnPropertyDescriptor(headers, Symbol.iterator);
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(prototype, Symbol.iterator);
   const iterated = Array.from(headers).map(([name, value]) => `${name}=${value}`).join(',');
   return JSON.stringify({
     descriptors,
@@ -7224,7 +7338,7 @@ fn headers_declared_methods_preserve_descriptors_and_iterator_alias() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["get:function:get:1:1:true:true:true","has:function:has:1:1:true:true:true","getSetCookie:function:getSetCookie:0:0:true:true:true","set:function:set:2:2:true:true:true","delete:function:delete:1:1:true:true:true","append:function:append:2:2:true:true:true","keys:function:keys:0:0:true:true:true","values:function:values:0:0:true:true:true","entries:function:entries:0:0:true:true:true","forEach:function:forEach:1:1:true:true:true"],"iterator":"function:true:entries:0:true:true:true:x-a=1"}"#
+        r#"{"descriptors":["get:function:get:1:1:true:true:true","has:function:has:1:1:true:true:true","getSetCookie:function:getSetCookie:0:0:true:true:true","set:function:set:2:2:true:true:true","delete:function:delete:1:1:true:true:true","append:function:append:2:2:true:true:true","keys:function:keys:0:0:true:true:true","values:function:values:0:0:true:true:true","entries:function:entries:0:0:true:true:true","forEach:function:forEach:1:1:true:true:true"],"iterator":"function:true:entries:0:false:true:true:x-a=1"}"#
     );
 }
 
