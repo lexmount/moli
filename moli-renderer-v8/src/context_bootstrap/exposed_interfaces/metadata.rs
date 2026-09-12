@@ -221,6 +221,11 @@ pub(crate) fn dedicated_worker_lazy_interface_names_for_test() -> Vec<&'static s
 const EAGER_INTERFACE_NAMES: &[&str] = &["Window"];
 const NON_EXPOSED_INTERFACE_NAMES: &[&str] = &["DOMError"];
 
+// getExtension() needs realm-local prototypes without exposing these
+// Window-only constructors on WorkerGlobalScope.
+const WORKER_INTERNAL_INTERFACE_NAMES: &[&str] =
+    &["WEBGL_debug_renderer_info", "WEBGL_lose_context"];
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct InterfaceId(u32);
 
@@ -285,6 +290,7 @@ impl TemplateBuildProfile {
             Self::DedicatedWorker | Self::SharedWorker | Self::ServiceWorker => {
                 STORAGE_INTERFACE_NAMES.contains(&name)
                     || WORKER_SHARED_INTERFACE_NAMES.contains(&name)
+                    || WORKER_INTERNAL_INTERFACE_NAMES.contains(&name)
                     || crate::context_bootstrap::streams::is_worker_exposed_stream_interface(name)
                     || INDEXED_DB_INTERFACE_NAMES.contains(&name)
             }
@@ -360,7 +366,11 @@ impl ExposedInterfaceMetadata {
         // of whether their interface objects are exposed on the worker global.
         let worker_factory_intrinsic = profile != TemplateBuildProfile::Window
             && matches!(self.name, "ServiceWorkerContainer" | "ServiceWorker");
-        (self.exposure.contains(profile.realm_kind()) || worker_factory_intrinsic)
+        let internal_worker_interface = profile != TemplateBuildProfile::Window
+            && WORKER_INTERNAL_INTERFACE_NAMES.contains(&self.name);
+        (self.exposure.contains(profile.realm_kind())
+            || worker_factory_intrinsic
+            || internal_worker_interface)
             && profile.supports_name(self.name)
     }
 }
@@ -592,6 +602,26 @@ mod tests {
                     expected,
                     "{name}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn worker_webgl_extension_prototypes_are_supported_without_global_exposure() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
+            spec("WEBGL_debug_renderer_info", None),
+            spec("WEBGL_lose_context", None),
+        ])
+        .expect("extension metadata");
+        for name in WORKER_INTERNAL_INTERFACE_NAMES {
+            let metadata = table.metadata_by_name(name).expect("extension metadata");
+            for realm in [
+                RealmKind::DedicatedWorker,
+                RealmKind::SharedWorker,
+                RealmKind::ServiceWorker,
+            ] {
+                assert!(!metadata.is_exposed(realm, true));
+                assert!(metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)));
             }
         }
     }
