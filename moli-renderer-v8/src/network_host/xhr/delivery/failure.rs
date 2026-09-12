@@ -21,6 +21,7 @@ pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     if xhr_is_aborted(scope, xhr) {
         return;
     }
+    super::super::upload::dispatch_xhr_upload_error_if_in_progress(scope, xhr, "error");
     xhr_dispatch_progress_event(scope, xhr, "error", 0.0, 0.0);
     if scope.is_execution_terminating() {
         return;
