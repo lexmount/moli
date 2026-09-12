@@ -74,7 +74,7 @@ pub(crate) struct WorkerGlobalState {
     /// Fetch id counter.
     pub(in crate::worker) next_fetch_id: u32,
     /// Async XHR completions routed back onto the worker event loop.
-    pub(in crate::worker) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrCompletion>,
+    pub(in crate::worker) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrEvent>,
     /// In-flight worker XHR requests keyed by internal id.
     pub(in crate::worker) pending_xhrs: HashMap<u32, PendingWorkerXhr>,
     /// Worker XHR id counter.

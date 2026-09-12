@@ -267,3 +267,11 @@ pub(super) fn merge_worker_request_headers(
     headers.overlay(request_headers.clone());
     headers
 }
+
+pub(in crate::worker) enum WorkerXhrEvent {
+    Upload {
+        xhr_id: u32,
+        event: moli_fetch::UploadEvent,
+    },
+    Completion(Box<WorkerXhrCompletion>),
+}

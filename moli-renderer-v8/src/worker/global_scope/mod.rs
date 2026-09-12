@@ -57,6 +57,7 @@ use crate::context_bootstrap::{
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::{
+    apply_xhr_upload_event,
     capture_xhr_upload_listener_flag,
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
@@ -68,7 +69,7 @@ use crate::network_host::{
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
-    close_pending_network_body_stream, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
+    close_pending_network_body_stream, dispatch_xhr_loadstart, 
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
@@ -211,7 +212,7 @@ pub(super) use network_state::{
     PausedWorkerSubresourceResponse, PendingWorkerCspReport, PendingWorkerFetch,
     PendingWorkerFetchNetworkRecord, PendingWorkerXhr, WorkerFetchCompletion, WorkerFetchEvent,
     WorkerFetchResponse, WorkerFetchStreamingChunk, WorkerFetchStreamingFinished,
-    WorkerFetchStreamingStarted, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrResponse,
+    WorkerFetchStreamingStarted, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent, WorkerXhrResponse,
 };
 use network_state::{
     WorkerFetchResponseParts, merge_worker_request_headers, next_fetch_id, next_websocket_id,

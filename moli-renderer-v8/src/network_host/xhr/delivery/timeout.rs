@@ -203,6 +203,7 @@ pub(crate) fn apply_xhr_timeout(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     if xhr_is_aborted(scope, xhr) {
         return;
     }
+    super::super::upload::dispatch_xhr_upload_error_if_in_progress(scope, xhr, "timeout");
     xhr_dispatch_progress_event(scope, xhr, "timeout", 0.0, 0.0);
     xhr_dispatch_progress_event(scope, xhr, "loadend", 0.0, 0.0);
 }
