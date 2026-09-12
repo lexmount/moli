@@ -716,8 +716,8 @@ def _html_path_is_supported(
 
 
 @lru_cache(maxsize=None)
-def _fetch_preflight_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
-    names = ("preflight.py", "clean-stash.py", "inspect-headers.py")
+def _fetch_resource_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    names = ("preflight.py", "clean-stash.py", "inspect-headers.py", "redirect.py")
     references = []
     for name in names:
         resource = "fetch/api/resources/" + name
@@ -734,6 +734,11 @@ def _fetch_preflight_handler_reference_patterns(directory: str) -> tuple[re.Patt
     # concatenation intact in this match; a bare filename is not sufficient.
     patterns.append(re.compile(
         r"(?<![\w$.])RESOURCES_DIR\s*\+\s*['\"](?:"
+        + "|".join(re.escape(name) for name in names)
+        + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    ))
+    patterns.append(re.compile(
+        r"`\$\{\s*RESOURCES_DIR\s*\}(?:"
         + "|".join(re.escape(name) for name in names)
         + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
     ))
@@ -784,7 +789,7 @@ def _supported_wptserve_handler_references(
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("fetch/api/"):
-        supported += _fetch_preflight_handler_reference_patterns(posixpath.dirname(rel))
+        supported += _fetch_resource_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None and rel.startswith("wasm/webapi/"):
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("xhr/"):
