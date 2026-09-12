@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn webgl_extension_registry_and_context_identity_are_consistent() {
+    let mut vm = new_storage_test_vm("https://webgl-extensions.test/");
+    let result = vm
+        .eval(include_str!("../../../tests/fixtures/webgl-extensions.js"))
+        .expect("WebGL extension contract should hold on HTML and OffscreenCanvas");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
 mod text;
 
 async fn drain_canvas_image_load_event_tasks(

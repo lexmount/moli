@@ -8,9 +8,11 @@ use crate::{
 };
 pub(super) use interfaces::install_value_template_bindings;
 use moli_webapi_declare::{WebApiObject, WebApiValue};
+use strum::IntoEnumIterator;
 
 const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";
 const WEBGL_ERROR_SLOT: &str = "__moliWebGlError";
+const WEBGL_EXTENSIONS_SLOT: &str = "__moliWebGlExtensions";
 const WEBGL_VIEWPORT: u32 = 0x0BA2;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
 const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
@@ -21,7 +23,12 @@ const WEBGL2_COLOR_SPACE_SLOTS: &[&str] = &[
     WEBGL2_UNPACK_COLOR_SPACE_SLOT,
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
+// Listing and enabling extensions must use the same registry. Do not advertise
+// GPU extensions just because their names are known: their API must exist too.
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::EnumIter, strum::IntoStaticStr,
+)]
+#[strum(ascii_case_insensitive)]
 enum WebGlExtension {
     #[strum(serialize = "WEBGL_debug_renderer_info")]
     DebugRendererInfo,
@@ -63,6 +70,8 @@ struct WebGlContextStateDeclaration<'s> {
     viewport: v8::Local<'s, v8::Array>,
     #[webapi(slot = WEBGL_ERROR_SLOT)]
     error: u32,
+    #[webapi(slot = WEBGL_EXTENSIONS_SLOT)]
+    extensions: v8::Local<'s, v8::Map>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -250,12 +259,6 @@ pub(crate) const WEBGL2_CONSTANTS: &[(&str, u32)] = &[
     ("R11F_G11F_B10F", 0x8C3A),
 ];
 
-const WEBGL2_SUPPORTED_EXTENSIONS: &[&str] = &[
-    "EXT_color_buffer_float",
-    "EXT_color_buffer_half_float",
-    "WEBGL_lose_context",
-];
-
 fn webgl_array_value<'s, T>(
     scope: &mut v8::PinScope<'s, '_>,
     values: &[T],
@@ -271,23 +274,20 @@ pub(crate) fn webgl_get_supported_extensions_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_webgl2_context(scope, args.this()) {
-        webgl2_get_supported_extensions_callback(scope, args, rv);
+    if webgl_extensions(scope, args.this()).is_none() {
         return;
     }
-    let value = webgl_array_value(scope, WEBGL_SUPPORTED_EXTENSIONS)
-        .unwrap_or_else(|| v8::Array::new(scope, 0).into());
+    let names: Vec<&str> = WebGlExtension::iter().map(Into::into).collect();
+    let value = webgl_array_value(scope, &names).unwrap_or_else(|| v8::Array::new(scope, 0).into());
     rv.set(value);
 }
 
 pub(crate) fn webgl2_get_supported_extensions_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let value = webgl_array_value(scope, WEBGL2_SUPPORTED_EXTENSIONS)
-        .unwrap_or_else(|| v8::Array::new(scope, 0).into());
-    rv.set(value);
+    webgl_get_supported_extensions_callback(scope, args, rv);
 }
 
 pub(crate) fn webgl_get_extension_callback<'s>(
@@ -299,18 +299,14 @@ pub(crate) fn webgl_get_extension_callback<'s>(
         webgl2_get_extension_callback(scope, args, rv);
         return;
     }
+    let Some(extensions) = webgl_extensions(scope, args.this()) else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<WebGlGetExtensionArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
-    let value = match parsed.name.parse::<WebGlExtension>() {
-        Ok(WebGlExtension::DebugRendererInfo) => build_webgl_debug_renderer_info_object(scope),
-        Ok(WebGlExtension::LoseContext) => build_webgl_lose_context_object(scope),
-        Err(_) => None,
-    }
-    .map(Into::into)
-    .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(value);
+    rv.set(get_webgl_extension(scope, extensions, &parsed.name));
 }
 
 pub(crate) fn webgl2_get_extension_callback<'s>(
@@ -318,37 +314,47 @@ pub(crate) fn webgl2_get_extension_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(extensions) = webgl_extensions(scope, args.this()) else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<WebGl2GetExtensionArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
-    let value = match parsed.name.as_str() {
-        "WEBGL_lose_context" => build_webgl_lose_context_object(scope),
-        "EXT_color_buffer_float" | "EXT_color_buffer_half_float" => {
-            build_webgl_extension_object(scope, &parsed.name)
-        }
-        _ => None,
-    }
-    .map(Into::into)
-    .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(value);
+    rv.set(get_webgl_extension(scope, extensions, &parsed.name));
 }
 
-fn build_webgl_extension_object<'s>(
+fn webgl_extensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Map>> {
+    let extensions = get_private_value(scope, context, WEBGL_EXTENSIONS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok());
+    if extensions.is_none() {
+        throw_type_error(scope, "Illegal invocation");
+    }
+    extensions
+}
+
+fn get_webgl_extension<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    extensions: v8::Local<'s, v8::Map>,
     name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    let name = v8_string(scope, name)?;
-    object
-        .define_own_property(
-            scope,
-            v8::Symbol::get_to_string_tag(scope).into(),
-            name.into(),
-            v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
-        )
-        .filter(|defined| *defined)
-        .map(|_| object)
+) -> v8::Local<'s, v8::Value> {
+    let Ok(extension) = name.parse::<WebGlExtension>() else {
+        return v8::null(scope).into();
+    };
+    let key = v8str(scope, extension.into()).into();
+    if let Some(value) = extensions.get(scope, key).filter(|value| value.is_object()) {
+        return value;
+    }
+    let object = match extension {
+        WebGlExtension::DebugRendererInfo => build_webgl_debug_renderer_info_object(scope),
+        WebGlExtension::LoseContext => build_webgl_lose_context_object(scope),
+    }
+    .expect("registered WebGL extension should construct in its realm");
+    extensions.set(scope, key, object.into());
+    object.into()
 }
 
 pub(crate) fn webgl_get_parameter_callback<'s>(
@@ -670,7 +676,8 @@ pub(super) fn init_webgl_context_object<'s>(
 ) {
     let values = [0, 0, 300, 150].map(|value| v8::Integer::new(scope, value).into());
     let viewport = v8::Array::new_with_elements(scope, &values);
-    WebGlContextStateDeclaration::new(viewport, 0)
+    let extensions = v8::Map::new(scope);
+    WebGlContextStateDeclaration::new(viewport, 0, extensions)
         .initialize(scope, context)
         .expect("WebGL context state should initialize");
 }
@@ -902,7 +909,7 @@ mod tests {
     use super::WebGlExtension;
 
     #[test]
-    fn webgl_extension_names_are_case_sensitive() {
+    fn webgl_extension_names_are_ascii_case_insensitive() {
         assert_eq!(
             "WEBGL_debug_renderer_info".parse::<WebGlExtension>(),
             Ok(WebGlExtension::DebugRendererInfo)
@@ -911,7 +918,10 @@ mod tests {
             "WEBGL_lose_context".parse::<WebGlExtension>(),
             Ok(WebGlExtension::LoseContext)
         );
-        assert!("webgl_lose_context".parse::<WebGlExtension>().is_err());
+        assert_eq!(
+            "webgl_lose_context".parse::<WebGlExtension>(),
+            Ok(WebGlExtension::LoseContext)
+        );
         assert!("WEBGL_debug_shaders".parse::<WebGlExtension>().is_err());
     }
 }

@@ -2153,6 +2153,26 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
 }
 
 #[tokio::test]
+async fn worker_webgl_extensions_use_intrinsic_objects_and_context_local_identity() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage(JSON.parse({})); close();",
+            include_str!("../../../../tests/fixtures/webgl-extensions.js")
+        ),
+        "test://worker_webgl_extensions".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"["offscreen:webgl","offscreen:webgl2"]"#
+    );
+}
+
+#[tokio::test]
 async fn shared_worker_message_port_handler_can_reply_with_performance_now() {
     ensure_v8();
     let (port_wake_tx, mut port_wake_rx) = tokio::sync::mpsc::unbounded_channel();
