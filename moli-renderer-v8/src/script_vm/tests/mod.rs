@@ -346,6 +346,7 @@ fn register_pending_window_fetch_for_test(
         moli_fetch::RequestMode::Cors,
         moli_fetch::RequestCacheMode::Default,
         (&url).into(),
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {
@@ -524,6 +525,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         moli_fetch::RequestMode::Cors,
         moli_fetch::RequestCacheMode::Default,
         (&document_url).into(),
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {

@@ -679,6 +679,7 @@ pub(crate) fn external_script_source_load_outcome_from_response(
         request_origin,
         &head,
         request_mode,
+        moli_fetch::RequestRedirectMode::Follow,
         web_security_disabled,
     );
     let cors_error = if request_mode == RequestMode::Cors {

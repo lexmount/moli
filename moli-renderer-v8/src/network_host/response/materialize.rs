@@ -19,6 +19,7 @@ use moli_webapi::fetch_response::{
 pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) method: &'a str,
     pub(crate) mode: RequestMode,
+    pub(crate) redirect_mode: RequestRedirectMode,
 }
 
 fn has_null_body(method: &str, status: u16) -> bool {
@@ -33,13 +34,18 @@ pub(crate) fn network_response_filter(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     request_mode: RequestMode,
+    redirect_mode: RequestRedirectMode,
     web_security_disabled: bool,
 ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
-    let kind = head.fetch_response_type_with_web_security(
-        &request_origin.into(),
-        request_mode,
-        web_security_disabled,
-    );
+    let kind = if redirect_mode == RequestRedirectMode::Manual
+        && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+    {
+        FetchResponseFilter::OpaqueRedirect
+    } else {
+        head.fetch_response_type_with_web_security(
+            &request_origin.into(), request_mode, web_security_disabled,
+        )
+    };
     matches!(
         kind,
         FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect
@@ -94,7 +100,12 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
 ) -> v8::Local<'s, v8::Object> {
-    let metadata = head.fetch_metadata(&request_origin.into(), request.mode);
+    let mut metadata = head.fetch_metadata(&request_origin.into(), request.mode);
+    if request.redirect_mode == RequestRedirectMode::Manual
+        && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+    {
+        metadata.response_type = FetchResponseFilter::OpaqueRedirect;
+    }
     build_fetch_response_object_from_body_source_with_metadata(
         scope,
         request.method,
@@ -132,7 +143,12 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
-    let metadata = head.fetch_metadata(&request_origin.into(), request.mode);
+    let mut metadata = head.fetch_metadata(&request_origin.into(), request.mode);
+    if request.redirect_mode == RequestRedirectMode::Manual
+        && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+    {
+        metadata.response_type = FetchResponseFilter::OpaqueRedirect;
+    }
     build_fetch_response_object_from_stream_with_metadata(
         scope,
         request.method,

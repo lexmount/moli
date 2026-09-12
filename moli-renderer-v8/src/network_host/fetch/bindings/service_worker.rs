@@ -21,7 +21,8 @@ pub(super) fn dispatch_service_worker_fetch(
         &prepared.resolved_url,
     )?;
 
-    let native_request = super::paths::native_window_fetch_request(prepared).ok()?;
+    let native_request =
+        super::paths::native_window_fetch_request(prepared).map_err(anyhow::Error::msg)?;
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -53,6 +54,7 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.request_mode,
         prepared.cache_mode(),
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {

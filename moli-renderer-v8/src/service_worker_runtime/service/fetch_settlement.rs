@@ -315,6 +315,7 @@ impl ServiceWorkerRuntimeService {
         };
         let request_mode = job.request.request_mode;
         let credentials_mode = job.request.credentials_mode;
+        let redirect_mode = job.request.redirect_mode();
         job.resource_task_runner.spawn(async move {
             let result = match request_client
                 .fetch_raw_stream_with_cancel(request, cancel_handle)
@@ -345,6 +346,7 @@ impl ServiceWorkerRuntimeService {
                         &request_origin,
                         &head,
                         request_mode,
+                        redirect_mode,
                         request_client.web_security_disabled(),
                     );
                     let body = response.clone_body_bytes();
@@ -1553,6 +1555,88 @@ mod tests {
                 );
             }
             other => panic!("expected streaming finish error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redirect_filter_service_worker_responses_without_location_preserve_request_mode() {
+        use moli_fetch::RequestRedirectMode::{Error, Follow, Manual};
+        for status in [301, 302, 303, 307, 308] {
+            for mode in [Follow, Manual, Error] {
+                let service = new_service_worker_runtime_service();
+                let event_id = ServiceWorkerEventId(1);
+                let version_id = ServiceWorkerVersionId(1);
+                let run = RendererServiceWorkerRunIdentity::fresh();
+                let mut completion_queue =
+                    crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+                let request_url = insert_active_fetch_job_with_redirect_mode(
+                    &service,
+                    event_id,
+                    version_id,
+                    &run,
+                    1,
+                    completion_queue.sender(),
+                    mode,
+                );
+                let headers = vec![("X-Visible".to_owned(), "present".to_owned())];
+                service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+                    event_id,
+                    owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                        version_id, run,
+                    ),
+                    result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: moli_fetch_types::FetchResponseType::Default,
+                                timing_allow_passed: true,
+                                url_list: (None).into_iter().collect(),
+                                redirected: false,
+                                cors_exposed_header_names: None,
+                            },
+                            status,
+                            status_text: "No Location".to_owned(),
+                            headers: headers.clone(),
+                        },
+                        body: b"redirect body".to_vec(),
+                    }),
+                });
+                let completion = pop_async_subresource_completion(&mut completion_queue);
+                if mode == Error {
+                    assert!(
+                        completion
+                            .result
+                            .unwrap_err()
+                            .contains("redirect mode is error")
+                    );
+                    assert_eq!(
+                        completion.network_error_text.as_deref(),
+                        Some(crate::network_host::FAILED_ERROR_TEXT)
+                    );
+                } else {
+                    assert_eq!(
+                        completion.response_filter,
+                        Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                            moli_fetch_types::FetchResponseMetadata {
+                                response_type: if mode == Manual {
+                                    moli_fetch_types::FetchResponseType::OpaqueRedirect
+                                } else {
+                                    moli_fetch_types::FetchResponseType::Default
+                                },
+                                url_list: vec![request_url.clone()],
+                                timing_allow_passed: true,
+                                redirected: false,
+                                cors_exposed_header_names: None,
+                            }
+                        ))
+                    );
+                    let response = completion.result.unwrap();
+                    assert_eq!(response.status, status);
+                    assert_eq!(response.final_url, request_url);
+                    assert_eq!(response.headers, headers);
+                    assert_eq!(response.body_text(), "redirect body");
+                    assert!(!response.redirected);
+                }
+            }
         }
     }
 

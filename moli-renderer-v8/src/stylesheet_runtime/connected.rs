@@ -2246,6 +2246,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 &request_origin,
                 &response.head(),
                 request_mode,
+                moli_fetch::RequestRedirectMode::Follow,
                 web_security_disabled,
             )
             .is_none_or(|filter| filter.is_readable());

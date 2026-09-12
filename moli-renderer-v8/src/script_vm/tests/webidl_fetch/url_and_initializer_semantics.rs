@@ -746,6 +746,7 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
                     scope,
                     &document_url,
                     crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         method: "GET",
                         mode: moli_fetch::RequestMode::Cors,
                     },
@@ -859,6 +860,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                     scope,
                     &document_url,
                     crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                         method: "GET",
                         mode: moli_fetch::RequestMode::Cors,
                     },
@@ -985,6 +987,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                 scope,
                 &document_url,
                 crate::network_host::FetchResponseRequest {
+                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                     method: "GET",
                     mode: moli_fetch::RequestMode::Cors,
                 },
@@ -1534,6 +1537,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                 for opaque in [false, true] {
                     for source in ["response", "bytes", "stream", "preload"] {
                         let request = FetchResponseRequest {
+redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                             method,
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
                         };

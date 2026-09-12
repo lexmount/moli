@@ -36,6 +36,7 @@ pub(super) fn record_intercepted_fetch(
         cache_mode,
         request,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key,
         prepared.policy_context,
         prepared.blob_url_entry,
@@ -232,6 +233,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_mode,
         cache_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {
