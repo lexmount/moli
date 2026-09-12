@@ -7,11 +7,11 @@ URLs, ``==`` / ``!=`` references, timeout metadata, and fuzzy bounds.
 A testharness case is selectable if:
 
 * The file does not live under one of the default excluded directory prefixes.
-* It is a navigable ``.html`` file, a selected ``.any.js`` global, or a
+* It is a navigable ``.html`` / ``.htm`` file, a selected ``.any.js`` global, or a
   ``.window.js`` / ``.worker.js`` script case that can be wrapped as a
   testharness page.
 * Its filename does not contain ``.tentative`` or ``.optional``.
-* Its filename does not end in ``-manual.html``.
+* Its filename does not end in ``-manual.html`` or ``-manual.htm``.
 * It is not under a ``resources`` support directory.
 * HTML cases reference ``/resources/testharness.js``.
 * The file body does NOT reference ``/resources/testdriver`` (testdriver
@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
+from itertools import chain
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urljoin, urlsplit
@@ -893,7 +894,7 @@ def enumerate_cases(
         base = wpt_root / prefix
         if not base.exists():
             continue
-        for path in base.rglob("*.html"):
+        for path in chain(base.rglob("*.html"), base.rglob("*.htm")):
             if not path.is_file():
                 continue
             rel = path.relative_to(wpt_root).as_posix()
@@ -1173,7 +1174,7 @@ def _is_default_goal_container_query_case(rel: str) -> bool:
 
 def _is_manual_or_support_case(rel: str) -> bool:
     parts = rel.split("/")
-    return parts[-1].endswith("-manual.html") or any(
+    return parts[-1].endswith(("-manual.html", "-manual.htm")) or any(
         part in {"resources", "support"} for part in parts[:-1]
     )
 

@@ -2513,6 +2513,36 @@ class WptCrossTests(unittest.TestCase):
             self.assertFalse(audit["ok"])
             self.assertEqual(audit["counts"]["resolved_known_failures"], 1)
 
+    def test_enumerate_cases_includes_htm_before_applying_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "dom"
+            case_dir.mkdir()
+            harness = '<script src="/resources/testharness.js"></script>'
+            (case_dir / "a.htm").write_text(
+                '<meta name="timeout" content="long">'
+                '<meta name="variant" content="?mode=z">'
+                '<meta name="variant" content="?mode=a">'
+                + harness,
+                encoding="utf-8",
+            )
+            (case_dir / "z.html").write_text(harness, encoding="utf-8")
+            expected = [
+                WptCase("dom/a.htm?mode=a", LONG_TIMEOUT_MULTIPLIER),
+                WptCase("dom/a.htm?mode=z", LONG_TIMEOUT_MULTIPLIER),
+                WptCase("dom/z.html"),
+            ]
+
+            for prefixes in (None, ("dom",)):
+                with self.subTest(dir_prefixes=prefixes):
+                    self.assertEqual(
+                        enumerate_cases(wpt_root, dir_prefixes=prefixes), expected
+                    )
+                    self.assertEqual(
+                        enumerate_cases(wpt_root, dir_prefixes=prefixes, limit=1),
+                        expected[:1],
+                    )
+
     def test_enumerate_cases_expands_wpt_meta_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             wpt_root = Path(temp_dir)
@@ -2824,14 +2854,24 @@ class WptCrossTests(unittest.TestCase):
 <script src="/resources/testharness.js"></script>
 <script>test(() => {}, "ok");</script>
 """
-            (case_dir / "kept.html").write_text(case_html, encoding="utf-8")
-            (case_dir / "upload-manual.html").write_text(case_html, encoding="utf-8")
-            (resource_dir / "helper.html").write_text(case_html, encoding="utf-8")
-            (support_dir / "helper.html").write_text(case_html, encoding="utf-8")
+            for suffix in (".html", ".htm"):
+                (case_dir / f"kept{suffix}").write_text(case_html, encoding="utf-8")
+                (case_dir / f"upload-manual{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
+                (resource_dir / f"helper{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
+                (support_dir / f"helper{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
 
             cases = enumerate_cases(wpt_root)
 
-        self.assertEqual([case.case_path for case in cases], ["FileAPI/kept.html"])
+        self.assertEqual(
+            [case.case_path for case in cases],
+            ["FileAPI/kept.htm", "FileAPI/kept.html"],
+        )
 
     def test_explicit_dir_prefix_bypasses_default_rendering_blacklist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
