@@ -20,10 +20,5 @@ pub(super) fn clone_headers_object<'s>(
     let entries = headers_entries(scope, original);
     let guard = self::store::headers_guard(scope, original);
     let immutable = self::store::headers_are_immutable(scope, original);
-    let clone = build_headers_object_with_state(scope, &entries, guard, immutable);
-    if let Some(prototype) = moli_v8_util::global_constructor_prototype(scope, "Headers") {
-        let _ = clone.set_prototype(scope, prototype.into());
-    }
-    install_headers_object_methods(scope, clone);
-    clone
+    build_headers_object_with_state(scope, &entries, guard, immutable)
 }
