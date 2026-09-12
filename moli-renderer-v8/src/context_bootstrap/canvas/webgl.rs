@@ -14,6 +14,7 @@ const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";
 const WEBGL_ERROR_SLOT: &str = "__moliWebGlError";
 const WEBGL_EXTENSIONS_SLOT: &str = "__moliWebGlExtensions";
 const WEBGL_VIEWPORT: u32 = 0x0BA2;
+const WEBGL_INVALID_ENUM: u32 = 0x0500;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
 const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
 const WEBGL2_DRAWING_BUFFER_COLOR_SPACE_SLOT: &str = "__moliWebGl2DrawingBufferColorSpace";
@@ -51,6 +52,15 @@ struct WebGlGetParameterArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebGLRenderingContext.getShaderPrecisionFormat")]
+struct WebGlGetShaderPrecisionFormatArgs {
+    #[webidl(required)]
+    shader_type: u32,
+    #[webidl(required)]
+    precision_type: u32,
+}
+
+#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebGLRenderingContext.viewport")]
 struct WebGlViewportArgs {
     #[webidl(required)]
@@ -69,7 +79,7 @@ struct WebGlContextStateDeclaration<'s> {
     #[webapi(slot = WEBGL_VIEWPORT_SLOT)]
     viewport: v8::Local<'s, v8::Array>,
     #[webapi(slot = WEBGL_ERROR_SLOT)]
-    error: u32,
+    errors: v8::Local<'s, v8::Set>,
     #[webapi(slot = WEBGL_EXTENSIONS_SLOT)]
     extensions: v8::Local<'s, v8::Map>,
 }
@@ -153,6 +163,7 @@ struct WebGl2ContextObjectDeclaration {
 pub(crate) const WEBGL_CONSTANTS: &[(&str, u32)] = &[
     ("VIEWPORT", WEBGL_VIEWPORT),
     ("NO_ERROR", 0),
+    ("INVALID_ENUM", WEBGL_INVALID_ENUM),
     ("INVALID_VALUE", WEBGL_INVALID_VALUE),
     ("DEPTH_TEST", 0x0B71),
     ("LEQUAL", 0x0203),
@@ -195,6 +206,7 @@ pub(crate) const WEBGL_CONSTANTS: &[(&str, u32)] = &[
     ("LOW_INT", 0x8DF3),
     ("MEDIUM_INT", 0x8DF4),
     ("HIGH_INT", 0x8DF5),
+    ("COMPRESSED_TEXTURE_FORMATS", 0x86A3),
 ];
 
 pub(crate) const WEBGL2_CONSTANTS: &[(&str, u32)] = &[
@@ -229,7 +241,6 @@ pub(crate) const WEBGL2_CONSTANTS: &[(&str, u32)] = &[
     ("MAX_SERVER_WAIT_TIMEOUT", 0x9111),
     ("MAX_ELEMENT_INDEX", 0x8D6B),
     ("MAX_CLIENT_WAIT_TIMEOUT_WEBGL", 0x9247),
-    ("COMPRESSED_TEXTURE_FORMATS", 0x86A3),
     ("RENDERBUFFER", 0x8D41),
     ("SAMPLES", 0x80A9),
     ("FRAMEBUFFER", 0x8D40),
@@ -366,15 +377,17 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         webgl2_get_parameter_callback(scope, args, rv);
         return;
     }
+    let Some(extensions) = webgl_extensions(scope, args.this()) else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<WebGlGetParameterArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
     match parsed.pname {
         WEBGL_VIEWPORT => return_webgl_viewport(scope, args.this(), &mut rv),
-        0x846D | 0x846E => rv.set(
-            webgl_array_value(scope, &[1, 1]).unwrap_or_else(|| v8::Array::new(scope, 0).into()),
-        ),
+        0x846D | 0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
+        0x86A3 => rv.set(webgl_uint32_array(scope, &[])),
         0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
@@ -384,11 +397,19 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 8).into()),
         0x8B4D => rv.set(v8::Integer::new(scope, 16).into()),
         0x8DFB..=0x8DFD => rv.set(v8::Integer::new(scope, 128).into()),
-        0x1F00 | 0x9245 => rv.set(v8::String::empty(scope).into()),
-        0x1F01 | 0x9246 => rv.set(v8::String::empty(scope).into()),
-        0x1F02 => rv.set(v8::String::new(scope, "WebGL 1.0").unwrap().into()),
-        0x8B8C => rv.set(v8::String::new(scope, "WebGL GLSL ES 1.0").unwrap().into()),
-        _ => rv.set(v8::null(scope).into()),
+        // These masked API strings match the Chromium service surface, not a
+        // claim about the physical GPU. Unmasked hardware identity stays empty.
+        0x1F00 => rv.set(v8str(scope, "WebKit").into()),
+        0x1F01 => rv.set(v8str(scope, "WebKit WebGL").into()),
+        0x9245 | 0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8::String::empty(scope).into())
+        }
+        0x1F02 => rv.set(v8str(scope, "WebGL 1.0 (OpenGL ES 2.0 Chromium)").into()),
+        0x8B8C => rv.set(v8str(scope, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)").into()),
+        _ => {
+            record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
+            rv.set_null();
+        }
     }
 }
 
@@ -397,6 +418,9 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(extensions) = webgl_extensions(scope, args.this()) else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<WebGl2GetParameterArgs>(scope, &args) else {
         rv.set_undefined();
         return;
@@ -427,7 +451,9 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         0x8A34 => rv.set(v8::Integer::new(scope, 256).into()),
         0x1F00 => rv.set(v8str(scope, "WebKit").into()),
         0x1F01 => rv.set(v8str(scope, "WebKit WebGL").into()),
-        0x9245 | 0x9246 => rv.set(v8::String::empty(scope).into()),
+        0x9245 | 0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8::String::empty(scope).into())
+        }
         0x1F02 => rv.set(v8str(scope, "WebGL 2.0 (OpenGL ES 3.0 Chromium)").into()),
         0x8B8C => {
             rv.set(v8str(scope, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)").into())
@@ -435,15 +461,26 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         0x86A3 => rv.set(webgl_uint32_array(scope, &[])),
         0x0D33 | 0x84E8 | 0x851C => rv.set(v8::Integer::new(scope, 8192).into()),
         0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
-        0x846D | 0x846E => rv.set(webgl_int32_array(scope, &[1, 1])),
+        0x846D | 0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
         0x0D57 => rv.set(v8::Integer::new(scope, 0).into()),
         0x8869 => rv.set(v8::Integer::new(scope, 16).into()),
         0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 16).into()),
         0x8B4D => rv.set(v8::Integer::new(scope, 64).into()),
-        _ => rv.set(v8::null(scope).into()),
+        _ => {
+            record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
+            rv.set_null();
+        }
     }
+}
+
+fn webgl_debug_renderer_info_enabled(
+    scope: &mut v8::PinScope<'_, '_>,
+    extensions: v8::Local<'_, v8::Map>,
+) -> bool {
+    let key = v8str(scope, WebGlExtension::DebugRendererInfo.into()).into();
+    extensions.has(scope, key) == Some(true)
 }
 
 pub(crate) fn webgl2_get_internalformat_parameter_callback<'s>(
@@ -485,6 +522,21 @@ fn webgl_int32_array<'s>(
     let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
     v8::Int32Array::new(scope, buffer, 0, values.len())
         .expect("WebGL Int32Array construction should succeed")
+        .into()
+}
+
+fn webgl_float32_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: &[f32],
+) -> v8::Local<'s, v8::Value> {
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(values));
+    for value in values {
+        bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+    let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
+    v8::Float32Array::new(scope, buffer, 0, values.len())
+        .expect("WebGL Float32Array construction should succeed")
         .into()
 }
 
@@ -590,17 +642,35 @@ pub(crate) fn webgl_get_error_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(error) = get_private_value(scope, args.this(), WEBGL_ERROR_SLOT) else {
+    let Some(errors) = get_private_value(scope, args.this(), WEBGL_ERROR_SLOT)
+        .and_then(|value| v8::Local::<v8::Set>::try_from(value).ok())
+    else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
+    if errors.size() == 0 {
+        rv.set_uint32(0);
+        return;
+    }
+    let error = errors
+        .as_array(scope)
+        .get_index(scope, 0)
+        .expect("pending WebGL errors have an own first entry");
+    errors.delete(scope, error);
     rv.set(error);
-    set_private_value(
-        scope,
-        args.this(),
-        WEBGL_ERROR_SLOT,
-        v8::Integer::new(scope, 0).into(),
-    );
+}
+
+fn record_webgl_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    error: u32,
+) {
+    let errors = get_private_value(scope, context, WEBGL_ERROR_SLOT)
+        .and_then(|value| v8::Local::<v8::Set>::try_from(value).ok())
+        .expect("validated WebGL receiver has error state");
+    // Like Blink's synthetic error list, preserve distinct pending errors but
+    // coalesce repeated occurrences until getError consumes them.
+    errors.add(scope, v8::Integer::new_from_unsigned(scope, error).into());
 }
 
 pub(crate) fn webgl_viewport_callback<'s>(
@@ -618,12 +688,7 @@ pub(crate) fn webgl_viewport_callback<'s>(
     if parsed.width < 0 || parsed.height < 0 {
         // GL errors preserve the previous viewport and remain pending until
         // getError consumes them. WebIDL conversion failures throw instead.
-        set_private_value(
-            scope,
-            args.this(),
-            WEBGL_ERROR_SLOT,
-            v8::Integer::new_from_unsigned(scope, WEBGL_INVALID_VALUE).into(),
-        );
+        record_webgl_error(scope, args.this(), WEBGL_INVALID_VALUE);
         return;
     }
     set_webgl_viewport(
@@ -677,7 +742,8 @@ pub(super) fn init_webgl_context_object<'s>(
     let values = [0, 0, 300, 150].map(|value| v8::Integer::new(scope, value).into());
     let viewport = v8::Array::new_with_elements(scope, &values);
     let extensions = v8::Map::new(scope);
-    WebGlContextStateDeclaration::new(viewport, 0, extensions)
+    let errors = v8::Set::new(scope);
+    WebGlContextStateDeclaration::new(viewport, errors, extensions)
         .initialize(scope, context)
         .expect("WebGL context state should initialize");
 }
@@ -780,17 +846,41 @@ pub(crate) fn webgl_is_context_lost_callback(
     rv.set(v8::Boolean::new(scope, false).into());
 }
 
-pub(crate) fn webgl_get_shader_precision_format_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(crate) fn webgl_get_shader_precision_format_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if webgl_extensions(scope, args.this()).is_none() {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<WebGlGetShaderPrecisionFormatArgs>(scope, &args) else {
+        return;
+    };
+    if !matches!(parsed.shader_type, 0x8B30 | 0x8B31) {
+        record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
+        rv.set_null();
+        return;
+    }
+    // A stable software-GL precision profile. Integer precision is always 0;
+    // the floating-point mantissa width is not meaningful for integer formats.
+    let (range_min, range_max, precision) = match parsed.precision_type {
+        0x8DF0 | 0x8DF1 => (15, 15, 10),
+        0x8DF2 => (127, 127, 23),
+        0x8DF3 | 0x8DF4 => (15, 14, 0),
+        0x8DF5 => (31, 30, 0),
+        _ => {
+            record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
+            rv.set_null();
+            return;
+        }
+    };
     let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
         scope,
         "WebGLShaderPrecisionFormat",
     )
     .expect("WebGLShaderPrecisionFormat intrinsic prototype should be available");
-    let value = WebGlShaderPrecisionFormat::new(prototype, 23, 127, 127)
+    let value = WebGlShaderPrecisionFormat::new(prototype, precision, range_min, range_max)
         .bind(scope)
         .expect("WebGL shader precision format declaration should bind");
     rv.set(value.into());
