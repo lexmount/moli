@@ -2802,17 +2802,14 @@ fn storage_bucket_cached_response_from_value<'s>(
     value: v8::Local<'s, v8::Value>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) -> Option<StorageBucketCachedResponseMaterialization<'s>> {
-    let (head, response) = match crate::network_host::materialize_response_object_internal_head(
-        scope,
-        value,
-        "Cache.put",
-    ) {
-        Ok(result) => result,
-        Err(error) => {
-            reject_type_error(scope, resolver, &error);
-            return None;
-        }
-    };
+    let (head, response) =
+        match crate::network_host::materialize_cache_response_object_head(scope, value) {
+            Ok(result) => result,
+            Err(error) => {
+                reject_type_error(scope, resolver, &error);
+                return None;
+            }
+        };
     let body =
         match crate::network_host::materialize_response_object_body(scope, response, "Cache.put") {
             crate::network_host::MaterializedResponseBody::Ready(body) => body,
@@ -2950,6 +2947,9 @@ fn build_storage_bucket_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: StorageBucketCachedResponse,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if response.response_type == "error" {
+        return crate::network_host::build_error_response_object(scope);
+    }
     if matches!(response.response_type.as_str(), "opaque" | "opaqueredirect") {
         return crate::network_host::build_filtered_cached_response_object(
             scope,
@@ -2997,6 +2997,7 @@ fn build_storage_bucket_cached_response_object<'s>(
         .get(scope, v8str(scope, "Response").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
+    crate::network_host::mark_response_headers_immutable(scope, response_obj);
     if matches!(response.response_type.as_str(), "basic" | "cors") {
         crate::network_host::set_filtered_response_internal_head(
             scope,
