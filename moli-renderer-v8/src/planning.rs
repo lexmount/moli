@@ -427,7 +427,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
                 ClassicScriptResponseProvenance::Network
             } else {
                 ClassicScriptResponseProvenance::ServiceWorker {
-                    filter: response.response_filter,
+                    filter: response.response_filter.clone(),
                 }
             };
             external_script_source_load_outcome_from_response_inner(
@@ -554,7 +554,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
     )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ClassicScriptResponseProvenance {
     Network,
     ServiceWorker {

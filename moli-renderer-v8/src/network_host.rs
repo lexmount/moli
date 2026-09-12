@@ -147,11 +147,9 @@ pub(in crate::network_host) use self::request_scope::{
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     MaterializedResponseHead, build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
-    build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode_with_filter,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
+    build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
     cors_preflight_request_headers, fetch_response_needs_orb_body_validation,
@@ -159,12 +157,11 @@ pub(crate) use self::response::{
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     network_response_filter, response_constructor_callback, response_has_null_body,
-    validate_cors_preflight_response, validate_cors_response_chain,
-    validate_cross_origin_embedder_and_document_isolation_policy,
+    set_filtered_response_internal_head, validate_cors_preflight_response,
+    validate_cors_response_chain, validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_headers,
     validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
-    validate_fetch_response_security_policy_with_body_classified,
-    validate_opaque_response_blocking_with_body, validated_opaque_response_body,
+    validate_fetch_response_security_policy_with_body_classified, validated_opaque_response_body,
 };
 #[cfg(test)]
 pub(crate) use self::response::{materialize_response_object, materialize_response_object_head};
@@ -302,4 +299,10 @@ use super::{
         context_host_ptr_from_global_bridge, enqueue_host_microtask, throw_type_error, v8_string,
         v8str,
     },
+};
+
+#[cfg(test)]
+pub(crate) use self::response::{
+    build_fetch_response_object_from_stream_for_request_mode,
+    build_fetch_response_object_from_subresource_body_for_request_mode,
 };
