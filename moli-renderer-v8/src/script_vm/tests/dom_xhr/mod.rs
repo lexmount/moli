@@ -18,6 +18,7 @@ mod query_realms;
 mod receivers;
 mod reopen;
 mod response_headers;
+mod response_type;
 mod send_body;
 mod shadow_dom;
 mod streaming_failure;
