@@ -19,6 +19,7 @@ mod reopen;
 mod response_headers;
 mod send_body;
 mod shadow_dom;
+mod streaming_failure;
 mod style_invalidation;
 mod upload_preflight;
 mod upload_transport;

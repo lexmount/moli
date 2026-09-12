@@ -192,7 +192,7 @@ pub(crate) use self::xhr::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT,
     XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
-    apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
+    apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_failure, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout, apply_xhr_upload_event,
     begin_xhr_send, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     finish_xhr_abort, install_progress_event_template_bindings,
