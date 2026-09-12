@@ -14,6 +14,7 @@ mod send_body;
 mod shadow_dom;
 mod style_invalidation;
 mod upload_preflight;
+mod upload_transport;
 mod xhr;
 
 mod response_type;
