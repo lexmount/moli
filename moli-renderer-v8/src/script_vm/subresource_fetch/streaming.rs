@@ -964,6 +964,7 @@ impl ScriptVm {
                         crate::network_host::FetchResponseRequest {
                             method: &started.request_method,
                             mode: pending.request_mode,
+                            redirect_mode: fetch.redirect_mode(),
                         },
                         observable_head,
                         started.body_source_id,

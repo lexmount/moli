@@ -347,6 +347,14 @@ impl ScriptVm {
         .with_request_origin(pending.request_origin.clone())
         .with_request_mode(pending.request_mode)
         .with_use_cors_preflight(pending.continuation.use_cors_preflight())
+        .with_redirect_mode(
+            pending
+                .continuation
+                .window_fetch()
+                .map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+                    fetch.redirect_mode()
+                }),
+        )
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
         .with_subframe_context(pending.info.frame_id.is_some());
@@ -619,6 +627,14 @@ impl ScriptVm {
         .with_request_origin(pending_fetch.request_origin.clone())
         .with_request_mode(pending_fetch.request_mode)
         .with_use_cors_preflight(pending_fetch.continuation.use_cors_preflight())
+        .with_redirect_mode(
+            pending_fetch
+                .continuation
+                .window_fetch()
+                .map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+                    fetch.redirect_mode()
+                }),
+        )
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
