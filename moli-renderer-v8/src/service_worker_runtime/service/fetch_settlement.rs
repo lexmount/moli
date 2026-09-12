@@ -541,6 +541,16 @@ impl ServiceWorkerRuntimeService {
         response: ServiceWorkerFetchResponse,
     ) {
         job.cancel_pending_navigation_preload();
+        // Validate the filtered response before inspecting its internal redirect.
+        // A restored Location must not turn an invalid respondWith into a fetch.
+        if let Some(message) = service_worker_fetch_response_rejection(&job, &response) {
+            self.complete_fetch_with_network_failure(
+                job,
+                message,
+                crate::network_host::FAILED_ERROR_TEXT.to_owned(),
+            );
+            return;
+        }
         if is_redirect_status(response.status)
             && response.response_type == "opaqueredirect"
             && service_worker_fetch_is_navigation_request(&job)
@@ -607,14 +617,6 @@ impl ServiceWorkerRuntimeService {
                     return;
                 }
             }
-        }
-        if let Some(message) = service_worker_fetch_response_rejection(&job, &response) {
-            self.complete_fetch_with_network_failure(
-                job,
-                message,
-                crate::network_host::FAILED_ERROR_TEXT.to_owned(),
-            );
-            return;
         }
         let final_url = response
             .final_url

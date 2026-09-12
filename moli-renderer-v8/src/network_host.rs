@@ -144,8 +144,6 @@ pub(in crate::network_host) use self::request_scope::{
     observe_subresource_request_cookie_report_for_origin, subresource_request_origin_for_owner,
     subresource_request_scope_for_owner,
 };
-#[cfg(test)]
-pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     MaterializedResponseHead, build_fetch_response_object_for_request_mode,
@@ -158,9 +156,9 @@ pub(crate) use self::response::{
     cors_preflight_request_headers_for_origin, cors_request_origin_after_redirects,
     fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers_for_origin,
     is_cors_policy_failure_message, materialize_response_object_body,
-    materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
-    materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, response_constructor_callback, response_has_null_body,
+    materialize_response_object_body_with_chunk_callback,
+    materialize_response_object_internal_head, materialized_body_bytes_from_value,
+    response_constructor_callback, response_has_null_body,
     validate_cors_preflight_response_for_origin, validate_cors_response,
     validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
@@ -170,6 +168,8 @@ pub(crate) use self::response::{
     validate_fetch_response_security_policy_with_body_classified_for_origin,
     validate_fetch_response_security_policy_with_body_for_origin, validated_opaque_response_body,
 };
+#[cfg(test)]
+pub(crate) use self::response::{materialize_response_object, materialize_response_object_head};
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
 };

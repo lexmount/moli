@@ -15,6 +15,30 @@ pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) redirect_mode: RequestRedirectMode,
 }
 
+impl FetchResponseRequest<'_> {
+    pub(crate) fn filter_response_headers(
+        self,
+        request_origin: &moli_url::WebOrigin,
+        head: &moli_fetch::ResponseHead,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+    ) -> Vec<(String, String)> {
+        // Opaque responses need their internal headers for Cache and respondWith.
+        // Their public header list is made empty when the Response is built.
+        if self.mode == RequestMode::NoCors
+            || self.redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status)
+        {
+            head.headers.clone()
+        } else {
+            filter_cors_exposed_response_headers_for_origin(
+                request_origin,
+                &head.final_url,
+                &head.headers,
+                credentials_mode,
+            )
+        }
+    }
+}
+
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -325,31 +349,41 @@ fn build_fetch_response_object_head<'s>(
         .initialize(scope, obj)
         .expect("Fetch Response internal URL declaration should initialize");
     if filter != FetchResponseFilter::None {
-        set_response_slot_value(
+        set_filtered_response_internal_head(
             scope,
             obj,
-            RESPONSE_INTERNAL_STATUS_SLOT,
-            v8::Number::new(scope, head.status as f64).into(),
-        );
-        set_response_slot_string(
-            scope,
-            obj,
-            RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
+            head.status,
             head.status_text(),
-        );
-        let internal_headers = filter_headers_for_guard(&head.headers, HeadersGuard::Response);
-        let internal_headers_obj =
-            build_headers_object_with_state(scope, &internal_headers, HeadersGuard::Response, true);
-        install_headers_object_methods(scope, internal_headers_obj);
-        set_response_slot_value(
-            scope,
-            obj,
-            RESPONSE_INTERNAL_HEADERS_SLOT,
-            internal_headers_obj.into(),
+            &head.headers,
         );
     }
     mark_response_object(scope, obj);
     obj
+}
+
+fn set_filtered_response_internal_head(
+    scope: &mut v8::PinScope<'_, '_>,
+    obj: v8::Local<'_, v8::Object>,
+    status: u16,
+    status_text: &str,
+    headers: &[(String, String)],
+) {
+    set_response_slot_value(
+        scope,
+        obj,
+        RESPONSE_INTERNAL_STATUS_SLOT,
+        v8::Number::new(scope, status as f64).into(),
+    );
+    set_response_slot_string(scope, obj, RESPONSE_INTERNAL_STATUS_TEXT_SLOT, status_text);
+    let internal_headers =
+        build_headers_object_with_state(scope, headers, HeadersGuard::None, true);
+    install_headers_object_methods(scope, internal_headers);
+    set_response_slot_value(
+        scope,
+        obj,
+        RESPONSE_INTERNAL_HEADERS_SLOT,
+        internal_headers.into(),
+    );
 }
 
 fn finish_fetch_response_object_with_body_stream<'s>(
@@ -396,6 +430,9 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response_type: &str,
     internal_url: &str,
+    status: u16,
+    status_text: &str,
+    internal_headers: &[(String, String)],
     body: Vec<u8>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let response_type = match response_type {
@@ -416,6 +453,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
             .initialize(scope, obj)
             .ok()?;
     }
+    set_filtered_response_internal_head(scope, obj, status, status_text, internal_headers);
     mark_response_object(scope, obj);
 
     let headers = filter_headers_for_guard(&[], HeadersGuard::Response);
@@ -566,13 +604,13 @@ pub(crate) fn materialize_response_object_head<'s>(
     ))
 }
 
-pub(crate) fn materialize_response_object_head_for_service_worker_respond_with<'s>(
+pub(crate) fn materialize_response_object_internal_head<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: &str,
 ) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
     let (mut head, response) = materialize_response_object_head(scope, value, context)?;
-    if head.response_type == "opaqueredirect"
+    if matches!(head.response_type.as_str(), "opaque" | "opaqueredirect")
         && let Some(internal_status) =
             response_slot_number(scope, response, RESPONSE_INTERNAL_STATUS_SLOT)
     {

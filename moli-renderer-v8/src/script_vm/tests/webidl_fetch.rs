@@ -9559,9 +9559,19 @@ fn materialize_response_object_preserves_redirected_slot() {
 }
 
 #[test]
-fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
+fn filtered_response_materialization_preserves_internal_head_across_clone_and_cache() {
     use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
     for (response_type, filter) in [("opaque", Opaque), ("opaqueredirect", OpaqueRedirect)] {
+        let internal_status = if response_type == "opaque" { 206 } else { 302 };
+        let internal_headers = vec![
+            (
+                "cross-origin-resource-policy".to_owned(),
+                "cross-origin".to_owned(),
+            ),
+            ("location".to_owned(), "target.html".to_owned()),
+            ("set-cookie".to_owned(), "hidden=secret".to_owned()),
+            ("vary".to_owned(), "*".to_owned()),
+        ];
         let mut vm = new_storage_test_vm("https://response-materialize-filtered.test/");
         let document_url = Url::parse("https://response-materialize-filtered.test/")
             .expect("document URL should parse");
@@ -9574,6 +9584,7 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
         vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
             let final_url = final_url.clone();
+            let internal_headers = internal_headers.clone();
             move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -9585,10 +9596,10 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
                     crate::network_host::FetchResponseRequest {
 redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
-                        status_text: None,
+                        status_text: Some("Internal Status".to_owned()),
                         final_url: final_url.clone(),
-                        status: 302,
-                        headers: vec![("location".to_owned(), "target.html".to_owned())],
+                        status: internal_status,
+                        headers: internal_headers,
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -9645,7 +9656,9 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: mol
             globalThis.__filteredResponseCached.type,
             globalThis.__filteredResponseCached.status,
             globalThis.__filteredResponseCached.url,
-            globalThis.__filteredResponseCached.body === null
+            globalThis.__filteredResponseCached.body === null,
+            [...globalThis.__filteredResponseCached.headers].length,
+            globalThis.__filteredResponseCached.statusText
           ].join("|");
         })().catch(error => {
           globalThis.__filteredResponseCacheProbe =
@@ -9661,7 +9674,7 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: mol
             .expect("filtered response cache roundtrip should settle");
         assert_eq!(
             cache_probe,
-            format!("{response_type}|0|{expected_url}|true")
+            format!("{response_type}|0|{expected_url}|true|0|")
         );
         assert_eq!(
             vm.eval("__filteredResponseClone.url").unwrap(),
@@ -9680,19 +9693,31 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: mol
                     .get(scope, v8str(scope, "__filteredResponseClone").into())
                     .expect("filtered response clone should exist");
                 let materialized_clone =
-                    crate::network_host::materialize_response_object(scope, clone, "clone")
-                        .expect("filtered response clone should preserve internal URL");
+                    crate::network_host::materialize_response_object_internal_head(
+                        scope, clone, "clone",
+                    )
+                    .expect("filtered response clone should preserve the internal head")
+                    .0;
                 assert_eq!(materialized_clone.final_url.as_ref(), Some(&final_url));
                 assert_eq!(materialized_clone.response_type, response_type);
+                assert_eq!(materialized_clone.status, internal_status);
+                assert_eq!(materialized_clone.status_text, "Internal Status");
+                assert_eq!(materialized_clone.headers, internal_headers);
 
                 let cached = global
                     .get(scope, v8str(scope, "__filteredResponseCached").into())
                     .expect("cached filtered response should exist");
                 let materialized_cached =
-                    crate::network_host::materialize_response_object(scope, cached, "cache")
-                        .expect("cached filtered response should preserve internal URL");
+                    crate::network_host::materialize_response_object_internal_head(
+                        scope, cached, "cache",
+                    )
+                    .expect("cached filtered response should preserve the internal head")
+                    .0;
                 assert_eq!(materialized_cached.final_url.as_ref(), Some(&final_url));
                 assert_eq!(materialized_cached.response_type, response_type);
+                assert_eq!(materialized_cached.status, internal_status);
+                assert_eq!(materialized_cached.status_text, "Internal Status");
+                assert_eq!(materialized_cached.headers, internal_headers);
                 Ok(())
             })
             .expect("filtered response clone/cache should materialize");

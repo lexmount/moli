@@ -2784,14 +2784,17 @@ fn storage_bucket_cached_response_from_value<'s>(
     value: v8::Local<'s, v8::Value>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) -> Option<StorageBucketCachedResponseMaterialization<'s>> {
-    let (head, response) =
-        match crate::network_host::materialize_response_object_head(scope, value, "Cache.put") {
-            Ok(result) => result,
-            Err(error) => {
-                reject_type_error(scope, resolver, &error);
-                return None;
-            }
-        };
+    let (head, response) = match crate::network_host::materialize_response_object_internal_head(
+        scope,
+        value,
+        "Cache.put",
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            reject_type_error(scope, resolver, &error);
+            return None;
+        }
+    };
     let body =
         match crate::network_host::materialize_response_object_body(scope, response, "Cache.put") {
             crate::network_host::MaterializedResponseBody::Ready(body) => body,
@@ -2933,6 +2936,9 @@ fn build_storage_bucket_cached_response_object<'s>(
             scope,
             &response.response_type,
             &response.url,
+            response.status,
+            &response.status_text,
+            &response.headers,
             response.body,
         );
     }

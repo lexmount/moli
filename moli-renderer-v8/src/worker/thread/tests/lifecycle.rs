@@ -2828,7 +2828,8 @@ async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserve
 }
 
 #[tokio::test]
-async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_body() {
+async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_head_and_body()
+ {
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -2855,7 +2856,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
             stream
                 .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCross-Origin-Resource-Policy: cross-origin\r\nVary: *\r\nSet-Cookie: hidden=secret\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
                 )
                 .await
                 .expect("write service worker opaque body response");
@@ -2870,7 +2871,9 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
                 function assertOpaqueResponse(response, label) {{
                   response.body;
                   if (response.type !== "opaque" || response.status !== 0 ||
-                      response.body !== null || response.bodyUsed) {{
+                      response.body !== null || response.bodyUsed ||
+                      response.statusText !== "" || response.url !== "" ||
+                      [...response.headers].length !== 0) {{
                     throw new Error(label + ":" + [
                       response.type,
                       response.status,
@@ -2975,7 +2978,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
-            response.status, 0,
+            response.status, 200,
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
@@ -2983,10 +2986,22 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             Some(fetch_url.as_str()),
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
-        assert!(
-            response.headers.is_empty(),
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
+        assert_eq!(response.status_text, "OK");
+        for (name, value) in [
+            ("content-type", "application/javascript"),
+            ("cross-origin-resource-policy", "cross-origin"),
+            ("vary", "*"),
+            ("set-cookie", "hidden=secret"),
+        ] {
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|(key, entry)| key.eq_ignore_ascii_case(name) && entry == value),
+                "missing internal {name} for {clone_mode}/{cache_mode}: {:?}",
+                response.headers,
+            );
+        }
         assert_eq!(
             response.body,
             b"callback('OK');".to_vec(),

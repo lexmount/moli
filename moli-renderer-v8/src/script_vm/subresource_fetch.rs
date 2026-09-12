@@ -3723,13 +3723,13 @@ impl ScriptVm {
                         record_started,
                     );
                     let mut observable_response = response;
-                    if matches!(
-                        pending.info.resource_type,
-                        SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) {
+                    let response_request_origin = pending.response_request_origin(
+                        observable_response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url)),
+                    );
+                    if pending.info.resource_type == SubresourceResourceType::Xhr {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers_for_origin(
-                                &pending.response_request_origin(observable_response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
+                                &response_request_origin,
                                 &observable_response.final_url,
                                 &observable_response.headers,
                                 pending.credentials_mode,
@@ -3745,6 +3745,16 @@ impl ScriptVm {
                                 .expect("detached keepalive completion is handled before V8 entry");
                             let resolver = v8::Local::new(scope, &resolver);
                             let (mut head, body) = observable_response.into_body();
+                            let response_request = crate::network_host::FetchResponseRequest {
+                                method: &response_request_method,
+                                mode: pending.request_mode,
+                                redirect_mode,
+                            };
+                            head.headers = response_request.filter_response_headers(
+                                &response_request_origin,
+                                &head,
+                                pending.credentials_mode,
+                            );
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
@@ -3760,11 +3770,7 @@ impl ScriptVm {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.info.document_url,
-                                    crate::network_host::FetchResponseRequest {
-                                        method: &response_request_method,
-                                        mode: pending.request_mode,
-                                        redirect_mode,
-                                    },
+                                    response_request,
                                     head,
                                     body,
                                     response_filter,
@@ -4882,12 +4888,12 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
-            if matches!(
-                pending.info.resource_type,
-                SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) {
+            let response_request_origin = pending.response_request_origin(
+                observable_head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            );
+            if pending.info.resource_type == SubresourceResourceType::Xhr {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers_for_origin(
-                    &pending.response_request_origin(observable_head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
+                    &response_request_origin,
                     &observable_head.final_url,
                     &observable_head.headers,
                     pending.credentials_mode,
@@ -4975,14 +4981,20 @@ impl ScriptVm {
                         .resolver()
                         .expect("detached keepalive stream is handled before V8 entry");
                     let resolver = v8::Local::new(scope, resolver);
+                    let response_request = crate::network_host::FetchResponseRequest {
+                        method: &started.request_method,
+                        mode: pending.request_mode,
+                        redirect_mode: fetch.redirect_mode(),
+                    };
+                    observable_head.headers = response_request.filter_response_headers(
+                        &response_request_origin,
+                        &observable_head,
+                        pending.credentials_mode,
+                    );
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                         scope,
                         &pending.info.document_url,
-                        crate::network_host::FetchResponseRequest {
-                            method: &started.request_method,
-                            mode: pending.request_mode,
-                            redirect_mode: fetch.redirect_mode(),
-                        },
+                        response_request,
                         observable_head,
                         started.body_source_id,
                     );
