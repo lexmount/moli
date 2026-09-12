@@ -209,7 +209,13 @@ async fn child_navigation_retires_local_window_owned_xhr() {
         .expect("child XHR realm should exist");
     vm.eval_in_child_default_context(
         child_context_id,
-        "parent.__retiredChildXhrWrapper = new XMLHttpRequest(); parent.__retiredChildXhrExceptionPrototype = DOMException.prototype; 'captured'",
+        r#"
+        parent.__retiredChildXhrWrapper = new XMLHttpRequest();
+        // Preserve both prototype checks without materializing DOMException before open().
+        parent.__retiredChildErrorPrototype = Error.prototype;
+        parent.__getRetiredChildXhrExceptionPrototype = () => DOMException.prototype;
+        'captured'
+        "#,
     )
     .expect("parent should retain the child-created XHR wrapper for stale-owner proof");
     let child_context_ptr = {
@@ -292,15 +298,19 @@ async fn child_navigation_retires_local_window_owned_xhr() {
             );
             return "no-error";
           } catch (error) {
-            return [error.name, error.code,
-              Object.getPrototypeOf(error) === __retiredChildXhrExceptionPrototype,
-              !(error instanceof DOMException)].join("|");
+            return [
+              error.name,
+              error.code,
+              Object.getPrototypeOf(error) === __getRetiredChildXhrExceptionPrototype(),
+              Object.getPrototypeOf(Object.getPrototypeOf(error)) === __retiredChildErrorPrototype,
+              !(error instanceof DOMException)
+            ].join("|");
           }
         })()
         "#,
         )
         .expect("calling open on a retained old-child XHR wrapper should fail closed");
-    assert_eq!(stale_open, "InvalidStateError|11|true|true");
+    assert_eq!(stale_open, "InvalidStateError|11|true|true|true");
     assert!(
         vm._context_host
             .borrow()
