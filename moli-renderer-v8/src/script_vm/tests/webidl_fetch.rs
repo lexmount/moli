@@ -10640,3 +10640,40 @@ fn clipboard_item_record_converts_thenables_before_later_descriptors() {
         .unwrap();
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn webidl_initializer_unions_convert_platform_objects_without_iterators_as_records() {
+    let mut vm = new_storage_test_vm("https://initializer-record.test/");
+    let result = vm.eval(r#"
+(() => {
+  for (const Constructor of [Headers, URLSearchParams]) {
+    const url = new URL('https://initializer-record.test/path?query=value');
+    Object.defineProperty(url, Symbol.toPrimitive, {value() {
+      throw new Error('URL object must use record conversion');
+    }});
+    if (Array.from(new Constructor(url)).length !== 0) throw new Error('empty URL record');
+    url['x-record'] = 'record';
+    if (JSON.stringify(Array.from(new Constructor(url))) !== '[["x-record","record"]]') {
+      throw new Error(Constructor.name + ' must use own URL properties');
+    }
+    for (const factory of [() => new Headers(), () => new URLSearchParams(), () => new FormData()]) {
+      for (const value of [undefined, null]) {
+        const input = factory();
+        let iteratorReads = 0;
+        Object.defineProperty(input, Symbol.iterator, {enumerable: true, get() {
+          iteratorReads++;
+          return value;
+        }});
+        let caught;
+        try { new Constructor(input); } catch (error) { caught = error; }
+        if (!(caught instanceof TypeError) || iteratorReads !== 1) {
+          throw new Error(Constructor.name + ' must reject the enumerable Symbol key before reading its value');
+        }
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
