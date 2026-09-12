@@ -83,7 +83,6 @@ pub(crate) use self::event_source::{
     update_event_source_stream_state,
 };
 pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
-pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_BODY_SLOT, REQUEST_BODY_USED_SLOT, REQUEST_CACHE_SLOT, REQUEST_CREDENTIALS_SLOT,
     REQUEST_DESTINATION_SLOT, REQUEST_DUPLEX_SLOT, REQUEST_HEADERS_SLOT, REQUEST_INTEGRITY_SLOT,
@@ -112,6 +111,7 @@ pub(in crate::network_host) use self::fetch_surface::{
     response_slot_bool, response_slot_object, response_slot_string, response_slot_value,
     set_request_slot_bool, set_response_slot_value,
 };
+pub(crate) use self::fetch_surface::{mark_response_headers_immutable, set_response_slot_string};
 pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
 pub(crate) use self::headers::{HeadersGuard, filter_headers_for_guard};
@@ -146,7 +146,8 @@ pub(in crate::network_host) use self::request_scope::{
 };
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
-    MaterializedResponseHead, build_fetch_response_object_for_request_mode,
+    MaterializedResponseHead, build_error_response_object,
+    build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode_with_filter,
     build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,
@@ -154,8 +155,8 @@ pub(crate) use self::response::{
     build_navigation_preload_response_object_from_stream_for_request_mode,
     cors_preflight_request_headers_for_origin, cors_request_origin_after_redirects,
     fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers_for_origin,
-    is_cors_policy_failure_message, materialize_response_object_body,
-    materialize_response_object_body_with_chunk_callback,
+    is_cors_policy_failure_message, materialize_cache_response_object_head,
+    materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     response_constructor_callback, response_has_null_body, set_filtered_response_internal_head,
     validate_cors_preflight_response_for_origin, validate_cors_response,

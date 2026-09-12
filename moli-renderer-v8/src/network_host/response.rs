@@ -14,8 +14,8 @@ pub(crate) fn response_has_null_body(method: &str, status: u16) -> bool {
     matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
 }
 
-pub(crate) use self::bindings::response_constructor_callback;
 pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_response_init};
+pub(crate) use self::bindings::{build_error_response_object, response_constructor_callback};
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers_for_origin,
@@ -38,7 +38,8 @@ pub(crate) use self::materialize::{
     build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
+    materialize_cache_response_object_head, materialize_response_object_body,
+    materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     set_filtered_response_internal_head,
 };

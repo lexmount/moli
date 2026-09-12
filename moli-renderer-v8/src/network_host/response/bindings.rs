@@ -28,6 +28,20 @@ struct ResponseInstanceDeclaration {
     body_used: (),
 }
 
+pub(crate) fn build_error_response_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let response = ResponseInstanceDeclaration::new(0.0, String::new(), false)
+        .bind(scope)
+        .ok()?;
+    set_response_slot_string(scope, response, RESPONSE_TYPE_SLOT, "error");
+    install_response_headers(scope, response, &[], None);
+    install_response_body_stream(scope, response, None, None);
+    mark_response_object(scope, response);
+    mark_response_headers_immutable(scope, response);
+    Some(response)
+}
+
 pub(crate) fn response_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

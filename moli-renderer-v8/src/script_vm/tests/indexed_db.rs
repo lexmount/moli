@@ -2730,6 +2730,120 @@ async fn indexed_db_child_reply_does_not_leak_child_scope_to_top_continuation() 
 }
 
 #[test]
+fn global_cache_storage_preserves_error_responses_and_immutable_headers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-response.test/");
+    vm.eval(r#"
+globalThis.cacheResponseResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const name = 'response-admission';
+  await caches.delete(name);
+  const cache = await caches.open(name);
+  const NativeResponse = Response;
+  const errorFactory = Response.error;
+  for (const [key, response] of [
+    ['error', Response.error()],
+    ['error-clone', Response.error().clone()],
+    ['server-error', new Response('failure', {status: 500})],
+    ['redirect', Response.redirect('/target')]
+  ]) {
+    await cache.put('/' + key, response);
+    const matched = await cache.match('/' + key);
+    const all = await cache.matchAll('/' + key);
+    const storageMatch = await caches.match('/' + key, {cacheName: name});
+    for (const entry of [matched, matched.clone(), all[0], storageMatch]) {
+      check(entry.type === response.type && entry.status === response.status, key + ': metadata');
+      for (const mutation of [
+        () => entry.headers.set('x-added', 'value'),
+        () => entry.headers.append('x-added', 'value'),
+        () => entry.headers.delete('x-absent')
+      ]) {
+        let error;
+        try { mutation(); } catch (value) { error = value; }
+        check(error instanceof TypeError, key + ': immutable headers');
+      }
+      if (entry.type === 'error') {
+        check(entry.status === 0 && !entry.ok && entry.statusText === '' && entry.url === '' &&
+          !entry.redirected && entry.body === null && !entry.bodyUsed && [...entry.headers].length === 0,
+          key + ': error response');
+        check(await entry.text() === '' && !entry.bodyUsed, key + ': null body');
+        await cache.put('/again', entry);
+      }
+    }
+  }
+  try {
+    globalThis.Response = function() { throw new Error('author constructor invoked'); };
+    const error = errorFactory.call(null);
+    check(error instanceof NativeResponse && error.type === 'error', 'intrinsic Response.error');
+    await cache.put('/tampered', error);
+    const matched = await cache.match('/tampered');
+    check(matched instanceof NativeResponse && matched.type === 'error' && matched.body === null,
+      'intrinsic cached error response');
+  } finally {
+    globalThis.Response = NativeResponse;
+  }
+  await caches.delete(name);
+  cacheResponseResult = 'ok';
+})().catch(error => cacheResponseResult = String(error.stack || error));
+"#).unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheResponseResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
+fn global_cache_storage_rejects_uncacheable_responses_before_consuming_body() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-admission.test/");
+    vm.eval(
+        r#"
+globalThis.cacheAdmissionResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const name = 'response-admission';
+  await caches.delete(name);
+  const cache = await caches.open(name);
+  await cache.put('/key', new Response('original'));
+  for (const streaming of [false, true]) {
+    for (const init of [
+      {status: 206},
+      {headers: {VARY: '*'}},
+      {headers: [['vary', 'Accept-Language'], ['Vary', ' \t* ']]}
+    ]) {
+      const body = streaming ? new ReadableStream({start(controller) {
+        controller.enqueue(new TextEncoder().encode('replacement'));
+        controller.close();
+      }}) : 'replacement';
+      const response = new Response(body, init);
+      // Admission reads the associated response, even if author properties mask it.
+      Object.defineProperty(response, 'status', {get() { throw new Error('status getter'); }});
+      Object.defineProperty(response, 'headers', {get() { throw new Error('headers getter'); }});
+      let error;
+      try { await cache.put('/key', response); } catch (value) { error = value; }
+      check(error instanceof TypeError, 'uncacheable response must reject');
+      check(!response.bodyUsed && !response.body.locked, 'rejection consumed or locked body');
+      check(await response.text() === 'replacement', 'rejected body is readable');
+      check(await (await cache.match('/key')).text() === 'original', 'rejection replaced entry');
+    }
+  }
+  const accepted = new Response('allowed', {headers: {Vary: 'Accept-Language, star*'}});
+  await cache.put('/key', accepted);
+  check(accepted.bodyUsed && await (await cache.match('/key')).text() === 'allowed', 'valid Vary');
+  await caches.delete(name);
+  cacheAdmissionResult = 'ok';
+})().catch(error => cacheAdmissionResult = String(error.stack || error));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheAdmissionResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
 fn global_cache_storage_normalizes_request_info_urls() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://cache-request-info.test/app/index.html");

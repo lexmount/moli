@@ -69,17 +69,6 @@ struct ResponseInitObjectDeclaration<'scope> {
     headers: Option<v8::Local<'scope, v8::Value>>,
 }
 
-#[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Response)]
-struct ResponseErrorStateDeclaration {
-    #[webapi(slot = RESPONSE_TYPE_SLOT, init = string("error"))]
-    response_type: (),
-    #[webapi(slot = RESPONSE_STATUS_SLOT, init = 0)]
-    status: (),
-    #[webapi(slot = RESPONSE_OK_SLOT, init = false)]
-    ok: (),
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Request, enumerable)]
 struct RequestTemplateMethodsDeclaration {
@@ -577,20 +566,20 @@ fn response_static_error_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let init = ResponseInitObjectDeclaration::new(None, None, None)
-        .bind(scope)
-        .expect("Response error init declaration should bind");
-    let Some(response) = new_response_instance(scope, v8::null(scope).into(), init.into()) else {
+    let Some(response) = super::response::build_error_response_object(scope) else {
         rv.set_undefined();
         return;
     };
-    ResponseErrorStateDeclaration::default()
-        .initialize(scope, response)
-        .expect("Response error state declaration should initialize");
+    rv.set(response.into());
+}
+
+pub(crate) fn mark_response_headers_immutable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+) {
     if let Some(headers) = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT) {
         mark_headers_immutable(scope, headers);
     }
-    rv.set(response.into());
 }
 
 pub(crate) fn response_static_redirect_callback<'s>(
