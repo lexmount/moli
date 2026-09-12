@@ -3339,6 +3339,7 @@ fn service_worker_fetch_response_from_materialized(
 ) -> ServiceWorkerFetchResponse {
     let response = head.with_body(body);
     ServiceWorkerFetchResponse {
+        cors_exposed_header_names: response.cors_exposed_header_names,
         final_url: response.final_url,
         response_type: response.response_type,
         redirected: response.redirected,
@@ -3353,6 +3354,7 @@ fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        cors_exposed_header_names: head.cors_exposed_header_names.clone(),
         status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),

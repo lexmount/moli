@@ -3024,6 +3024,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        cors_exposed_header_names: None,
                         response_type: "default".to_owned(),
                         url: format!("{page_url}reserved"),
                         redirected: false,
