@@ -89,6 +89,8 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/echo-content-type.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
+    "/xhr/resources/bad-chunk-encoding.py",
+    "/xhr/resources/infinite-redirects.py",
     *XHR_DOCUMENT_FIXTURES,
 }
 FETCH_ABORT_RESOURCE_PATHS = {
@@ -2676,21 +2678,33 @@ def _make_handler(
             path = unquote(parsed.path)
             if path not in XHR_RESOURCE_PATHS:
                 return False
+            if path == "/xhr/resources/bad-chunk-encoding.py":
+                self._serve_xhr_bad_chunk_encoding()
+                return True
             upload_consumed = False
+            cache_control = "no-store"
             try:
                 if path == "/xhr/resources/requri.py":
                     params = parse_qs(parsed.query, keep_blank_values=True)
-                    uri = self.path
-                    if "full" in params and not uri.startswith("http://"):
-                        authority = self.headers.get("Host")
-                        if authority is None:
-                            authority = _url_host_literal(
-                                str(self.server.server_address[0])
-                            )
-                        if urlsplit("//" + authority).port is None:
-                            authority += ":" + str(self.server.server_address[1])
-                        uri = f"http://{authority}{uri}"
+                    uri = self._xhr_request_url() if "full" in params else self.path
                     status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                elif path == "/xhr/resources/infinite-redirects.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    page = "default" if params.get("page", [None])[0] == "alternate" else "alternate"
+                    redirect_type = 301 if params.get("type", [None])[0] == "301" else 302
+                    mix = int(params.get("mix", [None])[0] == "1")
+                    if mix:
+                        redirect_type = 302 if redirect_type == 301 else 301
+                    request_url = urlsplit(self._xhr_request_url())
+                    location = urlunsplit((
+                        request_url.scheme, request_url.netloc, request_url.path,
+                        f"page={page}&type={redirect_type}&mix={mix}", "",
+                    ))
+                    # Upstream returns 301 regardless of the next URL's `type`.
+                    status, reason = 301, None
+                    headers = [("Pragma", "no-cache"), ("Location", location)]
+                    cache_control = "no-cache"
+                    body = ("Hello guest. You have been redirected to " + location).encode("utf-8")
                 elif path == "/xhr/resources/inspect-headers.py":
                     status, reason = 200, None
                     headers, body = _xhr_inspect_headers_fixture_response(
@@ -2797,8 +2811,47 @@ def _make_handler(
                 extra_headers=headers,
                 status_code=status,
                 status_text=reason,
+                cache_control=cache_control,
             )
             return True
+
+        def _xhr_request_url(self) -> str:
+            if self.path.startswith("http://"):
+                return self.path
+            authority = self.headers.get("Host")
+            if authority is None:
+                authority = _url_host_literal(str(self.server.server_address[0]))
+            if urlsplit("//" + authority).port is None:
+                authority += ":" + str(self.server.server_address[1])
+            return f"http://{authority}{self.path}"
+
+        def _serve_xhr_bad_chunk_encoding(self) -> None:
+            # The upstream explicit writer sends these bytes even for HEAD.
+            # Use raw framing so clients receive data before a decoding error.
+            self.close_connection = True
+            self.protocol_version = self.request_version
+            try:
+                if stopping.wait(0.1):
+                    return
+                self.send_response(200)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if stopping.wait(0.1):
+                    return
+                for _ in range(5):
+                    self.wfile.write(b"a\r\nTEST_CHUNK\r\n")
+                    self.wfile.flush()
+                    if stopping.wait(0.1):
+                        return
+                self.wfile.write(b"garbage")
+                self.wfile.flush()
+            except OSError:
+                # Clients may abort once they receive a partial response.
+                return
 
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
@@ -3003,6 +3056,7 @@ def _make_handler(
             extra_headers: list[tuple[str, str]] | None = None,
             status_code: int = 200,
             status_text: str | None = None,
+            cache_control: str = "no-store",
         ) -> None:
             if content_type is None:
                 header_block = list(extra_headers or [])
@@ -3017,7 +3071,7 @@ def _make_handler(
                 self.send_header(name, value)
             if not _headers_include(header_block, "Content-Length"):
                 self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
             self.end_headers()
             if emit_body:
                 declared_length = next(
