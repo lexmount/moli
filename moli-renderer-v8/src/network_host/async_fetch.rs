@@ -1,15 +1,19 @@
 use super::response_hop::{
-    SubresourceResponseTransition, advance_subresource_response, network_response_extra_info,
-    redirect_mode_error_message,
+    SubresourceResponseTransition, advance_subresource_response, is_redirect_status,
+    network_response_extra_info, redirect_mode_error_message,
 };
 use super::*;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, NetworkResponseExtraInfo,
-    RedirectInfo, RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead,
-    StreamingRawResponse, is_cors_safelisted_method,
+    BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, NetworkObservationJournal,
+    NetworkResponseExtraInfo, RedirectInfo, RequestCredentialsMode, RequestMode,
+    RequestRedirectMode, ResponseHead, StreamingRawResponse,
 };
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
+
+#[cfg(test)]
+#[path = "async_fetch/redirect_tests.rs"]
+mod redirect_tests;
 
 /// Script fetches need CORS authorization before following every redirect,
 /// even though their browser-generated GET requests do not require preflight.
@@ -18,7 +22,7 @@ pub(crate) async fn fetch_cors_script_text(
     request: Request,
     cancel_handle: FetchCancelHandle,
 ) -> Result<Response, String> {
-    let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+    let observed = fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
         loader,
         request,
         Some(cancel_handle),
@@ -148,8 +152,8 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    if browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers) {
-        return fetch_browser_subresource_with_manual_preflight_redirects(
+    if browser_request_needs_cors_redirect_checks(&request) {
+        return fetch_browser_subresource_with_cors_redirect_checks(
             loader,
             request,
             cancel_handle,
@@ -218,6 +222,23 @@ pub(super) async fn fetch_subresource_hop(
     }))
 }
 
+fn browser_request_needs_cors_redirect_checks(request: &Request) -> bool {
+    matches!(
+        request.browser_request_metadata(),
+        Some(
+            BrowserRequestMetadata::Fetch
+                | BrowserRequestMetadata::EventSource
+                | BrowserRequestMetadata::JsonModule
+                | BrowserRequestMetadata::TextModule
+                | BrowserRequestMetadata::Manifest
+                | BrowserRequestMetadata::Script
+                | BrowserRequestMetadata::StyleModule
+                | BrowserRequestMetadata::Xhr,
+        )
+    ) && request.request_mode == RequestMode::Cors
+        && request.request_origin().is_some()
+}
+
 struct ManualCorsRedirectState {
     request: Request,
     preflight_request_headers: Vec<(String, String)>,
@@ -251,6 +272,11 @@ impl ManualCorsRedirectState {
         cancel_handle: Option<FetchCancelHandle>,
         preflight_observer: Option<&CorsPreflightNetworkObserver>,
     ) -> Result<(), String> {
+        if self.request.request_mode == RequestMode::SameOrigin
+            && self.request.has_cross_origin_url(&self.request.url)
+        {
+            return Err("same-origin request mode blocked a cross-origin URL".to_owned());
+        }
         run_cors_preflight_if_needed(
             loader,
             self.request(),
@@ -275,6 +301,7 @@ impl ManualCorsRedirectState {
             web_security_disabled,
         )?;
         if transition == SubresourceResponseTransition::FollowedRedirect {
+            // Retain only the original author's headers on each redirected hop.
             self.preflight_request_headers.retain(|(name, _)| {
                 self.request
                     .request_headers
@@ -290,20 +317,16 @@ impl ManualCorsRedirectState {
     }
 }
 
-async fn fetch_browser_subresource_with_manual_preflight_redirects(
+async fn fetch_browser_subresource_with_cors_redirect_checks(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    if !request.auth_requires_buffered_transport()
-        && request.redirect_mode() == RequestRedirectMode::Follow
-    {
-        // Materialize only the accepted final response. Waiting for buffered
-        // intermediate bodies here lets an unfinished redirect block the next
-        // hop and its preflight indefinitely.
-        let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+    if !request.auth_requires_buffered_transport() {
+        let redirect_mode = request.redirect_mode();
+        let observed = fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             &loader,
             request,
             cancel_handle,
@@ -311,14 +334,22 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
             preflight_observer,
         )
         .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
-        let response = response
-            .into_lossy_materialized_text_response()
-            .await
-            .map_err(format_network_error)?;
+        let (response, journal) = observed.into_parts_with_observation_journal();
+        let response = if redirect_mode == RequestRedirectMode::Manual
+            && is_redirect_status(response.status)
+        {
+            // The opaque redirect has no exposed body. Dropping its private
+            // transfer must not delay delivery until an unused body ends.
+            Response::from_head_and_text_body(response.head(), String::new())
+                .with_network_request_extra_info(response.network_request_extra_info().cloned())
+        } else {
+            response
+                .into_lossy_materialized_text_response()
+                .await
+                .map_err(format_network_error)?
+        };
         return Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
+            response, journal,
         ));
     }
 
@@ -332,39 +363,41 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
         preflight_request_headers,
     );
     let cancel_handle = cancel_handle.unwrap_or_default();
+    let mut journal = NetworkObservationJournal::default();
 
     loop {
         redirects
             .run_current_hop_preflight(&loader, Some(cancel_handle.clone()), preflight_observer)
             .await?;
 
-        let response_cancel = cancel_handle.child_for_subrequest();
-        let mut observed = fetch_once_with_network_metadata_unvalidated(
+        let hop_cancel = cancel_handle.child_for_subrequest();
+        let observed = fetch_once_with_network_metadata_unvalidated(
             &loader,
             redirects.single_hop_transport_request(),
-            Some(response_cancel.clone()),
+            Some(hop_cancel.clone()),
         )
         .await?;
-        let head = observed.response().head();
-        let extra_info = network_response_extra_info(&head, observed.observation_journal());
+        let (mut response, hop_journal) = observed.into_parts_with_observation_journal();
+        let head = response.head();
+        let extra_info = network_response_extra_info(&head, &hop_journal);
+        journal.append(hop_journal);
         match redirects.advance(head, extra_info, loader.web_security_disabled())? {
-            SubresourceResponseTransition::FinalResponse => {
-                cancel_handle.adopt_response_progress(&response_cancel);
+            SubresourceResponseTransition::FinalResponse
+            | SubresourceResponseTransition::ManualResponse { .. } => {
                 let redirect_chain = redirects.into_redirect_chain();
-                observed.response_mut().redirected = !redirect_chain.is_empty();
-                observed.response_mut().redirect_chain = redirect_chain;
-                return Ok(observed);
-            }
-            SubresourceResponseTransition::ManualResponse { .. } => {
-                cancel_handle.adopt_response_progress(&response_cancel);
-                return Ok(observed);
+                response.redirected = !redirect_chain.is_empty();
+                response.redirect_chain = redirect_chain;
+                cancel_handle.adopt_response_progress(&hop_cancel);
+                return Ok(NetworkFetchResult::with_observation_journal(
+                    response, journal,
+                ));
             }
             SubresourceResponseTransition::FollowedRedirect => {}
         }
     }
 }
 
-async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+async fn fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
@@ -376,41 +409,43 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
         preflight_request_headers,
     );
     let cancel_handle = cancel_handle.unwrap_or_default();
+    let mut journal = NetworkObservationJournal::default();
 
     loop {
         redirects
             .run_current_hop_preflight(loader, Some(cancel_handle.clone()), preflight_observer)
             .await?;
 
-        let mut observed = loader
+        let hop_cancel = cancel_handle.child_for_subrequest();
+        let observed = loader
             .fetch_raw_stream_with_cancel_and_network_metadata(
                 redirects.single_hop_transport_request(),
-                cancel_handle.child_for_subrequest(),
+                hop_cancel.clone(),
             )
             .await
             .map_err(format_network_error)?;
-        let head = observed.response().head();
-        let extra_info = network_response_extra_info(&head, observed.observation_journal());
+        let (mut response, hop_journal) = observed.into_parts_with_observation_journal();
+        let head = response.head();
+        let extra_info = network_response_extra_info(&head, &hop_journal);
+        journal.append(hop_journal);
         match redirects.advance(head, extra_info, loader.web_security_disabled())? {
-            SubresourceResponseTransition::FinalResponse => {
-                cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
+            SubresourceResponseTransition::FinalResponse
+            | SubresourceResponseTransition::ManualResponse { .. } => {
                 let redirect_chain = redirects.into_redirect_chain();
-                observed.response_mut().redirected = !redirect_chain.is_empty();
-                observed.response_mut().redirect_chain = redirect_chain;
-                return Ok(observed);
-            }
-            SubresourceResponseTransition::ManualResponse { response_url } => {
-                return Err(format!(
-                    "manual redirect unexpectedly entered follow-mode streaming from {}",
-                    response_url
+                response.redirected = !redirect_chain.is_empty();
+                response.redirect_chain = redirect_chain;
+                cancel_handle.adopt_response_progress(&hop_cancel);
+                return Ok(NetworkFetchResult::with_observation_journal(
+                    response, journal,
                 ));
             }
             SubresourceResponseTransition::FollowedRedirect => {}
         }
 
-        // Dropping this hop retires only its transport. Its body and late
-        // completion cannot cancel or commit the logical request's next hop.
-        drop(observed);
+        // The redirect body is unused. Cancel this hop without cancelling the
+        // logical request or waiting for a body that might never finish.
+        hop_cancel.cancel();
+        drop(response);
     }
 }
 
@@ -420,7 +455,7 @@ pub(crate) fn next_redirect_url(
     headers: &[(String, Vec<u8>)],
     redirect_count: usize,
 ) -> Result<Option<url::Url>, String> {
-    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+    if !is_redirect_status(status) {
         return Ok(None);
     }
     let Some(location) = headers
@@ -467,6 +502,16 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    if browser_request_needs_cors_redirect_checks(&request) {
+        return fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
+            loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            preflight_observer,
+        )
+        .await;
+    }
     // Borrow the loader so its fetch runtime stays alive until the caller drains
     // and finishes the returned StreamingRawResponse.
     run_cors_preflight_if_needed(
@@ -637,8 +682,7 @@ pub(crate) fn spawn_async_subresource_fetch(
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
         let redirect_mode = request.redirect_mode();
         let auth_requires_buffered_transport = request.auth_requires_buffered_transport();
-        let requires_manual_preflight_redirects =
-            browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
+        let requires_cors_redirect_checks = browser_request_needs_cors_redirect_checks(&request);
         let can_stream_subresource_body = matches!(
             request.browser_request_metadata(),
             Some(
@@ -662,7 +706,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 request_mode = ?request.request_mode,
                 redirect_handling = ?request.redirect_handling(),
                 auth_requires_buffered_transport,
-                requires_manual_preflight_redirects,
+                requires_cors_redirect_checks,
                 can_stream_subresource_body,
                 can_collect_image_body,
                 stage = "async_subresource_transport_selected",
@@ -777,10 +821,9 @@ async fn fetch_browser_image_into_parkable(
     ),
     String,
 > {
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
+    let requires_manual_preflight_redirects = browser_request_needs_cors_redirect_checks(&request);
     let observed = if requires_manual_preflight_redirects {
-        fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+        fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             loader,
             request,
             cancel_handle,
@@ -844,27 +887,14 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     request_body: Option<String>,
 ) -> Result<(), String> {
     let body_source_id = new_network_body_source_id();
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-    let observed = if requires_manual_preflight_redirects {
-        fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
-            &loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    } else {
-        fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-            &loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    };
+    let observed = fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+        &loader,
+        request,
+        cancel_handle,
+        preflight_request_headers,
+        preflight_observer,
+    )
+    .await?;
     let (mut response, request_observation) = observed.into_parts();
     let head = response.head();
     let _ = completion_tx.send_async_subresource_event(
@@ -947,11 +977,12 @@ async fn fetch_response_head_once(
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<ResponseHead, String> {
+    let cancel_handle = cancel_handle.unwrap_or_default().child_for_subrequest();
     // Challenge-response auth retries are completed inside libcurl on the
     // buffered path. Preemptive Basic auth can still use the streaming head
     // path because credentials are already represented as request headers.
     if request.auth_requires_buffered_transport() {
-        return fetch_once(loader, request, cancel_handle)
+        return fetch_once(loader, request, Some(cancel_handle))
             .await
             .map(|response| response.head());
     }
@@ -961,8 +992,8 @@ async fn fetch_response_head_once(
         .fetch_raw_stream_with_cancel(request, cancel_handle)
         .await
         .map_err(format_network_error)?;
-    // Preflight validation consumes only the headers. Its private cancellation
-    // authority lets Drop stop a slow body without aborting the actual request.
+    // Preflight authorization depends only on the response head. Drop this
+    // private transfer instead of draining an unneeded, possibly endless body.
     Ok(response.head())
 }
 
@@ -970,12 +1001,7 @@ fn validate_redirect_mode_response(
     response: Response,
     redirect_mode: RequestRedirectMode,
 ) -> Result<Response, String> {
-    validate_redirect_mode_parts(
-        &response.final_url,
-        response.status,
-        &response.headers,
-        redirect_mode,
-    )?;
+    validate_redirect_mode_parts(&response.final_url, response.status, redirect_mode)?;
     Ok(response)
 }
 
@@ -983,23 +1009,20 @@ fn validate_redirect_mode_response_head(
     head: &ResponseHead,
     redirect_mode: RequestRedirectMode,
 ) -> Result<(), String> {
-    validate_redirect_mode_parts(&head.final_url, head.status, &head.headers, redirect_mode)
+    validate_redirect_mode_parts(&head.final_url, head.status, redirect_mode)
 }
 
 fn validate_redirect_mode_parts(
     final_url: &url::Url,
     status: u16,
-    headers: &[(String, Vec<u8>)],
     redirect_mode: RequestRedirectMode,
 ) -> Result<(), String> {
     if redirect_mode == RequestRedirectMode::Manual {
         return Ok(());
     }
-    if redirect_mode == RequestRedirectMode::Error && matches!(status, 301 | 302 | 303 | 307 | 308)
-    {
+    if redirect_mode == RequestRedirectMode::Error && is_redirect_status(status) {
         return Err(redirect_mode_error_message(final_url));
     }
-    next_redirect_url(final_url, status, headers, 0)?;
     Ok(())
 }
 
@@ -1678,7 +1701,7 @@ mod tests {
         let cancel = FetchCancelHandle::new();
         let observed = tokio::time::timeout(
             Duration::from_secs(5),
-            fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+            fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
                 &loader,
                 request,
                 Some(cancel.clone()),
@@ -2316,10 +2339,7 @@ mod tests {
         .with_initiator_url(&document_url)
         .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
-        assert!(browser_request_needs_manual_preflight_redirects(
-            &request,
-            &request_headers,
-        ));
+        assert!(browser_request_needs_cors_redirect_checks(&request));
 
         spawn_async_subresource_fetch(
             crate::network::RendererResourceTaskRunner::from_current_tokio()?,
