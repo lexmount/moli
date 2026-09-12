@@ -1821,6 +1821,12 @@ impl JsContextHost {
             else {
                 return None;
             };
+            if crate::network_host::response_has_null_body(&state.request_method, state.head.status)
+            {
+                // Fetch disregards enqueuing into a null response body. Do not
+                // retain, decode, or publish bytes from an invalid response.
+                return None;
+            }
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
             let xhr = v8::Local::new(scope, xhr);
             state.body_writer.append(bytes);

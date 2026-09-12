@@ -14,12 +14,6 @@ pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) mode: RequestMode,
 }
 
-impl FetchResponseRequest<'_> {
-    fn has_null_body(self, status: u16) -> bool {
-        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
-    }
-}
-
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -203,7 +197,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
         .map(FetchResponseFilter::from)
         .unwrap_or_else(|| response_filter(document_url, &head, request.mode));
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
-    let body_stream = if request.has_null_body(head.status) {
+    let body_stream = if response_has_null_body(request.method, head.status) {
         None
     } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
@@ -223,7 +217,7 @@ pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode
 ) -> v8::Local<'s, v8::Object> {
     let filter = response_filter(document_url, &head, request.mode);
     let obj = build_fetch_response_object_head(scope, document_url, &head, filter, None);
-    let body_stream = if request.has_null_body(head.status) {
+    let body_stream = if response_has_null_body(request.method, head.status) {
         None
     } else if filtered_response_exposes_body(filter) {
         Some(network_body_stream_from_subresource_body(scope, obj, body))
@@ -282,7 +276,7 @@ fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>
         .flatten();
     let obj =
         build_fetch_response_object_head(scope, document_url, &head, filter, filtered_surface_url);
-    if request.has_null_body(head.status) {
+    if response_has_null_body(request.method, head.status) {
         // Fetch nulls the internal body, including for filtered responses. Do
         // not register a body source: subsequent transport chunks and terminal
         // events then have no stream to enqueue into or retain bytes for.

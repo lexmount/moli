@@ -4928,14 +4928,14 @@ impl ScriptVm {
                         event_source_parser: None,
                         xhr_response: Some(xhr_response),
                     });
-                let remains_current =
+                let keep_stream =
                     crate::network_host::apply_xhr_streaming_response_head(
                         scope,
                         xhr,
                         &observable_head,
                         started.internal_id,
                     );
-                if !remains_current {
+                if !keep_stream {
                     // Registering the stream before dispatching state 2 lets abort()
                     // retire the transport synchronously. open() and isolate
                     // termination also invalidate the old XHR generation; retire

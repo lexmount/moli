@@ -160,7 +160,7 @@ pub(crate) use self::response::{
     is_cors_policy_failure_message, materialize_response_object_body,
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, response_constructor_callback,
+    materialized_body_bytes_from_value, response_constructor_callback, response_has_null_body,
     validate_cors_preflight_response_for_origin, validate_cors_response,
     validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,

@@ -1001,7 +1001,10 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
             data.status, 200,
             "data: must not inherit the blob method restriction"
         );
-        assert_eq!(data.body_text(), "payload");
+        assert_eq!(
+            data.body_text(),
+            if method == "HEAD" { "" } else { "payload" }
+        );
     }
     Ok(())
 }

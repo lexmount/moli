@@ -9,6 +9,11 @@ use super::headers::{
 };
 use super::*;
 
+/// Fetch's main-fetch body filter, given an already normalized request method.
+pub(crate) fn response_has_null_body(method: &str, status: u16) -> bool {
+    matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+}
+
 pub(crate) use self::bindings::response_constructor_callback;
 pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_response_init};
 pub(super) use self::body_methods::install_response_body_methods;

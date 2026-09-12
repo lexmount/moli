@@ -125,6 +125,13 @@ fn apply_xhr_response_body(
     status_text: Option<&str>,
     mode: XhrResponseDeliveryMode,
 ) {
+    // Fulfilled and worker responses can bypass the HTTP transport's body
+    // filtering. Discard forbidden bytes before decoding any response type.
+    let body_bytes = if xhr_response_has_null_body(scope, xhr, &head) {
+        Vec::new()
+    } else {
+        body_bytes
+    };
     let Some(response_type) = prepare_xhr_response(scope, xhr, &head, status_text, mode) else {
         return;
     };
@@ -200,6 +207,7 @@ fn apply_xhr_response_body(
     );
 }
 
+/// Returns whether the transport state should remain registered.
 pub(crate) fn apply_xhr_streaming_response_head(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -211,8 +219,28 @@ pub(crate) fn apply_xhr_streaming_response_head(
     }
     set_xhr_response_head(scope, xhr, head, None);
     super::super::events::xhr_fire_readystatechange(scope, xhr, 2);
-    !scope.is_execution_terminating()
-        && super::progress::xhr_stream_is_current(scope, xhr, internal_id)
+    if scope.is_execution_terminating()
+        || !super::progress::xhr_stream_is_current(scope, xhr, internal_id)
+    {
+        return false;
+    }
+    if xhr_response_has_null_body(scope, xhr, head) {
+        // XHR handles a null body's end immediately after HEADERS_RECEIVED.
+        // Keep transport bookkeeping alive, but retire this XHR delivery so
+        // subsequent chunks and terminal errors cannot alter its response.
+        let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT);
+        apply_xhr_streaming_response_body_source(
+            scope,
+            xhr,
+            head.clone(),
+            moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+            internal_id,
+        );
+        return !scope.is_execution_terminating()
+            && !xhr_is_aborted(scope, xhr)
+            && xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT) == generation;
+    }
+    true
 }
 
 pub(crate) fn apply_xhr_streaming_response_chunk(
@@ -324,7 +352,7 @@ fn finish_xhr_response(
         matches!(mode, XhrResponseDeliveryMode::Buffered) && xhr_is_async(scope, xhr);
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_TEXT_SLOT, response_text);
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_SLOT, response_val);
-    if dispatch_intermediate_events {
+    if dispatch_intermediate_events && progress.loaded > 0.0 {
         super::super::events::xhr_fire_readystatechange(scope, xhr, 3);
         if scope.is_execution_terminating() {
             return;
@@ -333,7 +361,11 @@ fn finish_xhr_response(
             return;
         }
     }
-    if dispatch_intermediate_events {
+    // A zero-byte stream has no chunk that could have dispatched progress.
+    // It still needs the end-of-body event, without synthesizing LOADING.
+    if xhr_is_async(scope, xhr)
+        && (matches!(mode, XhrResponseDeliveryMode::Buffered) || progress.loaded == 0.0)
+    {
         xhr_dispatch_progress_event_with_length_computable(
             scope,
             xhr,
@@ -382,12 +414,14 @@ fn xhr_response_progress(head: &moli_fetch::ResponseHead, loaded: f64) -> XhrRes
     if matches!(head.final_url.scheme(), "data" | "blob") {
         return XhrResponseProgress {
             loaded,
-            length_computable: true,
+            length_computable: loaded > 0.0,
             total: loaded,
         };
     }
 
-    let total = identity_encoded_content_length(&head.headers).map(|value| value as f64);
+    let total = identity_encoded_content_length(&head.headers)
+        .filter(|value| *value > 0)
+        .map(|value| value as f64);
     XhrResponseProgress {
         loaded,
         length_computable: total.is_some(),
@@ -449,6 +483,10 @@ fn parse_xhr_response_document<'s>(
     response_type: XmlHttpRequestResponseType,
     character_set: &str,
 ) -> v8::Local<'s, v8::Value> {
+    // An empty HTML body can create a Document, but a null body cannot.
+    if xhr_response_has_null_body(scope, xhr, head) {
+        return v8::null(scope).into();
+    }
     // XHR defaults a missing or invalid response MIME type to text/xml.
     // Its XML MIME types include any +xml subtype, unlike DOMParser's enum.
     let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
@@ -461,6 +499,15 @@ fn parse_xhr_response_document<'s>(
     build_xhr_response_document(scope, xhr, head, body_text, &mime, character_set)
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into())
+}
+
+fn xhr_response_has_null_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    head: &moli_fetch::ResponseHead,
+) -> bool {
+    let method = xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_default();
+    response_has_null_body(&method, head.status)
 }
 
 fn build_xhr_response_document<'s>(
