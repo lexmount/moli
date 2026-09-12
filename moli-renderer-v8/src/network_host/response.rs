@@ -5,7 +5,7 @@ mod materialize;
 
 use super::headers::{
     HeadersGuard, build_headers_object_with_state, filter_headers_for_guard, headers_entries,
-    headers_entries_from_init, install_headers_object_methods,
+    headers_entries_from_init,
 };
 use super::*;
 
