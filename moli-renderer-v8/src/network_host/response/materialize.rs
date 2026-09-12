@@ -107,6 +107,7 @@ pub(crate) fn network_response_filter(
     if redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status) {
         Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
     } else if request_mode == RequestMode::NoCors
+        && head.final_url.scheme() != "data"
         && head.url_list().has_cross_origin_url(&request_origin)
     {
         Some(AsyncSubresourceFetchResponseFilter::Opaque)
@@ -121,16 +122,20 @@ fn compute_fetch_response_type(
     filter: FetchResponseFilter,
 ) -> &'static str {
     let request_origin = request_origin.into();
-    // Returning to the initiating origin does not undo response tainting.
+    // Main fetch selects basic tainting for data URLs regardless of request mode.
+    // HTTP responses retain cross-origin taint after a redirect back to the client.
     match filter {
         FetchResponseFilter::Basic => "basic",
         FetchResponseFilter::Cors => "cors",
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if head.url_list().has_cross_origin_url(&request_origin) => {
-            "cors"
+        FetchResponseFilter::None
+            if head.final_url.scheme() == "data"
+                || !head.url_list().has_cross_origin_url(&request_origin) =>
+        {
+            "basic"
         }
-        FetchResponseFilter::None => "basic",
+        FetchResponseFilter::None => "cors",
     }
 }
 
