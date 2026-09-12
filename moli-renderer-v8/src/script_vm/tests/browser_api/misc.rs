@@ -14270,12 +14270,12 @@ async fn navigator_service_worker_fetch_follows_and_filters_synthetic_redirect_r
         "String(globalThis.__serviceWorkerSyntheticRedirectProbe)",
         &format!(
             "200|true|{base_url}/app/api/redirect-final.txt|synthetic-redirect-final;\
-             manual=0|opaqueredirect|false||;\
+             manual=0|opaqueredirect|false|{base_url}/app/api/manual-start.txt|;\
              relative-follow=rejected:TypeError;\
-             relative-manual=0|opaqueredirect|false||;\
+             relative-manual=0|opaqueredirect|false|{base_url}/app/api/generated-relative-redirect.txt|;\
              opaqueredirect-follow=rejected:TypeError;\
              opaqueredirect-error=rejected:TypeError;\
-             opaqueredirect-manual=0|opaqueredirect|false||"
+             opaqueredirect-manual=0|opaqueredirect|false|{redirect_url}|"
         ),
     )
     .await;

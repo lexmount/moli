@@ -117,8 +117,10 @@ fn filtered_response_status(head: &moli_fetch::ResponseHead, filter: FetchRespon
 
 fn filtered_response_url(head: &moli_fetch::ResponseHead, filter: FetchResponseFilter) -> &str {
     match filter {
-        FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect => "",
-        FetchResponseFilter::None => head.final_url.as_str(),
+        FetchResponseFilter::Opaque => "",
+        // Manual redirects preserve the URL list; only their status, headers,
+        // and body are filtered. No redirect target was fetched.
+        FetchResponseFilter::None | FetchResponseFilter::OpaqueRedirect => head.final_url.as_str(),
     }
 }
 
@@ -393,7 +395,12 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
         "opaqueredirect" => "opaqueredirect",
         _ => return None,
     };
-    let obj = FetchResponseHeadDeclaration::new(0.0, false, String::new(), false, response_type)
+    let visible_url = if response_type == "opaqueredirect" {
+        internal_url.to_owned()
+    } else {
+        String::new()
+    };
+    let obj = FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type)
         .bind(scope)
         .ok()?;
     if !internal_url.is_empty() {

@@ -147,11 +147,12 @@ async fn check_redirect_filter_modes(worker: bool) {
                       assert(response.statusText === (filtered ? '' : 'Matrix Response'), 'statusText');
                       assert(response.ok === (!filtered && status === 200), 'ok');
                       assert(!response.redirected, 'redirected without Location');
-                      if (!manual) assert(response.url === (opaque ? '' : url.href), 'url');
+                      assert(response.url === (opaque ? '' : url.href), 'url');
                       assert(response.headers.get('X-Visible') === (filtered ? null : 'present'), 'headers');
                       if (filtered) assert(response.headers.entries().next().done, 'filtered headers');
                       assert((response.body === null) === (filtered || method === 'HEAD'), 'body nullability');
                       const clone = response.clone();
+                      assert(clone.url === response.url, 'clone url');
                       const expected = filtered || method === 'HEAD' ? '' : 'redirect body';
                       assert(await response.text() === expected, 'body');
                       assert(await clone.text() === expected, 'clone body');

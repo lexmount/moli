@@ -5266,7 +5266,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
                 ok: response.ok,
                 statusText: response.statusText,
                 redirected: response.redirected,
-                urlIsEmpty: response.url === "",
+                urlMatchesRequest: response.url === {url_literal},
                 bodyIsNull: response.body === null,
                 headers: Array.from(response.headers),
                 bodyUsedBefore,
@@ -5274,6 +5274,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
                 text,
                 cloneType: clone.type,
                 cloneStatus: clone.status,
+                cloneUrlMatchesRequest: clone.url === {url_literal},
                 cloneBodyIsNull: clone.body === null,
                 cloneText,
             }});
@@ -5294,7 +5295,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
         .expect("worker fetch manual-redirect server should finish");
     assert_eq!(
         post,
-        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlMatchesRequest":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneUrlMatchesRequest":true,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
