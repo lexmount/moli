@@ -104,7 +104,10 @@ FETCH_PREFLIGHT_RESOURCE_PATHS = {
     "/fetch/api/resources/preflight.py",
     "/fetch/api/resources/clean-stash.py",
 }
-FETCH_REDIRECT_RESOURCE_PATH = "/fetch/api/resources/redirect.py"
+FETCH_REDIRECT_RESOURCE_PATHS = {
+    "/fetch/api/resources/redirect.py",
+    "/fetch/api/resources/redirect-empty-location.py",
+}
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
@@ -1909,7 +1912,7 @@ def _make_handler(
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
                 if path in XHR_RESOURCE_PATHS:
                     return self._serve_xhr_method
-                if path in FETCH_PREFLIGHT_RESOURCE_PATHS or path == FETCH_REDIRECT_RESOURCE_PATH:
+                if path in FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_REDIRECT_RESOURCE_PATHS:
                     return self._serve_fetch_resource_method
             raise AttributeError(name)
 
@@ -1931,7 +1934,7 @@ def _make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -1958,7 +1961,7 @@ def _make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2024,7 +2027,7 @@ def _make_handler(
             if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
-            if unquote(parsed.path) == FETCH_REDIRECT_RESOURCE_PATH:
+            if unquote(parsed.path) in FETCH_REDIRECT_RESOURCE_PATHS:
                 self._serve_fetch_redirect_resource(parsed.query, emit_body=self.command != "HEAD")
                 return
             if unquote(parsed.path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
@@ -2055,7 +2058,7 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", FETCH_REDIRECT_RESOURCE_PATH
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2183,7 +2186,7 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
-            if path == FETCH_REDIRECT_RESOURCE_PATH:
+            if path in FETCH_REDIRECT_RESOURCE_PATHS:
                 self._serve_fetch_redirect_resource(parsed.query, emit_body=emit_body)
                 return
             if path in FETCH_PREFLIGHT_RESOURCE_PATHS:
@@ -3002,6 +3005,13 @@ def _make_handler(
                 # the upload in upstream redirect.py. Do not wait for EOF.
                 self.close_connection = True
                 connection_headers.append(("Connection", "close"))
+            if unquote(urlsplit(self.path).path) == "/fetch/api/resources/redirect-empty-location.py":
+                self._send_bytes(
+                    None, b"", emit_body=emit_body, status_code=302,
+                    extra_headers=[*connection_headers, ("Location", "")],
+                    cache_control=None,
+                )
+                return
             params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
             stash_path = urlsplit(self.path).path
             headers = [*connection_headers, ("Content-Type", "text/plain"), ("Pragma", "no-cache")]
