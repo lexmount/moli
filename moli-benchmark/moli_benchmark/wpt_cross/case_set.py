@@ -751,6 +751,32 @@ def _script_content_type_handler_reference_patterns(directory: str) -> tuple[re.
     )
 
 
+
+@lru_cache(maxsize=None)
+def _fetch_preflight_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    names = ("preflight.py", "clean-stash.py", "inspect-headers.py")
+    references = []
+    for name in names:
+        resource = "fetch/api/resources/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    patterns = [
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    ]
+    # The Fetch API's shared utils.js defines RESOURCES_DIR. Keep the
+    # concatenation intact in this match; a bare filename is not sufficient.
+    patterns.append(re.compile(
+        r"(?<![\w$.])RESOURCES_DIR\s*\+\s*['\"](?:"
+        + "|".join(re.escape(name) for name in names)
+        + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    ))
+    return tuple(patterns)
+
+
 @lru_cache(maxsize=None)
 def _navigation_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     resource = (
@@ -866,6 +892,8 @@ def _supported_wptserve_handler_references(
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/range":
         supported += SUPPORTED_FETCH_RANGE_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None and rel.startswith("fetch/api/"):
+        supported += _fetch_preflight_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None and rel.startswith("wasm/webapi/"):
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None:
