@@ -6660,8 +6660,129 @@ fn intersection_observer_servo_aligned_options_surface() {
 
     assert_eq!(
         result,
-        "0px 0px 0px 0px|0|false|1px 2% 3px 2%|4px 5% 6px 7%|[0.25,0.75]|100|true|[0]|8px 8px 8px 8px|100|1:1|function|true|function|function|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|true|throw:TypeError|throw:TypeError|undefined|throw:TypeError|throw:TypeError"
+        "0px 0px 0px 0px|0|false|1px 2% 3px 2%|4px 5% 6px 7%|[0.25,0.75]|100|true|[0]|8px 8px 8px 8px|100|1:1|function|true|function|function|throw:TypeError|throw:SyntaxError|throw:SyntaxError|throw:TypeError|true|throw:TypeError|throw:TypeError|undefined|throw:TypeError|throw:TypeError"
     );
+}
+
+#[test]
+fn intersection_observer_invalid_margins_throw_syntax_dom_exceptions() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-errors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const value of ['1', '2em', 'auto', 'calc(1px + 2px)',
+                         '1px !important', '1px 1px 1px 1px 1px', null]) {
+      const label = `${member}: ${JSON.stringify(value)}`;
+      try {
+        new IntersectionObserver(() => {}, { [member]: value });
+        failures.push(`${label}: did not throw`);
+      } catch (error) {
+        if (!(error instanceof DOMException) || error instanceof SyntaxError ||
+            error.name !== 'SyntaxError' || error.code !== DOMException.SYNTAX_ERR) {
+          failures.push(`${label}: ${error.name}, code ${error.code}`);
+        }
+      }
+    }
+  }
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver margin syntax errors should evaluate");
+
+    assert_eq!(result, "");
+}
+
+#[test]
+fn intersection_observer_margin_errors_use_the_intrinsic_dom_exception() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-intrinsic.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'DOMException');
+    let calls = 0;
+    let caught;
+    Object.defineProperty(globalThis, 'DOMException', {
+      configurable: true,
+      get() { calls++; throw new Error('replaced DOMException getter'); }
+    });
+    try {
+      new IntersectionObserver(() => {}, { [member]: 'invalid' });
+    } catch (error) {
+      caught = error;
+    } finally {
+      Object.defineProperty(globalThis, 'DOMException', descriptor);
+    }
+    if (calls !== 0) failures.push(`${member}: read the global constructor`);
+    if (!(caught instanceof DOMException) || caught.name !== 'SyntaxError' || caught.code !== 12) {
+      failures.push(`${member}: ${caught}`);
+    }
+  }
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver should use the intrinsic DOMException prototype");
+
+    assert_eq!(result, "");
+}
+
+#[test]
+fn intersection_observer_margin_errors_preserve_dictionary_conversion_exceptions() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-conversion.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  const sentinel = {};
+  const expectSentinel = (label, options) => {
+    try {
+      new IntersectionObserver(() => {}, options);
+      failures.push(`${label}: did not throw`);
+    } catch (error) {
+      if (error !== sentinel) failures.push(`${label}: ${error.name}`);
+    }
+  };
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const conversion of ['getter', 'toString', 'toPrimitive']) {
+      let calls = 0;
+      const fail = () => { calls++; throw sentinel; };
+      const options = conversion === 'getter'
+        ? Object.defineProperty({}, member, { get: fail })
+        : { [member]: conversion === 'toString'
+            ? { toString: fail } : { [Symbol.toPrimitive]: fail } };
+      expectSentinel(`${member}: ${conversion}`, options);
+      if (calls !== 1) failures.push(`${member}: ${conversion} called ${calls} times`);
+    }
+    expectSentinel(`${member}: later dictionary member`, {
+      [member]: 'invalid',
+      get threshold() { throw sentinel; }
+    });
+    try {
+      new IntersectionObserver(() => {}, { [member]: Symbol() });
+      failures.push(`${member}: Symbol did not throw`);
+    } catch (error) {
+      if (!(error instanceof TypeError)) failures.push(`${member}: Symbol ${error.name}`);
+    }
+  }
+  expectSentinel('scrollMargin conversion precedes rootMargin parsing', {
+    rootMargin: 'invalid',
+    scrollMargin: { toString() { throw sentinel; } }
+  });
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver should preserve dictionary conversion exceptions");
+
+    assert_eq!(result, "");
 }
 
 #[test]
