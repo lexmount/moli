@@ -1,6 +1,9 @@
 mod click;
+mod clipboard;
 mod default_action;
 mod targets;
+
+pub(crate) use clipboard::perform_clipboard_key_default_action;
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
 pub(in crate::native_bridge) use default_action::navigate_form_target_browsing_context;
