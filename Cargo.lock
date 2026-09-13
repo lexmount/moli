@@ -2834,6 +2834,7 @@ dependencies = [
  "parking_lot",
  "rcgen",
  "strum",
+ "thin-cancellation-token",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -5952,6 +5953,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thin-cancellation-token"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25dffd88e36502b4894f258d067631ac21c7795f047654ee5da91c105fedb818"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+ "triomphe",
+]
+
+[[package]]
 name = "thin-vec"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6324,6 +6336,12 @@ dependencies = [
  "num-integer",
  "strength_reduce",
 ]
+
+[[package]]
+name = "triomphe"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
 
 [[package]]
 name = "tungstenite"

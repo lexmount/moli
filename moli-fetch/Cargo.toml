@@ -28,6 +28,7 @@ moli-web-bot-auth = { path = "../moli-web-bot-auth" }
 moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
 strum = { version = "0.28.0", features = ["derive"] }
+thin-cancellation-token = "0.1.1"
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
 tracing = "0.1.41"
 url = "2.5.7"

@@ -30,11 +30,14 @@ use super::{
     policy::PageNetworkPolicy,
 };
 
+mod image;
+
 #[derive(Clone)]
 pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    pending_images: Arc<image::PendingImageLoads>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -71,6 +74,7 @@ impl ResourceRequestClient {
         resource_runtime: BrowserResourceRuntime,
     ) {
         self.resource_runtime = resource_runtime;
+        self.pending_images = Arc::default();
     }
 
     pub fn disk_pool(&self) -> Option<DiskPool> {
@@ -119,6 +123,7 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            pending_images: Arc::default(),
         }
     }
 
@@ -151,12 +156,12 @@ impl ResourceRequestClient {
     }
 
     pub(crate) fn frozen_request_client(&self) -> Self {
-        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
-            self.resource_runtime.clone(),
-            self.page_network_policy.frozen_request_view(),
-        );
-        client.browser_site_context = self.browser_site_context.clone();
-        client
+        Self {
+            resource_runtime: self.resource_runtime.clone(),
+            page_network_policy: self.page_network_policy.frozen_request_view(),
+            browser_site_context: self.browser_site_context.clone(),
+            pending_images: self.pending_images.clone(),
+        }
     }
 
     pub fn shares_page_network_policy_with(&self, other: &Self) -> bool {
@@ -273,6 +278,14 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<Response>> {
         let request = self.apply_network_policy(request)?;
+        if request.resource_type == moli_fetch::RequestResourceType::Image {
+            return self
+                .fetch_image_after_policy(request, cancel_handle)
+                .await
+                .map(|observed| {
+                    observed.map_response(RawResponse::into_lossy_materialized_text_response)
+                });
+        }
         if request.auth_requires_buffered_transport() || !request.follow_redirects {
             return self
                 .resource_runtime
@@ -773,6 +786,19 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         let request = self.apply_network_policy(request)?;
+        if request.resource_type == moli_fetch::RequestResourceType::Image {
+            // Image consumers now retain parkable bodies. Share the transport
+            // before adapting its materialized bytes back to that streaming
+            // boundary; do not bypass per-consumer preflight/security checks.
+            let observed = self.fetch_image_after_policy(request, cancel_handle).await?;
+            let (response, journal) = observed.into_parts_with_observation_journal();
+            let (head, body) = response.into_parts();
+            let bytes = body.try_into_materialized_bytes()
+                .expect("shared image transport materializes exact bytes");
+            return Ok(NetworkFetchResult::with_observation_journal(
+                streaming_raw_response_from_head_and_body(head, bytes)?, journal,
+            ));
+        }
         self.fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel_handle)
             .await
     }
