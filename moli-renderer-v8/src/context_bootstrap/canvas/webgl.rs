@@ -17,10 +17,15 @@ const WEBGL_VIEWPORT: u32 = 0x0BA2;
 const WEBGL_INVALID_ENUM: u32 = 0x0500;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
 const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
-// This query-only compatibility profile has no physical GPU identity provider.
-// Keep enabled debug queries usable without inventing a device or driver name.
-const WEBGL_COMPAT_VENDOR: &str = "WebKit";
-const WEBGL_COMPAT_RENDERER: &str = "WebKit WebGL";
+const WEBGL_MASKED_VENDOR: &str = "WebKit";
+const WEBGL_MASKED_RENDERER: &str = "WebKit WebGL";
+// A declared Windows/ANGLE compatibility identity, not physical GPU discovery.
+// The renderer spelling is from Chromium's ui/gl/gl_version_info_unittest.cc.
+// Keep shader precision below consistent with D3D11; these query declarations
+// do not imply a native D3D11 rendering backend or additional GPU extensions.
+const WEBGL_UNMASKED_VENDOR: &str = "Google Inc. (NVIDIA)";
+const WEBGL_UNMASKED_RENDERER: &str =
+    "ANGLE (NVIDIA, NVIDIA Quadro P1000 Direct3D11 vs_5_0 ps_5_0, D3D11-23.21.13.9077)";
 const WEBGL2_DRAWING_BUFFER_COLOR_SPACE_SLOT: &str = "__moliWebGl2DrawingBufferColorSpace";
 const WEBGL2_UNPACK_COLOR_SPACE_SLOT: &str = "__moliWebGl2UnpackColorSpace";
 const WEBGL2_COLOR_SPACE_SLOTS: &[&str] = &[
@@ -401,13 +406,13 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 8).into()),
         0x8B4D => rv.set(v8::Integer::new(scope, 16).into()),
         0x8DFB..=0x8DFD => rv.set(v8::Integer::new(scope, 128).into()),
-        0x1F00 => rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into()),
-        0x1F01 => rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into()),
+        0x1F00 => rv.set(v8str(scope, WEBGL_MASKED_VENDOR).into()),
+        0x1F01 => rv.set(v8str(scope, WEBGL_MASKED_RENDERER).into()),
         0x9245 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into())
+            rv.set(v8str(scope, WEBGL_UNMASKED_VENDOR).into())
         }
         0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into())
+            rv.set(v8str(scope, WEBGL_UNMASKED_RENDERER).into())
         }
         0x1F02 => rv.set(v8str(scope, "WebGL 1.0 (OpenGL ES 2.0 Chromium)").into()),
         0x8B8C => rv.set(v8str(scope, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)").into()),
@@ -454,13 +459,13 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         0x9111 | 0x9247 => rv.set(v8::Integer::new(scope, 0).into()),
         0x8D6B => rv.set(v8::Integer::new(scope, 1_073_741_823).into()),
         0x8A34 => rv.set(v8::Integer::new(scope, 256).into()),
-        0x1F00 => rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into()),
-        0x1F01 => rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into()),
+        0x1F00 => rv.set(v8str(scope, WEBGL_MASKED_VENDOR).into()),
+        0x1F01 => rv.set(v8str(scope, WEBGL_MASKED_RENDERER).into()),
         0x9245 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into())
+            rv.set(v8str(scope, WEBGL_UNMASKED_VENDOR).into())
         }
         0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into())
+            rv.set(v8str(scope, WEBGL_UNMASKED_RENDERER).into())
         }
         0x1F02 => rv.set(v8str(scope, "WebGL 2.0 (OpenGL ES 3.0 Chromium)").into()),
         0x8B8C => {
@@ -871,13 +876,12 @@ pub(crate) fn webgl_get_shader_precision_format_callback<'s>(
         rv.set_null();
         return;
     }
-    // A stable software-GL precision profile. Integer precision is always 0;
-    // the floating-point mantissa width is not meaningful for integer formats.
+    // ANGLE's D3D11 GenerateCaps uses setIEEEFloat / setTwosComplementInt(32)
+    // for every precision class in both shader stages. Keep this aligned with
+    // the declared renderer, including lowp/mediump rather than only highp.
     let (range_min, range_max, precision) = match parsed.precision_type {
-        0x8DF0 | 0x8DF1 => (15, 15, 10),
-        0x8DF2 => (127, 127, 23),
-        0x8DF3 | 0x8DF4 => (15, 14, 0),
-        0x8DF5 => (31, 30, 0),
+        0x8DF0..=0x8DF2 => (127, 127, 23),
+        0x8DF3..=0x8DF5 => (31, 30, 0),
         _ => {
             record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
             rv.set_null();
