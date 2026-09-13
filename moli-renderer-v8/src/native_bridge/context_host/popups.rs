@@ -815,6 +815,17 @@ impl JsContextHost {
             .bridge
             .bindings
             .instantiate_window_shell(scope, host_ptr);
+        let user_activation = crate::context_bootstrap::ensure_intrinsic_interface_constructor(
+            scope,
+            "UserActivation",
+        )
+        .ok()?;
+        define_non_enumerable_static_property(
+            scope,
+            window,
+            "UserActivation",
+            user_activation.into(),
+        );
         if let Some(dom_exception) = global_constructor_object(scope, "DOMException") {
             // Lightweight popups share the opener's V8 realm, so their
             // synthetic Window shell must expose the same realm constructor
@@ -871,18 +882,6 @@ impl JsContextHost {
         set_object_slot(scope, window, "frames", window.into());
         if let Some(opener) = opener {
             install_lightweight_popup_viewport_surface_from_opener(scope, opener, window);
-        }
-        if let Ok(navigator) =
-            crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
-                scope, popup_id,
-            )
-        {
-            set_object_slot(scope, window, "navigator", navigator.into());
-            if let Err(error) = crate::context_bootstrap::install_lightweight_popup_legacy_objects(
-                scope, window, navigator,
-            ) {
-                tracing::warn!(%error, "failed to initialize popup legacy Window objects");
-            }
         }
         let _ = install_storage_aliases_for_window(scope, window);
         install_simple_event_target_methods(
@@ -980,6 +979,7 @@ impl JsContextHost {
                 creator_resource_authority,
             ),
         );
+        self.refresh_lightweight_popup_navigator(scope, popup_id, window);
         self.refresh_lightweight_popup_indexed_db_factory(scope, popup_id, window);
         if matches!(initial_url.scheme(), "http" | "https") {
             let _ = self.register_or_update_service_worker_popup_client(
@@ -2064,6 +2064,7 @@ impl JsContextHost {
         }
         if let Some(retired_local_window_id) = transition.retired_local_window_id {
             self.retire_lightweight_popup_local_window(popup_id, retired_local_window_id);
+            self.refresh_lightweight_popup_navigator(scope, popup_id, window);
         }
         self.refresh_lightweight_popup_indexed_db_factory(scope, popup_id, window);
         tracing::debug!(
@@ -2142,6 +2143,26 @@ impl JsContextHost {
             retired_window_message_count,
             "retired lightweight popup runtime objects with LocalWindow"
         );
+    }
+
+    fn refresh_lightweight_popup_navigator<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        window: v8::Local<'s, v8::Object>,
+    ) {
+        if let Ok(navigator) =
+            crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
+                scope, popup_id,
+            )
+        {
+            set_object_slot(scope, window, "navigator", navigator.into());
+            if let Err(error) = crate::context_bootstrap::install_lightweight_popup_legacy_objects(
+                scope, window, navigator,
+            ) {
+                tracing::warn!(%error, "failed to initialize popup legacy Window objects");
+            }
+        }
     }
 
     fn refresh_lightweight_popup_indexed_db_factory<'s>(
