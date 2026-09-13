@@ -1175,7 +1175,7 @@ fn webgl_extension_and_parameter_methods_parse_webidl_arguments() {
 
     assert_eq!(
         result,
-        r#"{"extensionObject":true,"vendorConstantOwn":"37445:false","rendererConstantOwn":"37446:false","extensionMissing":"TypeError","extensionSymbol":"TypeError","extensionNull":"null","extensionThrow":"RangeError","parameterObject":"WebKit","parameterMissing":"TypeError","parameterSymbol":"TypeError","parameterNegative":"null","parameterWrap":"null","parameterFraction":"WebKit"}"#
+        r#"{"extensionObject":true,"vendorConstantOwn":"37445:false","rendererConstantOwn":"37446:false","extensionMissing":"TypeError","extensionSymbol":"TypeError","extensionNull":"null","extensionThrow":"RangeError","parameterObject":"Google Inc. (NVIDIA)","parameterMissing":"TypeError","parameterSymbol":"TypeError","parameterNegative":"null","parameterWrap":"null","parameterFraction":"Google Inc. (NVIDIA)"}"#
     );
 }
 #[test]
