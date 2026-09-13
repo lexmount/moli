@@ -33,8 +33,13 @@ For Moli, keep the same command but use `--engine moli`, its local binary,
 and omit `--require-windows` when running on Linux. Moli retains its own
 default identity; the collector never replaces it with the host identity.
 
-`result.json` selects the final event API's bot/tampering/score fields and
-an explicit allowlist of device attributes. No API reply within the fixed
+`result.json` selects the final event API's bot/tampering/score fields, VM
+classification and ML score, developer-tools/incognito signals, and high-activity/
+rare-device signals. Tampering details retain only `anti_detect_browser` and
+`anomaly_score`. Keep these components separate: a lower total caused by different
+visitor history does not establish a renderer improvement. An explicit allowlist
+also selects device attributes; identifiers, activity histories and arbitrary
+additional details are omitted. No API reply within the fixed
 12-second post-navigation window means **no valid verdict**. Identity reads
 happen after that window. Responses are not intercepted or rewritten.
 
