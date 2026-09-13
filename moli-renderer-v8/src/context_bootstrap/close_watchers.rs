@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     abort_signal_route::ResolvedAbortSignal,
-    native_bridge::OwnerDispatchScope,
+    native_bridge::{OwnerDispatchScope, WindowExecutionContextIdentity},
     util::{
         context_host_ptr_from_context_slot, get_private_value, set_private_value, throw_type_error,
     },
@@ -14,7 +14,6 @@ use crate::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const WINDOW_SLOT: &str = "__moliCloseWatcherWindow";
 const REALM_ANCHOR_SLOT: &str = "__moliCloseWatcherRealmAnchor";
 const ACTIVE_SLOT: &str = "__moliCloseWatcherActive";
 const RUNNING_CANCEL_SLOT: &str = "__moliCloseWatcherRunningCancel";
@@ -23,13 +22,10 @@ const ONCANCEL_SLOT: &str = "__moliCloseWatcherOncancel";
 const ONCLOSE_SLOT: &str = "__moliCloseWatcherOnclose";
 const SIGNAL_SLOT: &str = "__moliCloseWatcherSignal";
 const ABORT_ALGORITHM_SLOT: &str = "__moliCloseWatcherAbortAlgorithm";
-const WATCHERS_SLOT: &str = "__moliWindowCloseWatchers";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CloseWatcher)]
 struct CloseWatcherObjectDeclaration<'scope> {
-    #[webapi(slot = WINDOW_SLOT)]
-    window: v8::Local<'scope, v8::Object>,
     #[webapi(slot = REALM_ANCHOR_SLOT)]
     realm_anchor: v8::Local<'scope, v8::Object>,
     #[webapi(slot = ACTIVE_SLOT, init = true)]
@@ -118,21 +114,26 @@ pub(in crate::context_bootstrap) fn close_watcher_constructor_callback<'s>(
         );
         return;
     }
-    let window = context.global(scope);
     // Unlike a WindowProxy, this object's creation context cannot change when
     // navigation reuses the browsing context's public Window identity.
     let realm_anchor = v8::Object::new(scope);
     let watcher = args.this();
-    if CloseWatcherObjectDeclaration::new(window, realm_anchor)
+    if CloseWatcherObjectDeclaration::new(realm_anchor)
         .initialize(scope, watcher)
         .is_err()
     {
         return;
     }
     install_simple_event_target_ordered_handlers(scope, watcher);
-    let mut watchers = window_watchers(scope, window);
-    watchers.push(watcher.into());
-    set_window_watchers(scope, window, &watchers);
+    let Some(host_ptr) = context_host_ptr_from_context_slot(context) else {
+        return;
+    };
+    let Some(identity) =
+        unsafe { &*host_ptr }.window_execution_context_identity_for_access_check(context)
+    else {
+        return;
+    };
+    unsafe { &mut *host_ptr }.register_close_watcher(scope, identity, watcher);
     if let Some(signal) = signal {
         if signal.is_aborted(scope) {
             destroy(scope, watcher);
@@ -164,31 +165,6 @@ fn context_is_fully_active(context: v8::Local<'_, v8::Context>) -> bool {
         OwnerDispatchScope::Child(handle) => host.child_browsing_context_is_live(handle),
         OwnerDispatchScope::LightweightPopup(id) => host.lightweight_popup_is_open(id),
     }
-}
-
-// Retain active watchers in their Window. These arrays never escape to script,
-// and replacement avoids invoking mutable Array.prototype methods or setters.
-fn window_watchers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Vec<v8::Local<'s, v8::Value>> {
-    let Some(watchers) = get_private_value(scope, window, WATCHERS_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-    else {
-        return Vec::new();
-    };
-    (0..watchers.length())
-        .filter_map(|i| watchers.get_index(scope, i))
-        .collect()
-}
-
-fn set_window_watchers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    watchers: &[v8::Local<'s, v8::Value>],
-) {
-    let array = v8::Array::new_with_elements(scope, watchers);
-    set_private_value(scope, window, WATCHERS_SLOT, array.into());
 }
 
 fn receiver<'s>(
@@ -225,6 +201,15 @@ fn is_active<'s>(scope: &mut v8::PinScope<'s, '_>, watcher: v8::Local<'s, v8::Ob
         && watcher_context(scope, watcher).is_some_and(context_is_fully_active)
 }
 
+fn watcher_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    watcher: v8::Local<'s, v8::Object>,
+) -> Option<WindowExecutionContextIdentity> {
+    let context = watcher_context(scope, watcher)?;
+    let host_ptr = context_host_ptr_from_context_slot(context)?;
+    unsafe { &*host_ptr }.window_execution_context_identity_for_access_check(context)
+}
+
 fn destroy<'s>(scope: &mut v8::PinScope<'s, '_>, watcher: v8::Local<'s, v8::Object>) {
     if !flag(scope, watcher, ACTIVE_SLOT) {
         return;
@@ -235,12 +220,11 @@ fn destroy<'s>(scope: &mut v8::PinScope<'s, '_>, watcher: v8::Local<'s, v8::Obje
         ACTIVE_SLOT,
         v8::Boolean::new(scope, false).into(),
     );
-    if let Some(window) = get_private_value(scope, watcher, WINDOW_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    if let Some(identity) = watcher_identity(scope, watcher)
+        && let Some(context) = watcher_context(scope, watcher)
+        && let Some(host_ptr) = context_host_ptr_from_context_slot(context)
     {
-        let mut watchers = window_watchers(scope, window);
-        watchers.retain(|candidate| !candidate.strict_equals(watcher.into()));
-        set_window_watchers(scope, window, &watchers);
+        unsafe { &mut *host_ptr }.remove_close_watcher(scope, identity.owner(), watcher);
     }
     let signal = get_private_value(scope, watcher, SIGNAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -296,17 +280,35 @@ fn request_close_callback<'s>(
     let Some(watcher) = receiver(scope, args.this()) else {
         return;
     };
+    request_close(scope, watcher, false);
+}
+
+fn request_close<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    watcher: v8::Local<'s, v8::Object>,
+    require_history_activation: bool,
+) -> bool {
     if !is_active(scope, watcher) || flag(scope, watcher, RUNNING_CANCEL_SLOT) {
-        return;
+        return true;
     }
+    let Some(identity) = watcher_identity(scope, watcher) else {
+        return true;
+    };
+    let Some(context) = watcher_context(scope, watcher) else {
+        return true;
+    };
+    let Some(host_ptr) = context_host_ptr_from_context_slot(context) else {
+        return true;
+    };
+    let cancelable = !require_history_activation
+        || unsafe { &*host_ptr }.close_watcher_can_prevent_close(identity.owner());
     set_private_value(
         scope,
         watcher,
         RUNNING_CANCEL_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    // Programmatic requestClose never requires history-action activation.
-    let should_close = fire_event(scope, watcher, "cancel", true);
+    let should_close = fire_event(scope, watcher, "cancel", cancelable);
     set_private_value(
         scope,
         watcher,
@@ -315,7 +317,39 @@ fn request_close_callback<'s>(
     );
     if should_close {
         close(scope, watcher);
+    } else if context_is_fully_active(context) {
+        unsafe { &mut *host_ptr }
+            .consume_close_watcher_history_activation(identity.dispatch_scope());
     }
+    should_close
+}
+
+pub(crate) fn process_close_watchers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Context>,
+) -> bool {
+    if !context_is_fully_active(context) {
+        return false;
+    }
+    let Some(host_ptr) = context_host_ptr_from_context_slot(context) else {
+        return false;
+    };
+    let Some(identity) =
+        unsafe { &*host_ptr }.window_execution_context_identity_for_access_check(context)
+    else {
+        return false;
+    };
+    // Snapshot only the last group before invoking script. A listener may
+    // destroy other watchers, create new groups, or retire this Window.
+    let watchers = unsafe { &*host_ptr }.close_watchers_to_process(scope, identity.owner());
+    let processed = !watchers.is_empty();
+    for watcher in watchers {
+        if !request_close(scope, watcher, true) {
+            break;
+        }
+    }
+    unsafe { &mut *host_ptr }.finish_close_watcher_processing(identity.owner());
+    processed
 }
 
 fn close_callback<'s>(
