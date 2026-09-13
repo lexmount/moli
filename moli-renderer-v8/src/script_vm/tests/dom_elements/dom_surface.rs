@@ -770,6 +770,60 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
 }
 
 #[test]
+fn repeated_native_clicks_target_newly_inserted_buttons() {
+    let mut vm = new_parsed_test_vm(
+        "https://repeated-native-click.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    vm.eval("globalThis.clicks = []").unwrap();
+    for index in 0..3 {
+        vm.eval(&format!("globalThis.buttonIndex = {index}"))
+            .unwrap();
+        let geometry = vm
+            .eval(
+                r#"
+                (() => {
+                  globalThis.button = document.createElement('button');
+                  button.id = 'button-' + buttonIndex;
+                  button.textContent = 'Activate';
+                  button.style.cssText = 'position:absolute;left:10px;top:10px;width:100px;height:40px';
+                  button.onclick = event => clicks.push([event.target.id, event.isTrusted]);
+                  document.body.appendChild(button);
+                  const rects = button.getClientRects();
+                  if (rects.length !== 1) throw Error('new button must have a client rect');
+                  const rect = rects[0];
+                  const x = rect.left + rect.width / 2;
+                  const y = rect.top + rect.height / 2;
+                  if (document.elementFromPoint(x, y) !== button) throw Error('new button must be the hit target');
+                  return JSON.stringify([x, y]);
+                })()
+                "#,
+            )
+            .expect("newly connected button geometry must replace stale input geometry");
+        let point: [f64; 2] = serde_json::from_str(&geometry).unwrap();
+        for (event, button, buttons) in
+            [("mousemove", -1, 0), ("mousedown", 0, 1), ("mouseup", 0, 0)]
+        {
+            vm.dispatch_mouse_event_at_point(
+                point[0],
+                point[1],
+                event,
+                button,
+                Some(buttons),
+                0.0,
+                0.0,
+            )
+            .expect("native click should reach the newly inserted button");
+        }
+        vm.eval("button.remove()").unwrap();
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(clicks)").unwrap(),
+        r#"[["button-0",true],["button-1",true],["button-2",true]]"#,
+    );
+}
+
+#[test]
 fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     let mut vm = new_storage_test_vm("https://iframe-wheel-snapshot.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {

@@ -72,7 +72,7 @@ async fn computed_size_held_getters_observe_grid_sampling_without_dom_mutation()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh() {
+async fn computed_size_grid_sampling_refreshes_after_style_mutation() {
     run_page_vm_async_test(async move {
         let mut page = page_with_size_fixture(GRID)?;
         page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
@@ -116,14 +116,13 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(
         );
         assert_eq!(
             page.vm_mut().eval("held.gridTemplateColumns")?,
-            "40px 120px"
+            "100px 100px"
         );
-        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
         assert_eq!(
             page.vm().layout_snapshot_cache_observability_for_test().2,
-            sampled.2
+            sampled.2 + 1
         );
-        publish_size_layout(&mut page)?;
         assert_eq!(
             held_sizes(&mut page)?,
             json!(["200px", "40px", "200px", "40px"])
@@ -133,6 +132,12 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(
             "100px 100px"
         );
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 2);
+        publish_size_layout(&mut page)?;
+        assert_eq!(
+            held_sizes(&mut page)?,
+            json!(["200px", "40px", "200px", "40px"])
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes + 3);
         Ok::<_, anyhow::Error>(())
     })
     .await
