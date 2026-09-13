@@ -1,5 +1,6 @@
 FileAPI/Blob-methods-from-detached-frame.html
 FileAPI/idlharness.html
+FileAPI/url/sandboxed-iframe.html
 FileAPI/url/url-lifetime.html
 acid/acid3/numbered-tests.html
 client-hints/service-workers/intercept-request.https.html
@@ -9,6 +10,7 @@ compat/webkit-box-item-shrink-001.html
 compat/webkit-box-item-shrink-002.html
 compat/webkit-box-vertically-centered.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-star-allow.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/generic/image-document-applies-csp.html
@@ -42,6 +44,7 @@ content-security-policy/webrtc/webrtc-blocked-explicit.html
 content-security-policy/webrtc/webrtc-blocked-unknown.html
 content-security-policy/worker-src/service-worker-src-child-fallback-blocked.https.sub.html
 cookiestore/serviceworker_cookieStore_subscriptions_reset.https.html
+cors/response-headers.htm
 css/css-animations/parsing/keyframe-selectors.html
 css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
@@ -53,6 +56,7 @@ css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-cascade/all-prop-revert-noop.html?include=5
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
+css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
 css/css-cascade/layer-media-query.html
@@ -417,6 +421,7 @@ css/css-flexbox/relayout-align-items.html
 css/css-flexbox/scrollbars-auto.html
 css/css-flexbox/scrollbars-no-margin.html
 css/css-flexbox/scrollbars.html
+css/css-flexbox/select-as-flex-item-child-with-overflow.html
 css/css-flexbox/select-as-flex-item-with-overflow.html
 css/css-flexbox/shrinking-column-flexbox.html
 css/css-flexbox/stretched-child-shrink-on-relayout.html
@@ -518,7 +523,7 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -570,6 +575,7 @@ css/css-grid/alignment/grid-alignment-implies-size-change-010.html
 css/css-grid/alignment/grid-alignment-implies-size-change-011.html
 css/css-grid/alignment/grid-alignment-implies-size-change-012.html
 css/css-grid/alignment/grid-alignment-implies-size-change-013.html
+css/css-grid/alignment/grid-alignment-implies-size-change-014.html
 css/css-grid/alignment/grid-alignment-implies-size-change-017.html
 css/css-grid/alignment/grid-alignment-implies-size-change-018.html
 css/css-grid/alignment/grid-alignment-implies-size-change-019.html
@@ -1964,7 +1970,6 @@ css/css-syntax/unclosed-constructs.html
 css/css-text-decor/animations/discrete-no-interpolation.html
 css/css-text-decor/animations/text-decoration-thickness-interpolation.html
 css/css-text-decor/animations/text-underline-offset-interpolation.html
-css/css-transitions/parsing/starting-style-parsing.html
 css/css-typed-om/CSSMatrixComponent-DOMMatrix-mutable.html
 css/css-typed-om/declared-styleMap-accepts-inherit.html
 css/css-typed-om/factory-absolute-length.html
@@ -2255,6 +2260,7 @@ css/css-typed-om/the-stylepropertymap/properties/vector-effect.html
 css/css-typed-om/the-stylepropertymap/properties/vertical-align.html
 css/css-typed-om/the-stylepropertymap/properties/visibility.html
 css/css-typed-om/the-stylepropertymap/properties/white-space.html
+css/css-typed-om/the-stylepropertymap/properties/widows.html
 css/css-typed-om/the-stylepropertymap/properties/width.html
 css/css-typed-om/the-stylepropertymap/properties/will-change.html
 css/css-typed-om/the-stylepropertymap/properties/word-break.html
@@ -2519,6 +2525,7 @@ css/selectors/invalidation/empty-pseudo-in-has-display-none.html
 css/selectors/invalidation/heading-pseudo-class-in-has.html
 css/selectors/is-where-error-recovery.html
 css/selectors/is-where-shadow.html
+css/selectors/media/media-playback-state-timing.html
 css/selectors/media/media-playback-state.html
 css/selectors/media/sound-state.html
 css/selectors/missing-right-token.html
@@ -2549,6 +2556,7 @@ dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
 dom/lists/DOMTokenList-coverage-for-attributes.html
 dom/nodes/ParentNode-querySelector-escapes.html
+dom/nodes/getElementsByClassName-14.htm
 dom/nodes/moveBefore/child-style-preserve.html
 dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html
 dom/nodes/moveBefore/moveBefore-size-query.html
@@ -2602,7 +2610,6 @@ domparsing/tentative/stream-html-with-trusted-types-sanitizer.html
 domparsing/tentative/stream-html.html
 domparsing/tentative/stream-insertion-logic.html
 domparsing/tentative/stream-positional.html
-ecmascript/locale-compat.html
 editing/event.html
 editing/other/delete-editing-host.html
 editing/other/delete.html
@@ -2739,7 +2746,18 @@ editing/run/underline.html?2001-last
 editing/run/undo-redo-after-mutation.html
 editing/run/unlink.html
 encrypted-media/missing-sinf.html
-fetch/api/cors/sandboxed-iframe.html
+eventsource/dedicated-worker/eventsource-close.htm
+eventsource/dedicated-worker/eventsource-close2.htm
+eventsource/dedicated-worker/eventsource-constructor-non-same-origin.htm
+eventsource/dedicated-worker/eventsource-onmessage.htm
+eventsource/dedicated-worker/eventsource-onopen.htm
+eventsource/dedicated-worker/eventsource-prototype.htm
+eventsource/shared-worker/eventsource-close.htm
+eventsource/shared-worker/eventsource-constructor-non-same-origin.htm
+eventsource/shared-worker/eventsource-eventtarget.htm
+eventsource/shared-worker/eventsource-onmessage.htm
+eventsource/shared-worker/eventsource-onopen.htm
+eventsource/shared-worker/eventsource-prototype.htm
 fetch/api/policies/referrer-origin-when-cross-origin-worker.html
 fetch/api/policies/referrer-origin-worker.html
 fetch/api/policies/referrer-unsafe-url-worker.html
@@ -2826,6 +2844,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-docu
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-traversal.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-same-document-traversal.html
@@ -3009,7 +3028,6 @@ html/obsolete/requirements-for-implementations/other-elements-attributes-and-api
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
-html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-overflow.html
 html/semantics/document-metadata/the-base-element/base_multiple.html
 html/semantics/document-metadata/the-link-element/link-error-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/link-load-error-events.html
@@ -3054,6 +3072,7 @@ html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-to-eager.
 html/semantics/embedded-content/the-iframe-element/iframe-src-encoding.html
 html/semantics/embedded-content/the-iframe-element/iframe-synchronously-discard.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_form_submission.html
+html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_loading_lazy.htm
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-1.html
@@ -3061,6 +3080,8 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_histo
 html/semantics/embedded-content/the-iframe-element/move-node-local-root.html
 html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitive.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
+html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
 html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
@@ -3158,7 +3179,6 @@ html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.h
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3269,6 +3289,7 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
@@ -3373,6 +3394,10 @@ navigation-timing/navigation-type-post-backforward.html
 navigation-timing/test-document-onload.html
 navigation-timing/test-timing-attributes-order.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
+old-tests/submission/Microsoft/selection/insertNodeIntoSelection.htm
+old-tests/submission/Microsoft/selection/select.htm
+old-tests/submission/Microsoft/selection/selectionStartEnd.htm
+old-tests/submission/Microsoft/selection/setSelectionRange.htm
 page-lifecycle/idlharness.html
 page-visibility/iframe-session-history.html
 performance-timeline/get-invalid-entries.html
@@ -3500,7 +3525,6 @@ service-workers/service-worker/navigation-preload/get-state.https.html
 service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/nested-blob-url-workers.https.html
 service-workers/service-worker/next-hop-protocol.https.html
-service-workers/service-worker/opaque-response-preloaded.https.html
 service-workers/service-worker/opaque-script.https.html
 service-workers/service-worker/postmessage.https.html
 service-workers/service-worker/referrer-policy-header.https.html
@@ -3521,6 +3545,7 @@ service-workers/service-worker/skip-waiting.https.html
 service-workers/service-worker/srcdoc-iframe.https.html
 service-workers/service-worker/static-router-cross-origin-navigation.https.html
 service-workers/service-worker/static-router-fetch-event.https.html
+service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
@@ -3728,6 +3753,7 @@ trusted-types/trusted-types-reporting-for-SharedWorker-ServiceWorkerContainer-re
 trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-secondary-document.html
 trusted-types/trusted-types-svg-script-set-href.html
+uievents/interface/click-event.htm
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 url/a-element.html?exclude=(file|javascript|mailto)
 url/a-element.html?include=file
@@ -3747,6 +3773,7 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
+workers/WorkerNavigator_platform.htm
 workers/modules/dedicated-worker-import-csp.html
 workers/semantics/encodings/003.html
 workers/semantics/encodings/004.html
@@ -3756,5 +3783,18 @@ worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expiring value after load fires
+xhr/data-uri.htm
+xhr/getallresponseheaders.htm
+xhr/open-after-abort.htm
+xhr/open-during-abort.htm
+xhr/open-method-bogus.htm
+xhr/open-method-insecure.htm
+xhr/open-url-multi-window-2.htm
+xhr/open-url-multi-window-3.htm
+xhr/open-url-multi-window-5.htm
+xhr/open-url-worker-origin.htm
+xhr/response-invalid-responsetype.htm
+xhr/send-after-setting-document-domain.htm
+xhr/setrequestheader-bogus-name.htm
+xhr/setrequestheader-bogus-value.htm
 xml/xml-prolog-accepted-versions.html
