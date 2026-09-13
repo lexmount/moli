@@ -10,6 +10,7 @@ mod navigator;
 mod navigator_subobjects;
 use moli_webapi::media_capabilities::promises;
 mod screen;
+mod user_activation;
 mod visual_viewport;
 mod window_state;
 
