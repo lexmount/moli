@@ -213,9 +213,18 @@ async fn detached_session_binding_is_not_installed_in_a_later_child_realm() {
             binding(session_b, "liveChildBinding"),
         ];
         page_vm.set_stored_runtime_bindings(&bindings);
-        page_vm
-            .vm_mut()
-            .ensure_runtime_inspector_session(Some("session-a"));
+        for (session_id, name) in [
+            ("session-a", "detachedChildBinding"),
+            ("session-b", "liveChildBinding"),
+        ] {
+            page_vm
+                .vm_mut()
+                .dispatch_inspector_protocol_message_for_session(
+                    Some(session_id),
+                    r#"{"id":1,"method":"Runtime.enable"}"#,
+                )?;
+            page_vm.add_runtime_binding(Some(session_id), name, None, None)?;
+        }
 
         assert!(page_vm.detach_runtime_inspector_session(Some("session-a")));
         queue_child_realm_materialization(&mut page_vm, "post-detach-binding-child")?;
