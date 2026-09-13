@@ -746,11 +746,27 @@ impl DocumentRuntime {
         request_url: &Url,
         kind: DocumentSubresourceCspKind,
     ) -> DocumentContentSecurityPolicyCheck {
-        let document_url = self.document_url();
-        let policies = self.document_content_security_policy_strings_for_optional_document(
+        self.document_subresource_csp_check_for_document(
             Some(self.document_handle()),
-            &self.policy_container.response_content_security_policies,
-            &self.policy_container.content_security_reporting_endpoints,
+            self.document_url(),
+            &self.policy_container,
+            request_url,
+            kind,
+        )
+    }
+
+    pub(crate) fn document_subresource_csp_check_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        policy_container: &DocumentPolicyContainer,
+        request_url: &Url,
+        kind: DocumentSubresourceCspKind,
+    ) -> DocumentContentSecurityPolicyCheck {
+        let policies = self.document_content_security_policy_strings_for_optional_document(
+            document_handle,
+            &policy_container.response_content_security_policies,
+            &policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation = document_url_policy_violation_from_document_policies(
             policies,
@@ -761,10 +777,8 @@ impl DocumentRuntime {
             ContentSecurityPolicyDisposition::Enforce,
         );
         let report_only_violation = document_url_policy_violation(
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
+            &policy_container.response_content_security_report_only_policies,
+            &policy_container.content_security_reporting_endpoints,
             document_url,
             request_url,
             kind.resource_kind(),
@@ -1668,10 +1682,7 @@ impl DocumentRuntime {
                     .map(|policy| DocumentContentSecurityPolicyString {
                         policy,
                         report_uri_enabled: false,
-                        reporting_endpoints: self
-                            .policy_container
-                            .content_security_reporting_endpoints
-                            .clone(),
+                        reporting_endpoints: response_reporting_endpoints.clone(),
                     }),
             );
         }
@@ -2507,6 +2518,83 @@ mod tests {
                 )
                 .is_enforced(),
             "checking the parent must not discard the child document's delivered policy"
+        );
+    }
+
+    #[test]
+    fn child_image_meta_csp_uses_own_reporting_endpoints() {
+        let mut runtime = runtime_for_html(
+            r#"<!doctype html>
+            <meta http-equiv="Content-Security-Policy" content="img-src 'none'; report-to csp">
+            "#,
+        );
+        runtime.set_content_security_reporting_endpoints(reporting_endpoints());
+        let child_document = runtime.dom_host_mut().create_detached_html_document();
+        let child_meta = runtime.dom_host_mut().create_element("meta");
+        assert_eq!(
+            runtime
+                .dom_host_mut()
+                .adopt_node(child_document, child_meta),
+            Some(child_meta)
+        );
+        assert!(runtime.dom_host_mut().set_attribute(
+            child_meta,
+            "http-equiv",
+            "Content-Security-Policy"
+        ));
+        assert!(runtime.dom_host_mut().set_attribute(
+            child_meta,
+            "content",
+            "img-src 'none'; report-to csp; report-uri /ignored-meta-report"
+        ));
+        assert!(
+            runtime
+                .dom_host_mut()
+                .append_child(child_document, child_meta)
+        );
+
+        let child_url = Url::parse("https://child.example.test/page").unwrap();
+        let request_url = child_url.join("image.png").unwrap();
+        let child_policy = DocumentPolicyContainer::from_navigation_response_headers(
+            &[(
+                "Reporting-Endpoints".to_owned(),
+                "csp=\"/child-reports\"".to_owned(),
+            )],
+            &child_url,
+        );
+        for (policy, expected) in [
+            (
+                child_policy,
+                vec!["https://child.example.test/child-reports".to_owned()],
+            ),
+            (DocumentPolicyContainer::default(), Vec::new()),
+        ] {
+            let check = runtime.document_subresource_csp_check_for_document(
+                Some(child_document),
+                &child_url,
+                &policy,
+                &request_url,
+                DocumentSubresourceCspKind::Image,
+            );
+            let violation = check
+                .enforced_violation()
+                .expect("child meta CSP must block");
+            assert_eq!(
+                violation.report_to_endpoints, expected,
+                "a child must not resolve its report group using the parent's endpoints"
+            );
+            assert!(violation.report_uri_endpoints.is_empty());
+        }
+
+        let parent_check =
+            runtime.document_subresource_csp_check(&request_url, DocumentSubresourceCspKind::Image);
+        assert_eq!(
+            parent_check
+                .enforced_violation()
+                .expect("parent meta CSP must block")
+                .report_to_endpoints,
+            vec!["https://example.test/reports/csp".to_owned()],
+            "checking the child must preserve the parent's own report group"
         );
     }
 

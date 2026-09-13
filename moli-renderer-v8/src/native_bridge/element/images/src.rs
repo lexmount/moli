@@ -247,7 +247,22 @@ fn queued_image_update_microtask_callback<'s>(
     }
     runtime.set_current_image_request(handle, Some(request_key.clone()));
 
-    if runtime.image_resource_is_ready(handle)
+    let request_url = url::Url::parse(request_key.url()).map_err(|error| error.to_string());
+    // Decoded resources are shared across Documents. A cache hit must still
+    // satisfy the requesting element's current policy before it can be used.
+    let request_allowed = request_url.as_ref().is_ok_and(|request_url| {
+        !runtime
+            .check_element_subresource_csp(
+                scope,
+                handle,
+                request_url,
+                DocumentSubresourceCspKind::Image,
+            )
+            .blocks_request()
+    });
+
+    if request_allowed
+        && runtime.image_resource_is_ready(handle)
         && !runtime.has_scanned_image_preload_for_element(handle)
     {
         let followup =
@@ -257,27 +272,18 @@ fn queued_image_update_microtask_callback<'s>(
         return;
     }
 
-    let start = url::Url::parse(request_key.url())
-        .map_err(|error| error.to_string())
-        .and_then(|request_url| {
-            if runtime
-                .check_top_document_subresource_csp(
-                    scope,
-                    &request_url,
-                    DocumentSubresourceCspKind::Image,
-                )
-                .blocks_request()
-            {
-                return Ok(crate::network_host::ImageElementResourceFetchStart::Failed);
-            }
-            crate::network_host::start_image_element_resource_fetch(
-                scope,
-                runtime,
-                handle,
-                sequence,
-                request_url,
-            )
-        });
+    let start = request_url.and_then(|request_url| {
+        if !request_allowed {
+            return Ok(crate::network_host::ImageElementResourceFetchStart::Failed);
+        }
+        crate::network_host::start_image_element_resource_fetch(
+            scope,
+            runtime,
+            handle,
+            sequence,
+            request_url,
+        )
+    });
     match start {
         Ok(crate::network_host::ImageElementResourceFetchStart::Pending) => {}
         Ok(crate::network_host::ImageElementResourceFetchStart::Failed) => {
