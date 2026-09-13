@@ -1708,6 +1708,7 @@ impl PendingSubresourceFetchRequest {
         }
         if let Some(body) = body {
             chain.body = Some(body);
+            chain.body_overridden = true;
         }
         if let Some(headers) = headers {
             chain.headers = headers.headers().clone();
@@ -1730,7 +1731,7 @@ impl PendingSubresourceFetchRequest {
         (
             Some(chain.url.clone()),
             Some(chain.method.clone()),
-            Some(chain.body.clone()),
+            chain.body_overridden.then(|| chain.body.clone()),
             chain.header_override.clone(),
         )
     }
@@ -1754,6 +1755,8 @@ pub struct PendingSubresourceFetchRequestStageChain {
     pub method: String,
     pub headers: moli_fetch::RequestHeaders,
     pub body: Option<String>,
+    /// A display snapshot is not an override of the renderer's binary body.
+    pub body_overridden: bool,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub remaining_sessions: Vec<PendingSubresourceFetchRequestStage>,
 }

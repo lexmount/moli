@@ -2103,6 +2103,7 @@ mod protocol_neutral_tests {
                 method: "GET".to_owned(),
                 headers: vec![("x-old".to_owned(), "1".to_owned())].into(),
                 body: None,
+                body_overridden: false,
                 request_cookie_report: None,
                 remaining_sessions: vec![PendingSubresourceFetchRequestStage {
                     session_id: Some("SID-attached".to_owned()),
@@ -2387,6 +2388,7 @@ mod protocol_neutral_tests {
                 method: "GET".to_owned(),
                 headers: Vec::new().into(),
                 body: None,
+                body_overridden: false,
                 request_cookie_report: None,
                 remaining_sessions: vec![PendingSubresourceFetchRequestStage {
                     session_id: Some("BIDI-SID".to_owned()),

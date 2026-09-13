@@ -861,7 +861,7 @@ fn record_subresource_response_body_source(
     );
 }
 
-fn record_subresource_request_body(
+pub(crate) fn record_subresource_request_body(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     request_id: &str,

@@ -33,7 +33,7 @@ impl ScriptVm {
         let PendingSubresourceFetchState {
             redirect_headers,
             request_origin,
-            info,
+            mut info,
             load,
             execution_context,
             credentials_mode,
@@ -43,6 +43,11 @@ impl ScriptVm {
             continuation,
             deferred_request_started,
         } = pending;
+        // The text snapshot is only for protocol display. Unless the client
+        // explicitly replaces the body, retain the original binary upload.
+        if let Some(body) = &body {
+            info.request_body_bytes = body.as_ref().map(|body| body.as_bytes().to_vec());
+        }
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
                 let request_url = url.unwrap_or_else(|| info.url.clone());
@@ -331,10 +336,10 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
-        let mut request = moli_fetch::Request::new(
+        let mut request = moli_fetch::Request::new_bytes(
             &request_method,
             request_url.as_str(),
-            request_body.clone(),
+            pending.info.request_body_bytes.clone(),
             request_headers.clone(),
         )?
         .with_redirect_headers(pending.redirect_headers.clone())

@@ -76,7 +76,7 @@ pub(crate) use agent::{
 };
 pub(crate) use backlog::{
     NetworkBacklogProjectionContext, emit_pending_network_backlog_activity_background_events,
-    emit_prepared_renderer_network_live_background_events,
+    emit_prepared_renderer_network_live_background_events, record_subresource_request_body,
 };
 pub(crate) use collectors::NetworkDataCollectorStore;
 pub(crate) use cookie_context::navigation_cookie_request_context;
