@@ -3,6 +3,7 @@ use super::*;
 mod abort_signal_events;
 mod broadcast_channel;
 mod chrome;
+mod clipboard_exec_copy;
 mod clipboard_input;
 mod clipboard_storage;
 mod console;
