@@ -35,7 +35,7 @@ use moli_css_parse::{normalize_root_margin, root_margin_components};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{
-    context_bootstrap::build_dom_rect_object,
+    context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
     host::report_event_callback_exception,
     native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
     native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
@@ -1197,6 +1197,10 @@ pub(super) fn intersection_observer_constructor_callback<'s>(
             throw_type_error(scope, &message);
             return;
         }
+        Err(IntersectionObserverOptionsError::Syntax(message)) => {
+            throw_dom_exception_value(scope, message, "SyntaxError");
+            return;
+        }
         Err(IntersectionObserverOptionsError::WebIdl(error)) => {
             webidl::throw_error(scope, &error);
             return;
@@ -1608,6 +1612,7 @@ fn has_property(
 
 enum IntersectionObserverOptionsError {
     Type(String),
+    Syntax(&'static str),
     WebIdl(webidl::WebIdlError),
     Range(&'static str),
 }
@@ -1646,16 +1651,16 @@ fn parse_intersection_observer_options<'s>(
         options.root = Some(root);
     }
 
-    options.root_margin = normalize_root_margin(&init.root_margin).ok_or_else(|| {
-        IntersectionObserverOptionsError::Type(
-            "Failed to construct 'IntersectionObserver': rootMargin must contain 1 to 4 px or percentage values.".to_owned(),
-        )
-    })?;
-    options.scroll_margin = normalize_root_margin(&init.scroll_margin).ok_or_else(|| {
-        IntersectionObserverOptionsError::Type(
-            "Failed to construct 'IntersectionObserver': scrollMargin must contain 1 to 4 px or percentage values.".to_owned(),
-        )
-    })?;
+    options.root_margin = normalize_root_margin(&init.root_margin).ok_or(
+        IntersectionObserverOptionsError::Syntax(
+            "Failed to construct 'IntersectionObserver': rootMargin must contain 1 to 4 px or percentage values.",
+        ),
+    )?;
+    options.scroll_margin = normalize_root_margin(&init.scroll_margin).ok_or(
+        IntersectionObserverOptionsError::Syntax(
+            "Failed to construct 'IntersectionObserver': scrollMargin must contain 1 to 4 px or percentage values.",
+        ),
+    )?;
 
     if let Some(thresholds) = threshold_option(scope, init.threshold)? {
         options.thresholds = thresholds;
