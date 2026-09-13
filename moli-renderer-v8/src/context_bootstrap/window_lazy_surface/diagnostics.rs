@@ -6,6 +6,7 @@ pub(crate) fn window_lazy_surface_diagnostics(
 ) -> WindowLazySurfaceDiagnostics {
     let global = scope.get_current_context().global(scope);
     WindowLazySurfaceDiagnostics {
+        external_materialized: private_object_present(scope, global, WindowLazySurface::External),
         navigator_materialized: private_object_present(scope, global, WindowLazySurface::Navigator),
         performance_materialized: private_object_present(
             scope,
@@ -34,6 +35,7 @@ pub(crate) fn window_lazy_surface_diagnostics(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WindowLazySurfaceDiagnostics {
+    pub(crate) external_materialized: bool,
     pub(crate) navigator_materialized: bool,
     pub(crate) performance_materialized: bool,
     pub(crate) custom_elements_materialized: bool,
