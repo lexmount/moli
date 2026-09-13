@@ -43,9 +43,9 @@ use super::super::{
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
-    form_navigation_target_document, named_iframe_target_handle_for_navigation,
-    navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
-    navigate_target_browsing_context,
+    form_navigation_target_document,
+    named_iframe_target_handle_for_navigation, navigate_element_target_browsing_context,
+    navigate_hyperlink_source_browsing_context,
 };
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
@@ -1993,7 +1993,7 @@ fn anchor_click_default_action(
     ) {
         return None;
     }
-    let _ = navigate_hyperlink_target_browsing_context(
+    let _ = navigate_element_target_browsing_context(
         scope,
         runtime_ptr,
         handle,
@@ -2322,31 +2322,6 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
     target_name: Option<&str>,
     resolved_url: &str,
 ) -> bool {
-    let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
-    let exposes_opener = {
-        let runtime = unsafe { &*runtime_ptr };
-        let rel = runtime
-            .dom_host()
-            .node(form_handle)
-            .and_then(Node::as_element)
-            .and_then(|element| element.attribute("rel"))
-            .unwrap_or_default();
-        let mut has_opener = false;
-        let mut has_noopener = false;
-        let mut has_noreferrer = false;
-        for token in rel.split_ascii_whitespace() {
-            if token.eq_ignore_ascii_case("opener") {
-                has_opener = true;
-            } else if token.eq_ignore_ascii_case("noopener") {
-                has_noopener = true;
-            } else if token.eq_ignore_ascii_case("noreferrer") {
-                has_noreferrer = true;
-            }
-        }
-        !has_noreferrer
-            && !has_noopener
-            && (has_opener || special_target != Some(SpecialBrowsingContextTarget::Blank))
-    };
     let source_document = unsafe { &*runtime_ptr }
         .dom_host()
         .owner_document_handle(form_handle);
@@ -2436,13 +2411,16 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         );
         return true;
     }
-    navigate_target_browsing_context(
+    let source_element = node_wrapper_from_handle(scope, form_handle);
+    navigate_element_target_browsing_context(
         scope,
         runtime_ptr,
+        form_handle,
         target_name,
         resolved_url,
-        None,
-        exposes_opener,
+        source_element,
+        false,
+        RendererPopupDisposition::Foreground,
     )
 }
 
