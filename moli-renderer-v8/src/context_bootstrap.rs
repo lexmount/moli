@@ -368,6 +368,8 @@ pub(crate) use self::file_api::{
     protect_native_drag_source_view, read_string_drag_data, replace_drag_data_store_contents,
     update_drag_data_store_operations_mask,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::file_api::{build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer};
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,

@@ -249,10 +249,10 @@ pub(crate) fn construct_drop_input_event<'s>(
     event_type: &str,
     data_transfer: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_input_event_with_transfer(
+    construct_editing_input_event(
         scope,
         event_type,
-        TextEditInputType::InsertFromDrop,
+        TextEditInputType::InsertFromDrop.as_str(),
         None,
         Some(data_transfer),
     )

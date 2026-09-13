@@ -36,9 +36,9 @@ pub use pointer::{
     pointer_event_get_predicted_events_callback,
 };
 pub use values::{
-    construct_native_command_event, construct_native_hash_change_event,
-    construct_native_interest_event, construct_native_popstate_event,
-    construct_native_toggle_event,
+    construct_native_clipboard_event, construct_native_command_event,
+    construct_native_hash_change_event, construct_native_interest_event,
+    construct_native_popstate_event, construct_native_toggle_event,
 };
 pub mod error;
 pub mod font;

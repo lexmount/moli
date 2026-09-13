@@ -220,6 +220,27 @@ fn native_source_element<'s>(
     )
 }
 
+pub fn construct_native_clipboard_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ClipboardInit {
+        base: EventInit {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+        },
+        clipboard_data: Some(data),
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::ClipboardEvent,
+        event_type,
+        SubclassInit::Values(ValueEventInit::Clipboard(init)),
+    )
+}
+
 pub fn construct_native_command_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     command: &str,
