@@ -18,7 +18,8 @@
       check(gl.getError() === gl.INVALID_ENUM, 'disabled debug query signals an error');
       const debug = gl.getExtension('webgl_debug_renderer_info');
       for (const pname of [debug.UNMASKED_VENDOR_WEBGL, debug.UNMASKED_RENDERER_WEBGL]) {
-        check(typeof gl.getParameter(pname) === 'string', 'enabled debug query returns a string');
+        const value = gl.getParameter(pname);
+        check(typeof value === 'string' && value.length > 0, 'enabled debug query returns a nonempty identity');
       }
       const other = create();
       check(other.getParameter(37446) === null && other.getError() === other.INVALID_ENUM, 'activation is context-local');
