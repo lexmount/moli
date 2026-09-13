@@ -219,3 +219,63 @@ async fn native_geolocation_result_uses_receiver_realm() {
         })()
     "#).await, json!([true, false, true, 1]));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn focus_override_updates_loaded_background_page_and_preserves_real_focus() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active");
+    bc.attach_active_session("SID-active");
+    bc.insert_page_target_host(PageTargetHost::new(
+        "TID-1".into(),
+        Some("SID-1".into()),
+        TargetIdentityState::about_blank(),
+        TargetPageSlot::empty_for_test_fixture(),
+    ));
+    install_geolocation_page_for_test(&mut ctx, bc).await;
+    let snapshot = "[document.hasFocus(), document.hidden, document.visibilityState]";
+    assert_eq!(
+        evaluate(&mut ctx, snapshot).await,
+        json!([false, true, "hidden"])
+    );
+    for enabled in [true, true, false] {
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Emulation.setFocusEmulationEnabled",
+            json!({"enabled": enabled}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, snapshot).await,
+            json!([
+                enabled,
+                !enabled,
+                if enabled { "visible" } else { "hidden" }
+            ])
+        );
+        assert_eq!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_target_id(),
+            Some("TID-active")
+        );
+    }
+    // Removing an override does not remove the real foreground target's focus.
+    let mut foreground = setup().await;
+    expect_session_command_result(
+        &mut foreground,
+        88001,
+        "SID-1",
+        "Emulation.setFocusEmulationEnabled",
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut foreground, snapshot).await,
+        json!([true, false, "visible"])
+    );
+}

@@ -193,9 +193,7 @@ pub(crate) fn try_start_emulation_command_dispatch(
             EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({}))),
         ),
         Some(EmulationAction::SetFocusEmulationEnabled) => {
-            Some(EmulationCommandTaskStep::Complete(
-                focus_emulation_enabled_command_output_plan(conn, cmd),
-            ))
+            Some(start_focus_emulation_enabled_command(conn, cmd))
         }
         Some(EmulationAction::SetDeviceMetricsOverride) => {
             Some(start_device_metrics_override_command(conn, cmd))
@@ -241,26 +239,48 @@ pub(crate) fn try_start_emulation_command_dispatch(
     }
 }
 
-fn focus_emulation_enabled_command_output_plan(
+fn start_focus_emulation_enabled_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
+) -> EmulationCommandTaskStep {
     let params: params::SetFocusEmulationEnabledParams = match cmd.get_params() {
         Ok(Some(params)) => params,
-        _ => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
     };
     if conn.browser_context.is_none() {
-        return CommandOutputPlan::result(json!({}));
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::success());
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_focus_emulation_enabled(params.enabled);
-    }) {
-        Ok(()) => CommandOutputPlan::result(json!({})),
-        Err(message) if message == "BrowserContextNotLoaded" => {
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
+    if let Err(message) =
+        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+            state.set_focus_emulation_enabled(params.enabled);
+        })
+    {
+        let code = if message == "BrowserContextNotLoaded" {
+            -31998
+        } else {
+            -32000
+        };
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
+    }
+    let pending = match start_surface_override_page_commands(conn, cmd) {
+        Ok(pending) => pending,
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
+    };
+    if pending.is_empty() {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::success());
     }
+    EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
+        command_id: cmd.id,
+        session_id: cmd.session_id.map(str::to_owned),
+        pending: PendingEmulationRendererDispatch::Pages(pending),
+    })
 }
 
 fn start_touch_emulation_enabled_command(
@@ -669,7 +689,7 @@ fn start_update_geolocation_override_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let pending = match start_geolocation_surface_override_page_commands(conn, cmd) {
+    let pending = match start_surface_override_page_commands(conn, cmd) {
         Ok(pending) => pending,
         Err(error) => {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
@@ -2688,7 +2708,7 @@ fn start_context_emulated_media_page_commands(
     Ok(pending)
 }
 
-fn start_geolocation_surface_override_page_commands(
+fn start_surface_override_page_commands(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
