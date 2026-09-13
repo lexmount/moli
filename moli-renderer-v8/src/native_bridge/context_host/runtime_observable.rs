@@ -519,6 +519,7 @@ impl JsContextHost {
         owner: WindowExecutionContextOwner,
     ) -> bool {
         self.retire_event_callbacks_for_execution_context(owner);
+        self.close_watcher_managers.remove(&owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
         if let Some(binding) = retired.as_ref() {
@@ -576,6 +577,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
@@ -615,6 +617,7 @@ impl JsContextHost {
         context_token: RuntimeObservableContextToken,
         resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
+        self.retire_close_watcher_realm(context_token);
         let revoked_blob_object_url_count =
             crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
