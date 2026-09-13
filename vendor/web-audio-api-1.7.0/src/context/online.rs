@@ -619,7 +619,11 @@ impl AudioContext {
         // Stop AudioRenderCapacity before closing so no capacity events are queued during shutdown.
         self.render_capacity.stop();
 
-        if self.state() == AudioContextState::Running {
+        // Startup can still be queued while the initial state is Suspended.
+        // Serialize Close after it before shutting down the backend.
+        if self.startup_pending.load(Ordering::Acquire)
+            || self.state() == AudioContextState::Running
+        {
             // First, stop rendering via a control message
             let (sender, receiver) = oneshot::channel();
             let notify = OneshotNotify::Async(sender);
@@ -759,8 +763,11 @@ impl AudioContext {
         // Stop AudioRenderCapacity before closing so no capacity events are queued during shutdown.
         self.render_capacity.stop();
 
-        // First, stop rendering via a control message
-        if self.state() == AudioContextState::Running {
+        // Startup must settle before the backend stops, even if the initial
+        // Suspended state has not yet transitioned to Running.
+        if self.startup_pending.load(Ordering::Acquire)
+            || self.state() == AudioContextState::Running
+        {
             let (sender, receiver) = crossbeam_channel::bounded(0);
             let notify = OneshotNotify::Sync(sender);
             self.base.send_control_msg(ControlMessage::Close { notify });
@@ -917,6 +924,38 @@ mod tests {
     }
 
     fn require_send_sync<T: Send + Sync>(_: T) {}
+
+    #[test]
+    fn test_close_sync_during_startup_is_terminal() {
+        let context = AudioContext::new(AudioContextOptions {
+            sink_id: "none".into(),
+            ..AudioContextOptions::default()
+        });
+        context.close_sync();
+        assert!(
+            !context.startup_pending.load(Ordering::Acquire),
+            "close must settle the queued Startup before stopping its backend"
+        );
+        assert_eq!(context.state(), AudioContextState::Closed);
+        context.close_sync();
+        assert_eq!(context.state(), AudioContextState::Closed);
+    }
+
+    #[test]
+    fn test_close_during_startup_is_terminal() {
+        let context = AudioContext::new(AudioContextOptions {
+            sink_id: "none".into(),
+            ..AudioContextOptions::default()
+        });
+        executor::block_on(context.close());
+        assert!(
+            !context.startup_pending.load(Ordering::Acquire),
+            "close must settle the queued Startup before stopping its backend"
+        );
+        assert_eq!(context.state(), AudioContextState::Closed);
+        context.close_sync();
+        assert_eq!(context.state(), AudioContextState::Closed);
+    }
 
     #[test]
     fn test_all_futures_thread_safe() {

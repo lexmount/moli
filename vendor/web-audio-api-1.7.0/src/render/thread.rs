@@ -191,10 +191,11 @@ impl RenderThread {
             Startup { graph } => {
                 debug_assert!(self.graph.is_none());
                 self.graph = Some(graph);
+                self.set_state(AudioContextState::Running);
                 if let Some(startup_pending) = self.startup_pending.as_ref() {
+                    // Observing startup completion must also observe Running.
                     startup_pending.store(false, Ordering::Release);
                 }
-                self.set_state(AudioContextState::Running);
             }
             NodeMessage { id, mut msg } => {
                 self.graph.as_mut().unwrap().route_message(id, msg.as_mut());
