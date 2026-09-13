@@ -11,8 +11,6 @@ use super::page_task_queue::RendererOwnerWake;
 use super::runtime::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCommand,
 };
-use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
-use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
 // Rust's default stack for spawned Unix threads is 2 MiB, which is too tight
 // for our render runtime once a deep async continuation chain reaches V8.
@@ -100,8 +98,6 @@ impl RenderRuntimeOwner {
         owner: RendererOwnerHandle,
         page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
         inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
-        shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
-        service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<RenderRuntimeEnvelope>();
         let render_join = std::thread::Builder::new()
@@ -122,8 +118,6 @@ impl RenderRuntimeOwner {
                     rx,
                     page_wake_rx,
                     inspector_io_wake_rx,
-                    shared_worker_wake_rx,
-                    service_worker_wake_rx,
                 ));
             })
             .expect("failed to spawn render runtime thread");
@@ -275,17 +269,9 @@ async fn render_runtime_main_loop(
     rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
     page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
     inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
-    shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
-    service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
 ) {
     owner
-        .run_render_runtime_loop(
-            rx,
-            page_wake_rx,
-            inspector_io_wake_rx,
-            shared_worker_wake_rx,
-            service_worker_wake_rx,
-        )
+        .run_render_runtime_loop(rx, page_wake_rx, inspector_io_wake_rx)
         .await;
 }
 

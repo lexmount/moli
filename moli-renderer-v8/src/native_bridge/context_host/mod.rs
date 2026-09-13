@@ -54,7 +54,6 @@ use crate::{
     types::{PendingSubresourceContinueEvent, PendingSubresourceFetchInfo},
 };
 use indexmap::IndexMap;
-use moli_shared_worker::SharedWorkerClientOwnerId;
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -977,8 +976,6 @@ pub(crate) struct JsContextHost {
     message_port_registry: SharedMessagePortRegistry,
     message_port_wrappers: HashMap<MessagePortId, MessagePortWrapperEntry>,
     broadcast_channel_registry: SharedBroadcastChannelRegistry,
-    shared_worker_client_owner_id: SharedWorkerClientOwnerId,
-    child_shared_worker_client_owner_ids: HashMap<DomHandle, SharedWorkerClientOwnerId>,
     shared_worker_clients: SharedWorkerClientEndpointOwner,
     top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     web_storage_opaque_context_nonce: Option<moli_storage_key::OpaqueOriginNonce>,

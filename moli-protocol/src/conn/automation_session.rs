@@ -1,14 +1,16 @@
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
 };
 
 use moli_core::browser::BrowserContextId;
 
-use super::{CdpConnection, CdpSessionRoute};
+use super::{CdpConnection, CdpSessionRoute, DEFAULT_BROWSER_CONTEXT_ID};
 use crate::devtools_runtime::{
-    DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsError, DevToolsErrorKind, DevToolsTargetId,
+    AutomationEvent, DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext,
+    DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsProtocol, DevToolsTargetId,
+    DevToolsTargetInfo,
 };
 
 /// Session ownership is a set of exact native Context identities. It is not a
@@ -22,7 +24,49 @@ pub(super) struct WebDriverSessionScope {
     global_settings: Vec<DevToolsCommand>,
 }
 
+impl WebDriverSessionScope {
+    fn project_bidi_context_id(&self, id: &mut DevToolsBrowserContextId) {
+        if id.as_str() == self.default_context {
+            *id = DevToolsBrowserContextId::from(DEFAULT_BROWSER_CONTEXT_ID);
+        }
+    }
+
+    fn project_bidi_target_info(&self, target: &mut DevToolsTargetInfo) {
+        if let Some(id) = &mut target.browser_context_id {
+            self.project_bidi_context_id(id);
+        }
+    }
+}
+
 impl CdpConnection {
+    /// Apply the recipient's default alias after visibility checks, leaving the
+    /// shared lifecycle fact and standalone observers' Context identities intact.
+    pub fn webdriver_bidi_automation_event<'a>(
+        &self,
+        session: Option<&str>,
+        event: &'a AutomationEvent,
+    ) -> Cow<'a, AutomationEvent> {
+        let Some(scope) = session.and_then(|session| self.webdriver_sessions.get(session)) else {
+            return Cow::Borrowed(event);
+        };
+        match event {
+            AutomationEvent::TargetCreated(target) | AutomationEvent::TargetDestroyed(target)
+                if target.browser_context_id.as_ref().map(|id| id.as_str())
+                    == Some(scope.default_context.as_str()) => {}
+            _ => return Cow::Borrowed(event),
+        }
+        let mut event = event.clone();
+        if let AutomationEvent::TargetCreated(target) | AutomationEvent::TargetDestroyed(target) =
+            &mut event
+        {
+            scope.project_bidi_context_id(target.browser_context_id.as_mut().unwrap());
+            if let Some(info) = &mut target.target_info {
+                scope.project_bidi_target_info(info);
+            }
+        }
+        Cow::Owned(event)
+    }
+
     pub(super) fn webdriver_global_setting(
         &self,
         command: &DevToolsCommand,
@@ -625,6 +669,38 @@ impl CdpConnection {
                     .as_ref()
                     .is_some_and(|id| self.webdriver_target_is_visible(context, id.as_str()))
             }),
+            _ => {}
+        }
+        if context.protocol != DevToolsProtocol::WebDriverBidi {
+            return;
+        }
+        let scope = &self.webdriver_sessions[session.as_str()];
+        match result {
+            Ok(DevToolsCommandResult::GetBrowserContexts(contexts)) => {
+                for id in &mut contexts.browser_context_ids {
+                    scope.project_bidi_context_id(id);
+                }
+            }
+            Ok(DevToolsCommandResult::GetTargets(targets)) => {
+                for target in &mut targets.targets {
+                    scope.project_bidi_target_info(target);
+                }
+            }
+            Ok(DevToolsCommandResult::GetTargetInfo(target)) => {
+                scope.project_bidi_target_info(&mut target.target_info);
+            }
+            Ok(DevToolsCommandResult::GetFrameTree(tree)) => {
+                if let Some(target) = &mut tree.target_info {
+                    scope.project_bidi_target_info(target);
+                }
+            }
+            Ok(DevToolsCommandResult::GetFrameTrees(trees)) => {
+                for tree in &mut trees.frame_trees {
+                    if let Some(target) = &mut tree.target_info {
+                        scope.project_bidi_target_info(target);
+                    }
+                }
+            }
             _ => {}
         }
     }

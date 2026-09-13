@@ -127,7 +127,7 @@ pub(super) fn execute_devtools_get_service_worker_logs_command(
         };
         let cursor_id =
             devtools_service_worker_classic_log_cursor_id(&command_session_id, &target_id);
-        let messages = target.pending_classic_log_messages(&cursor_id).to_vec();
+        let messages = target.pending_classic_log_messages(&cursor_id);
         let console_end = target.console_message_count();
         target.mark_classic_log_emitted(cursor_id, console_end);
         for message in messages {
@@ -322,8 +322,6 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
     Result<DevToolsCommandResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
 ) {
-    let should_emit_internal_lifecycle =
-        command.context.protocol == DevToolsProtocol::WebDriverBidi;
     let browser_context_id = command.browser_context_id.into_string();
     if browser_context_id == conn.default_browser_context_id() {
         return (
@@ -352,13 +350,6 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
         Err(error) => return (Err(error), Vec::new()),
     };
 
-    let mut protocol_events = Vec::new();
-    if should_emit_internal_lifecycle {
-        protocol_events.extend(target_destroyed_automation_events_for_browser_context(
-            conn,
-            &browser_context_id,
-        ));
-    }
     let mut side_effects = events::TargetProtocolSideEffects::default();
     let mut command_context = crate::conn::CommandDispatchContext::default();
     if let Err(error) = super::browser_context_disposal::execute_browser_context_disposal_async(
@@ -371,7 +362,7 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
     {
         return (Err(error), Vec::new());
     }
-    protocol_events.extend(side_effects.into_background_events());
+    let mut protocol_events = side_effects.into_background_events();
     protocol_events.extend(command_context.take_protocol_events());
     (Ok(DevToolsCommandResult::Empty), protocol_events)
 }
@@ -463,20 +454,6 @@ pub(in crate::domains) fn target_filter_allows_type(
         }
     }
     false
-}
-
-fn target_destroyed_automation_events_for_browser_context(
-    conn: &CdpConnection,
-    browser_context_id: &str,
-) -> Vec<BackgroundProtocolEvent> {
-    let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
-        return Vec::new();
-    };
-    let target_infos = browser_context.devtools_target_infos();
-    target_infos
-        .into_iter()
-        .flat_map(|target_info| conn.target_destroyed_automation_events(target_info))
-        .collect()
 }
 
 pub(super) fn get_browser_contexts(conn: &mut CdpConnection) -> CommandOutputPlan {

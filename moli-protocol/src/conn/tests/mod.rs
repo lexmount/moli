@@ -10,7 +10,6 @@ use super::{
     BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandResponseFlushContext,
     ServiceWorkerTargetState, SharedWorkerTargetState,
 };
-use crate::devtools_runtime::DevToolsTargetFilterEntry;
 use crate::testing::TestContext;
 use moli_cookie_jar::{
     BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides, CookieSiteDataClearScope,
@@ -296,21 +295,6 @@ fn internal_runtime_command_id_allocator_rejects_u64_exhaustion() {
     conn.next_internal_devtools_command_id = u64::MAX;
 
     let _ = conn.next_internal_devtools_command_id();
-}
-
-#[test]
-fn replace_root_target_discovery_is_noop_when_already_enabled() {
-    let mut conn = crate::test_support::connection();
-    let filter = vec![DevToolsTargetFilterEntry {
-        exclude: false,
-        target_type: Some("service_worker".to_owned()),
-    }];
-    conn.set_target_discovery_for_owner_from_devtools_filter(None, Some(filter.clone()));
-
-    let previous = conn.replace_root_target_discovery_enabled(true);
-
-    assert!(previous);
-    assert_eq!(conn.target_discovery_filter_for_owner(None), Some(filter));
 }
 
 #[test]

@@ -1408,24 +1408,30 @@ async fn concurrent_navigation_bodies_do_not_park_either_targets_network_events(
             activate: false,
         })
     };
-    let first_create = conn
-        .execute_devtools_command(create_target(context.clone()))
-        .await;
-    let (first_result, _) = first_create.into_parts();
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("first target should be created")
-    else {
-        panic!("expected create-target result")
-    };
-    let first_target_id = first_result.target_id.into_string();
-    let second_create = conn.execute_devtools_command(create_target(context)).await;
-    let (second_result, _) = second_create.into_parts();
-    let DevToolsCommandResult::CreateTarget(second_result) =
-        second_result.expect("second target should be created")
-    else {
-        panic!("expected create-target result")
-    };
-    let second_target_id = second_result.target_id.into_string();
+    let mut target_ids = Vec::new();
+    for context in [context.clone(), context] {
+        let (result, scheduler_events, events) = conn
+            .execute_devtools_command(create_target(context))
+            .await
+            .into_parts_with_protocol_events();
+        assert!(scheduler_events.is_empty());
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.has_protocol_wire_message())
+        );
+        let DevToolsCommandResult::CreateTarget(created) =
+            result.expect("target should be created")
+        else {
+            panic!("expected create-target result")
+        };
+        assert_eq!(events.into_iter().filter_map(|event| event.into_parts().1)
+            .filter(|event| matches!(event, moli_protocol::devtools_runtime::AutomationEvent::TargetCreated(event)
+                if event.target_id == created.target_id)).count(), 1);
+        target_ids.push(created.target_id.into_string());
+    }
+    let [first_target_id, second_target_id]: [String; 2] = target_ids.try_into().unwrap();
     assert_ne!(first_target_id, second_target_id);
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-A");
     let target_a = navigation.target_id().to_owned();

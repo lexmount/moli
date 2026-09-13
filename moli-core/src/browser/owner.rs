@@ -944,19 +944,42 @@ impl BrowserContextHandle {
         })
     }
 
-    pub fn bind_page_navigation_engines(
-        &self,
-        config: crate::runtime::NavigationRuntimeConfig,
-        sender: Option<crate::RendererOutputTransportSender>,
-    ) {
-        self.update_live(move |context| context.bind_page_navigation_engines(config, sender));
+    pub fn bind_page_navigation_engines(&self, config: crate::runtime::NavigationRuntimeConfig) {
+        self.update_live(move |context| context.bind_page_navigation_engines(config));
     }
 
+    /// First binding returns the native Worker prefix covered by the new
+    /// observer. Repeated binding to the same transport does not replay it.
     pub fn set_renderer_output_transport_sender(
         &self,
         sender: crate::RendererOutputTransportSender,
-    ) -> Result<(), String> {
-        self.update(move |context| context.set_renderer_output_transport_sender(sender))
+    ) -> Result<Option<super::WorkerStateSnapshot>, String> {
+        if !self.update(move |context| context.set_renderer_output_transport_sender(sender))? {
+            return Ok(None);
+        }
+        let id = self.id;
+        // Producers enqueue native input before publishing to their journals.
+        // A second owner turn includes inputs queued behind the binding turn,
+        // so discarding unobserved publications cannot leave a recovery gap.
+        self.browser.execute(move |browser| {
+            let context = browser.context(id)?;
+            Ok(Some(super::WorkerStateSnapshot {
+                sequence: browser.events.sequence(),
+                web_contents: context.web_contents_handles().collect(),
+                workers: context.worker_snapshots().collect(),
+                requests: context
+                    .network_requests
+                    .snapshots()
+                    .filter(|request| {
+                        matches!(
+                            request.renderer_source,
+                            crate::page::RendererNetworkSource::Worker(_)
+                        )
+                    })
+                    .collect(),
+                pauses: context.network_requests.worker_pauses().collect(),
+            }))
+        })?
     }
 
     pub fn contains_web_contents(&self, handle: WebContentsHandle) -> bool {

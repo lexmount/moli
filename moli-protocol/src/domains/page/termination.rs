@@ -762,7 +762,7 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     out.extend(
         conn.close_browser_web_contents_async(
             web_contents,
-            crate::conn::PageCloseNotifications::PageCommand,
+            crate::conn::PageCloseNotifications::All,
         )
         .await,
     );

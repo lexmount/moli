@@ -34,18 +34,6 @@ async fn publish_and_run_service_worker_internal_test_task<E>(
     );
 }
 
-pub(super) async fn run_service_worker_client_navigate_request_task_for_test(
-    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
-    context: &str,
-    completion: crate::types::ServiceWorkerClientNavigateRequestCompletion,
-) {
-    publish_and_run_service_worker_internal_test_task(page, loader, context, |sender| {
-        sender.send_service_worker_client_navigate_request(completion)
-    })
-    .await;
-}
-
 pub(super) async fn run_service_worker_client_focus_request_task_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     loader: &ResourceRequestClient,

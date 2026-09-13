@@ -23,7 +23,7 @@ use moli_protocol::{
         DevToolsGetLayoutMetricsCommand, DevToolsGetRealmsCommand, DevToolsGetTargetInfoCommand,
         DevToolsGetTargetsCommand, DevToolsNavigationWait, DevToolsProtocol,
         DevToolsRemoteHandleId, DevToolsSessionId, DevToolsSetFileInputFilesCommand,
-        DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind, TargetLifecycleEvent,
+        DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
         webdriver_bidi_navigation_id_from_loader_id,
     },
 };
@@ -210,9 +210,6 @@ impl BidiSocketActor {
                 scheduler.cancel_devtools_navigation_lifecycle(*wait);
             }
             Some(BidiPendingCommandWait::DocumentAdmission(_)) | None => {}
-        }
-        if let Some(previous_target_discovery) = pending.completion.previous_target_discovery {
-            scheduler.replace_target_discovery_enabled(previous_target_discovery);
         }
     }
 
@@ -658,9 +655,6 @@ async fn handle_bidi_socket_message(
     } else {
         match (devtools_command, input_command) {
             (Some(dispatch), None) => {
-                let observe_context_created = bidi
-                    .subscribed_contexts_for_bidi_event("browsingContext.contextCreated")
-                    .is_some();
                 start_bidi_devtools_command(
                     scheduler,
                     receivers,
@@ -669,7 +663,6 @@ async fn handle_bidi_socket_message(
                     pending_navigation_candidate
                         .as_ref()
                         .map(|candidate| candidate.background_command_id),
-                    observe_context_created,
                     bidi.subscribed_contexts_for_bidi_event("browsingContext.load")
                         .is_some(),
                 )
@@ -1475,15 +1468,10 @@ async fn recv_bidi_command_completion(
 
 struct BidiDevToolsCommandCompletion {
     id: u64,
-    session_id: String,
     event_sources: BidiDevToolsEventSources,
     event_context: Option<String>,
-    close_target_event: Option<TargetLifecycleEvent>,
-    create_target_browser_context_id:
-        Option<moli_protocol::devtools_runtime::DevToolsBrowserContextId>,
     observe_browsing_context_load: bool,
     script_may_create_targets: bool,
-    previous_target_discovery: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1526,7 +1514,6 @@ enum BidiDevToolsEventSource {
         command_id: Option<u64>,
         response: BackgroundCommandResponsePayload,
     },
-    AutomationEvent(Box<AutomationEvent>),
 }
 
 #[derive(Default)]
@@ -1597,11 +1584,6 @@ impl BidiDevToolsEventSources {
         for event in output.into_background_events() {
             self.push_background_event(event);
         }
-    }
-
-    fn push_automation_event(&mut self, event: AutomationEvent) {
-        self.sources
-            .push(BidiDevToolsEventSource::AutomationEvent(Box::new(event)));
     }
 
     fn push_background_event(&mut self, event: BackgroundProtocolEvent) {
@@ -1678,8 +1660,7 @@ impl BidiPendingNavigationResponse {
     fn matches_pause_sources(&self, sources: &[BidiDevToolsEventSource]) -> bool {
         sources.iter().any(|source| {
             let event = match source {
-                BidiDevToolsEventSource::AutomationEvent(event)
-                | BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { automation_event: event, .. } => event.as_ref(),
+                BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { automation_event: event, .. } => event.as_ref(),
                 BidiDevToolsEventSource::ProtocolMessage(message) => {
                     return matches!(message["method"].as_str(), Some("Fetch.authRequired" | "Fetch.requestPaused"))
                         && message["params"]["frameId"] == self.target_id
@@ -1713,8 +1694,7 @@ fn take_pending_navigation_response_from_sources(
                     response,
                 ),
                 BidiDevToolsEventSource::ProtocolMessage(_)
-                | BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { .. }
-                | BidiDevToolsEventSource::AutomationEvent(_) => None,
+                | BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { .. } => None,
             })
             .or_else(|| {
                 sources.iter().find_map(|source| match source {
@@ -1724,8 +1704,7 @@ fn take_pending_navigation_response_from_sources(
                     } => {
                         pending_navigation_response_from_protocol_message(pending_response, message)
                     }
-                    BidiDevToolsEventSource::CommandResponse { .. }
-                    | BidiDevToolsEventSource::AutomationEvent(_) => None,
+                    BidiDevToolsEventSource::CommandResponse { .. } => None,
                 })
             })?;
         let wait = (response["type"] == "success")
@@ -1752,8 +1731,7 @@ fn take_pending_navigation_response_from_sources(
     };
     for source in sources {
         match source {
-            BidiDevToolsEventSource::AutomationEvent(event)
-            | BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent {
+            BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent {
                 automation_event: event,
                 ..
             } => wait.observe_lifecycle_event(event),
@@ -1868,10 +1846,7 @@ fn subscribed_bidi_events_from_devtools_event_sources(
             BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent {
                 automation_event,
                 ..
-            }
-            | BidiDevToolsEventSource::AutomationEvent(automation_event) => {
-                Some(automation_event.as_ref())
-            }
+            } => Some(automation_event.as_ref()),
             _ => None,
         };
         if scheduler.is_some_and(|scheduler| {
@@ -1901,6 +1876,13 @@ fn subscribed_bidi_events_from_devtools_event_sources(
                 let message_owner_context =
                     bidi_protocol_message_owner_context(scheduler, message, owner_context);
                 bidi.record_protocol_message_state(message, message_owner_context.as_deref());
+                let automation_event = scheduler.map_or_else(
+                    || std::borrow::Cow::Borrowed(automation_event.as_ref()),
+                    |scheduler| {
+                        scheduler
+                            .webdriver_bidi_automation_event(bidi.session_id(), automation_event)
+                    },
+                );
                 events.extend(
                     bidi.subscribed_bidi_events_from_automation_events_with_context(
                         std::iter::once(automation_event.as_ref()),
@@ -1909,13 +1891,6 @@ fn subscribed_bidi_events_from_devtools_event_sources(
                 );
             }
             BidiDevToolsEventSource::CommandResponse { .. } => {}
-            BidiDevToolsEventSource::AutomationEvent(event) => {
-                events.extend(
-                    bidi.subscribed_bidi_events_from_automation_events(std::iter::once(
-                        event.as_ref(),
-                    )),
-                );
-            }
         }
     }
     events
@@ -2043,7 +2018,6 @@ async fn start_bidi_devtools_command(
     bidi: &BidiConnectionState,
     mut dispatch: BidiDevToolsCommandDispatch,
     background_command_id: Option<u64>,
-    observe_context_created: bool,
     observe_browsing_context_load: bool,
 ) -> BidiDevToolsCommandStart {
     dispatch
@@ -2052,10 +2026,6 @@ async fn start_bidi_devtools_command(
             bidi.file_prompt_handler_for_script_commands(),
         );
     let event_context = bidi_event_context_from_devtools_command(&dispatch.command);
-    let close_target_id = match &dispatch.command {
-        DevToolsCommand::CloseTarget(command) => Some(command.target_id.as_str().to_owned()),
-        _ => None,
-    };
     let script_may_create_targets = matches!(
         &dispatch.command,
         DevToolsCommand::EvaluateScript(_) | DevToolsCommand::CallFunction(_)
@@ -2080,11 +2050,6 @@ async fn start_bidi_devtools_command(
             .await,
         Some(&*scheduler),
     );
-    let close_target_event = if let Some(target_id) = close_target_id.as_deref() {
-        bidi_target_lifecycle_event_for_target(scheduler, &dispatch.session_id, target_id).await
-    } else {
-        None
-    };
     if let Some(error) =
         validate_bidi_top_level_context_command(scheduler, &dispatch.session_id, &dispatch.command)
             .await
@@ -2097,23 +2062,12 @@ async fn start_bidi_devtools_command(
             event_context,
         });
     }
-    let previous_target_discovery = ((observe_context_created || observe_browsing_context_load)
-        && script_may_create_targets)
-        .then(|| scheduler.replace_target_discovery_enabled(true));
-    let create_target_browser_context_id = match &dispatch.command {
-        DevToolsCommand::CreateTarget(command) => command.browser_context_id.clone(),
-        _ => None,
-    };
     let completion = BidiDevToolsCommandCompletion {
         id: dispatch.id,
-        session_id: dispatch.session_id.clone(),
         event_sources,
         event_context,
-        close_target_event,
-        create_target_browser_context_id,
         observe_browsing_context_load,
         script_may_create_targets,
-        previous_target_discovery,
     };
     if bidi_devtools_command_uses_deferred_runtime_progress(&dispatch.command) {
         return match scheduler
@@ -2233,22 +2187,15 @@ async fn complete_bidi_devtools_command_execution(
 ) -> BidiDevToolsCommandOutput {
     let BidiDevToolsCommandCompletion {
         id,
-        session_id,
         mut event_sources,
         event_context,
-        close_target_event,
-        create_target_browser_context_id,
         observe_browsing_context_load,
         script_may_create_targets,
-        previous_target_discovery,
     } = completion;
     event_sources.extend_protocol_output(execution.protocol_output, Some(&*scheduler));
     match drain_ready_bidi_background_navigation(scheduler, receivers).await {
         Ok(sources) => event_sources.append(sources),
         Err(failure) => {
-            if let Some(previous_target_discovery) = previous_target_discovery {
-                scheduler.replace_target_discovery_enabled(previous_target_discovery);
-            }
             return bidi_command_output_from_renderer_transport_failure(
                 id,
                 event_context,
@@ -2256,34 +2203,6 @@ async fn complete_bidi_devtools_command_execution(
                 failure,
             );
         }
-    }
-    let created_target_id = match &execution.result {
-        Ok(DevToolsCommandResult::CreateTarget(result)) => {
-            Some(result.target_id.as_str().to_owned())
-        }
-        _ => None,
-    };
-    let close_succeeded = matches!(&execution.result, Ok(DevToolsCommandResult::CloseTarget(_)));
-    if let Some(target_id) = created_target_id.as_deref() {
-        let mut event =
-            match bidi_target_lifecycle_event_for_target(scheduler, &session_id, target_id).await {
-                Some(event) => event,
-                None => TargetLifecycleEvent {
-                    target_id: DevToolsTargetId::from(target_id),
-                    browser_context_id: create_target_browser_context_id.clone(),
-                    kind: DevToolsTargetKind::Page,
-                    url: "about:blank".to_owned(),
-                    target_info: None,
-                },
-            };
-        if let Some(browser_context_id) = create_target_browser_context_id {
-            event.browser_context_id = Some(browser_context_id);
-            event.target_info = None;
-        }
-        event_sources.push_automation_event(AutomationEvent::TargetCreated(event));
-    }
-    if close_succeeded && let Some(event) = close_target_event {
-        event_sources.push_automation_event(AutomationEvent::TargetDestroyed(event));
     }
     let response = match execution.result {
         Ok(result) => bidi_response_from_devtools_result(id, result),
@@ -2293,9 +2212,6 @@ async fn complete_bidi_devtools_command_execution(
         match complete_bidi_post_response_protocol_residences(scheduler, receivers).await {
             Ok(sources) => sources,
             Err(failure) => {
-                if let Some(previous_target_discovery) = previous_target_discovery {
-                    scheduler.replace_target_discovery_enabled(previous_target_discovery);
-                }
                 return bidi_command_output_from_renderer_transport_failure(
                     id,
                     event_context,
@@ -2304,9 +2220,6 @@ async fn complete_bidi_devtools_command_execution(
                 );
             }
         };
-    if let Some(previous_target_discovery) = previous_target_discovery {
-        scheduler.replace_target_discovery_enabled(previous_target_discovery);
-    }
     let post_response_background_navigation_drain = if observe_browsing_context_load
         && script_may_create_targets
         && scheduler.has_inflight_background_navigation()
@@ -3125,15 +3038,6 @@ fn frame_tree_contains_target(frame_tree: &serde_json::Value, target_id: &str) -
             .any(|child| frame_tree_contains_target(child, target_id))
 }
 
-async fn bidi_target_lifecycle_event_for_target(
-    scheduler: &mut CdpScheduler,
-    session_id: &str,
-    target_id: &str,
-) -> Option<TargetLifecycleEvent> {
-    let result = bidi_target_info_for_target(scheduler, session_id, target_id).await?;
-    target_lifecycle_event_from_target_info(result)
-}
-
 async fn bidi_target_info_for_target(
     scheduler: &mut CdpScheduler,
     session_id: &str,
@@ -3155,19 +3059,6 @@ async fn bidi_target_info_for_target(
         return None;
     };
     Some(result.target_info)
-}
-
-fn target_lifecycle_event_from_target_info(
-    info: DevToolsTargetInfo,
-) -> Option<TargetLifecycleEvent> {
-    let target_id = info.target_id.clone()?;
-    Some(TargetLifecycleEvent {
-        target_id,
-        browser_context_id: info.browser_context_id.clone(),
-        kind: info.kind,
-        url: info.url.clone(),
-        target_info: Some(info),
-    })
 }
 
 fn bidi_event_context_from_devtools_command(command: &DevToolsCommand) -> Option<String> {

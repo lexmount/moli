@@ -34,6 +34,47 @@ use serde_json::json;
 
 use super::*;
 
+impl DevToolsCommandDispatchOutcome {
+    #[track_caller]
+    fn into_created_target_parts(
+        self,
+    ) -> (
+        Result<DevToolsCommandResult, crate::devtools_runtime::DevToolsError>,
+        Vec<CdpSchedulerEvent>,
+    ) {
+        let (result, scheduler_events, events) = self.into_parts_with_protocol_events();
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.has_protocol_wire_message())
+        );
+        match &result {
+            Ok(DevToolsCommandResult::CreateTarget(created)) => {
+                assert_eq!(events.len(), 2, "one page and one tab creation");
+                let mut page = 0;
+                let mut tab = 0;
+                for event in events {
+                    let Some(AutomationEvent::TargetCreated(event)) = event.into_parts().1 else {
+                        panic!("creation must carry its actual lifecycle fact")
+                    };
+                    match event.kind {
+                        crate::devtools_runtime::DevToolsTargetKind::Page => {
+                            assert_eq!(event.target_id, created.target_id);
+                            page += 1;
+                        }
+                        crate::devtools_runtime::DevToolsTargetKind::Tab => tab += 1,
+                        kind => panic!("unexpected created kind: {kind:?}"),
+                    }
+                }
+                assert_eq!((page, tab), (1, 1));
+            }
+            Err(_) => assert!(events.is_empty()),
+            result => panic!("expected target creation result: {result:?}"),
+        }
+        (result, scheduler_events)
+    }
+}
+
 fn complete_messages(step: CdpCommandTaskStep) -> Vec<Value> {
     match step {
         CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,
@@ -526,7 +567,7 @@ async fn devtools_command_executes_target_create_and_get_targets() {
             activate: false,
         }))
         .await;
-    let (create_result, create_events) = create.into_parts();
+    let (create_result, create_events) = create.into_created_target_parts();
     assert!(create_events.is_empty());
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
@@ -583,7 +624,7 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
         }))
         .await;
     let create_predecessor = create_outcome.renderer_output_predecessor();
-    let (create_result, create_events) = create_outcome.into_parts();
+    let (create_result, create_events) = create_outcome.into_created_target_parts();
     assert!(create_events.is_empty());
     if let Some(predecessor) = create_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
@@ -914,7 +955,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_target_result) =
         create_target_result.expect("create target in user context should succeed")
     else {
@@ -1020,7 +1061,7 @@ async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     assert!(matches!(result, Ok(DevToolsCommandResult::CreateTarget(_))));
     let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
     let client = conn.resource_request_client_for_owner(&owner).unwrap();
@@ -1072,7 +1113,7 @@ async fn devtools_create_target_explicit_default_browser_context_materializes_de
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target in explicit default context should succeed")
     else {
@@ -1121,7 +1162,7 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     assert!(create_events.is_empty());
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target from reference context should succeed")
@@ -1180,7 +1221,7 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     assert!(create_events.is_empty());
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("explicit browser context target creation should succeed")
@@ -1357,7 +1398,7 @@ async fn devtools_create_target_rejects_unknown_reference_target() {
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let error = create_result.expect_err("unknown reference context should fail");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchTarget);
 }
@@ -1385,12 +1426,28 @@ async fn devtools_command_preserves_target_create_typed_sidecar() {
 
     assert!(scheduler_events.is_empty());
     result.expect("create target should succeed");
-    assert_eq!(protocol_events.len(), 1);
-    let (_message, automation_event) = protocol_events.remove(0).into_parts();
+    assert_eq!(protocol_events.len(), 2);
+    assert_eq!(
+        protocol_events
+            .iter()
+            .filter(|event| event.has_protocol_wire_message())
+            .count(),
+        1
+    );
+    let wire = protocol_events
+        .iter()
+        .position(|event| event.has_protocol_wire_message())
+        .unwrap();
+    let (_message, automation_event) = protocol_events.remove(wire).into_parts();
     let Some(AutomationEvent::TargetCreated(event)) = automation_event else {
         panic!("expected targetCreated typed sidecar");
     };
     assert_eq!(event.target_id.as_str(), "TID-1");
+    let Some(AutomationEvent::TargetCreated(event)) = protocol_events.remove(0).into_parts().1
+    else {
+        panic!("tab creation must retain its automation receipt")
+    };
+    assert_eq!(event.kind, crate::devtools_runtime::DevToolsTargetKind::Tab);
 }
 
 #[tokio::test]
@@ -1513,7 +1570,7 @@ async fn devtools_command_executes_target_pending_activate_and_close() {
                 activate: false,
             }))
             .await
-            .into_parts();
+            .into_created_target_parts();
         result.expect("create target should succeed");
     }
 
@@ -1531,13 +1588,24 @@ async fn devtools_command_executes_target_pending_activate_and_close() {
         DevToolsCommandResult::Empty
     );
 
-    let (close_result, _) = conn
+    let (close_result, _, close_events) = conn
         .execute_devtools_command(DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
             context: context.clone(),
             target_id: DevToolsTargetId::from("TID-2"),
         }))
         .await
-        .into_parts();
+        .into_parts_with_protocol_events();
+    assert!(
+        close_events
+            .iter()
+            .all(|event| !event.has_protocol_wire_message())
+    );
+    assert_eq!(
+        close_events.into_iter().filter_map(|event| event.into_parts().1)
+            .filter(|event| matches!(event, AutomationEvent::TargetDestroyed(event) if event.target_id.as_str() == "TID-2"))
+            .count(),
+        1,
+    );
     let DevToolsCommandResult::CloseTarget(close_result) =
         close_result.expect("close should succeed")
     else {
@@ -1592,7 +1660,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
@@ -1743,7 +1811,7 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
@@ -1902,7 +1970,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
@@ -2594,7 +2662,7 @@ async fn bidi_create_target_installs_initial_about_blank_page_without_default_pr
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(_) =
         create_result.expect("active target create should succeed")
     else {
@@ -2690,7 +2758,7 @@ async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -2805,7 +2873,7 @@ async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -2858,7 +2926,7 @@ async fn classic_create_target_ensures_fresh_initial_document_without_resolver_f
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("classic create target should succeed")
     else {
@@ -3107,7 +3175,7 @@ async fn devtools_create_target_can_activate_created_target() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(first_result) =
         first_result.expect("first create target should succeed")
     else {
@@ -3137,7 +3205,7 @@ async fn devtools_create_target_can_activate_created_target() {
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(second_result) =
         second_result.expect("second create target should succeed")
     else {
@@ -3268,7 +3336,7 @@ async fn devtools_command_executes_page_navigation_and_reload() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -3333,7 +3401,7 @@ async fn devtools_command_executes_page_navigation_without_cdp_response_sidecar(
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -3497,7 +3565,7 @@ async fn devtools_command_reports_invalid_navigation_without_cdp_response_parser
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -3547,7 +3615,7 @@ async fn devtools_command_executes_preload_without_cdp_response_sidecar() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -4246,7 +4314,7 @@ async fn devtools_command_rejects_page_print_to_pdf_without_placeholder_payload(
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -4314,7 +4382,7 @@ async fn devtools_command_executes_context_viewport_override() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -4389,7 +4457,7 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -4619,7 +4687,7 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
             activate: true,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target in userContext should succeed")
     else {
@@ -4660,7 +4728,7 @@ async fn devtools_command_executes_dom_outer_html_for_document_source() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -4722,7 +4790,7 @@ async fn devtools_command_executes_dom_query_selector_for_document_root() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -5215,7 +5283,7 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -5460,7 +5528,7 @@ async fn devtools_command_executes_input_key_command_without_cdp_sidecar() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -5564,7 +5632,7 @@ async fn devtools_command_executes_storage_cookie_commands_for_webdriver_context
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -5785,7 +5853,7 @@ async fn devtools_command_executes_navigation_history_and_traverse() {
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -6365,7 +6433,7 @@ async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_mess
             activate: false,
         }))
         .await
-        .into_parts();
+        .into_created_target_parts();
     let DevToolsCommandResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {

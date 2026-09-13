@@ -320,6 +320,9 @@ pub(in crate::domains) fn worker_network_prepared_outputs(
     };
     let mut outputs = TargetPreparedOutputs::default();
     let occurrence = committed.occurrence();
+    if conn.worker_network_receipt_is_covered(committed) {
+        return outputs;
+    }
     let RendererNetworkSource::Worker(source) = &occurrence.source else {
         return outputs;
     };
@@ -632,10 +635,12 @@ impl CdpConnection {
         &mut self,
         mut workers: Vec<moli_core::browser::WorkerSnapshot>,
         sequence: moli_core::browser::BrowserSequence,
+        contexts: &[moli_core::browser::BrowserContextId],
     ) -> Vec<BackgroundProtocolEvent> {
         let mut outputs = TargetPreparedOutputs::default();
         let retired = self
             .browser_contexts()
+            .filter(|context| contexts.contains(&context.browser_context_id()))
             .flat_map(|context| {
                 context
                     .shared_worker_targets
@@ -730,6 +735,7 @@ impl CdpConnection {
         }
         let contexts = self
             .browser_contexts()
+            .filter(|context| contexts.contains(&context.browser_context_id()))
             .map(|context| context.id.clone())
             .collect::<Vec<_>>();
         for id in contexts {
@@ -1050,7 +1056,6 @@ fn register_dedicated_worker_target(
         return outputs;
     };
     let creator_is_worker = matches!(owner, DedicatedWorkerOwner::Worker(_));
-    let should_emit_created = conn.has_any_target_discovery();
     let created_snapshot = {
         let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
             return TargetPreparedOutputs::default();
@@ -1062,9 +1067,7 @@ fn register_dedicated_worker_target(
             info.name,
             owner_network_sessions.clone(),
         ));
-        should_emit_created
-            .then(|| context.devtools_target_info(&target_id))
-            .flatten()
+        context.devtools_target_info(&target_id)
     };
     if let Some(target_info) = created_snapshot {
         outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
@@ -1816,10 +1819,8 @@ fn record_dedicated_worker_target_console_message(
         else {
             continue;
         };
-        let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
+        let console_messages = target.pending_console_domain_messages(&session_id);
+        let runtime_messages = target.pending_runtime_console_messages(&session_id);
         if console_messages.is_empty() && runtime_messages.is_empty() {
             continue;
         }
@@ -1862,10 +1863,7 @@ fn prepare_dedicated_worker_target_retirement(
         Some(target_id) => target_id.to_owned(),
         None => return outputs,
     };
-    let destroyed_delta = conn
-        .has_any_target_discovery()
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let mut detached_delta = conn
         .browser_context_by_id(browser_context_id)
         .and_then(|context| {
@@ -1921,7 +1919,6 @@ fn register_shared_worker_target(
         return outputs;
     }
     let target_id = conn.gen_target_id();
-    let should_emit_created = conn.has_any_target_discovery();
     let auto_attach_owners = shared_worker_auto_attach_owner_sessions(conn);
     let attached_sessions = auto_attach_owners
         .iter()
@@ -1944,13 +1941,9 @@ fn register_shared_worker_target(
             info.url,
             info.name,
         ));
-        if should_emit_created {
-            let snapshot = context.devtools_target_info(&target_id);
-            debug_assert!(snapshot.is_some());
-            snapshot
-        } else {
-            None
-        }
+        let snapshot = context.devtools_target_info(&target_id);
+        debug_assert!(snapshot.is_some());
+        snapshot
     };
     let mut attached_outputs = Vec::new();
     for (owner_session_id, session_id, waiting_for_debugger) in attached_sessions {
@@ -2023,7 +2016,6 @@ fn register_service_worker_target_with_active_run(
         return outputs;
     }
     let target_id = conn.gen_target_id();
-    let should_emit_created = conn.has_any_target_discovery();
     let mut auto_attach_owners = service_worker_auto_attach_owner_sessions(conn)
         .into_iter()
         .map(|owner_session_id| {
@@ -2077,13 +2069,8 @@ fn register_service_worker_target_with_active_run(
         let version = target
             .version_identity(browser_context_id)
             .expect("inserted service-worker target must own its version scope");
-        let snapshot = if should_emit_created {
-            let snapshot = context.devtools_target_info(&target_id);
-            debug_assert!(snapshot.is_some());
-            snapshot
-        } else {
-            None
-        };
+        let snapshot = context.devtools_target_info(&target_id);
+        debug_assert!(snapshot.is_some());
         (snapshot, version)
     };
     let mut attached_outputs = Vec::new();
@@ -2508,7 +2495,6 @@ fn remove_shared_worker_target_with_reason(
     reason: &'static str,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    let should_emit_destroyed = conn.has_any_target_discovery();
     let target_id = {
         let Some(context) = conn.browser_context_by_id(browser_context_id) else {
             return outputs;
@@ -2521,9 +2507,7 @@ fn remove_shared_worker_target_with_reason(
         };
         target_id
     };
-    let destroyed_delta = should_emit_destroyed
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return outputs;
     };
@@ -2638,7 +2622,6 @@ fn remove_service_worker_target_with_reason(
     reason: &'static str,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    let should_emit_destroyed = conn.has_any_target_discovery();
     let service_worker_domain_sessions =
         service_worker::enabled_sessions_for_browser_context(conn, browser_context_id);
     let target_id = {
@@ -2659,9 +2642,7 @@ fn remove_service_worker_target_with_reason(
         }
         target_id
     };
-    let destroyed_delta = should_emit_destroyed
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return outputs;
     };
@@ -2927,7 +2908,7 @@ fn record_shared_worker_target_console_message(
         let attachment = target
             .protocol_attachment_identity(browser_context_id, &session_id)
             .expect("shared-worker output session must retain its exact attachment identity");
-        let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
+        let console_messages = target.pending_console_domain_messages(&session_id);
         if !console_messages.is_empty() {
             outputs.push(WorkerTargetLifecycleOutput::SharedWorkerConsoleMessages {
                 attachment: attachment.clone(),
@@ -2935,9 +2916,7 @@ fn record_shared_worker_target_console_message(
                 console_end: target.console_message_count(),
             });
         }
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
+        let runtime_messages = target.pending_runtime_console_messages(&session_id);
         if !runtime_messages.is_empty() {
             outputs.push(
                 WorkerTargetLifecycleOutput::SharedWorkerRuntimeConsoleMessages {
@@ -3026,7 +3005,7 @@ fn record_service_worker_target_console_message(
             continue;
         };
         let runtime = TargetServiceWorkerRuntimeAttachmentIdentity::new(attachment, run.clone());
-        let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
+        let console_messages = target.pending_console_domain_messages(&session_id);
         if !console_messages.is_empty() {
             let console_end = target.console_message_count();
             target.mark_console_domain_emitted(&session_id, console_end);
@@ -3036,9 +3015,7 @@ fn record_service_worker_target_console_message(
                 console_end,
             });
         }
-        let runtime_messages = target
-            .pending_runtime_console_messages(&session_id)
-            .to_vec();
+        let runtime_messages = target.pending_runtime_console_messages(&session_id);
         if !runtime_messages.is_empty() {
             let console_end = target.console_message_count();
             target.mark_runtime_console_emitted(&session_id, console_end);
@@ -3088,12 +3065,10 @@ fn record_service_worker_target_exception_message(
         else {
             continue;
         };
+        let exception_messages = target.pending_runtime_exception_messages(&session_id);
         let exception_start = target
             .exception_message_count()
-            .saturating_sub(target.pending_runtime_exception_messages(&session_id).len());
-        let exception_messages = target
-            .pending_runtime_exception_messages(&session_id)
-            .to_vec();
+            .saturating_sub(exception_messages.len());
         if !exception_messages.is_empty() {
             let exception_end = target.exception_message_count();
             target.mark_runtime_exception_emitted(&session_id, exception_end);
@@ -3142,7 +3117,7 @@ fn record_service_worker_target_fetch_diagnostic(
         else {
             continue;
         };
-        let diagnostics = target.pending_fetch_diagnostics(&session_id).to_vec();
+        let diagnostics = target.pending_fetch_diagnostics(&session_id);
         if !diagnostics.is_empty() {
             let diagnostic_end = target.fetch_diagnostic_count();
             let diagnostic_start = diagnostic_end.saturating_sub(diagnostics.len());
@@ -3220,20 +3195,16 @@ fn record_service_worker_target_runtime_inspector_messages(
         let mut pending_runtime_console = None;
         let mut pending_runtime_exceptions = None;
         if let Some(target) = exact_service_worker_runtime_target_mut(conn, &runtime) {
-            let pending_console = target
-                .pending_runtime_console_messages(&session_id)
-                .to_vec();
+            let pending_console = target.pending_runtime_console_messages(&session_id);
             if !pending_console.is_empty() {
                 let console_end = target.console_message_count();
                 target.mark_runtime_console_emitted(&session_id, console_end);
                 pending_runtime_console = Some((pending_console, console_end));
             }
+            let pending_exceptions = target.pending_runtime_exception_messages(&session_id);
             let exception_start = target
                 .exception_message_count()
-                .saturating_sub(target.pending_runtime_exception_messages(&session_id).len());
-            let pending_exceptions = target
-                .pending_runtime_exception_messages(&session_id)
-                .to_vec();
+                .saturating_sub(pending_exceptions.len());
             if !pending_exceptions.is_empty() {
                 let exception_end = target.exception_message_count();
                 target.mark_runtime_exception_emitted(&session_id, exception_end);
@@ -3723,17 +3694,19 @@ async fn emit_target_lifecycle_events(
                 replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
                     .await;
                 side_effects.extend_background_events(response_events);
-                if let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment)
-                    && !target
-                        .pending_runtime_console_messages(session_id)
-                        .is_empty()
-                {
-                    side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id,
-                        attachment.target_id(),
-                        target.pending_runtime_console_messages(session_id),
-                    ));
-                    target.mark_runtime_console_emitted(session_id, target.console_message_count());
+                if let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment) {
+                    let messages = target.pending_runtime_console_messages(session_id);
+                    if !messages.is_empty() {
+                        side_effects.extend_background_events(runtime_console_api_called_events(
+                            session_id,
+                            attachment.target_id(),
+                            &messages,
+                        ));
+                        target.mark_runtime_console_emitted(
+                            session_id,
+                            target.console_message_count(),
+                        );
+                    }
                 }
             }
         }
@@ -4083,9 +4056,7 @@ fn exact_shared_worker_pending_runtime_console(
     attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
 ) -> Option<(Vec<RuntimeConsoleMessageSnapshot>, usize)> {
     let target = exact_shared_worker_target(conn, attachment)?;
-    let messages = target
-        .pending_runtime_console_messages(attachment.session_id())
-        .to_vec();
+    let messages = target.pending_runtime_console_messages(attachment.session_id());
     (!messages.is_empty()).then(|| (messages, target.console_message_count()))
 }
 
@@ -5156,7 +5127,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dedicated_worker_destruction_retires_state_without_target_discovery() {
+    async fn dedicated_worker_lifecycle_retires_state_without_target_discovery() {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
         let outputs = register_dedicated_worker_target(
             &mut conn,
@@ -5165,13 +5136,25 @@ mod tests {
             Vec::new(),
             dedicated_worker_info(13, owner_renderer_page, "https://example.test/worker.js"),
         );
-        assert!(outputs.worker_target_lifecycle_outputs.is_empty());
         let target_id = conn
             .browser_context
             .as_ref()
             .and_then(|context| context.dedicated_worker_target_id_for_renderer_instance(13))
             .expect("DedicatedWorker target state")
             .to_owned();
+        let events = drain_target_lifecycle_events_for_test(&mut conn, outputs).await;
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.has_protocol_wire_message())
+        );
+        assert_eq!(events.len(), 1);
+        let Some(crate::devtools_runtime::AutomationEvent::TargetCreated(event)) =
+            events.into_iter().next().unwrap().into_parts().1
+        else {
+            panic!("native creation must reach automation")
+        };
+        assert_eq!(event.target_id.as_str(), target_id);
         assert_eq!(
             conn.target_registry_host_kind(&target_id),
             Some(DevToolsTargetKind::Worker)
@@ -5185,7 +5168,19 @@ mod tests {
         );
         let events = drain_target_lifecycle_events_for_test(&mut conn, retirement).await;
 
-        assert!(events.is_empty(), "disabled discovery must remain silent");
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.has_protocol_wire_message()),
+            "disabled discovery must remain silent on CDP"
+        );
+        assert_eq!(events.len(), 1);
+        let Some(crate::devtools_runtime::AutomationEvent::TargetDestroyed(event)) =
+            events.into_iter().next().unwrap().into_parts().1
+        else {
+            panic!("native retirement must reach automation")
+        };
+        assert_eq!(event.target_id.as_str(), target_id);
         assert!(
             conn.browser_context
                 .as_ref()
@@ -5356,15 +5351,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shared_worker_target_registration_tracks_undiscovered_targets_without_events() {
+    #[tokio::test]
+    async fn shared_worker_target_registration_tracks_undiscovered_targets_without_wire_events() {
         let mut conn = crate::test_support::connection();
         conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
+        let created =
+            register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(9));
+        let events = drain_target_lifecycle_events_for_test(&mut conn, created).await;
+        assert_eq!(events.len(), 1);
         assert!(
-            register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(9))
-                .is_empty(),
-            "target discovery disabled should suppress immediate targetCreated"
+            events
+                .iter()
+                .all(|event| !event.has_protocol_wire_message()),
+            "target discovery disabled should suppress CDP targetCreated"
         );
         let infos = conn.browser_context.as_ref().unwrap().target_infos();
         assert_eq!(infos.len(), 1);
@@ -5478,6 +5478,92 @@ mod tests {
                 target_id: target_id.clone(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn worker_lifecycle_has_one_primary_event_with_any_discovery_scope() {
+        use crate::devtools_runtime::AutomationEvent;
+
+        for service in [false, true] {
+            for discovery in [None, Some(None), Some(Some("SID-browser"))] {
+                let mut conn = crate::test_support::connection();
+                conn.set_root_target_discovery_enabled(false);
+                conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1"));
+                if let Some(owner) = discovery {
+                    conn.set_target_discovery_for_owner(
+                        owner,
+                        CdpTargetFilter::default_target_discovery(),
+                    );
+                }
+                let register = |conn: &mut CdpConnection| {
+                    if service {
+                        register_service_worker_target(conn, "BID-1", service_worker_info(31))
+                    } else {
+                        register_shared_worker_target(conn, "BID-1", None, shared_worker_info(31))
+                    }
+                };
+                let created = register(&mut conn);
+                let created = drain_target_lifecycle_events_for_test(&mut conn, created).await;
+                let repeated = register(&mut conn);
+                assert!(
+                    drain_target_lifecycle_events_for_test(&mut conn, repeated)
+                        .await
+                        .is_empty()
+                );
+                let retire = |conn: &mut CdpConnection| {
+                    if service {
+                        remove_service_worker_target(conn, "BID-1", 31, None)
+                    } else {
+                        remove_shared_worker_target(
+                            conn,
+                            "BID-1",
+                            SharedWorkerInstanceId::from_u64(31),
+                        )
+                    }
+                };
+                let retired = retire(&mut conn);
+                let retired = drain_target_lifecycle_events_for_test(&mut conn, retired).await;
+                for (events, created) in [(created, true), (retired, false)] {
+                    let primary = events
+                        .iter()
+                        .filter(|event| event.protocol_session_id().is_none())
+                        .filter_map(|event| event.clone().into_parts().1)
+                        .filter(|event| {
+                            if created {
+                                matches!(event, AutomationEvent::TargetCreated(_))
+                            } else {
+                                matches!(event, AutomationEvent::TargetDestroyed(_))
+                            }
+                        })
+                        .count();
+                    assert_eq!(
+                        primary, 1,
+                        "one lifecycle event: created={created}, service={service}, discovery={discovery:?}"
+                    );
+                    let wire = events
+                        .iter()
+                        .filter(|event| {
+                            event.protocol_method()
+                                == Some(if created {
+                                    "Target.targetCreated"
+                                } else {
+                                    "Target.targetDestroyed"
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(wire.len(), usize::from(discovery.is_some()));
+                    if let Some(owner) = discovery {
+                        assert_eq!(wire[0].protocol_session_id(), owner);
+                    }
+                }
+                let repeated = retire(&mut conn);
+                assert!(
+                    drain_target_lifecycle_events_for_test(&mut conn, repeated)
+                        .await
+                        .is_empty()
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -5638,9 +5724,12 @@ mod tests {
     fn service_worker_target_registration_auto_attaches_related_newer_version() {
         let mut conn = crate::test_support::connection();
         conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
-        assert!(
-            register_service_worker_target(&mut conn, "BID-1", service_worker_info(7)).is_empty()
-        );
+        assert!(matches!(
+            register_service_worker_target(&mut conn, "BID-1", service_worker_info(7))
+                .worker_target_lifecycle_outputs
+                .as_slice(),
+            [WorkerTargetLifecycleOutput::ServiceWorkerCreated { .. }]
+        ));
 
         conn.set_service_worker_auto_attach_related_owner(
             None,
@@ -5654,24 +5743,39 @@ mod tests {
         );
 
         assert!(
-            register_service_worker_target(&mut conn, "BID-1", service_worker_info(6)).is_empty(),
+            matches!(
+                register_service_worker_target(&mut conn, "BID-1", service_worker_info(6))
+                    .worker_target_lifecycle_outputs
+                    .as_slice(),
+                [WorkerTargetLifecycleOutput::ServiceWorkerCreated { .. }]
+            ),
             "older versions are not related autoAttach candidates"
         );
         let mut different_registration = service_worker_info(8);
         different_registration.registration_id = 42;
         assert!(
-            register_service_worker_target(&mut conn, "BID-1", different_registration).is_empty(),
+            matches!(
+                register_service_worker_target(&mut conn, "BID-1", different_registration)
+                    .worker_target_lifecycle_outputs
+                    .as_slice(),
+                [WorkerTargetLifecycleOutput::ServiceWorkerCreated { .. }]
+            ),
             "different registrations are not related autoAttach candidates"
         );
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(9))
             .worker_target_lifecycle_outputs;
-        assert_eq!(outputs.len(), 1);
-        let (attachment, prepared_attach) = service_worker_attached_output(&outputs[0])
+        assert_eq!(outputs.len(), 2);
+        let WorkerTargetLifecycleOutput::ServiceWorkerCreated { target_delta, .. } = &outputs[0]
+        else {
+            panic!("creation must precede related attachment")
+        };
+        let (attachment, prepared_attach) = service_worker_attached_output(&outputs[1])
             .expect("expected newer related service worker to auto attach");
         let session_id = attachment.session_id();
         let target_info = prepared_attach.target_info();
         let target_id = target_info_id_string(target_info);
+        assert_eq!(target_delta.target_id(), target_id);
         assert_eq!(target_info.kind, DevToolsTargetKind::ServiceWorker);
         assert!(
             prepared_attach
@@ -6366,10 +6470,12 @@ mod tests {
     fn service_worker_version_state_updates_without_a_domain_listener() {
         let mut conn = crate::test_support::connection();
         conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
-        assert!(
-            register_service_worker_target(&mut conn, "BID-1", service_worker_info(31)).is_empty(),
-            "an undiscovered target without domain listeners should not manufacture output"
-        );
+        assert!(matches!(
+            register_service_worker_target(&mut conn, "BID-1", service_worker_info(31))
+                .worker_target_lifecycle_outputs
+                .as_slice(),
+            [WorkerTargetLifecycleOutput::ServiceWorkerCreated { .. }]
+        ));
 
         let outputs = record_service_worker_target_version_updated(
             &mut conn,
@@ -6566,9 +6672,13 @@ mod tests {
         let outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(11))
                 .worker_target_lifecycle_outputs;
-        assert_eq!(outputs.len(), 1);
-        let (attachment, prepared_attach) = shared_worker_attached_output(&outputs[0])
+        assert_eq!(outputs.len(), 2);
+        let WorkerTargetLifecycleOutput::SharedWorkerCreated { target_delta } = &outputs[0] else {
+            panic!("creation must precede attachment")
+        };
+        let (attachment, prepared_attach) = shared_worker_attached_output(&outputs[1])
             .expect("auto-attach should prepare an exact Target.attachedToTarget");
+        assert_eq!(target_delta.target_id(), attachment.target_id());
         assert!(prepared_attach.target_info().attached);
         assert_eq!(
             attachment.target_id(),
@@ -7514,6 +7624,107 @@ mod tests {
                 .into_iter()
                 .all(|info| info["type"] != json!("shared_worker")),
             "late shared worker output must not recreate target state after destroy"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_worker_history_eviction_keeps_oversized_prepared_output_and_the_live_tail() {
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1"));
+        let instance = SharedWorkerInstanceId::from_u64(17);
+        let mut target = SharedWorkerTargetState::new(
+            instance,
+            "TID-shared-worker".into(),
+            None,
+            "https://example.test/shared-worker.js".into(),
+            "worker".into(),
+        );
+        target.attach_session("SID-worker".into());
+        target.set_console_enabled("SID-worker", true);
+        target.set_runtime_frontend_enabled("SID-worker", true);
+        target.record_runtime_execution_context_created_event(&worker_context_created_event(
+            90017, "worker",
+        ));
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .insert_shared_worker_target(target);
+        let payload_len = 12 * 1024 * 1024;
+        let oversized = record_shared_worker_target_console_message(
+            &mut conn,
+            "BID-1",
+            instance,
+            RendererSharedWorkerConsoleMessage {
+                message: "log: oversized".into(),
+                args: vec![json!({"type": "string", "value": "x".repeat(payload_len)})],
+                stack: None,
+            },
+        );
+        let tail = record_shared_worker_target_console_message(
+            &mut conn,
+            "BID-1",
+            instance,
+            RendererSharedWorkerConsoleMessage {
+                message: "log: tail".into(),
+                args: Vec::new(),
+                stack: None,
+            },
+        );
+        let target = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .shared_worker_target("TID-shared-worker")
+            .unwrap();
+        assert_eq!(
+            target.retained_output_stats().0,
+            1,
+            "the history released the oversized record"
+        );
+        assert_eq!(target.console_message_count(), 2);
+        let events = drain_target_lifecycle_events_for_test(&mut conn, oversized).await;
+        let messages = events
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+        let runtime = messages
+            .iter()
+            .find(|message| message["method"] == "Runtime.consoleAPICalled")
+            .unwrap();
+        assert_eq!(
+            runtime["params"]["args"][0]["value"]
+                .as_str()
+                .unwrap()
+                .len(),
+            payload_len
+        );
+        assert_eq!(runtime["params"]["executionContextId"], 90017);
+        assert_eq!(
+            messages.len(),
+            2,
+            "Console and Runtime each deliver the frozen message once"
+        );
+        let events = drain_target_lifecycle_events_for_test(&mut conn, tail).await;
+        assert_eq!(
+            events.len(),
+            2,
+            "eviction must not swallow the later live message"
+        );
+        let target = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .shared_worker_target("TID-shared-worker")
+            .unwrap();
+        assert!(
+            target
+                .pending_runtime_console_messages("SID-worker")
+                .is_empty()
+        );
+        assert!(
+            target
+                .pending_console_domain_messages("SID-worker")
+                .is_empty()
         );
     }
 

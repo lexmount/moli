@@ -47,7 +47,7 @@ pub use events::{
     BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
     DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationError,
     NavigationFailureReason, NavigationFetchFailure, NavigationRequest, NavigationResponseSnapshot,
-    NavigationSnapshot, WebContentsSelection, WebContentsSnapshot,
+    NavigationSnapshot, WebContentsSelection, WebContentsSnapshot, WorkerStateSnapshot,
 };
 pub use navigation_decision::{
     DocumentDecisionProvider, NavigationDecision, NavigationDecisionSnapshot,
@@ -96,7 +96,7 @@ macro_rules! define_browser_identity {
                 Self(allocate_nonzero_u64(&$counter, $label))
             }
 
-            /// Returns the opaque value for diagnostics and migration bridges.
+            /// Returns the opaque value for diagnostics and external correlation.
             pub const fn get(self) -> u64 {
                 self.0.get()
             }

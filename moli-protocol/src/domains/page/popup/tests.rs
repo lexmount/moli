@@ -184,11 +184,8 @@ async fn removed_opener_downgrades_access_without_rebinding_to_current_target() 
     )
     .await;
     install_peer(&mut conn);
-    conn.close_browser_web_contents_async(
-        document.web_contents(),
-        PageCloseNotifications::BrowserEvent,
-    )
-    .await;
+    conn.close_browser_web_contents_async(document.web_contents(), PageCloseNotifications::All)
+        .await;
     let targets = project(&mut conn, openings).await;
     let info = conn
         .browser_context_by_id("BID-source")
@@ -442,7 +439,7 @@ async fn closed_native_popup_cannot_be_resurrected_by_a_late_observation() {
         .await
         .unwrap()
         .web_contents;
-    conn.close_browser_web_contents_async(popup, PageCloseNotifications::BrowserEvent)
+    conn.close_browser_web_contents_async(popup, PageCloseNotifications::All)
         .await;
     assert!(project(&mut conn, openings).await.is_empty());
     assert!(

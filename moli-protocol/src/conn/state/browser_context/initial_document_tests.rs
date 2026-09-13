@@ -18,7 +18,7 @@ fn context() -> (BrowserContext, BrowserHandle, DocumentDecisionProvider) {
     let browser = BrowserService::start().unwrap().handle();
     let provider = browser.register_document_decision_provider().unwrap();
     let mut context = BrowserContext::new_with_browser_for_test(&browser, "initial-context");
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     context.set_active_target_id(TARGET);
     context.begin_active_target_initial_empty_document("about:blank".into());
     (context, browser, provider)

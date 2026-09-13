@@ -59,39 +59,6 @@ mod tests {
         }
         assert!(scheduler.bidi_event_sources.is_empty());
     }
-
-    #[tokio::test]
-    async fn concurrent_discovery_leases_restore_the_original_setting() {
-        let service = moli_core::browser::BrowserService::start().unwrap();
-        let (mut scheduler, _) = CdpScheduler::new_with_initial_state_runtime_config(
-            service.handle(),
-            moli_protocol::CdpInitialStoragePartition::memory(),
-            Default::default(),
-        );
-        for initial in [false, true] {
-            for order in [[1, 2], [2, 1]] {
-                scheduler.set_bidi_frontend_turn(None);
-                scheduler.replace_target_discovery_enabled(initial);
-                for id in [1, 2] {
-                    scheduler.set_bidi_frontend_turn(Some(id));
-                    assert!(!scheduler.replace_target_discovery_enabled(true));
-                }
-                scheduler.set_bidi_frontend_turn(Some(order[0]));
-                assert!(scheduler.replace_target_discovery_enabled(false));
-                assert!(scheduler.conn.replace_root_target_discovery_enabled(true));
-                scheduler.set_bidi_frontend_turn(Some(order[1]));
-                assert!(scheduler.replace_target_discovery_enabled(false));
-                assert_eq!(
-                    scheduler
-                        .conn
-                        .replace_root_target_discovery_enabled(initial),
-                    initial
-                );
-                assert!(scheduler.bidi_event_sources.is_empty());
-                assert!(scheduler.bidi_initial_target_discovery.is_none());
-            }
-        }
-    }
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -100,7 +67,6 @@ pub(super) enum BidiEventSource {
     Network(String),
     FileDialog(String),
     Download,
-    TargetDiscovery,
 }
 
 /// Only already projected envelopes cross the frontend boundary. Renderer
@@ -131,6 +97,15 @@ impl CdpScheduler {
         self.conn
             .webdriver_automation_event_is_visible(session, event, fallback_target)
     }
+
+    pub(crate) fn webdriver_bidi_automation_event<'a>(
+        &self,
+        session: Option<&str>,
+        event: &'a moli_protocol::devtools_runtime::AutomationEvent,
+    ) -> std::borrow::Cow<'a, moli_protocol::devtools_runtime::AutomationEvent> {
+        self.conn.webdriver_bidi_automation_event(session, event)
+    }
+
     pub(crate) fn publish_devtools_output(&self, output: ProtocolOutputSequence) {
         if !output.is_empty()
             && let Some(tx) = &self.frontend_output_tx
@@ -144,7 +119,7 @@ impl CdpScheduler {
             BidiEventSource::Runtime(target)
             | BidiEventSource::Network(target)
             | BidiEventSource::FileDialog(target) => target != target_id,
-            BidiEventSource::Download | BidiEventSource::TargetDiscovery => true,
+            BidiEventSource::Download => true,
         });
     }
 

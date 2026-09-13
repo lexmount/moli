@@ -172,6 +172,22 @@ async fn run_page_service_worker_internal_tasks_until_request_consumed_for_test(
     panic!("{message}: exact ServiceWorker request exceeded the bounded 32-turn FIFO budget");
 }
 
+async fn drain_page_service_worker_internal_tasks_for_test(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) {
+    for _ in 0..32 {
+        if !page
+            .run_one_service_worker_internal_task_executor_turn(loader)
+            .await
+            .expect("ServiceWorker internal FIFO task should complete")
+        {
+            return;
+        }
+    }
+    panic!("ServiceWorker internal FIFO exceeded the bounded 32-turn budget");
+}
+
 async fn assert_initial_about_blank_child_completed_through_page_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     loader: &ResourceRequestClient,
@@ -4397,12 +4413,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("retired-generation lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "retired-generation lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("globalThis.__mainServiceWorkerLifecycle")
             .expect("main lifecycle state should evaluate"),
@@ -4418,12 +4429,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("rebound lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "rebound lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("globalThis.__mainServiceWorkerLifecycle")
             .expect("main rebound lifecycle state should evaluate"),

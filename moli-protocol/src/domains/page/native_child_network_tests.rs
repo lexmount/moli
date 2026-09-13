@@ -68,7 +68,7 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
                 None,
             )
             .unwrap();
-        context.bind_page_navigation_engines(Default::default(), None);
+        context.bind_page_navigation_engines(Default::default());
         let (sender, mut output) = moli_core::renderer_output_transport_channel();
         context
             .set_renderer_output_transport_sender(sender)

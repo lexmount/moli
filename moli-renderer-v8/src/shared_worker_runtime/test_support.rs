@@ -223,7 +223,7 @@ pub(super) fn connect_matching(
     key: SharedWorkerKey,
     descriptor: SharedWorkerDescriptor,
 ) -> SharedWorkerConnectAction<SharedRendererSharedWorkerHost> {
-    runtime_service.connect_matching(key, descriptor, runtime_service.next_client_owner_id())
+    runtime_service.connect_matching(key, descriptor)
 }
 
 pub(super) fn finish_loading_matching(
@@ -250,17 +250,6 @@ pub(super) fn matching_clients_for_instance(
 
 pub(super) fn matching_is_empty(runtime_service: &SharedWorkerRuntimeService) -> bool {
     runtime_service.matching_is_empty()
-}
-
-pub(super) fn active_owner_ids_for_instance(
-    runtime_service: &SharedWorkerRuntimeService,
-    instance_id: SharedWorkerInstanceId,
-) -> Vec<moli_shared_worker::SharedWorkerClientOwnerId> {
-    runtime_service.active_owner_ids_for_instance(instance_id)
-}
-
-pub(super) fn owner_lifecycle_is_empty(runtime_service: &SharedWorkerRuntimeService) -> bool {
-    runtime_service.owner_lifecycle_is_empty()
 }
 
 pub(super) fn install_owner_wake_sender(

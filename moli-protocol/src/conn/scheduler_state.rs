@@ -136,7 +136,7 @@ impl CdpTurnOutcome {
         (
             protocol_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(crate::testing::protocol_event_into_wire_message)
                 .collect(),
             self.scheduler_events,
         )

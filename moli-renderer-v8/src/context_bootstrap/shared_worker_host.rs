@@ -22,14 +22,14 @@ use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::{SharedStorageBucketStore, WeakIndexedDbManager},
     document_runtime::DomHandle,
-    native_bridge::WorkerOwnerScope,
+    native_bridge::{WindowExecutionContextIdentity, WorkerOwnerScope},
     network::ResourceRequestClient,
     page_task_queue::RendererWorkerHostBridgeEventSender,
     runtime::RendererBrowserContextRuntime,
     shared_worker_runtime::{
-        SharedWorkerClientEndpointReceiver, SharedWorkerClientError,
-        SharedWorkerClientFrameIdentity, SharedWorkerExecutionPolicy, SharedWorkerLaunchContext,
-        SharedWorkerLaunchParams, SharedWorkerScriptLoad, SharedWorkerScriptRequestPolicy,
+        SharedWorkerClientEndpointReceiver, SharedWorkerClientError, SharedWorkerExecutionPolicy,
+        SharedWorkerLaunchContext, SharedWorkerLaunchParams, SharedWorkerScriptLoad,
+        SharedWorkerScriptRequestPolicy,
     },
     types::SubresourcePolicyContext,
     util::{
@@ -143,7 +143,7 @@ struct SharedWorkerConstructorContext {
     browser_context_runtime: RendererBrowserContextRuntime,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
-    client_identity: SharedWorkerClientFrameIdentity,
+    client_identity: WindowExecutionContextIdentity,
     worker_owner_child_handle: Option<DomHandle>,
     client_event_realm: crate::page_task_queue::RendererPageSharedWorkerClientEventRealmSender,
     worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
@@ -368,7 +368,6 @@ fn shared_worker_constructor_callback_inner<'s>(
         launch_context,
         client_port_id,
         worker_port_id,
-        context.client_identity.owner_id(),
         parent_service_worker_client_id,
         context.client_event_realm,
         context.worker_host_bridge_sender,
@@ -465,12 +464,7 @@ fn shared_worker_constructor_context(
             host.document_content_security_policies().to_vec()
         };
         document_content_security_policies.extend(document_meta_content_security_policies);
-        let client_owner_id = child_handle
-            .map(|handle| host.shared_worker_client_owner_id_for_child_context(handle))
-            .unwrap_or_else(|| host.shared_worker_client_owner_id());
         let execution_context = host.current_runtime_window_execution_context_identity(scope)?;
-        let client_identity =
-            SharedWorkerClientFrameIdentity::new(client_owner_id, execution_context);
         let client_event_realm = host
             .page_shared_worker_client_event_sender()
             .bind_execution_context(execution_context);
@@ -506,7 +500,7 @@ fn shared_worker_constructor_context(
             browser_context_runtime: host.browser_context_runtime(),
             indexed_db_manager: host.indexed_db_manager(),
             storage_bucket_store: host.storage_bucket_store(),
-            client_identity,
+            client_identity: execution_context,
             worker_owner_child_handle: child_handle,
             client_event_realm,
             worker_host_bridge_sender,

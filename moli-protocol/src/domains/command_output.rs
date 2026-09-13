@@ -358,7 +358,7 @@ impl CommandOutputPlan {
         out.extend(
             self.into_background_events(command_id, session_id)
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(crate::testing::protocol_event_into_wire_message),
         );
     }
 

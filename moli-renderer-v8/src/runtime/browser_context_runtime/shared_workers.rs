@@ -4,20 +4,16 @@ use crate::{
     },
     worker_owner_wake::WorkerOwnerWakeRoutes,
 };
-use moli_shared_worker::{
-    SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerDescriptor, SharedWorkerInstanceId,
-};
+use moli_shared_worker::{SharedWorkerClientId, SharedWorkerDescriptor, SharedWorkerInstanceId};
 use parking_lot::Mutex;
 
 use super::RendererBrowserContextRuntime;
 use crate::runtime::RendererOwnerLocalHostId;
 
 /// Defers the browser-context SharedWorker registry until the first actual
-/// `connect_shared_worker` call. ID allocation and owner routing do not require
-/// the registry.
+/// `connect_shared_worker` call. Owner wake routing does not require the registry.
 pub(super) struct LazySharedWorkerRuntime {
     state: Mutex<LazySharedWorkerRuntimeState>,
-    client_owner_id_allocator: crate::shared_worker_runtime::SharedWorkerClientOwnerIdAllocator,
     worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
@@ -48,7 +44,6 @@ impl LazySharedWorkerRuntime {
                 owner_wake_senders: WorkerOwnerWakeRoutes::default(),
                 owner_local_host_id: None,
             }),
-            client_owner_id_allocator: Default::default(),
             worker_lifecycle,
             output_transport,
         }
@@ -61,7 +56,6 @@ impl LazySharedWorkerRuntime {
     ) -> Self {
         service.configure_target_output_streams(worker_lifecycle.clone(), output_transport.clone());
         Self {
-            client_owner_id_allocator: service.client_owner_id_allocator(),
             state: Mutex::new(LazySharedWorkerRuntimeState::Live(service)),
             worker_lifecycle,
             output_transport,
@@ -82,10 +76,7 @@ impl LazySharedWorkerRuntime {
         };
         let owner_wake_senders = std::mem::take(owner_wake_senders);
         let owner_local_host_id = *owner_local_host_id;
-        let service = crate::shared_worker_runtime::
-            new_shared_worker_runtime_service_with_client_owner_id_allocator(
-                self.client_owner_id_allocator.clone(),
-            );
+        let service = crate::shared_worker_runtime::SharedWorkerRuntimeService::default();
         service.configure_target_output_streams(
             self.worker_lifecycle.clone(),
             self.output_transport.clone(),
@@ -110,10 +101,6 @@ impl LazySharedWorkerRuntime {
 
     pub(super) fn is_initialized(&self) -> bool {
         matches!(*self.state.lock(), LazySharedWorkerRuntimeState::Live(_))
-    }
-
-    pub(super) fn allocate_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.client_owner_id_allocator.allocate()
     }
 
     pub(super) fn add_owner_wake_sender(&self, sender: SharedWorkerRuntimeOwnerWakeSender) {
@@ -176,10 +163,6 @@ impl RendererBrowserContextRuntime {
             .connect(descriptor, params)
     }
 
-    pub(crate) fn next_shared_worker_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.inner.shared_worker_runtime.allocate_client_owner_id()
-    }
-
     pub(crate) fn drain_shared_worker_service_lane(&self) -> usize {
         self.inner
             .shared_worker_runtime
@@ -233,8 +216,8 @@ mod owner_wake_retirement_tests {
                 };
                 assert_eq!(
                     owner_wake_senders.len_for_test(),
-                    2,
-                    "only the peer and current renderer remain"
+                    3,
+                    "only the Context task, peer and current test receiver remain"
                 );
             }
             drop(receiver);
@@ -251,7 +234,7 @@ mod owner_wake_retirement_tests {
         };
         assert_eq!(
             owner_wake_senders.len_for_test(),
-            1,
+            2,
             "closed admission must not reintroduce stale routes"
         );
     }

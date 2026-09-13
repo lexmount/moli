@@ -2249,7 +2249,7 @@ mod native_navigation_projection_tests {
             let browser = service.handle();
             let _provider = browser.register_document_decision_provider().unwrap();
             let mut context = BrowserContext::new_with_browser_for_test(&browser, "BID-page-slot");
-            context.bind_page_navigation_engines(Default::default(), None);
+            context.bind_page_navigation_engines(Default::default());
             assert!(context.register_page_target_fixture(
                 PAGE_SLOT_TEST_TARGET.into(),
                 None,
@@ -2641,7 +2641,7 @@ mod pending_renderer_page_tests {
         let mut context =
             BrowserContext::new_with_browser_for_test(&browser, "BID-initial-binding");
         context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
-        context.bind_page_navigation_engines(Default::default(), None);
+        context.bind_page_navigation_engines(Default::default());
         let first = context
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,

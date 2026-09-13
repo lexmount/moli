@@ -1,7 +1,7 @@
 use moli_fetch::{FetchCancelHandle, Request, RequestCredentialsMode, ScriptFetchRequestMetadata};
 use moli_shared_worker::{
-    SharedWorkerClientOwnerId, SharedWorkerCredentialsMode, SharedWorkerDescriptor,
-    SharedWorkerKey, SharedWorkerSameSiteCookies, SharedWorkerScriptType,
+    SharedWorkerCredentialsMode, SharedWorkerDescriptor, SharedWorkerKey,
+    SharedWorkerSameSiteCookies, SharedWorkerScriptType,
 };
 use url::Url;
 
@@ -67,7 +67,6 @@ pub(crate) struct SharedWorkerLaunchParams {
     pub(super) launch_context: SharedWorkerLaunchContext,
     pub(super) client_port_id: MessagePortId,
     pub(super) worker_port_id: MessagePortId,
-    pub(super) client_owner_id: SharedWorkerClientOwnerId,
     pub(super) client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
     pub(super) worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
     pub(super) parent_service_worker_client_id: Option<ServiceWorkerClientId>,
@@ -112,7 +111,6 @@ impl SharedWorkerLaunchParams {
         launch_context: SharedWorkerLaunchContext,
         client_port_id: MessagePortId,
         worker_port_id: MessagePortId,
-        client_owner_id: SharedWorkerClientOwnerId,
         parent_service_worker_client_id: Option<ServiceWorkerClientId>,
         client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
         worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
@@ -123,7 +121,6 @@ impl SharedWorkerLaunchParams {
             launch_context,
             client_port_id,
             worker_port_id,
-            client_owner_id,
             client_event_realm,
             worker_host_bridge_sender,
             parent_service_worker_client_id,

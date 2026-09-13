@@ -13,7 +13,8 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use crate::devtools_runtime::{
-    DevToolsCommandContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
+    AutomationEvent, DevToolsCommandContext, DevToolsTargetFilterEntry, DevToolsTargetInfo,
+    DevToolsTargetKind,
 };
 use crate::domains::command_output::BackgroundProtocolEventBuffer;
 
@@ -612,7 +613,7 @@ pub(crate) use state::{
 pub(crate) use state::{HistoryTraversalDestination, ResolvedHistoryTraversal};
 use target::{
     DevToolsAgentHostRegistry, TargetClosurePlan, TargetHostDelta,
-    target_destroyed_automation_events,
+    with_primary_target_lifecycle_event,
 };
 pub(crate) use target::{
     DevToolsSessionHandlerSet, PreparedTargetAttach, PreparedTargetHostClosure,
@@ -2957,14 +2958,6 @@ impl CdpConnection {
         self.target_discovery_enabled
     }
 
-    pub fn replace_root_target_discovery_enabled(&mut self, enabled: bool) -> bool {
-        let previous = self.target_discovery_enabled;
-        if previous != enabled {
-            self.set_root_target_discovery_enabled(enabled);
-        }
-        previous
-    }
-
     pub fn set_root_target_discovery_enabled(&mut self, enabled: bool) {
         if enabled {
             self.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
@@ -2997,12 +2990,16 @@ impl CdpConnection {
         self.agent_hosts.has_any_target_info_observer()
     }
 
-    fn exact_target_created_events_for_all_discovery_owners(
+    fn target_creation_events(
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.agent_hosts
-            .target_created_events_for_all_discovery_owners(target_info)
+        with_primary_target_lifecycle_event(
+            self.agent_hosts
+                .target_created_events_for_all_discovery_owners(target_info.clone()),
+            target_info,
+            AutomationEvent::TargetCreated,
+        )
     }
 
     pub(crate) fn target_created_event_plan(&mut self, target_id: &str) -> TargetEventPlan {
@@ -3160,7 +3157,7 @@ impl CdpConnection {
                 else {
                     return Vec::new();
                 };
-                self.exact_target_created_events_for_all_discovery_owners(target_info)
+                self.target_creation_events(target_info)
             }
             TargetHostDelta::InfoChanged { target_id } => {
                 let Some(target_info) =
@@ -3176,7 +3173,7 @@ impl CdpConnection {
                 else {
                     return Vec::new();
                 };
-                self.exact_target_destroyed_events_for_all_discovery_owners(target_info)
+                self.target_retirement_events(target_info)
             }
         }
     }
@@ -3193,12 +3190,16 @@ impl CdpConnection {
             .target_info_changed_events_for_all_observer_owners(target_info)
     }
 
-    fn exact_target_destroyed_events_for_all_discovery_owners(
+    fn target_retirement_events(
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.agent_hosts
-            .target_destroyed_events_for_all_discovery_owners(target_info)
+        with_primary_target_lifecycle_event(
+            self.agent_hosts
+                .target_destroyed_events_for_all_discovery_owners(target_info.clone()),
+            target_info,
+            AutomationEvent::TargetDestroyed,
+        )
     }
 
     pub(crate) fn target_crashed_events_for_all_discovery_owners(
@@ -3209,23 +3210,6 @@ impl CdpConnection {
     ) -> Vec<BackgroundProtocolEvent> {
         self.agent_hosts
             .target_crashed_events_for_all_discovery_owners(target_id, status, error_code)
-    }
-
-    pub(crate) fn target_destroyed_automation_events(
-        &self,
-        target_info: DevToolsTargetInfo,
-    ) -> Vec<BackgroundProtocolEvent> {
-        target_destroyed_automation_events(
-            self.project_page_tab_target_infos_for_destruction(target_info),
-        )
-    }
-
-    fn project_page_tab_target_infos_for_destruction(
-        &self,
-        target_info: DevToolsTargetInfo,
-    ) -> Vec<DevToolsTargetInfo> {
-        self.agent_hosts
-            .project_page_tab_target_infos_for_destruction(target_info)
     }
 
     #[cfg(test)]

@@ -1528,7 +1528,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .drain(..position)
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 let response = events
                     .remove(0)
@@ -1545,7 +1545,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 return;
             }
@@ -1559,14 +1559,14 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 return;
             };
             self.sent.extend(
                 events
                     .drain(..position)
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(protocol_event_into_wire_message),
             );
             let message = events.remove(0).into_protocol_message();
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
@@ -1747,7 +1747,7 @@ impl TestContext {
             self.sent.extend(
                 response_events
                     .into_iter()
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(protocol_event_into_wire_message),
             );
             if !suffix_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
@@ -1948,8 +1948,18 @@ impl TestContext {
 fn protocol_events_into_messages(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(protocol_event_into_wire_message)
         .collect()
+}
+
+pub(crate) fn protocol_event_into_wire_message(event: BackgroundProtocolEvent) -> Option<Value> {
+    assert!(
+        event.as_runtime_inspector_response_ready().is_none(),
+        "route the typed renderer response before materializing test wire output"
+    );
+    event
+        .has_protocol_wire_message()
+        .then(|| event.into_protocol_message())
 }
 
 #[cfg(test)]
@@ -1972,7 +1982,7 @@ pub(crate) async fn drain_scheduler_events_like_scheduler(
         conn,
         out,
         scheduler_events,
-        BackgroundProtocolEvent::into_protocol_message,
+        protocol_event_into_wire_message,
     )
     .await;
 }
@@ -1997,7 +2007,7 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
     conn: &mut CdpConnection,
     out: &mut Vec<Value>,
     scheduler_events: Vec<CdpSchedulerEvent>,
-    materialize_event: fn(BackgroundProtocolEvent) -> Value,
+    materialize_event: fn(BackgroundProtocolEvent) -> Option<Value>,
 ) {
     let mut queue = VecDeque::new();
     enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
@@ -2010,15 +2020,15 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
             .complete_ready_protocol_scheduler_work_turn(protocol_work)
             .await
             .into_protocol_event_parts();
-        out.extend(events.into_iter().map(materialize_event));
+        out.extend(events.into_iter().filter_map(materialize_event));
         enqueue_scheduler_events_like_scheduler(&mut queue, nested_scheduler_events);
         enqueue_scheduler_events_like_scheduler(&mut queue, conn.take_scheduler_events());
     }
 }
 
 #[cfg(test)]
-fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Value {
-    event.into_parts().0
+fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Option<Value> {
+    Some(event.into_parts().0)
 }
 
 #[cfg(test)]

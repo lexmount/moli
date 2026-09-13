@@ -372,6 +372,109 @@ async fn service_worker_internal_action_is_checkpoint_only() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn service_worker_window_client_owner_requests_reject_on_stale_document_owner() {
+    run_page_vm_async_test(async move {
+        use crate::types::{
+            ServiceWorkerClientNavigateRequestCompletion,
+            ServiceWorkerClientsOpenWindowRequestCompletion,
+        };
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://stale-worker-client.test/page.html")?,
+            );
+        let target = page_vm
+            .vm()
+            .service_worker_internal_window_client_target_for_test(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("initial Window client target");
+        let root = page_vm.document_lifecycle.identity().document;
+        page_vm.vm_mut().eval("document.open(); 'replaced'")?;
+        let current = page_vm
+            .vm()
+            .service_worker_internal_window_client_target_for_test(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("replacement Window client target");
+        assert_ne!(target.document_owner, current.document_owner);
+        assert_eq!(root, page_vm.document_lifecycle.identity().document);
+        let focused = page_vm.vm_mut().eval("document.hasFocus()")?;
+        let sender = page_vm.service_worker_task_sender_for_root_for_test(root);
+        for kind in [
+            RendererServiceWorkerInternalTaskKind::ClientNavigateRequest,
+            RendererServiceWorkerInternalTaskKind::ClientFocusRequest,
+            RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest,
+        ] {
+            let source_version_id = ServiceWorkerVersionId::from_u64_for_test(1);
+            let source_run = crate::runtime::RendererServiceWorkerRunIdentity::fresh();
+            match kind {
+                RendererServiceWorkerInternalTaskKind::ClientNavigateRequest => sender
+                    .send_service_worker_client_navigate_request(
+                        ServiceWorkerClientNavigateRequestCompletion {
+                            target,
+                            request_id: 101,
+                            source_version_id,
+                            source_run,
+                            url: Url::parse("https://stale-worker-client.test/navigate.html")?,
+                        },
+                    ),
+                RendererServiceWorkerInternalTaskKind::ClientFocusRequest => sender
+                    .send_service_worker_client_focus_request(
+                        ServiceWorkerClientFocusRequestCompletion {
+                            target,
+                            request_id: 102,
+                            source_version_id,
+                            source_run,
+                        },
+                    ),
+                RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest => sender
+                    .send_service_worker_clients_open_window_request(
+                        ServiceWorkerClientsOpenWindowRequestCompletion {
+                            host: target,
+                            request_id: 103,
+                            source_version_id,
+                            source_run,
+                            url: Url::parse("https://stale-worker-client.test/popup.html")?,
+                        },
+                    ),
+                _ => unreachable!(),
+            }
+            .expect("stale Window request enters the current root's typed source");
+            let task = page_vm
+                .take_service_worker_internal_body_task_for_test()
+                .expect("the admitted request must be selected");
+            let outcome = page_vm.apply_selected_page_service_worker_internal_turn(task)?;
+            assert_eq!(outcome.action.task_kind, kind);
+            assert_eq!(
+                outcome.action.target_effect,
+                PageServiceWorkerInternalTargetEffect::CurrentRootTaskHadNoExactTarget,
+                "each stale Window request must return its rejection result",
+            );
+            let completion = outcome.action.into_page_task_completion();
+            assert!(matches!(completion, PageTaskCompletion::NoCompletion));
+            page_vm
+                .finish_selected_page_task_completion(completion, &loader)
+                .await?;
+            assert!(
+                page_vm
+                    .vm_mut()
+                    .take_pending_location_navigation_with_seed()
+                    .is_none()
+            );
+            assert!(page_vm.vm_mut().take_pending_popup_activations().is_empty());
+            assert!(!page_vm.vm().has_pending_lightweight_popup_document_loads());
+            assert_eq!(page_vm.vm_mut().eval("document.hasFocus()")?, focused);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stale Window client requests must retain exact Document authorization");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn service_worker_lifecycle_completion_reconciles_listener_document_open() {
     run_page_vm_async_test(async move {
         let loader =

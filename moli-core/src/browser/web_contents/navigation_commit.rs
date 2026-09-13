@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{DocumentHost, InheritedDocumentPolicy, WebContents};
 
-/// Browser-only commit participant in the private migration residence (20/24b).
+/// Prepared navigation bound to the Browser objects fixed at admission.
 /// No frontend identity, renderer attachment, arbitrary callback or Page lease.
 #[derive(Debug)]
 pub struct PreparedDocumentNavigation {

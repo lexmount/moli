@@ -1,5 +1,8 @@
 use super::*;
 
+mod shared_page_creation;
+mod shared_page_retirement;
+
 #[tokio::test]
 async fn native_browser_page_is_discovered_shared_and_retained_across_frontends() {
     use moli_core::browser::{
@@ -21,7 +24,7 @@ async fn native_browser_page_is_discovered_shared_and_retained_across_frontends(
             None,
         )
         .unwrap();
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     let (native, _) = context
         .create_web_contents(WebContentsCreation::with_initial_document(
             "about:blank#native-running".into(),
@@ -263,7 +266,7 @@ async fn native_browser_page_is_discovered_shared_and_retained_across_frontends(
         context_count + 1
     );
     // Native navigation configuration must preserve an already-installed observer.
-    later_context.bind_page_navigation_engines(Default::default(), None);
+    later_context.bind_page_navigation_engines(Default::default());
     let (later, _) = later_context
         .create_web_contents(WebContentsCreation::with_initial_document(
             "about:blank#native-later".into(),

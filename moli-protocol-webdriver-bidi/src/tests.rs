@@ -3177,7 +3177,7 @@ fn session_subscribe_filters_protocol_browsing_context_context_created_events() 
         }),
         &mut registry,
     );
-    record_bidi_context_tree(&mut state, &[("TID-1", "default")]);
+    record_bidi_context_tree(&mut state, &[("TID-1", "BID-1")]);
     let subscribe = state.handle_message_with_session_registry(
         json!({
             "id": 2_u64,
@@ -3239,7 +3239,7 @@ fn session_subscribe_filters_protocol_browsing_context_context_created_events() 
     assert_eq!(events[0]["params"]["children"], Value::Null);
     assert_eq!(events[0]["params"]["clientWindow"], json!("TID-1"));
     assert_eq!(events[0]["params"]["originalOpener"], json!("TID-opener"));
-    assert_eq!(events[0]["params"]["userContext"], json!("default"));
+    assert_eq!(events[0]["params"]["userContext"], json!("BID-1"));
     assert_eq!(events[0]["params"]["parent"], Value::Null);
 }
 
@@ -3319,7 +3319,7 @@ fn session_subscribe_filters_automation_browsing_context_context_destroyed_event
         }),
         &mut registry,
     );
-    record_bidi_context_tree(&mut state, &[("TID-1", "default")]);
+    record_bidi_context_tree(&mut state, &[("TID-1", "BID-1")]);
     let subscribe = state.handle_message_with_session_registry(
         json!({
             "id": 2_u64,
@@ -3363,7 +3363,7 @@ fn session_subscribe_filters_automation_browsing_context_context_destroyed_event
     assert_eq!(events[0]["params"]["children"], json!([]));
     assert_eq!(events[0]["params"]["clientWindow"], json!("TID-1"));
     assert_eq!(events[0]["params"]["originalOpener"], Value::Null);
-    assert_eq!(events[0]["params"]["userContext"], json!("default"));
+    assert_eq!(events[0]["params"]["userContext"], json!("BID-1"));
     assert_eq!(events[0]["params"]["parent"], Value::Null);
 }
 
@@ -6091,7 +6091,7 @@ fn session_subscribe_replays_buffered_log_entry_for_user_context() {
                 "targetId": "FRAME-default",
                 "type": "page",
                 "url": "about:blank",
-                "browserContextId": "BID-1"
+                "browserContextId": "BID-default"
             }
         }
     });
@@ -7107,6 +7107,7 @@ fn serializes_browser_user_context_results_to_bidi_response() {
         get["result"]["userContexts"],
         json!([
             {"userContext": "default"},
+            {"userContext": "BID-2"},
             {"userContext": "user-context-1"}
         ])
     );
@@ -7380,7 +7381,7 @@ fn serializes_devtools_get_targets_result_to_bidi_contexts() {
     );
     assert_eq!(
         response["result"]["contexts"][0]["userContext"],
-        json!("default")
+        json!("BID-1")
     );
     assert_eq!(
         response["result"]["contexts"][1]["context"],

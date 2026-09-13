@@ -88,6 +88,17 @@ pub struct BrowserSnapshot {
     pub worker_fetch_pauses: Vec<super::WorkerFetchPause>,
 }
 
+/// One Context's native Worker state at an owner boundary. Live Window
+/// handles let observers resolve Dedicated Worker creators without owning them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerStateSnapshot {
+    pub sequence: BrowserSequence,
+    pub web_contents: Vec<WebContentsHandle>,
+    pub workers: Vec<super::WorkerSnapshot>,
+    pub requests: Vec<super::NetworkRequestSnapshot>,
+    pub pauses: Vec<super::WorkerFetchPause>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DocumentLifecycleSnapshot {
     pub document: DocumentHandle,
@@ -192,6 +203,10 @@ impl Default for BrowserEventStream {
 }
 
 impl BrowserEventStream {
+    pub(super) fn sequence(&self) -> BrowserSequence {
+        self.sequence
+    }
+
     pub(super) fn publish(&mut self, event: BrowserEvent) -> BrowserEventRecord {
         self.publish_committed(BrowserSequence::allocate(), event)
     }

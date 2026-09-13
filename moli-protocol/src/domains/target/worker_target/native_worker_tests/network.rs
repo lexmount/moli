@@ -8,6 +8,141 @@ use moli_core::page::{
     RendererWorkerIdentity, ScriptNetworkOutputItem,
 };
 
+#[tokio::test]
+async fn native_shared_worker_binding_restores_the_unobserved_network_prefix_once() {
+    worker_binding_restores_the_unobserved_network_prefix_once(false).await;
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_binding_restores_the_unobserved_network_prefix_once() {
+    worker_binding_restores_the_unobserved_network_prefix_once(true).await;
+}
+
+async fn worker_binding_restores_the_unobserved_network_prefix_once(dedicated: bool) {
+    use moli_core::browser::NetworkRequestState;
+    let mut fixture = NativeWorkers::start_script_with_transport(
+        &["unobserved-network"],
+        dedicated,
+        if dedicated {
+            "fetch('data:text/plain,before-binding').then(r=>r.text());onmessage=()=>{}"
+        } else {
+            "onconnect=()=>fetch('data:text/plain,before-binding').then(r=>r.text())"
+        },
+        false,
+    )
+    .await;
+    let browser = fixture.service.handle();
+    let (mut snapshot, mut native) = browser.subscribe().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !snapshot.network_requests.iter().any(|request| matches!(&request.state, NetworkRequestState::Completed { request, .. } if request.url().as_str() == "data:text/plain,before-binding")) {
+            native.recv().await.unwrap();
+            snapshot = browser.subscribe().unwrap().0;
+        }
+    }).await.expect("native completion must precede any output binding");
+    assert!(fixture.output.try_recv().is_err());
+    let peer = browser
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    peer.bind_page_navigation_engines(Default::default());
+    let (contents, _) = peer.create_web_contents(Default::default()).unwrap();
+    peer.navigate_document(contents, moli_core::browser::web_contents::NavigationRequestInterception::new(
+        "data:text/html,<script>globalThis.worker=new SharedWorker('data:text/javascript,onconnect=()=>{}','peer')</script>".parse().unwrap(),
+        "GET".into(), None, Vec::new().into(), NavigationRequestLoadPolicy::BrowserInitiated,
+    )).unwrap().wait().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            snapshot = browser.subscribe().unwrap().0;
+            if snapshot.workers.iter().any(|worker| matches!(worker, WorkerSnapshot::Shared { context, .. } if *context == peer.id())) { break; }
+            native.recv().await.unwrap();
+        }
+    }).await.expect("another unobserved Context must own its independent Worker");
+    let requests = std::mem::take(&mut snapshot.network_requests);
+    let source = requests
+        .iter()
+        .find_map(|request| match &request.renderer_source {
+            RendererNetworkSource::Worker(source) => Some(source.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let mut conn = fixture.connection();
+    conn.project_browser_snapshot(snapshot).await;
+    let context_id = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .id
+        .clone();
+    attach_worker_network(&mut conn, &context_id, &source, "SID-bound-network");
+    conn.set_renderer_publication_sender(fixture.transport.clone());
+    let messages = conn
+        .project_bound_worker_output()
+        .await
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        conn.browser_context_by_browser_id(peer.id())
+            .unwrap()
+            .shared_worker_targets
+            .len(),
+        1,
+        "one Context's binding snapshot cannot retire another Context's Worker"
+    );
+    assert!(
+        conn.native_worker_network_owner(&context_id, &source)
+            .is_some()
+    );
+    for method in [
+        "Network.requestWillBeSent",
+        "Network.responseReceived",
+        "Network.loadingFinished",
+    ] {
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["method"] == method
+                    && message["sessionId"] == "SID-bound-network")
+                .count(),
+            1,
+            "{messages:?}"
+        );
+    }
+    let id = messages
+        .iter()
+        .find(|message| message["method"] == "Network.requestWillBeSent")
+        .unwrap()["params"]["requestId"]
+        .as_str()
+        .unwrap();
+    let body = network_command(&mut conn, serde_json::json!({"id":1,"method":"Network.getResponseBody","sessionId":"SID-bound-network","params":{"requestId":id}})).await;
+    assert_eq!(body["result"]["body"], "before-binding");
+    let cutoff = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .worker_network_snapshot_sequence;
+    conn.set_renderer_publication_sender(fixture.transport.clone());
+    assert!(conn.project_bound_worker_output().await.is_empty());
+    assert!(
+        conn.project_browser_snapshot(browser.subscribe().unwrap().0)
+            .await
+            .iter()
+            .all(|event| !event
+                .protocol_method()
+                .is_some_and(|method| method.starts_with("Network.")))
+    );
+    assert_eq!(
+        conn.browser_context_by_browser_id(fixture.context.id())
+            .unwrap()
+            .worker_network_snapshot_sequence,
+        cutoff,
+        "lag snapshots cannot advance the first-binding cutoff"
+    );
+    fixture.service.shutdown();
+}
+
 async fn network_command(
     conn: &mut CdpConnection,
     request: serde_json::Value,

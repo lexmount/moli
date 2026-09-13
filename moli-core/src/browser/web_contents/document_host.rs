@@ -25,7 +25,7 @@ impl DocumentLifecycleEvent {
 
 /// One browser Document incarnation, including its concrete renderer Page.
 ///
-/// Private in the current residence until the typed API cutover (Commit 24b).
+/// Owned by WebContents through its MainFrameSlot on the BrowserOwner sequence.
 /// No Target/session state or public mutable Page capability belongs here.
 #[derive(Debug)]
 pub struct DocumentHost {

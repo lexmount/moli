@@ -3,30 +3,10 @@ use crate::shared_worker_runtime::{
     AppliedSharedWorkerClientErrorTarget, SharedWorkerClientEndpointDisposition,
     SharedWorkerClientEndpointReceiver,
 };
-use moli_shared_worker::SharedWorkerClientOwnerId;
 
 impl JsContextHost {
     pub(crate) fn browser_context_runtime(&self) -> crate::runtime::RendererBrowserContextRuntime {
         self.browser_context_runtime.clone()
-    }
-
-    pub(crate) fn shared_worker_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.shared_worker_client_owner_id
-    }
-
-    pub(crate) fn shared_worker_client_owner_id_for_child_context(
-        &mut self,
-        handle: DomHandle,
-    ) -> SharedWorkerClientOwnerId {
-        if let Some(owner_id) = self.child_shared_worker_client_owner_ids.get(&handle) {
-            return *owner_id;
-        }
-        let owner_id = self
-            .browser_context_runtime
-            .next_shared_worker_client_owner_id();
-        self.child_shared_worker_client_owner_ids
-            .insert(handle, owner_id);
-        owner_id
     }
 
     pub(crate) fn register_shared_worker_client(
@@ -91,14 +71,12 @@ impl JsContextHost {
     pub(crate) fn close_shared_worker_clients(&mut self) {
         self.shared_worker_clients
             .disconnect_all_for_context_teardown();
-        self.child_shared_worker_client_owner_ids.clear();
     }
 
     pub(crate) fn disconnect_shared_worker_clients_for_child_context(
         &mut self,
         handle: DomHandle,
     ) -> usize {
-        self.child_shared_worker_client_owner_ids.remove(&handle);
         self.shared_worker_clients
             .disconnect_all_for_child_context(handle)
     }

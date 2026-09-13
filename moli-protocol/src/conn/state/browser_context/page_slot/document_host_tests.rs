@@ -133,7 +133,7 @@ fn empty_document_context_with_runtime_config(
 ) -> DocumentOwnerFixture {
     let mut conn = crate::test_support::connection();
     let mut owner = conn.new_browser_context_fixture_for_test("BID-dialog-owner");
-    owner.bind_page_navigation_engines(runtime_config, None);
+    owner.bind_page_navigation_engines(runtime_config);
     owner.set_active_target_id(TARGET);
     conn.install_browser_context_fixture_for_test(owner);
     DocumentOwnerFixture {

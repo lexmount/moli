@@ -166,7 +166,7 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
     let mut conn = crate::test_support::connection();
     let mut context = conn.new_browser_context_fixture_for_test("BID-physical-owner");
     context.set_active_target_id("TID-physical-owner");
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     conn.install_browser_context_fixture_for_test(context);
     conn.install_navigation_fixture_for_session_owner_for_test(
         "data:text/html,<title>Browser owned</title>",
@@ -296,7 +296,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
         .handle();
     let _provider = browser.register_document_decision_provider().unwrap();
     let mut context = BrowserContext::new_with_browser_for_test(&browser, "BID-close");
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     context.set_active_target_id("TID-close");
     context.attach_active_session("SID-close");
     let build = context
@@ -358,7 +358,7 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
         .handle();
     let _provider = browser.register_document_decision_provider().unwrap();
     let mut context = BrowserContext::new_with_browser_for_test(&browser, "BID-close-all");
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     let mut waiters = Vec::new();
     let mut builds = Vec::new();
     for id in ["TID-first", "TID-background"] {

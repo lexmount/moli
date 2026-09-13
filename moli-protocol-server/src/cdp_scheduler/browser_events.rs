@@ -44,6 +44,9 @@ impl CdpScheduler {
             };
             output.append(self.handle_browser_event(event).await);
         }
+        output.append(ProtocolOutputSequence::from_background_events(
+            self.conn.project_bound_worker_output().await,
+        ));
         output
     }
 
@@ -65,7 +68,7 @@ impl CdpScheduler {
             Ok(record) => match record.event.clone() {
                 BrowserEvent::ContextCreated(context) => {
                     self.conn.project_created_browser_context(context);
-                    Vec::new()
+                    self.conn.project_bound_worker_output().await
                 }
                 BrowserEvent::WebContentsCreated(handle) => {
                     self.conn.project_created_web_contents(handle).await

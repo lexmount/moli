@@ -114,6 +114,50 @@ impl CdpConnection {
         }
         events
     }
+    pub(crate) fn worker_network_receipt_is_covered(
+        &self,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> bool {
+        let occurrence = committed.occurrence();
+        self.browser_contexts().any(|context| {
+            context.routes_renderer_browser_context_runtime(occurrence.runtime)
+                && context
+                    .worker_network_snapshot_sequence
+                    .is_some_and(|sequence| committed.browser_sequence() <= sequence.get())
+        })
+    }
+
+    pub(in crate::conn) fn project_worker_network_snapshot(
+        &mut self,
+        request: moli_core::browser::NetworkRequestSnapshot,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let moli_core::page::RendererNetworkSource::Worker(source) = &request.renderer_source
+        else {
+            return Vec::new();
+        };
+        let Some(context_id) = self
+            .browser_context_by_browser_id(request.owner.context())
+            .map(|context| context.id.clone())
+        else {
+            return Vec::new();
+        };
+        let owner = self.native_worker_network_owner(&context_id, source);
+        let mut events = Vec::new();
+        for item in request.output_items() {
+            if let moli_core::page::RendererNetworkOutputItem::Resource(item) = item {
+                if let Some(context) =
+                    self.browser_context_by_browser_id_mut(request.owner.context())
+                {
+                    retire_worker_fetch_from_network(context, source, &item);
+                }
+                if let Some(owner) = &owner {
+                    events.extend(self.project_native_worker_network_item(owner, &item));
+                }
+            }
+        }
+        events
+    }
+
     pub(in crate::conn) fn project_browser_network_snapshot(
         &mut self,
         requests: Vec<moli_core::browser::NetworkRequestSnapshot>,
@@ -128,27 +172,11 @@ impl CdpConnection {
         }
         let mut events = Vec::new();
         for request in requests {
-            if let moli_core::page::RendererNetworkSource::Worker(source) = &request.renderer_source
-            {
-                let Some(context_id) = self
-                    .browser_context_by_browser_id(request.owner.context())
-                    .map(|context| context.id.clone())
-                else {
-                    continue;
-                };
-                let owner = self.native_worker_network_owner(&context_id, source);
-                for item in request.output_items() {
-                    if let moli_core::page::RendererNetworkOutputItem::Resource(item) = item {
-                        if let Some(context) =
-                            self.browser_context_by_browser_id_mut(request.owner.context())
-                        {
-                            retire_worker_fetch_from_network(context, source, &item);
-                        }
-                        if let Some(owner) = &owner {
-                            events.extend(self.project_native_worker_network_item(owner, &item));
-                        }
-                    }
-                }
+            if matches!(
+                request.renderer_source,
+                moli_core::page::RendererNetworkSource::Worker(_)
+            ) {
+                events.extend(self.project_worker_network_snapshot(request));
                 continue;
             }
             let moli_core::browser::NetworkOwner::Document(document) = request.owner else {
@@ -259,20 +287,35 @@ mod tests {
     #[tokio::test]
     async fn native_worker_request_snapshot_recovers_once_and_terminal_cleanup_keeps_document_request()
      {
-        recover_worker_pause_snapshot(PauseStage::Request).await;
+        recover_worker_pause_snapshot(PauseStage::Request, false).await;
     }
 
     #[tokio::test]
     async fn native_worker_auth_snapshot_recovers_without_request_stage_projection() {
-        recover_worker_pause_snapshot(PauseStage::Auth).await;
+        recover_worker_pause_snapshot(PauseStage::Auth, false).await;
     }
 
     #[tokio::test]
     async fn native_worker_response_snapshot_recovers_without_request_stage_projection() {
-        recover_worker_pause_snapshot(PauseStage::Response).await;
+        recover_worker_pause_snapshot(PauseStage::Response, false).await;
     }
 
-    async fn recover_worker_pause_snapshot(stage: PauseStage) {
+    #[tokio::test]
+    async fn native_worker_request_pause_survives_first_transport_binding() {
+        recover_worker_pause_snapshot(PauseStage::Request, true).await;
+    }
+
+    #[tokio::test]
+    async fn native_worker_auth_pause_survives_first_transport_binding() {
+        recover_worker_pause_snapshot(PauseStage::Auth, true).await;
+    }
+
+    #[tokio::test]
+    async fn native_worker_response_pause_survives_first_transport_binding() {
+        recover_worker_pause_snapshot(PauseStage::Response, true).await;
+    }
+
+    async fn recover_worker_pause_snapshot(stage: PauseStage, late_binding: bool) {
         use axum::{Router, routing::get};
         use moli_core::page::{RendererWorkerFetchStage, WorkerFetchDecision};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -306,11 +349,13 @@ mod tests {
                 None,
             )
             .unwrap();
-        context.bind_page_navigation_engines(Default::default(), None);
+        context.bind_page_navigation_engines(Default::default());
         let (sender, mut output) = moli_core::renderer_output_transport_channel();
-        context
-            .set_renderer_output_transport_sender(sender)
-            .unwrap();
+        if !late_binding {
+            context
+                .set_renderer_output_transport_sender(sender.clone())
+                .unwrap();
+        }
         let (contents, _) = context.create_web_contents(Default::default()).unwrap();
         context
             .install_web_contents_fetch_interception_policy(
@@ -375,7 +420,10 @@ mod tests {
                 | (PauseStage::Auth, RendererWorkerFetchStage::Auth(_))
                 | (PauseStage::Response, RendererWorkerFetchStage::Response(_))
         ));
-        let late_fifo = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let late_fifo = if late_binding {
+            None
+        } else {
+            Some(tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let moli_core::RendererOutputTransportMessage::Publication(publication) = output.recv().await.unwrap() else { continue; };
                 for record in publication.into_records() {
@@ -386,7 +434,8 @@ mod tests {
                     }
                 }
             }
-        }).await.expect("pause must retain its original FIFO receipt");
+        }).await.expect("pause must retain its original FIFO receipt"))
+        };
         let mut snapshot = browser.subscribe().unwrap().0;
         let pauses = std::mem::take(&mut snapshot.worker_fetch_pauses);
         assert_eq!(pauses, vec![pause.clone()]);
@@ -425,6 +474,9 @@ mod tests {
                     },
                 }],
             );
+        if late_binding {
+            conn.set_renderer_publication_sender(sender);
+        }
         let recovered = conn
             .project_browser_snapshot(browser.subscribe().unwrap().0)
             .await;
@@ -448,15 +500,17 @@ mod tests {
                 .iter()
                 .all(|event| event.protocol_method() != Some(method))
         );
-        let late_pause = conn
-            .committed_worker_fetch_pause(late_fifo.occurrence())
-            .unwrap();
-        assert!(
-            crate::domains::fetch::native_worker_fetch_prepared_outputs(&mut conn, late_pause)
-                .await
-                .is_none(),
-            "late source FIFO must not publish a recovered stage twice"
-        );
+        if let Some(late_fifo) = late_fifo {
+            let late_pause = conn
+                .committed_worker_fetch_pause(late_fifo.occurrence())
+                .unwrap();
+            assert!(
+                crate::domains::fetch::native_worker_fetch_prepared_outputs(&mut conn, late_pause)
+                    .await
+                    .is_none(),
+                "late source FIFO must not publish a recovered stage twice"
+            );
+        }
         if stage == PauseStage::Request {
             let owner = &mut conn
                 .browser_context_by_browser_id_mut(context.id())
@@ -502,11 +556,37 @@ mod tests {
                     && matches!(&occurrence.renderer.item, moli_core::page::RendererNetworkOutputItem::Resource(item) if matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceBodyFinished(body) if body.handle() == pause.pause.handle())) { break occurrence; }
             }
         }).await.expect("released native request must finish");
-        // A snapshot-only observer has no live FIFO consumer to retire this
-        // stage. Native completion must clean it up even without a Worker
-        // attachment or Network listener; a late FIFO remains idempotent.
-        conn.project_browser_snapshot(browser.subscribe().unwrap().0)
-            .await;
+        if late_binding {
+            // After bootstrap, completion belongs to the live FIFO even when
+            // the request has no Worker attachment or Network listener.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let moli_core::RendererOutputTransportMessage::Publication(publication) =
+                        output.recv().await.unwrap()
+                    else {
+                        continue;
+                    };
+                    for record in publication.into_records() {
+                        if let moli_core::RendererOutputItem::Observation(
+                            moli_core::RendererProtocolObservation::Network(observation),
+                        ) = record.into_parts().1
+                            && let Some(committed) = observation.committed().await
+                            && committed.occurrence() == terminal.renderer.as_ref()
+                        {
+                            assert!(!conn.worker_network_receipt_is_covered(&committed));
+                            conn.retire_completed_worker_fetch(committed.occurrence());
+                            return;
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("post-binding completion must retain its live FIFO receipt");
+        } else {
+            // Snapshot-only observers retire completed decisions by snapshot.
+            conn.project_browser_snapshot(browser.subscribe().unwrap().0)
+                .await;
+        }
         assert!(!conn.observes_worker_fetch_pause(&pause));
         conn.retire_completed_worker_fetch(&terminal.renderer);
         let owner = &mut conn
@@ -558,7 +638,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        context.bind_page_navigation_engines(Default::default(), None);
+        context.bind_page_navigation_engines(Default::default());
         let (sender, mut output) = moli_core::renderer_output_transport_channel();
         context
             .set_renderer_output_transport_sender(sender)

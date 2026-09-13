@@ -27,7 +27,6 @@ use super::service_worker_drain::{
     drain_service_worker_test_turn, drain_service_worker_test_until_eval_equals,
     drain_service_worker_test_until_popup_loads_settle,
     run_service_worker_client_focus_request_task_for_test,
-    run_service_worker_client_navigate_request_task_for_test,
     run_service_worker_clients_open_window_request_task_for_test,
 };
 
@@ -17643,8 +17642,15 @@ async fn navigator_service_worker_default_update_via_cache_revalidates_fresh_mai
 
 #[tokio::test]
 async fn navigator_service_worker_event_listeners_do_not_drive_lifecycle_state() {
-    let (base_url, server) =
-        spawn_service_worker_script_server(vec!["/app/listener-worker.js"]).await;
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/listener-worker.js",
+        "text/javascript",
+        r#"
+        const installed = new Promise(resolve => { self.onmessage = () => resolve(); });
+        self.addEventListener("install", event => event.waitUntil(installed));
+        "#,
+    )])
+    .await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let (mut vm, browser_context_runtime) =
         new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
@@ -17673,6 +17679,7 @@ async fn navigator_service_worker_event_listeners_do_not_drive_lifecycle_state()
                   registration.waiting === null,
                   registration.active === null
                 ].join("|");
+                installing.postMessage("finish-install");
               })().catch((error) => {
                 globalThis.__serviceWorkerListenerProbe = "error:" + String(error);
               });
@@ -17705,8 +17712,9 @@ async fn navigator_service_worker_register_resolves_when_activate_wait_until_rej
         "/app/activate-reject-worker.js",
         "text/javascript; charset=utf-8",
         r#"
+        const installed = new Promise(resolve => { self.onmessage = () => resolve(); });
         self.addEventListener("install", event => {
-          event.waitUntil(Promise.resolve());
+          event.waitUntil(installed);
         });
         self.addEventListener("activate", event => {
           event.waitUntil(Promise.reject(new Error("activate failed")));
@@ -17734,6 +17742,7 @@ async fn navigator_service_worker_register_resolves_when_activate_wait_until_rej
                   registration.waiting && registration.waiting.state,
                   Boolean(registration.active)
                 ].join(":");
+                registration.installing.postMessage("finish-install");
                 const readyRegistration = await navigator.serviceWorker.ready;
                 globalThis.__serviceWorkerActivateRejectProbe =
                   "resolved:" + registerState + "|" +
@@ -21102,135 +21111,6 @@ async fn navigator_service_worker_window_client_navigate_rejects_when_overwritte
     server
         .await
         .expect("service worker navigate cancel script server should finish");
-}
-
-#[tokio::test]
-async fn service_worker_window_client_owner_requests_reject_on_stale_document_owner() {
-    let (base_url, server) = spawn_service_worker_response_server(vec![(
-        "/app/worker.js",
-        "text/javascript; charset=utf-8",
-        r#"
-            self.addEventListener("install", event => {
-              event.waitUntil(self.skipWaiting());
-            });
-            self.addEventListener("activate", event => {
-              event.waitUntil(clients.claim());
-            });
-            "#,
-    )])
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let (mut vm, browser_context_runtime) =
-        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-            &format!("{base_url}/app/page.html"),
-            &loader,
-        );
-
-    vm.eval(
-        r#"
-        (() => {
-          globalThis.__serviceWorkerStaleOwnerProbe = "pending";
-          (async () => {
-            await navigator.serviceWorker.register("worker.js", { scope: "./" });
-            const registration = await navigator.serviceWorker.ready;
-            globalThis.__serviceWorkerStaleOwnerProbe = registration.active.state;
-          })().catch(error => {
-            globalThis.__serviceWorkerStaleOwnerProbe = "error:" + String(error);
-          });
-        })()
-        "#,
-    )
-    .expect("service worker stale owner setup should evaluate");
-
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "String(globalThis.__serviceWorkerStaleOwnerProbe)",
-        "activated",
-    )
-    .await;
-
-    let service = browser_context_runtime.service_worker_runtime();
-    assert_eq!(service.pending_service_lane_event_count(), 0);
-    let current_owner = vm
-        .current_main_document_task_owner()
-        .expect("service worker test page should retain a main Document owner");
-    let stale_owner = crate::frame_owner_model::FrameDocumentTaskOwner::new(
-        current_owner.scheduler_lane_id,
-        current_owner.local_window_id,
-        crate::frame_owner_model::DocumentId(
-            current_owner
-                .document_id
-                .0
-                .checked_add(1)
-                .expect("test Document id should have a successor"),
-        ),
-    );
-    run_service_worker_client_navigate_request_task_for_test(
-        &mut vm,
-        &loader,
-        "stale navigate request",
-        crate::types::ServiceWorkerClientNavigateRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
-            ),
-            request_id: 101,
-            source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-            url: url::Url::parse(&format!("{base_url}/app/stale-navigate.html")).unwrap(),
-        },
-    )
-    .await;
-    assert_eq!(service.pending_service_lane_event_count(), 1);
-
-    run_service_worker_client_focus_request_task_for_test(
-        &mut vm,
-        &loader,
-        "stale focus request",
-        crate::types::ServiceWorkerClientFocusRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
-            ),
-            request_id: 102,
-            source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-        },
-    )
-    .await;
-    assert_eq!(service.pending_service_lane_event_count(), 2);
-
-    run_service_worker_clients_open_window_request_task_for_test(
-        &mut vm,
-        &loader,
-        "stale openWindow request",
-        crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
-            host: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
-            ),
-            request_id: 103,
-            source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-            url: url::Url::parse(&format!("{base_url}/app/opened.html")).unwrap(),
-        },
-    )
-    .await;
-    assert_eq!(service.pending_service_lane_event_count(), 3);
-    assert!(vm.take_pending_popup_activations().is_empty());
-    assert!(!vm.has_pending_lightweight_popup_document_loads());
-
-    assert_eq!(
-        browser_context_runtime.drain_service_worker_service_lane(),
-        3
-    );
-    assert_eq!(service.pending_service_lane_event_count(), 0);
-
-    server
-        .await
-        .expect("service worker stale owner script server should finish");
 }
 
 #[tokio::test]

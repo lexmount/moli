@@ -67,7 +67,6 @@ mod tests {
         assert!(host.is_closed());
         assert!(test_support::matching_is_empty(&service));
         assert!(test_support::loading_hosts_empty(&service));
-        assert!(test_support::owner_lifecycle_is_empty(&service));
 
         let task = message_port_owner
             .pop_shared_worker_client_event()
@@ -119,7 +118,6 @@ mod tests {
 
         assert!(host.is_closed());
         assert!(test_support::matching_is_empty(&service));
-        assert!(test_support::owner_lifecycle_is_empty(&service));
         assert!(
             host.target_output_retired(),
             "context shutdown must retire the running worker's concrete output stream"

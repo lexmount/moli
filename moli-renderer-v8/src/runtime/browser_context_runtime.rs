@@ -204,6 +204,7 @@ pub(crate) struct ClipboardSnapshot {
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
     worker_resource_task_runner: Arc<OnceLock<crate::network::RendererResourceTaskRunner>>,
+    worker_service_task: OnceLock<WorkerServiceTask>,
     id: super::RendererBrowserContextRuntimeId,
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
@@ -222,6 +223,15 @@ struct RendererBrowserContextRuntimeInner {
     dedicated_workers: Arc<RendererDedicatedWorkerRegistry>,
     javascript_dialog_handler_enabled: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
+}
+
+#[derive(Debug)]
+struct WorkerServiceTask(tokio::task::JoinHandle<()>);
+
+impl Drop for WorkerServiceTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 #[derive(Debug)]
@@ -395,9 +405,43 @@ impl RendererBrowserContextRuntime {
         &self,
         task_runner: crate::network::RendererResourceTaskRunner,
     ) {
-        self.inner
+        let runner = self
+            .inner
             .worker_resource_task_runner
             .get_or_init(|| task_runner);
+        self.inner.worker_service_task.get_or_init(|| {
+            let (shared_tx, mut shared_rx) =
+                crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+            let (service_tx, mut service_rx) =
+                crate::service_worker_runtime::service_worker_owner_wake_channel();
+            self.add_shared_worker_owner_wake_sender(shared_tx);
+            self.add_service_worker_owner_wake_sender(service_tx);
+            let context = Arc::downgrade(&self.inner);
+            // One Context task owns both service lanes. Window creation,
+            // retirement and command polling cannot strand their completions.
+            WorkerServiceTask(runner.spawn_abortable(async move {
+                loop {
+                    let shared = tokio::select! {
+                        wake = shared_rx.recv() => { if wake.is_none() { break } true },
+                        wake = service_rx.recv() => { if wake.is_none() { break } false },
+                    };
+                    if shared {
+                        while shared_rx.try_recv().is_ok() {}
+                    } else {
+                        while service_rx.try_recv().is_ok() {}
+                    }
+                    let Some(inner) = context.upgrade() else {
+                        break;
+                    };
+                    let runtime = RendererBrowserContextRuntime { inner };
+                    if shared {
+                        runtime.drain_shared_worker_service_lane();
+                    } else {
+                        runtime.drain_service_worker_service_lane();
+                    }
+                }
+            }))
+        });
     }
 
     #[cfg(test)]
@@ -524,6 +568,7 @@ impl RendererBrowserContextRuntime {
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
         shared_worker_runtime: crate::shared_worker_runtime::SharedWorkerRuntimeService,
+        task_runner: crate::network::RendererResourceTaskRunner,
     ) -> RendererBrowserContextRuntimeOwner {
         let browser_resource_runtime_owner = crate::network::BrowserResourceRuntimeOwner::new(
             &moli_fetch::FetchConfig::default(),
@@ -538,9 +583,7 @@ impl RendererBrowserContextRuntime {
             crate::new_shared_service_worker_resource_store(),
             browser_resource_runtime,
         );
-        runtime.bind_worker_resource_task_runner(
-            crate::network::RendererResourceTaskRunner::for_test(),
-        );
+        runtime.bind_worker_resource_task_runner(task_runner);
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
             producer_registry: RendererProducerRegistry::new(),
@@ -636,6 +679,7 @@ impl RendererBrowserContextRuntime {
         let runtime = Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 worker_resource_task_runner,
+                worker_service_task: OnceLock::new(),
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 worker_lifecycle,
@@ -664,6 +708,9 @@ impl RendererBrowserContextRuntime {
     /// Stops browser-context producers before the external network owner root
     /// broadcasts shutdown and joins fetch threads.
     pub fn terminate_resource_producers_for_owner_shutdown(&self) {
+        if let Some(task) = self.inner.worker_service_task.get() {
+            task.0.abort();
+        }
         terminate_browser_context_resource_producers(&self.inner);
     }
 
@@ -916,6 +963,11 @@ impl RendererBrowserContextRuntime {
 }
 
 impl RendererBrowserContextRuntimeOwner {
+    /// Bind Context-owned producers even when no Window runtime remains.
+    pub fn bind_output_transport(&self, sender: super::RendererOutputTransportSender) {
+        self.handle().set_renderer_output_transport_sender(sender);
+    }
+
     pub fn handle(&self) -> RendererBrowserContextRuntime {
         self.runtime
             .as_ref()
@@ -1239,7 +1291,6 @@ mod tests {
             false
         );
 
-        let _ = runtime.next_shared_worker_client_owner_id();
         let document_url = url::Url::parse("https://deferred-client.test/").unwrap();
         let client_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         runtime.register_service_worker_client(

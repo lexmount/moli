@@ -4,10 +4,9 @@ use std::{
 };
 
 use moli_shared_worker::{
-    SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerClientRemoval,
-    SharedWorkerConnectAction, SharedWorkerDescriptor, SharedWorkerInstanceId,
-    SharedWorkerInstanceRemoval, SharedWorkerKey, SharedWorkerLoadFailure, SharedWorkerLoadReady,
-    SharedWorkerRegistryDiagnostics,
+    SharedWorkerClientId, SharedWorkerClientRemoval, SharedWorkerConnectAction,
+    SharedWorkerDescriptor, SharedWorkerInstanceId, SharedWorkerInstanceRemoval, SharedWorkerKey,
+    SharedWorkerLoadFailure, SharedWorkerLoadReady, SharedWorkerRegistryDiagnostics,
 };
 use parking_lot::Mutex;
 use tracing::trace;
@@ -20,23 +19,10 @@ use crate::{
 use super::{
     host::SharedRendererSharedWorkerHost,
     instances::SharedWorkerHostStore,
-    matching::{SharedWorkerClientOwnerIdAllocator, SharedWorkerMatchingStore},
+    matching::SharedWorkerMatchingStore,
     owner_wake::{SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender},
     service_lane::SharedWorkerServiceLane,
 };
-
-pub(crate) fn new_shared_worker_runtime_service_with_client_owner_id_allocator(
-    client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
-) -> SharedWorkerRuntimeService {
-    SharedWorkerRuntimeService {
-        inner: Arc::new(SharedWorkerRuntimeInner {
-            matching: Arc::new(SharedWorkerMatchingStore::with_client_owner_id_allocator(
-                client_owner_id_allocator,
-            )),
-            ..SharedWorkerRuntimeInner::default()
-        }),
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct SharedWorkerRuntimeService {
@@ -50,6 +36,9 @@ pub(crate) struct WeakSharedWorkerRuntimeService {
 
 #[derive(Default)]
 struct SharedWorkerRuntimeInner {
+    // Admission and load completion span the matching registry and physical
+    // host. A new client must not observe a partially installed Running host.
+    connection_admission: Mutex<()>,
     matching: Arc<SharedWorkerMatchingStore>,
     hosts: Arc<SharedWorkerHostStore>,
     service_lane: Arc<SharedWorkerServiceLane>,
@@ -59,8 +48,8 @@ struct SharedWorkerRuntimeInner {
 }
 
 impl SharedWorkerRuntimeService {
-    pub(crate) fn client_owner_id_allocator(&self) -> SharedWorkerClientOwnerIdAllocator {
-        self.inner.matching.client_owner_id_allocator()
+    pub(super) fn connection_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.inner.connection_admission.lock()
     }
 
     pub(crate) fn configure_target_output_streams(
@@ -160,20 +149,12 @@ impl SharedWorkerRuntimeService {
             .broadcast(SharedWorkerRuntimeOwnerWake::ServiceLane)
     }
 
-    #[cfg(test)]
-    pub(crate) fn next_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.inner.matching.next_client_owner_id()
-    }
-
     pub(super) fn connect_matching(
         &self,
         key: SharedWorkerKey,
         descriptor: SharedWorkerDescriptor,
-        client_owner_id: SharedWorkerClientOwnerId,
     ) -> SharedWorkerConnectAction<SharedRendererSharedWorkerHost> {
-        self.inner
-            .matching
-            .connect(key, descriptor, client_owner_id)
+        self.inner.matching.connect(key, descriptor)
     }
 
     pub(super) fn finish_loading_matching(
@@ -278,21 +259,6 @@ impl SharedWorkerRuntimeService {
     #[cfg(test)]
     pub(super) fn matching_is_empty(&self) -> bool {
         self.inner.matching.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(super) fn active_owner_ids_for_instance(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> Vec<SharedWorkerClientOwnerId> {
-        self.inner
-            .matching
-            .active_owner_ids_for_instance(instance_id)
-    }
-
-    #[cfg(test)]
-    pub(super) fn owner_lifecycle_is_empty(&self) -> bool {
-        self.inner.matching.owner_lifecycle_is_empty()
     }
 
     #[cfg(test)]

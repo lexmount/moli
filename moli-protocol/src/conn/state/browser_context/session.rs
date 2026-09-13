@@ -91,7 +91,6 @@ impl BrowserContext {
             .expect("resolved WebContents must remain live")
     }
 
-    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
     fn install_effective_content_security_policy_for_target(&mut self, target_id: &str) {
         let bypass = self
             .page_targets
@@ -200,8 +199,8 @@ impl BrowserContext {
         }
     }
 
-    // Only contribution writes aggregate DevTools state. Replace this in-place
-    // install with AgentHost -> BrowserHandle in Commits 14/22, before 24b.
+    // Aggregate DevTools contributions on writes and install the resulting
+    // policy through the physical WebContents handle.
     fn install_effective_network_request_policy_for_target(&mut self, target_id: &str) {
         let projection = self
             .page_targets
@@ -262,7 +261,6 @@ impl BrowserContext {
             .expect("resolved WebContents must remain live")
     }
 
-    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
     pub(crate) fn set_network_offline_for_target(&mut self, target_id: &str, offline: bool) {
         let handle = self
             .web_contents_handle_for_target(target_id)
@@ -281,7 +279,6 @@ impl BrowserContext {
             .expect("resolved WebContents must remain live")
     }
 
-    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
     pub(crate) fn set_tls_verify_host_override_for_target(
         &mut self,
         target_id: &str,
@@ -295,8 +292,6 @@ impl BrowserContext {
             .expect("resolved WebContents must remain live");
     }
 
-    // Like request policy, this value-only bridge is replaced by the typed
-    // AgentHost/BrowserHandle install in Commits 14/22, before 24b.
     fn install_effective_browser_identity_for_target(&mut self, target_id: &str) {
         let identity = self
             .page_targets
@@ -543,7 +538,7 @@ fn overlay_extra_headers(
     }
 }
 
-/// Read-only migration snapshot of installed Browser values. Session raw input
+/// Read-only snapshot of installed Browser values. Session raw input
 /// is resolved on writes, never when reading policy or preparing navigation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EffectiveTargetPolicy {

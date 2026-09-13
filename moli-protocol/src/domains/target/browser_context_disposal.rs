@@ -162,7 +162,7 @@ pub(super) async fn execute_browser_context_disposal_async(
         out.extend_background_events(
             conn.close_browser_web_contents_async(
                 page_target.web_contents,
-                crate::conn::PageCloseNotifications::ContextDisposal,
+                crate::conn::PageCloseNotifications::InspectorAlreadyDetached,
             )
             .await,
         );

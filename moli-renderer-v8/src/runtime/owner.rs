@@ -84,12 +84,6 @@ use crate::script_vm::{
     PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, RuntimeEvaluateResultMode,
     dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake,
 };
-use crate::service_worker_runtime::{
-    ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
-};
-use crate::shared_worker_runtime::{
-    SharedWorkerRuntimeOwnerWake, shared_worker_owner_wake_channel,
-};
 use moli_page_types::LayoutPolicy;
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
@@ -674,8 +668,6 @@ enum RenderRuntimeTurn {
         target_stage: PageVmInitStage,
         navigation_reply_policy: NavigationReplyPolicy,
     },
-    DrainSharedWorkerServiceLane,
-    DrainServiceWorkerServiceLane,
     RunPageTurn {
         token: RendererPageToken,
     },
@@ -791,13 +783,6 @@ enum RenderRuntimeTurn {
 }
 
 impl RenderRuntimeTurn {
-    fn page_turn_should_yield_to_ready_command(&self) -> bool {
-        !matches!(
-            self,
-            Self::DrainSharedWorkerServiceLane | Self::DrainServiceWorkerServiceLane
-        )
-    }
-
     /// Return the Page whose committed view this host-facing command needs.
     ///
     /// A same-Page cross-document navigation installs its replacement PageVm
@@ -1791,10 +1776,6 @@ impl RendererOwnerHandle {
     ) -> (Self, RenderRuntimeOwner) {
         let (page_wake_tx, page_wake_rx) = mpsc::unbounded_channel();
         let (inspector_io_wake_tx, inspector_io_wake_rx) = mpsc::unbounded_channel();
-        let (shared_worker_wake_tx, shared_worker_wake_rx) = shared_worker_owner_wake_channel();
-        browser_context_runtime.add_shared_worker_owner_wake_sender(shared_worker_wake_tx);
-        let (service_worker_wake_tx, service_worker_wake_rx) = service_worker_owner_wake_channel();
-        browser_context_runtime.add_service_worker_owner_wake_sender(service_worker_wake_tx);
         let owner_local_host_id = RendererOwnerLocalHostId::new(
             NEXT_RENDERER_OWNER_LOCAL_HOST_ID.fetch_add(1, Ordering::Relaxed),
         );
@@ -1824,13 +1805,8 @@ impl RendererOwnerHandle {
             state,
             render_runtime: RenderRuntimeHandle::disconnected(),
         };
-        let render_runtime_owner = RenderRuntimeOwner::spawn(
-            provisional.clone(),
-            page_wake_rx,
-            inspector_io_wake_rx,
-            shared_worker_wake_rx,
-            service_worker_wake_rx,
-        );
+        let render_runtime_owner =
+            RenderRuntimeOwner::spawn(provisional.clone(), page_wake_rx, inspector_io_wake_rx);
         let render_runtime = render_runtime_owner.handle();
         provisional
             .state
@@ -2557,8 +2533,6 @@ impl RendererOwnerHandle {
         mut rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
         mut page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
         mut inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
-        mut shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
-        mut service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
     ) {
         let loop_future = async {
             let mut owner_local_store = RendererOwnerLocalStore::default();
@@ -2635,9 +2609,7 @@ impl RendererOwnerHandle {
                     Err(mpsc::error::TryRecvError::Disconnected) => {}
                 }
                 if let Some(mut pending_turn) = pending_turns.pop_front() {
-                    if pending_turn.allow_command_overtake
-                        && pending_turn.turn.page_turn_should_yield_to_ready_command()
-                    {
+                    if pending_turn.allow_command_overtake {
                         // A protocol reply may observe page progress, but it does not
                         // own the page scheduler. Every bounded page turn returns the
                         // entry to its stable slot, so already-arrived commands can be
@@ -2946,27 +2918,6 @@ impl RendererOwnerHandle {
                     continue;
                 }
 
-                // SharedWorker service-lane completions can make a page-visible
-                // command result ready. Do not let sustained CDP polling starve
-                // this owner-level wake behind the command queue.
-                match shared_worker_wake_rx.try_recv() {
-                    Ok(wake) => {
-                        self.handle_shared_worker_runtime_wake(wake, &mut pending_turns);
-                        continue;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {}
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
-                }
-
-                match service_worker_wake_rx.try_recv() {
-                    Ok(wake) => {
-                        self.handle_service_worker_runtime_wake(wake, &mut pending_turns);
-                        continue;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {}
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
-                }
-
                 match rx.try_recv() {
                     Ok(envelope) => {
                         self.dispatch_envelope_on_owner_local_store(
@@ -3019,18 +2970,6 @@ impl RendererOwnerHandle {
                             break;
                         };
                         dispatch_inspector_io_owner_wake(wake);
-                    }
-                    shared_worker_wake_opt = shared_worker_wake_rx.recv() => {
-                        let Some(wake) = shared_worker_wake_opt else {
-                            break;
-                        };
-                        self.handle_shared_worker_runtime_wake(wake, &mut pending_turns);
-                    }
-                    service_worker_wake_opt = service_worker_wake_rx.recv() => {
-                        let Some(wake) = service_worker_wake_opt else {
-                            break;
-                        };
-                        self.handle_service_worker_runtime_wake(wake, &mut pending_turns);
                     }
                     _ = sleep_until_or_forever(next_owner_deadline) => {
                         self.enqueue_due_parked_turns(&mut parked_turns, &mut pending_turns);
@@ -3802,54 +3741,6 @@ impl RendererOwnerHandle {
         }
     }
 
-    fn enqueue_shared_worker_service_lane_turn(
-        &self,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        pending_turns.push_back(RenderRuntimePendingTurn {
-            reply_tx: None,
-            turn: RenderRuntimeTurn::DrainSharedWorkerServiceLane,
-            allow_command_overtake: false,
-            command_admission_output_predecessor: None,
-        });
-    }
-
-    fn enqueue_service_worker_service_lane_turn(
-        &self,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        pending_turns.push_back(RenderRuntimePendingTurn {
-            reply_tx: None,
-            turn: RenderRuntimeTurn::DrainServiceWorkerServiceLane,
-            allow_command_overtake: false,
-            command_admission_output_predecessor: None,
-        });
-    }
-
-    fn handle_shared_worker_runtime_wake(
-        &self,
-        wake: SharedWorkerRuntimeOwnerWake,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        match wake {
-            SharedWorkerRuntimeOwnerWake::ServiceLane => {
-                self.enqueue_shared_worker_service_lane_turn(pending_turns);
-            }
-        }
-    }
-
-    fn handle_service_worker_runtime_wake(
-        &self,
-        wake: ServiceWorkerRuntimeOwnerWake,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        match wake {
-            ServiceWorkerRuntimeOwnerWake::ServiceLane => {
-                self.enqueue_service_worker_service_lane_turn(pending_turns);
-            }
-        }
-    }
-
     fn next_parked_turn_deadline(
         &self,
         parked_turns: &VecDeque<RenderRuntimeParkedTurn>,
@@ -4592,8 +4483,6 @@ impl RendererOwnerHandle {
                 remove_page_on_bound_owner_local_store(token);
             }
             RenderRuntimeTurn::FinishHtmlCreatePage { .. }
-            | RenderRuntimeTurn::DrainSharedWorkerServiceLane
-            | RenderRuntimeTurn::DrainServiceWorkerServiceLane
             | RenderRuntimeTurn::RunPageTurn { .. }
             | RenderRuntimeTurn::RunOwnerMaintenance { .. }
             | RenderRuntimeTurn::RunInspectorMainReceiver { .. }
@@ -6506,18 +6395,6 @@ impl RendererOwnerHandle {
                 )
                 .await
             }
-            RenderRuntimeTurn::DrainSharedWorkerServiceLane => {
-                self.state
-                    .browser_context_runtime
-                    .drain_shared_worker_service_lane();
-                RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
-            }
-            RenderRuntimeTurn::DrainServiceWorkerServiceLane => {
-                self.state
-                    .browser_context_runtime
-                    .drain_service_worker_service_lane();
-                RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
-            }
             RenderRuntimeTurn::RunPageTurn { token } => self.run_one_page_turn(token).await,
             RenderRuntimeTurn::RunOwnerMaintenance { task } => {
                 self.run_one_owner_maintenance_turn(task).await
@@ -7344,27 +7221,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_worker_service_lane_turn_does_not_yield_to_ready_commands() {
-        assert!(
-            !RenderRuntimeTurn::DrainSharedWorkerServiceLane
-                .page_turn_should_yield_to_ready_command(),
-            "SharedWorker load completions can make page commands ready, so the service lane must not be starved by command polling"
-        );
-    }
-
-    #[test]
-    fn page_turn_allows_one_ready_command_overtake() {
-        let turn = RenderRuntimeTurn::RunPageTurn {
-            token: RendererPageToken::new_for_testing(PageId::new_for_testing(7)),
-        };
-
-        assert!(
-            turn.page_turn_should_yield_to_ready_command(),
-            "ordinary detached page activity should still let ready commands run between turns"
-        );
-    }
-
-    #[test]
     fn selected_parser_admission_precedes_an_ordinary_same_page_turn() {
         let parser_token = RendererPageToken::new_for_testing(PageId::new_for_testing(8));
         let unrelated_token = RendererPageToken::new_for_testing(PageId::new_for_testing(9));
@@ -7458,7 +7314,7 @@ mod tests {
             .expect("maintenance lane should retain its admitted turn");
         assert!(turn.is_owner_maintenance_turn());
         assert!(
-            turn.turn.page_turn_should_yield_to_ready_command(),
+            turn.allow_command_overtake,
             "housekeeping may let one ready command overtake before it runs"
         );
         assert!(!pending.has_owner_maintenance_turn());

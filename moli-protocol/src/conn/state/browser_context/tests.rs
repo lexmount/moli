@@ -416,13 +416,13 @@ fn context_network_policy_outlives_page_and_protocol_projection() {
 fn physical_context_storage_outlives_protocol_projection() {
     let (physical, id, runtime_id, local_storage) = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-owner", "page-owner");
-        projection.bind_page_navigation_engines(NavigationRuntimeConfig::default(), None);
+        projection.bind_page_navigation_engines(NavigationRuntimeConfig::default());
         projection.set_storage_quota_override("https://example.test".into(), 123.0);
         let id = projection.browser_context_id();
         let runtime_id = projection.browser_context.renderer_runtime_id_for_test();
         let local_storage = projection.web_storage_store_for_test().clone();
-        // Moving the sole Browser owner out lets the protocol shell and its
-        // legacy embedded page/engine go away without retiring the context.
+        // Keeping the Context handle lets us inspect storage after the protocol
+        // projection is dropped; BrowserOwner retains the physical Context.
         (projection.browser_context, id, runtime_id, local_storage)
     };
     assert_eq!(physical.id(), id);

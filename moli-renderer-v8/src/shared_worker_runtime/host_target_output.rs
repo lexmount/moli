@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn created_target_fact_is_frozen_until_transport_binding() {
+    fn unobserved_created_target_is_not_retained_for_late_transport() {
         let runtime_service = test_support::runtime_service();
         let key = test_support::shared_worker_key();
         let instance_id = SharedWorkerInstanceId::from_u64(42);
@@ -315,6 +315,7 @@ mod tests {
             test_support::loading_host_with_runtime_service(instance_id, &key, &runtime_service);
 
         host.publish_created_target_event();
+        assert!(host.target_output().last_published_cursor().is_none());
         let (tx, mut rx) = crate::runtime::renderer_output_transport_channel();
         runtime_service.bind_target_output_transport(tx);
 
@@ -324,19 +325,21 @@ mod tests {
                 crate::runtime::RendererOutputStreamControl::Opened { .. }
             )
         ));
+        assert!(rx.try_recv().is_err(), "unobserved history is not replayed");
+        host.publish_destroyed_target_event();
         let crate::runtime::RendererOutputTransportMessage::Publication(publication) = rx
             .try_recv()
-            .expect("pre-transport target fact should publish after open")
+            .expect("observed retirement must publish after open")
         else {
             panic!("target fact must use concrete output")
         };
         let [record] = publication.records() else {
-            panic!("one created fact should produce one record")
+            panic!("one retirement must produce one record")
         };
         assert!(matches!(
             record.item(),
             RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
-                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedCreated(info) if info.instance_id == instance_id)
+                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedDestroyed(retired) if *retired == instance_id)
         ));
     }
 

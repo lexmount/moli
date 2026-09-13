@@ -15,7 +15,7 @@ mod worker_session;
 pub(crate) use agent_host_registry::DevToolsAgentHostRegistry;
 pub(crate) use default_target::{DEFAULT_BROWSER_CONTEXT_ID, DefaultTargetLifecycle};
 pub(crate) use graph::{TargetClosurePlan, TargetHostDelta};
-pub(crate) use observer::{TargetHandlerStore, target_destroyed_automation_events};
+pub(crate) use observer::{TargetHandlerStore, with_primary_target_lifecycle_event};
 pub(crate) use route::{CdpSessionRoute, TargetHandlerAccessMode};
 pub(crate) use session::{
     CommittedAttachSession, DetachedTargetSession, DevToolsSessionHandlerSet,

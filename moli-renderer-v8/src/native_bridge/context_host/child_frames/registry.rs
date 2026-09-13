@@ -806,15 +806,8 @@ impl JsContextHost {
         for handle in stale_meta_refresh_handles {
             self.cancel_child_meta_refresh_navigation(handle);
         }
-        let stale_shared_worker_client_handles = self
-            .child_shared_worker_client_owner_ids
-            .keys()
-            .copied()
-            .filter(|handle| !live_handles.contains(handle))
-            .collect::<Vec<_>>();
-        for handle in stale_shared_worker_client_handles {
-            self.disconnect_shared_worker_clients_for_child_context(handle);
-        }
+        self.shared_worker_clients
+            .disconnect_inactive_child_contexts(&live_handles);
         let mut stale_registry_context_handles = self
             .child_browsing_context_document_handles
             .keys()

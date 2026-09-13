@@ -75,13 +75,7 @@ pub(crate) async fn project_browser_popup_target(
     let Some(tab_info) = conn.tab_target_info(&tab_target_id) else {
         return out;
     };
-    if conn.has_any_target_discovery() {
-        push_target_created_events(conn, &mut out, target_id);
-    } else {
-        out.push(BackgroundProtocolEvent::automation_only(
-            events::target_created_automation_event(target_info.clone()),
-        ));
-    }
+    push_target_created_events(conn, &mut out, target_id);
     push_committed_auto_attached_session_events(
         conn,
         &mut out,

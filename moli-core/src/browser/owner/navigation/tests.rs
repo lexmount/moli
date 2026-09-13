@@ -71,7 +71,7 @@ fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, Web
             None,
         )
         .unwrap();
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     let (contents, _) = context
         .create_web_contents(WebContentsCreation::default())
         .unwrap();
@@ -898,6 +898,124 @@ async fn native_document_lifecycle_advances_without_a_devtools_output_consumer()
     assert!(after.started.sequence > before.sequence());
     assert_eq!(context.document_handle(contents).unwrap(), Some(document));
     service.shutdown();
+}
+
+#[tokio::test]
+async fn native_service_worker_transport_binds_after_the_last_window_closes() {
+    use crate::browser::{ServiceWorkerCommand, ServiceWorkerExecution, WorkerSnapshot};
+    use crate::page::{
+        RendererServiceWorkerLifecycle, RendererServiceWorkerVersionStatus, RendererWorkerLifecycle,
+    };
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut native) = browser.subscribe().unwrap();
+    navigate(&context, contents, &server.url("/native-service-worker/")).await;
+    let worker = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(worker) =
+                browser
+                    .subscribe()
+                    .unwrap()
+                    .0
+                    .workers
+                    .into_iter()
+                    .find_map(|snapshot| match snapshot {
+                        WorkerSnapshot::Service { worker, .. }
+                            if worker.info.status
+                                == RendererServiceWorkerVersionStatus::Activated
+                                && matches!(
+                                    worker.execution,
+                                    ServiceWorkerExecution::Running(_)
+                                ) =>
+                        {
+                            Some(worker)
+                        }
+                        _ => None,
+                    })
+            {
+                break worker;
+            }
+            native.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("the native version must activate before observation");
+    context
+        .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+            version_id: worker.info.version_id,
+        })
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !browser.subscribe().unwrap().0.workers.iter().any(|snapshot| matches!(snapshot, WorkerSnapshot::Service { worker: current, .. } if current.info.version_id == worker.info.version_id && current.execution == ServiceWorkerExecution::Stopped)) {
+            native.recv().await.unwrap();
+        }
+    }).await.expect("the first run must stop without a transport");
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(browser.subscribe().unwrap().0.web_contents.is_empty());
+    let (sender, mut output) = crate::renderer_output_transport_channel();
+    assert!(
+        context
+            .set_renderer_output_transport_sender(sender.clone())
+            .unwrap()
+            .is_some()
+    );
+    let crate::RendererOutputTransportMessage::StreamControl(
+        crate::RendererOutputStreamControl::Opened { stream },
+    ) = output.try_recv().unwrap()
+    else {
+        panic!("the surviving version must bind without a Window engine")
+    };
+    assert!(
+        matches!(stream.residence(), crate::RendererOutputResidenceIdentity::ServiceWorker { version_id, .. } if version_id == worker.info.version_id)
+    );
+    assert!(
+        context
+            .set_renderer_output_transport_sender(sender)
+            .unwrap()
+            .is_none()
+    );
+    context
+        .execute_service_worker_command(ServiceWorkerCommand::Start {
+            scope: worker.info.scope_url.parse().unwrap(),
+        })
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut next_sequence = 1;
+        loop {
+            let crate::RendererOutputTransportMessage::Publication(publication) =
+                output.recv().await.unwrap()
+            else {
+                continue;
+            };
+            assert_eq!(publication.cursor().stream(), stream);
+            assert_eq!(publication.cursor().sequence(), next_sequence);
+            next_sequence += 1;
+            for record in publication.into_records() {
+                if let crate::RendererOutputItem::Observation(
+                    crate::RendererProtocolObservation::WorkerLifecycle(observation),
+                ) = record.into_parts().1
+                    && let Some(committed) = observation.committed().await
+                    && let RendererWorkerLifecycle::Service(
+                        RendererServiceWorkerLifecycle::Started { version_id, run },
+                    ) = committed.lifecycle()
+                {
+                    assert_eq!(*version_id, worker.info.version_id);
+                    assert_ne!(Some(run), worker.execution.active_run());
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the restarted run must publish through the bound version FIFO");
+    service.shutdown();
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -2302,7 +2420,7 @@ async fn native_initial_url_failed_admission_does_not_change_the_next_history_en
             .attempt
             .is_none()
     );
-    context.bind_page_navigation_engines(Default::default(), None);
+    context.bind_page_navigation_engines(Default::default());
     navigate(&context, contents, "data:text/html,independent").await;
     let (_, history) = context.navigation_history_snapshot(contents).unwrap();
     assert_eq!(history.last().unwrap().transition_type, "typed");

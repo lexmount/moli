@@ -55,6 +55,9 @@ pub(crate) async fn ingest_renderer_output_transport_async(
     order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) -> Vec<BackgroundProtocolEvent> {
+    for event in conn.project_bound_worker_output().await {
+        command_context.push_protocol_event(event);
+    }
     match publication {
         RendererOutputTransportMessage::StreamControl(control) => {
             conn.apply_renderer_output_stream_control(control);
@@ -333,6 +336,9 @@ async fn project_renderer_output_records_for_owner(
                             committed.occurrence().source,
                             moli_core::page::RendererNetworkSource::Worker(_)
                         ) {
+                            if conn.worker_network_receipt_is_covered(&committed) {
+                                continue;
+                            }
                             conn.retire_completed_worker_fetch(committed.occurrence());
                             if let Some(pause) =
                                 conn.committed_worker_fetch_pause(committed.occurrence())

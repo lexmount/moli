@@ -55,6 +55,7 @@ struct NativeWorkers {
     service: BrowserService,
     context: BrowserContextHandle,
     output: moli_core::RendererOutputTransportReceiver,
+    transport: moli_core::RendererOutputTransportSender,
     occurrences: std::collections::VecDeque<(
         moli_core::RendererOutputStreamIdentity,
         moli_core::page::RendererWorkerLifecycleObservation,
@@ -123,6 +124,15 @@ impl NativeWorkers {
     }
 
     async fn start_script(names: &[&str], dedicated: bool, script: &str) -> Self {
+        Self::start_script_with_transport(names, dedicated, script, true).await
+    }
+
+    async fn start_script_with_transport(
+        names: &[&str],
+        dedicated: bool,
+        script: &str,
+        bind: bool,
+    ) -> Self {
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
         let context = browser
@@ -133,11 +143,13 @@ impl NativeWorkers {
                 None,
             )
             .unwrap();
-        context.bind_page_navigation_engines(Default::default(), None);
+        context.bind_page_navigation_engines(Default::default());
         let (sender, output) = moli_core::renderer_output_transport_channel();
-        context
-            .set_renderer_output_transport_sender(sender)
-            .unwrap();
+        if bind {
+            context
+                .set_renderer_output_transport_sender(sender.clone())
+                .unwrap();
+        }
         let (contents, _) = context
             .create_web_contents(WebContentsCreation::default())
             .unwrap();
@@ -202,6 +214,7 @@ impl NativeWorkers {
             service,
             context,
             output,
+            transport: sender,
             occurrences: Default::default(),
         }
     }

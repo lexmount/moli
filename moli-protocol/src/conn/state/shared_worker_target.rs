@@ -1,3 +1,4 @@
+use super::worker_output_history::WorkerOutputHistory;
 use std::collections::BTreeMap;
 
 use moli_core::page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot};
@@ -43,7 +44,7 @@ pub(crate) struct SharedWorkerTargetState {
     pub(crate) url: String,
     pub(crate) name: String,
     runtime_execution_context: Option<RuntimeExecutionContextEvent>,
-    console_messages: Vec<RuntimeConsoleMessageSnapshot>,
+    console_messages: WorkerOutputHistory<RuntimeConsoleMessageSnapshot>,
 }
 
 #[derive(Debug)]
@@ -78,7 +79,7 @@ impl SharedWorkerTargetState {
             url,
             name,
             runtime_execution_context: None,
-            console_messages: Vec::new(),
+            console_messages: WorkerOutputHistory::default(),
         }
     }
 
@@ -99,7 +100,7 @@ impl SharedWorkerTargetState {
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {
-        for message in &mut self.console_messages {
+        for message in self.console_messages.iter_mut() {
             if message.execution_context_id == synthetic_id {
                 message.execution_context_id = real_id;
             }
@@ -481,7 +482,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -528,7 +529,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_console_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -537,81 +538,92 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries = console_len;
         }
     }
 
     pub(crate) fn discard_runtime_console_entries(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.runtime_console_entries = console_len;
         }
     }
 
     pub(crate) fn record_console_message(&mut self, message: RendererSharedWorkerConsoleMessage) {
-        self.console_messages.push(RuntimeConsoleMessageSnapshot {
+        let message = RuntimeConsoleMessageSnapshot {
             execution_context_id: self.execution_context_id(),
             message: message.message,
             args: message.args,
             stack: message.stack,
-        });
+        };
+        let bytes = message.retained_payload_bytes();
+        self.console_messages.push(message, bytes);
     }
 
     pub(crate) fn pending_console_domain_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.console_output_session_state.console_enabled {
-            return &[];
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .console_domain_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.console_domain_entries)
     }
 
     pub(crate) fn pending_runtime_console_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
+            return Vec::new();
         }
         if self.runtime_execution_context.is_none() {
-            return &[];
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.runtime_console_entries)
     }
 
     pub(crate) fn mark_console_domain_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.console_domain_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.console_domain_entries = state
+                .console_output_session_state
+                .console_domain_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
     pub(crate) fn mark_runtime_console_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.runtime_console_entries = state
+                .console_output_session_state
+                .runtime_console_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
+    pub(crate) fn retained_output_stats(&self) -> (usize, usize) {
+        (
+            self.console_messages.len(),
+            self.console_messages.retained_bytes(),
+        )
+    }
+
     pub(crate) fn console_message_count(&self) -> usize {
-        self.console_messages.len()
+        self.console_messages.end()
     }
 
     #[cfg(test)]
@@ -934,5 +946,87 @@ mod tests {
             target.pending_runtime_console_messages("SID-shared-worker")[0].execution_context_id,
             2901
         );
+    }
+
+    #[test]
+    fn shared_worker_history_without_sessions_has_a_count_bound() {
+        let mut target = shared_worker_target();
+        for index in 0..4096 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: format!("log: {index}"),
+                args: vec![serde_json::json!(index)],
+                stack: None,
+            });
+        }
+        assert_eq!(target.console_messages.len(), 1000);
+        assert_eq!(
+            target.console_message_count(),
+            4096,
+            "emission positions never wrap with history"
+        );
+        target.attach_session("late".into());
+        target.set_runtime_frontend_enabled("late", true);
+        target.record_runtime_execution_context_created_event(&worker_context_created_event(2901));
+        let pending = target.pending_runtime_console_messages("late");
+        assert_eq!(pending.len(), 1000);
+        assert_eq!(pending[0].args[0], 3096);
+        assert_eq!(pending.last().unwrap().args[0], 4095);
+    }
+
+    #[test]
+    fn shared_worker_history_accounts_for_nested_console_arguments() {
+        let mut target = shared_worker_target();
+        let payload = "x".repeat(512 * 1024);
+        for index in 0..32 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: "log".into(),
+                args: vec![serde_json::json!({"index": index, "nested": {"payload": payload}})],
+                stack: None,
+            });
+        }
+        let retained = target
+            .console_messages
+            .iter()
+            .map(|message| message.args[0]["nested"]["payload"].as_str().unwrap().len())
+            .sum::<usize>();
+        assert!(
+            retained <= 10 * 1024 * 1024,
+            "nested argument bytes retained: {retained}"
+        );
+        assert_eq!(
+            target.console_messages.iter().next_back().unwrap().args[0]["index"],
+            31
+        );
+    }
+
+    #[test]
+    fn shared_worker_history_eviction_preserves_frozen_and_independent_session_positions() {
+        let mut target = shared_worker_target();
+        target.record_runtime_execution_context_created_event(&worker_context_created_event(2901));
+        for session in ["fast", "slow"] {
+            target.attach_session(session.into());
+            target.set_runtime_frontend_enabled(session, true);
+            target.set_console_enabled(session, true);
+        }
+        for index in 0..1005 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: format!("log: {index}"),
+                args: Vec::new(),
+                stack: None,
+            });
+        }
+        target.mark_runtime_console_emitted("fast", 1000);
+        target.mark_console_domain_emitted("fast", 1000);
+        assert_eq!(target.pending_runtime_console_messages("fast").len(), 5);
+        assert_eq!(target.pending_console_domain_messages("fast").len(), 5);
+        assert_eq!(target.pending_runtime_console_messages("slow").len(), 1000);
+        target.mark_runtime_console_emitted("fast", 1005);
+        target.mark_console_domain_emitted("fast", 1005);
+        // An older prepared output cannot unconsume a newer publication.
+        target.mark_runtime_console_emitted("fast", 1000);
+        target.mark_console_domain_emitted("fast", 1000);
+        assert!(target.pending_runtime_console_messages("fast").is_empty());
+        assert!(target.pending_console_domain_messages("fast").is_empty());
+        assert_eq!(target.pending_console_domain_messages("slow").len(), 1000);
     }
 }

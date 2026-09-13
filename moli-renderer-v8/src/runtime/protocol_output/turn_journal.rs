@@ -21,6 +21,92 @@ struct RendererTurnOutputJournalState {
     deferred_close: Option<RendererOutputStreamControl>,
 }
 
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use crate::runtime::{
+        RendererBrowserContextRuntimeId, RendererProtocolObservation,
+        RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
+    };
+
+    fn record() -> PendingRendererOutputRecord {
+        PendingRendererOutputRecord::observation(
+            None,
+            RendererProtocolObservation::RuntimeInspector(
+                RendererRuntimeInspectorMessageBatch::new(
+                    moli_page_types::RendererDevToolsAgentToken::allocate(),
+                    moli_page_types::DevToolsSessionKey::Primary,
+                    vec![RendererRuntimeInspectorMessage::from_v8_inspector_message(
+                        serde_json::json!({"method":"Runtime.consoleAPICalled", "params":{"payload":"x".repeat(16384)}}),
+                    )],
+                ),
+            ),
+        )
+    }
+
+    #[test]
+    fn unobserved_worker_journal_does_not_retain_payloads_or_reserve_history() {
+        let journal =
+            RendererTurnOutputJournal::new(RendererOutputStreamIdentity::new_shared_worker(
+                RendererBrowserContextRuntimeId::new_for_testing(37),
+                1,
+            ));
+        for _ in 0..4096 {
+            journal.publish_record(record().resolve().unwrap());
+        }
+        assert!(
+            journal.state.lock().deferred_publications.is_empty(),
+            "an unobserved Worker must not retain historical payloads"
+        );
+        assert!(
+            journal.last_published_cursor().is_none(),
+            "the observed FIFO starts at binding"
+        );
+        let (sender, mut receiver) = super::super::renderer_output_transport_channel();
+        journal.bind_transport(sender);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            super::super::RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Opened { .. }
+            )
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "binding restores native state, not unbounded history"
+        );
+        journal.publish_record(record().resolve().unwrap());
+        let super::super::RendererOutputTransportMessage::Publication(publication) =
+            receiver.try_recv().unwrap()
+        else {
+            panic!("bound Worker output must enter the FIFO")
+        };
+        assert_eq!(publication.cursor().sequence(), 1);
+    }
+
+    #[test]
+    fn failed_transport_binding_releases_all_frozen_page_payloads() {
+        let journal = RendererTurnOutputJournal::new(
+            RendererOutputStreamIdentity::new_page_for_protocol_test(
+                crate::runtime::PageId::new_for_testing(8),
+            ),
+        );
+        for _ in 0..128 {
+            journal.append(record());
+            journal.publish_pending();
+        }
+        let (sender, receiver) = super::super::renderer_output_transport_channel();
+        drop(receiver);
+        journal.bind_transport(sender.clone());
+        assert!(
+            journal.state.lock().deferred_publications.is_empty(),
+            "terminal binding cannot retain an unreplayable prefix"
+        );
+        journal.bind_transport(sender);
+        journal.retire(RendererOutputStreamCloseReason::ResidenceRetired);
+        assert!(journal.state.lock().deferred_publications.is_empty());
+    }
+}
+
 /// Shared journal for one exact renderer output stream.
 ///
 /// Page producers append on their owner lane and settle once per selected
@@ -154,10 +240,6 @@ impl RendererTurnOutputJournal {
         // publication and Close, so the transport observes a deterministic
         // publication -> declaration -> close order.
         RendererOutputFence::declare(cursor, state.transport.clone())
-    }
-
-    pub(crate) fn transport_is_bound(&self) -> bool {
-        self.state.lock().transport.is_some()
     }
 
     pub(crate) fn append(&self, record: PendingRendererOutputRecord) {
@@ -330,6 +412,16 @@ impl RendererTurnOutputJournal {
             !state.closed,
             "renderer output cannot be published after stream closure"
         );
+        if state.transport.is_none()
+            && !matches!(
+                state.stream.residence(),
+                super::RendererOutputResidenceIdentity::Page { .. }
+            )
+        {
+            // Native Worker state is already reported to Browser. No frontend
+            // owns this history; its FIFO begins when observation is bound.
+            return;
+        }
         let cursor = Self::reserve_cursor_locked(&mut state);
         let publication = RendererOutputPublication::new(cursor, vec![record]);
         if let Some(transport) = state.transport.as_ref() {
@@ -338,8 +430,6 @@ impl RendererTurnOutputJournal {
             // record on a later transport.
             let _ = publication.publish_to(transport);
         } else {
-            // Keep the already sequenced concrete batch frozen until the
-            // browser context binds its protocol transport.
             state.deferred_publications.push(publication);
         }
     }
@@ -361,22 +451,23 @@ impl RendererTurnOutputJournal {
         // protocol boundary, not permission to replay Opened or a concrete
         // prefix into a later, unrelated transport.
         state.transport = Some(transport.clone());
+        let deferred = std::mem::take(&mut state.deferred_publications);
+        let close = state.deferred_close.take();
         let opened = RendererOutputStreamControl::Opened {
             stream: state.stream,
         };
         if transport.send(opened.into()).is_err() {
             return;
         }
-        for publication in &state.deferred_publications {
-            if publication.clone().publish_to(&transport).is_err() {
+        for publication in deferred {
+            if publication.publish_to(&transport).is_err() {
                 return;
             }
         }
-        state.deferred_publications.clear();
         // Unsettled records still belong to an active producer turn. A late
         // observer may replay frozen publications, but must not resolve or
         // publish the producer's in-progress records from another lane.
-        if let Some(control) = state.deferred_close.take() {
+        if let Some(control) = close {
             let _ = transport.send(control.into());
         }
     }
@@ -420,10 +511,9 @@ impl RendererTurnOutputJournal {
             // process-fatal invariant.
             let _ = transport.send(control.into());
         } else {
-            // A stream may finish before protocol installs a transport (for
-            // example, a short-lived worker created during connection setup).
-            // Preserve the final concrete fact and close boundary for ordered
-            // late transport binding; do not synthesize them from live state.
+            // Page owner actions retain their final concrete turn and close
+            // boundary. Unobserved Worker journals have no historical records
+            // and their registry releases them at retirement.
             if let Some(publication) = final_publication {
                 state.deferred_publications.push(publication);
             }

@@ -70,8 +70,7 @@ pub use window::{WindowSurface, WindowSurfaceState};
 
 /// Stable Browser page ownership, independent of DevTools bindings.
 ///
-/// Owned by the physical BrowserContext, privately embedded in the Protocol
-/// migration residence until the typed API cutover (Commit 24b).
+/// Owned by the physical BrowserContext on the BrowserOwner sequence.
 /// Declaration order cancels pending work and retires the Document before
 /// releasing the engine and storage. This owner is deliberately not Clone.
 #[derive(Debug)]

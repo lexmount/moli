@@ -1,12 +1,11 @@
 use super::*;
 use crate::conn::{BackgroundProtocolEvent, CdpTargetHostLifecycleDelta, TargetClosureCleanupPlan};
 
-/// Which lifecycle notifications are already owned by the initiating executor.
+/// Context disposal can detach inspectors before retiring individual pages.
 #[derive(Clone, Copy)]
 pub(crate) enum PageCloseNotifications {
-    BrowserEvent,
-    PageCommand,
-    ContextDisposal,
+    All,
+    InspectorAlreadyDetached,
 }
 
 impl CdpConnection {
@@ -17,11 +16,6 @@ impl CdpConnection {
         let Ok(handle) = self.browser.context_handle(id) else {
             return;
         };
-        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender()
-            && handle.set_renderer_output_transport_sender(sender).is_err()
-        {
-            return;
-        }
         let wire_id = loop {
             let id = self.gen_bc_id();
             if !self.has_browser_context_id(&id) {
@@ -30,8 +24,11 @@ impl CdpConnection {
         };
         // Adoption is observation, not Context creation or policy installation.
         // In particular it must not bind the lazy default target to this Context.
-        self.inactive_browser_contexts
-            .push(BrowserContext::from_browser_handle(wire_id, handle));
+        let mut context = BrowserContext::from_browser_handle(wire_id, handle);
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
+            context.set_renderer_output_transport_sender(sender);
+        }
+        self.inactive_browser_contexts.push(context);
     }
 
     pub async fn project_created_web_contents(
@@ -189,8 +186,8 @@ impl CdpConnection {
                 );
             }
         }
-        for context in snapshot.contexts {
-            self.project_created_browser_context(context);
+        for context in &snapshot.contexts {
+            self.project_created_browser_context(*context);
         }
         for handle in snapshot.web_contents {
             events.extend(self.project_created_web_contents(handle).await);
@@ -217,7 +214,7 @@ impl CdpConnection {
             events.extend(self.project_browser_selection(selected, None, snapshot.sequence));
         }
         events.extend(
-            self.project_browser_workers(snapshot.workers, snapshot.sequence)
+            self.project_browser_workers(snapshot.workers, snapshot.sequence, &snapshot.contexts)
                 .await,
         );
         events.extend(self.project_browser_network_snapshot(snapshot.network_requests));
@@ -234,6 +231,44 @@ impl CdpConnection {
             events.extend(self.project_created_browser_download(download));
         }
         events.extend(self.project_retired_context_downloads());
+        events.extend(self.project_bound_worker_output().await);
+        events
+    }
+
+    /// Consume the native prefix frozen at first transport binding, before
+    /// admitting that Context's live Worker output or subsequent commands.
+    pub async fn project_bound_worker_output(&mut self) -> Vec<BackgroundProtocolEvent> {
+        let snapshots = self
+            .browser_context
+            .iter_mut()
+            .chain(&mut self.inactive_browser_contexts)
+            .filter_map(|context| {
+                context
+                    .worker_output_snapshot
+                    .take()
+                    .map(|snapshot| (context.browser_context_id(), snapshot))
+            })
+            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for (context, snapshot) in snapshots {
+            for contents in snapshot.web_contents {
+                events.extend(Box::pin(self.project_created_web_contents(contents)).await);
+            }
+            events.extend(
+                self.project_browser_workers(snapshot.workers, snapshot.sequence, &[context])
+                    .await,
+            );
+            for request in snapshot.requests {
+                events.extend(self.project_worker_network_snapshot(request));
+            }
+            for pause in snapshot.pauses {
+                if let Some((owner, outputs)) =
+                    crate::domains::fetch::native_worker_fetch_prepared_outputs(self, pause).await
+                {
+                    events.extend(outputs.emit_fetch_snapshot(self, &owner).await);
+                }
+            }
+        }
         events
     }
 
@@ -257,13 +292,8 @@ impl CdpConnection {
         activated: Option<moli_core::browser::WebContentsHandle>,
         sequence: moli_core::browser::BrowserSequence,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.retire_closed_web_contents(
-            handle,
-            activated,
-            sequence,
-            PageCloseNotifications::BrowserEvent,
-        )
-        .await
+        self.retire_closed_web_contents(handle, activated, sequence, PageCloseNotifications::All)
+            .await
     }
 
     pub(in crate::conn) async fn retire_closed_web_contents(
@@ -296,7 +326,10 @@ impl CdpConnection {
             .collect::<Vec<_>>();
         let mut seen = std::collections::HashSet::new();
         sessions.retain(|session| seen.insert(session.clone()));
-        if !matches!(notifications, PageCloseNotifications::ContextDisposal) {
+        if !matches!(
+            notifications,
+            PageCloseNotifications::InspectorAlreadyDetached
+        ) {
             events.extend(sessions.iter().map(|session| {
                 BackgroundProtocolEvent::inspector_detached(Some(session), "Render process gone.")
             }));
@@ -305,14 +338,7 @@ impl CdpConnection {
             target.runtime_slot.collected_network_data_artifacts(),
         );
         target.runtime_slot.retire_for_target_close();
-        events.extend(
-            self.project_retired_target(
-                info,
-                sessions,
-                matches!(notifications, PageCloseNotifications::BrowserEvent),
-            )
-            .await,
-        );
+        events.extend(self.project_retired_target(info, sessions).await);
         if let Some(activated) = activated {
             events.extend(self.project_browser_selection(activated, Some(handle), sequence));
         }
@@ -371,7 +397,7 @@ impl CdpConnection {
                 .as_ref()
                 .map(|id| self.attached_sessions_for_target(id.as_str()))
                 .unwrap_or_default();
-            events.extend(self.project_retired_target(info, sessions, true).await);
+            events.extend(self.project_retired_target(info, sessions).await);
         }
         removed.retire_page_projections();
         events.extend(self.project_retired_context_downloads());
@@ -382,7 +408,6 @@ impl CdpConnection {
         &mut self,
         info: crate::devtools_runtime::DevToolsTargetInfo,
         sessions: Vec<String>,
-        emit_automation: bool,
     ) -> Vec<BackgroundProtocolEvent> {
         let Some(target_id) = info.target_id.as_ref().map(|id| id.as_str().to_owned()) else {
             return Vec::new();
@@ -390,13 +415,10 @@ impl CdpConnection {
         let mut events = Vec::new();
         let destroyed = self
             .agent_hosts
-            .project_page_tab_target_infos_for_destruction(info.clone());
+            .project_page_tab_target_infos_for_destruction(info);
         for mut info in destroyed.iter().filter(|info| info.attached).cloned() {
             info.attached = false;
             events.extend(self.exact_target_info_changed_events_for_all_observer_owners(info));
-        }
-        if emit_automation {
-            events.extend(self.target_destroyed_automation_events(info));
         }
         events.extend(
             self.dispose_target_closure_sessions_event_plan_async(
@@ -428,7 +450,7 @@ impl CdpConnection {
             });
         }
         for info in destroyed {
-            events.extend(self.exact_target_destroyed_events_for_all_discovery_owners(info));
+            events.extend(self.target_retirement_events(info));
         }
         if target_id == self.default_target_id() {
             self.mark_default_browser_target_closed();
@@ -494,10 +516,10 @@ impl CdpConnection {
         browser_context.set_dedicated_worker_pause_on_start(
             self.dedicated_worker_pause_on_start_for_devtools(),
         );
-        browser_context.bind_page_navigation_engines(
-            self.navigation_runtime_config.clone(),
-            self.scheduler_hooks.renderer_publication_sender(),
-        );
+        browser_context.bind_page_navigation_engines(self.navigation_runtime_config.clone());
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
+            browser_context.set_renderer_output_transport_sender(sender);
+        }
         if self.browser_context.is_none() {
             self.browser_context = Some(browser_context);
             self.apply_active_engine_fetch_overrides();

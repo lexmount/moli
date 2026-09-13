@@ -130,7 +130,6 @@ pub(crate) struct CdpScheduler {
     bidi_frontend_turn: Option<BidiFrontendTurn>,
     bidi_sessions: HashMap<String, u64>,
     bidi_event_sources: HashMap<BidiEventSource, HashSet<u64>>,
-    bidi_initial_target_discovery: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -756,7 +755,6 @@ impl CdpScheduler {
             bidi_frontend_turn: None,
             bidi_sessions: HashMap::new(),
             bidi_event_sources: HashMap::new(),
-            bidi_initial_target_discovery: None,
         }
     }
 
@@ -1194,29 +1192,6 @@ impl CdpScheduler {
         };
         self.apply_renderer_owner_turn_outcome(receivers, outcome)
             .await
-    }
-
-    pub(crate) fn replace_target_discovery_enabled(&mut self, enabled: bool) -> bool {
-        let Some(frontend) = self.bidi_frontend_turn else {
-            return self.conn.replace_root_target_discovery_enabled(enabled);
-        };
-        let source = BidiEventSource::TargetDiscovery;
-        let previous = self
-            .bidi_event_sources
-            .get(&source)
-            .is_some_and(|owners| owners.contains(&frontend.id));
-        if enabled {
-            if !self.bidi_event_sources.contains_key(&source) {
-                self.bidi_initial_target_discovery =
-                    Some(self.conn.replace_root_target_discovery_enabled(true));
-            }
-            self.retain_bidi_event_source(source);
-        } else if self.release_bidi_event_source(&source)
-            && let Some(initial) = self.bidi_initial_target_discovery.take()
-        {
-            self.conn.replace_root_target_discovery_enabled(initial);
-        }
-        previous
     }
 
     pub(crate) async fn execute_devtools_command_with_external_load_wait(

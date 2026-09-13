@@ -117,10 +117,10 @@ impl CdpConnection {
         id: impl Into<String>,
     ) -> BrowserContext {
         let mut context = BrowserContext::new_with_browser_for_test(&self.browser, id);
-        context.bind_page_navigation_engines(
-            self.navigation_runtime_config.clone(),
-            self.scheduler_hooks.renderer_publication_sender(),
-        );
+        context.bind_page_navigation_engines(self.navigation_runtime_config.clone());
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
+            context.set_renderer_output_transport_sender(sender);
+        }
         context
     }
 
@@ -143,10 +143,10 @@ impl CdpConnection {
         // Mirror production Context insertion. Document admission must never
         // fall back to a connection/another WebContents' navigation engine.
         browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
-        browser_context.bind_page_navigation_engines(
-            self.navigation_runtime_config.clone(),
-            self.scheduler_hooks.renderer_publication_sender(),
-        );
+        browser_context.bind_page_navigation_engines(self.navigation_runtime_config.clone());
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
+            browser_context.set_renderer_output_transport_sender(sender);
+        }
         self.browser_context = Some(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }
@@ -157,10 +157,10 @@ impl CdpConnection {
         mut browser_context: BrowserContext,
     ) {
         browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
-        browser_context.bind_page_navigation_engines(
-            self.navigation_runtime_config.clone(),
-            self.scheduler_hooks.renderer_publication_sender(),
-        );
+        browser_context.bind_page_navigation_engines(self.navigation_runtime_config.clone());
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
+            browser_context.set_renderer_output_transport_sender(sender);
+        }
         self.inactive_browser_contexts.push(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }

@@ -23,13 +23,79 @@ pub(super) struct ServiceWorkerTargetOutputStreams {
     state: Mutex<ServiceWorkerTargetOutputStreamsState>,
 }
 
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use crate::runtime::{
+        RendererBrowserContextRuntimeId, RendererServiceWorkerTargetInfo,
+        RendererServiceWorkerVersionStatus,
+    };
+
+    #[test]
+    fn unobserved_service_versions_release_retired_streams_and_bind_the_live_version_once() {
+        let streams = ServiceWorkerTargetOutputStreams::new(
+            RendererWorkerLifecycleReporter::new(RendererBrowserContextRuntimeId::new_for_testing(
+                38,
+            )),
+            RendererOutputTransportSenderSlot::default(),
+        );
+        for version in 1..=4097 {
+            streams.publish_created(
+                ServiceWorkerVersionId(version),
+                RendererServiceWorkerLifecycle::Created {
+                    info: RendererServiceWorkerTargetInfo {
+                        registration_id: version,
+                        version_id: version,
+                        script_url: "https://worker.test/sw.js".into(),
+                        scope_url: "https://worker.test/".into(),
+                        status: RendererServiceWorkerVersionStatus::Activated,
+                    },
+                    active_run: None,
+                },
+            );
+            if version != 4097 {
+                streams.publish_destroyed(
+                    ServiceWorkerVersionId(version),
+                    RendererServiceWorkerLifecycle::Destroyed {
+                        version_id: version,
+                        active_run: None,
+                    },
+                );
+            }
+        }
+        let (sender, mut receiver) = crate::runtime::renderer_output_transport_channel();
+        streams.bind_transport(sender.clone());
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            crate::runtime::RendererOutputTransportMessage::StreamControl(
+                crate::runtime::RendererOutputStreamControl::Opened { .. }
+            )
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "only a live version stream is bound; no historical versions or status changes"
+        );
+        streams.publish(
+            ServiceWorkerVersionId(4097),
+            RendererServiceWorkerLifecycle::VersionUpdated {
+                version_id: 4097,
+                status: RendererServiceWorkerVersionStatus::Redundant,
+            },
+        );
+        let crate::runtime::RendererOutputTransportMessage::Publication(publication) =
+            receiver.try_recv().unwrap()
+        else {
+            panic!("live status change must enter the bound FIFO")
+        };
+        assert_eq!(publication.cursor().sequence(), 1);
+        streams.bind_transport(sender);
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
 #[derive(Default)]
 struct ServiceWorkerTargetOutputStreamsState {
     live: HashMap<ServiceWorkerVersionId, RendererTurnOutputJournal>,
-    /// ServiceWorker versions may become redundant during BrowserContext
-    /// setup. Retain their already-frozen terminal stream until the one-shot
-    /// protocol transport binding can deliver it in FIFO order.
-    retired_before_transport: Vec<RendererTurnOutputJournal>,
 }
 
 impl ServiceWorkerTargetOutputStreams {
@@ -45,12 +111,9 @@ impl ServiceWorkerTargetOutputStreams {
     }
 
     pub(super) fn bind_transport(&self, transport: crate::runtime::RendererOutputTransportSender) {
-        let mut state = self.state.lock();
+        let state = self.state.lock();
         self.transport.set(transport.clone());
         for journal in state.live.values() {
-            journal.bind_transport(transport.clone());
-        }
-        for journal in state.retired_before_transport.drain(..) {
             journal.bind_transport(transport.clone());
         }
     }
@@ -111,9 +174,6 @@ impl ServiceWorkerTargetOutputStreams {
             .expect("ServiceWorker target stream must exist until target destruction");
         journal.publish_record(self.lifecycle_record(event));
         journal.retire(RendererOutputStreamCloseReason::ResidenceRetired);
-        if !journal.transport_is_bound() {
-            state.retired_before_transport.push(journal);
-        }
     }
 
     pub(super) fn publish_observation(

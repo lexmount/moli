@@ -1494,7 +1494,7 @@ async fn resetting_opener_target_clears_live_opener_but_keeps_frame_attribution(
         .web_contents_handle_for_target("TID-opener-reset")
         .unwrap();
     ctx.conn
-        .close_browser_web_contents_async(opener, crate::conn::PageCloseNotifications::BrowserEvent)
+        .close_browser_web_contents_async(opener, crate::conn::PageCloseNotifications::All)
         .await;
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
@@ -3147,7 +3147,7 @@ async fn native_popup_close_clears_tab_page_sessions_and_target_graph() {
         .web_contents_handle_for_target(page_target_id)
         .unwrap();
     ctx.conn
-        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::BrowserEvent)
+        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::All)
         .await;
 
     assert_eq!(ctx.conn.session_route(Some("SID-popup-tab")), None);
@@ -3231,7 +3231,7 @@ async fn native_active_popup_close_clears_active_slot_sessions_and_target_graph(
         .web_contents_handle_for_target(page_target_id)
         .unwrap();
     ctx.conn
-        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::BrowserEvent)
+        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::All)
         .await;
 
     assert_eq!(ctx.conn.session_route(Some("SID-active-popup-tab")), None);
