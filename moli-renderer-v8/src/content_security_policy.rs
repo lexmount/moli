@@ -3147,8 +3147,9 @@ mod tests {
             ContentSecurityPolicyResourceKind::DocumentStyleElement,
             ContentSecurityPolicyResourceKind::WorkerConnect,
             ContentSecurityPolicyResourceKind::WorkerScript,
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ] {
             for source in ["https://cdn.test:*", "http://cdn.test:*", "CDN.TEST:*"] {
                 for port in ["", ":0", ":80", ":443", ":8443", ":65535"] {
