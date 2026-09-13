@@ -236,6 +236,7 @@ pub(crate) use activation::{
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
 };
+pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
     queue_deferred_named_iframe_target_navigation_from_document,
@@ -310,7 +311,6 @@ use event_handlers::{
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
-#[cfg(feature = "devtools")]
 pub(crate) use events::construct_clipboard_event;
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,

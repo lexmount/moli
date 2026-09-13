@@ -1,5 +1,8 @@
+use super::drag::{
+    create_drag_data_transfer_view, create_external_drag_data_store, set_data_transfer_mode,
+};
 use super::*;
-use crate::runtime::RendererDragDataItem;
+use crate::runtime::{RendererDragData, RendererDragDataItem, RendererDraggedFile};
 
 pub(crate) fn build_clipboard_data_transfer<'s>(
     scope: &mut v8::PinScope<'s, '_>,

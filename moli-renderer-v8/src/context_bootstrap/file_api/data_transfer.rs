@@ -1,4 +1,3 @@
-#[cfg(any(test, feature = "devtools"))]
 pub(super) mod drag;
 
 use super::*;
@@ -30,9 +29,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(crate) use moli_file_api::data_transfer::DragDataStoreMode;
 
-#[cfg(feature = "devtools")]
 mod clipboard;
-#[cfg(feature = "devtools")]
 pub(crate) use clipboard::{
     build_clipboard_data_transfer, clipboard_data_transfer_contents,
     disable_clipboard_data_transfer,

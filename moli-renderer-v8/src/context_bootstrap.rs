@@ -230,7 +230,7 @@ pub(crate) use performance_runtime::performance_slot_number;
 #[cfg(feature = "devtools")]
 pub(crate) use selection_surface::window_selection_is_collapsed;
 pub(crate) use selection_surface::{
-    bind_isolated_window_selection_owner, focus_editing_host_selection, selection_value_for_window,
+    bind_isolated_window_selection_owner, focus_editing_host_selection, selection_text_for_clipboard, selection_value_for_window,
     sync_selection_owner_document_for_window,
 };
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
@@ -368,7 +368,6 @@ pub(crate) use self::file_api::{
     protect_native_drag_source_view, read_string_drag_data, replace_drag_data_store_contents,
     update_drag_data_store_operations_mask,
 };
-#[cfg(feature = "devtools")]
 pub(crate) use self::file_api::{build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer};
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,

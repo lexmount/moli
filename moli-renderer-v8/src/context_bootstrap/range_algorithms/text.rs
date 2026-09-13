@@ -34,6 +34,20 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    selection_string_contents(scope, range)
+}
+
+pub(in crate::context_bootstrap) fn range_clipboard_string_contents<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    selection_string_contents(scope, range)
+}
+
+fn selection_string_contents<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<String> {
     let (start, start_offset, end, end_offset) =
         if let Some(boundaries) = native_range_boundary_handles(scope, range) {
             (
@@ -322,6 +336,17 @@ fn append_selected_character_data(
     }
     if state.in_visible_script_or_style {
         append_collapsed_trimmed_text(out, &data);
+    } else if runtime
+        .dom_host()
+        .parent_node(handle)
+        .is_some_and(|parent| {
+            matches!(
+                style_property_value(runtime, parent, StyleMode::Computed, "white-space").as_str(),
+                "pre" | "pre-wrap" | "break-spaces"
+            )
+        })
+    {
+        out.push_str(&data);
     } else {
         append_rendered_text_node(out, &data);
     }

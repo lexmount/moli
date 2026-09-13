@@ -1,18 +1,17 @@
 use super::*;
-use crate::runtime::{
-    RendererDragData, RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile,
-};
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
+use crate::runtime::RendererDragDataItem;
+use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
+use moli_file_api::data_transfer::child_entry_full_path;
 use moli_file_api::data_transfer::drag_effect_allowed_from_mask;
-use moli_file_api::data_transfer::{
-    child_entry_full_path, drag_operations_mask_from_effect_allowed,
-};
+#[cfg(any(test, feature = "devtools"))]
+use moli_file_api::data_transfer::drag_operations_mask_from_effect_allowed;
 
 use moli_webapi::drag_data_values::{
     DataTransferDirectoryItemObjectDeclaration, FileSystemDirectoryEntryObjectDeclaration,
 };
 
-fn set_data_transfer_mode<'s>(
+pub(super) fn set_data_transfer_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     mode: DragDataStoreMode,
@@ -120,6 +119,7 @@ pub(crate) fn drag_data_read_count_for_test(scope: &mut v8::PinScope<'_, '_>) ->
 
 /// Reads the string items and `effectAllowed` that `dragstart` listeners left
 /// in the shared store, in the shape CDP reports as `Input.DragData`.
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn read_string_drag_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: &NativeDragDataStore,
@@ -171,6 +171,7 @@ pub(crate) fn read_string_drag_data<'s>(
     (items, mask)
 }
 
+#[cfg(any(test, feature = "devtools"))]
 fn data_transfer_effect_allowed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -187,7 +188,6 @@ pub(crate) fn create_native_drag_data_store(
     })
 }
 
-#[cfg(feature = "devtools")]
 pub(crate) fn create_external_drag_data_store(
     scope: &mut v8::PinScope<'_, '_>,
     data: &RendererDragData,
@@ -210,6 +210,7 @@ pub(crate) fn create_drag_data_transfer_view<'s>(
     Some(owner)
 }
 
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn finish_drag_data_transfer_view<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     view: v8::Local<'s, v8::Object>,
@@ -221,6 +222,7 @@ pub(crate) fn finish_drag_data_transfer_view<'s>(
 
 /// The source keeps readable item metadata after dragstart, without regaining
 /// access to payloads or allowing a finished view to become active again.
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn protect_native_drag_source_view<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     view: v8::Local<'s, v8::Object>,
@@ -232,6 +234,7 @@ pub(crate) fn protect_native_drag_source_view<'s>(
 
 /// Editing events retain readable data independently of the drag views' access
 /// lifetime and later mutations of their source item records.
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn readonly_data_transfer_for_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
@@ -334,7 +337,6 @@ pub(crate) fn replace_drag_data_store_contents<'s>(
     Some(())
 }
 
-#[cfg(feature = "devtools")]
 pub(crate) fn update_drag_data_store_operations_mask(
     scope: &mut v8::PinScope<'_, '_>,
     store: &NativeDragDataStore,
@@ -349,6 +351,7 @@ pub(crate) fn update_drag_data_store_operations_mask(
     );
 }
 
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn native_data_transfer_effect_allowed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     view: v8::Local<'s, v8::Object>,
@@ -356,6 +359,7 @@ pub(crate) fn native_data_transfer_effect_allowed<'s>(
     data_transfer_effect_allowed(scope, view).unwrap_or_else(|| "none".to_owned())
 }
 
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn native_data_transfer_drop_effect<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     view: v8::Local<'s, v8::Object>,
@@ -443,6 +447,7 @@ fn append_directory_item<'s>(
     append_item(scope, item_array, item)
 }
 
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn native_data_transfer_files<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     view: v8::Local<'s, v8::Object>,

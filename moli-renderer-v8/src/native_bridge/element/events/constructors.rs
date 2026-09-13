@@ -8,7 +8,6 @@ pub(crate) use moli_webapi::events::subclasses::{
     construct_native_interest_event as construct_interest_event,
     construct_native_toggle_event as construct_toggle_event,
 };
-#[cfg(feature = "devtools")]
 pub(crate) use moli_webapi::events::subclasses::construct_native_clipboard_event as construct_clipboard_event;
 pub(super) use moli_webapi::events::subclasses::construct_native_input_event as construct_editing_input_event;
 use moli_webapi::events::subclasses::{construct_native_focus_event, construct_native_submit_event};
