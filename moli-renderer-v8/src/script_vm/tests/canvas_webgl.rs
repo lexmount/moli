@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn webgl_drawing_capabilities_preserve_native_sizes_and_matrix_arguments() {
+    let mut vm = new_storage_test_vm("https://webgl-drawing-capabilities.test/");
+    let result = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/webgl-drawing-capabilities.js"
+        ))
+        .expect("WebGL drawing capability contract should hold");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
 fn webgl_compatibility_profile_uses_d3d11_identity_and_precision() {
     let mut vm = new_storage_test_vm("https://webgl-compatibility-profile.test/");
     let result = vm

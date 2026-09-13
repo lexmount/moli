@@ -36,15 +36,15 @@ use super::canvas::{
     webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
     webgl_create_framebuffer_callback, webgl_create_program_callback,
     webgl_create_renderbuffer_callback, webgl_create_shader_callback,
-    webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
-    webgl_get_error_callback, webgl_get_extension_callback, webgl_get_parameter_callback,
-    webgl_get_shader_info_log_callback, webgl_get_shader_precision_format_callback,
-    webgl_get_supported_extensions_callback, webgl_is_context_lost_callback,
-    webgl_lose_context_noop_callback, webgl_noop_callback, webgl_uniform_location_callback,
-    webgl_viewport_callback, webgl2_color_space_getter_callback,
-    webgl2_color_space_setter_callback, webgl2_get_extension_callback,
-    webgl2_get_internalformat_parameter_callback, webgl2_get_parameter_callback,
-    webgl2_get_supported_extensions_callback,
+    webgl_drawing_buffer_size_callback, webgl_get_attrib_location_callback,
+    webgl_get_context_attributes_callback, webgl_get_error_callback, webgl_get_extension_callback,
+    webgl_get_parameter_callback, webgl_get_shader_info_log_callback,
+    webgl_get_shader_precision_format_callback, webgl_get_supported_extensions_callback,
+    webgl_is_context_lost_callback, webgl_lose_context_noop_callback, webgl_noop_callback,
+    webgl_uniform_location_callback, webgl_uniform_matrix_callback, webgl_viewport_callback,
+    webgl2_color_space_getter_callback, webgl2_color_space_setter_callback,
+    webgl2_get_extension_callback, webgl2_get_internalformat_parameter_callback,
+    webgl2_get_parameter_callback, webgl2_get_supported_extensions_callback,
 };
 use super::file_api::{
     file_list_item_callback, file_reader_abort_callback, file_reader_add_event_listener_callback,
@@ -423,6 +423,14 @@ struct CanvasGradientTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::WebGLRenderingContext, enumerable)]
 struct WebGlRenderingContextTemplateMethodsDeclaration {
+    #[webapi(accessor_property = "drawingBufferWidth", getter = webgl_drawing_buffer_size_callback,
+        data = crate::util::callback_data_index_value(scope, 0))]
+    drawing_buffer_width: (),
+
+    #[webapi(accessor_property = "drawingBufferHeight", getter = webgl_drawing_buffer_size_callback,
+        data = crate::util::callback_data_index_value(scope, 1))]
+    drawing_buffer_height: (),
+
     #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
     viewport: (),
 
@@ -510,6 +518,18 @@ struct WebGlRenderingContextTemplateMethodsDeclaration {
 
     #[webapi(method = "uniform2fv", length = 2, callback = webgl_noop_callback)]
     uniform2fv: (),
+
+    #[webapi(method = "uniformMatrix2fv", length = 3, callback = webgl_uniform_matrix_callback,
+        data = crate::util::callback_data_index_value(scope, 0))]
+    uniform_matrix2fv: (),
+
+    #[webapi(method = "uniformMatrix3fv", length = 3, callback = webgl_uniform_matrix_callback,
+        data = crate::util::callback_data_index_value(scope, 1))]
+    uniform_matrix3fv: (),
+
+    #[webapi(method = "uniformMatrix4fv", length = 3, callback = webgl_uniform_matrix_callback,
+        data = crate::util::callback_data_index_value(scope, 2))]
+    uniform_matrix4fv: (),
 
     #[webapi(method = "drawArrays", length = 3, callback = webgl_noop_callback)]
     draw_arrays: (),

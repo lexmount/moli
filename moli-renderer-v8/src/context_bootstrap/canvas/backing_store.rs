@@ -1,7 +1,6 @@
 use super::super::image_data::new_uint8_clamped_array_from_bytes;
 use super::{OFFSCREEN_CANVAS_HEIGHT_SLOT, OFFSCREEN_CANVAS_WIDTH_SLOT};
 use crate::util::{get_private_object, get_private_value, set_private_value};
-use crate::webidl;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{JsContextHost, node_runtime_and_handle_from_object_or_detached},
@@ -221,22 +220,19 @@ pub(super) fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
-    let width = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_WIDTH_SLOT, "width")?;
-    let height = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_HEIGHT_SLOT, "height")?;
+    // Backing dimensions are native state, not JS-visible property lookups.
+    // A page's own width/height getter must not resize a context or execute
+    // while its drawingBufferWidth/Height (or pixels) are being queried.
+    if html_canvas_identity(scope, canvas).is_some() {
+        return Some(crate::native_bridge::element::html_canvas_dimensions(
+            scope, canvas,
+        ));
+    }
+    let width =
+        get_private_value(scope, canvas, OFFSCREEN_CANVAS_WIDTH_SLOT)?.uint32_value(scope)?;
+    let height =
+        get_private_value(scope, canvas, OFFSCREEN_CANVAS_HEIGHT_SLOT)?.uint32_value(scope)?;
     Some((width, height))
-}
-
-fn canvas_like_dimension<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-    slot: &str,
-    public_name: &'static str,
-) -> Option<u32> {
-    let value = get_private_value(scope, canvas, slot)
-        .and_then(|value| value.number_value(scope))
-        .or_else(|| webidl::optional_number_property(scope, canvas, public_name))
-        .unwrap_or(0.0);
-    Some(value.max(0.0).trunc() as u32)
 }
 
 fn write_bytes_to_view<'s>(

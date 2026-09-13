@@ -2204,6 +2204,26 @@ async fn worker_media_capabilities_matches_the_software_chromium_profile() {
 }
 
 #[tokio::test]
+async fn worker_webgl_drawing_capabilities_match_the_window_contract() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "try {{ postMessage(JSON.parse({})); }} catch (error) {{ postMessage(String(error)); }} close();",
+            include_str!("../../../../tests/fixtures/webgl-drawing-capabilities.js")
+        ),
+        "https://webgl-drawing-capabilities.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker WebGL drawing capability task must settle")
+        .expect("worker must return the drawing capability result");
+    assert_eq!(
+        expect_post_json(message),
+        r#"["offscreen:webgl","offscreen:webgl2"]"#
+    );
+}
+
+#[tokio::test]
 async fn worker_webgl_compatibility_profile_matches_the_window_profile() {
     ensure_v8();
     let mut handle = spawn_worker(

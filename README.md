@@ -359,9 +359,12 @@ Its current intentional boundaries include:
 - Media capability queries use a Chromium-style software compatibility profile;
   advertised support and smoothness do not imply implemented media playback or
   hardware acceleration.
-- WebGL renderer queries use generic compatibility labels (`WebKit` / `WebKit
-  WebGL`), including enabled debug-renderer queries. These labels do not identify
-  a physical GPU or an implemented graphics driver.
+- WebGL queries use a declared Windows/ANGLE compatibility profile, with
+  `WebKit` / `WebKit WebGL` as masked labels. Debug identity, limits and shader
+  precision do not identify a physical GPU or an implemented graphics driver.
+  Drawing-buffer dimensions reflect the native canvas size; matrix-uniform
+  capability shims validate arguments but do not execute shaders or upload
+  uniforms to a GPU. Drawing and pixel readback remain incomplete.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 

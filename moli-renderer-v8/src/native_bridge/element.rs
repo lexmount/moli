@@ -224,7 +224,7 @@ pub(super) use attributes::{
 };
 pub(crate) use canvas::{
     canvas_get_context_callback, canvas_to_data_url_callback,
-    canvas_transfer_control_to_offscreen_callback,
+    canvas_transfer_control_to_offscreen_callback, html_canvas_dimensions,
 };
 pub(crate) use canvas::{
     html_canvas_height_getter_callback, html_canvas_height_setter_callback,
