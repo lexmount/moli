@@ -10008,8 +10008,8 @@ fn navigator_runtime_subobjects_keep_declared_brand_and_methods() {
                   userActivation.hasBeenActive,
                   Object.keys(userActivation).join(","),
                   Object.hasOwn(Object.getPrototypeOf(navigator), "userActivation"),
-                  getterOutcome(userActivation, fakeUserActivation, "isActive"),
-                  getterOutcome(userActivation, fakeUserActivation, "hasBeenActive")
+                  getterOutcome(Object.getPrototypeOf(userActivation), fakeUserActivation, "isActive"),
+                  getterOutcome(Object.getPrototypeOf(userActivation), fakeUserActivation, "hasBeenActive")
                 ].join("|")
               });
             })()
@@ -10019,7 +10019,7 @@ fn navigator_runtime_subobjects_keep_declared_brand_and_methods() {
 
     assert_eq!(
         result,
-        r#"{"permissions":"true|[object Permissions]|false|function|1","storage":"true|[object StorageManager]|false|false|false|false||true|true|true|true|persisted|0|persist|0|estimate|0|false:undefined:::::|[object Promise]|[object Promise]","connection":"[object Object]|string|unknown|Infinity|string|4g|10|50|false|true|type,downlinkMax,effectiveType,downlink,rtt,saveData,onchange,addEventListener,removeEventListener||true:function:addEventListener:2:true:true:true|true:function:removeEventListener:2:true:true:true|undefined|undefined|throw:TypeError|throw:TypeError","mediaDevices":"true|[object MediaDevices]|false|false||enumerateDevices|0|getUserMedia|1|true:function:enumerateDevices:0:true:true:true|true:function:getUserMedia:1:true:true:true","clipboard":"true|true|[object Clipboard]|false|false||true|true|true|true|readText|0|writeText|1|true:function:readText:0:true:true:true|true:function:writeText:1:true:true:true|[object Promise]|[object Promise]","userActivation":"undefined|[object Object]|boolean|false|false|isActive,hasBeenActive|true|throw:TypeError|throw:TypeError"}"#
+        r#"{"permissions":"true|[object Permissions]|false|function|1","storage":"true|[object StorageManager]|false|false|false|false||true|true|true|true|persisted|0|persist|0|estimate|0|false:undefined:::::|[object Promise]|[object Promise]","connection":"[object Object]|string|unknown|Infinity|string|4g|10|50|false|true|type,downlinkMax,effectiveType,downlink,rtt,saveData,onchange,addEventListener,removeEventListener||true:function:addEventListener:2:true:true:true|true:function:removeEventListener:2:true:true:true|undefined|undefined|throw:TypeError|throw:TypeError","mediaDevices":"true|[object MediaDevices]|false|false||enumerateDevices|0|getUserMedia|1|true:function:enumerateDevices:0:true:true:true|true:function:getUserMedia:1:true:true:true","clipboard":"true|true|[object Clipboard]|false|false||true|true|true|true|readText|0|writeText|1|true:function:readText:0:true:true:true|true:function:writeText:1:true:true:true|[object Promise]|[object Promise]","userActivation":"function|[object UserActivation]|boolean|false|false||true|throw:TypeError|throw:TypeError"}"#
     );
     let receiver_errors = vm
         .eval(
