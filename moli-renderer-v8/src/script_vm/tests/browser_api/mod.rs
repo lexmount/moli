@@ -54,6 +54,7 @@ mod traversal;
 mod traversal_coordinator;
 mod trusted_types;
 mod trusted_types_attributes;
+mod user_activation;
 mod web_audio;
 mod webrtc;
 mod webrtc_events;
