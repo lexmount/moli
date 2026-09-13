@@ -3415,7 +3415,7 @@ impl PageVm {
             let Some(node) = self.vm().document_runtime.dom_host().node(handle) else {
                 return Ok(None);
             };
-            if node.is_element() {
+            if node.is_element() || node.is_document() {
                 break;
             }
             let Some(parent) = node.parent_node() else {
