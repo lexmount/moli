@@ -304,7 +304,7 @@ fn finish_drag_session<'s>(
         );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
-    unsafe { &mut *runtime_ptr }.clear_mouse_press();
+    unsafe { &mut *runtime_ptr }.clear_mouse_presses();
 }
 
 fn author_drag_operation<'s>(
@@ -1609,7 +1609,7 @@ impl ScriptVm {
             None
         };
 
-        if event_name == "mousedown" && button == 0 {
+        if event_name == "mousedown" && button == 0 && buttons == 1 && click_count <= 1 {
             let runtime = self._context_host.borrow();
             let document = runtime.dom_host().owner_document_handle(initial_target);
             let root_to_frame = document
@@ -1781,6 +1781,12 @@ impl ScriptVm {
             if let Some((event, input_document)) = pointer_event
                 && input_document.contains(runtime(), pointer_dispatch_handle)
             {
+                if (pointer_event_name == Some("pointerdown") && pointer.pointer_type == "mouse")
+                    || (pointer_event_name == Some("pointerup") && pointer.pointer_type != "mouse")
+                {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                }
                 let dispatched =
                     dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                 if event_name == "mousedown" && !dispatched.allows_default() {
@@ -1839,13 +1845,17 @@ impl ScriptVm {
                     )
                 };
                 if let Some(event) = event {
-                    #[cfg(feature = "molio")]
                     if event_name == "mousedown" {
-                        // The element can disappear or later moves can reach another
-                        // frame while the Window still owns the mouse press.
-                        let owner = InputDocument::for_target(runtime(), mouse_dispatch_handle)
-                            .map(|document| document.owner);
-                        unsafe { &mut *runtime_ptr }.set_compat_mouse_press_owner(button, owner);
+                        #[cfg(feature = "molio")]
+                        {
+                            // The element can disappear or later moves can reach another
+                            // frame while the Window still owns the mouse press.
+                            let owner = InputDocument::for_target(runtime(), mouse_dispatch_handle)
+                                .map(|document| document.owner);
+                            unsafe { &mut *runtime_ptr }.set_compat_mouse_press_owner(button, owner);
+                        }
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
@@ -2129,7 +2139,7 @@ impl ScriptVm {
             modifiers,
         };
         self.pending_drag_gesture = None;
-        self._context_host.borrow_mut().clear_mouse_press();
+        self._context_host.borrow_mut().clear_mouse_presses();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         self.with_default_context_scope(|scope, runtime_ptr| {
             // SAFETY: with_default_context_scope runs synchronously under
@@ -2497,6 +2507,10 @@ impl ScriptVm {
                         sampled.as_deref(),
                     );
                     if input_document.contains(runtime(), pointer_handle) {
+                        if event_name_for_pointer == "pointerup" {
+                            unsafe { &mut *runtime_ptr }
+                                .notify_close_watcher_input_activation(pointer_handle);
+                        }
                         let dispatched =
                             dispatch_public_event(scope, runtime_ptr, pointer_handle, event);
                         if event_name == "touchstart"
@@ -2563,9 +2577,15 @@ impl ScriptVm {
                 event_name,
                 &active_event_points,
                 &changed_event_points,
-            ) && !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
-            {
-                tap = None;
+            ) {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(event_target);
+                }
+                if !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
+                {
+                    tap = None;
+                }
             }
             if event_name == "touchend"
                 && let Some(candidate) = tap.take()
@@ -2842,6 +2862,19 @@ impl ScriptVm {
         let canceled_raw_keydown = Cell::new(false);
 
         let result = self.with_native_keyboard_event_scope(|scope, runtime_ptr| {
+            let runtime = unsafe { &mut *runtime_ptr };
+            let close_request_context =
+                runtime
+                    .owner_dispatch_scope_for_node(handle)
+                    .and_then(|target| {
+                        let owner = runtime.current_window_execution_context_owner(target)?;
+                        runtime
+                            .window_execution_context(scope, owner, target)
+                            .map(|(_, context)| context)
+                    });
+            if event_name == "keydown" && key_lower != "escape" {
+                runtime.notify_close_watcher_input_activation(handle);
+            }
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -2862,6 +2895,13 @@ impl ScriptVm {
                     canceled_raw_keydown.set(true);
                 }
                 return Ok(input_dispatch_outcome(false));
+            }
+
+            if event_name == "keydown"
+                && key_lower == "escape"
+                && let Some(context) = close_request_context
+            {
+                crate::context_bootstrap::process_close_watchers(scope, context);
             }
 
             // Combined keydown/text input includes a cancelable keypress before

@@ -559,6 +559,7 @@ impl PageScriptHost {
         self.retire_realtime_animation_frame_owner(owner);
         self.retire_realtime_media_query_owner(owner);
         self.retire_event_callbacks_for_execution_context(owner);
+        self.close_watcher_managers.remove(&owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
         if let Some(binding) = retired.as_ref() {
@@ -618,6 +619,7 @@ impl PageScriptHost {
             self.local_storage_areas.remove(&owner);
             self.retire_realtime_animation_frame_owner(owner);
             crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
+            self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
@@ -660,6 +662,7 @@ impl PageScriptHost {
         self.retire_font_face_loads_for_context_token(context_token);
         self.retire_realtime_animation_frame_realm(context_token);
         self.retire_realtime_media_query_realm(context_token);
+        self.retire_close_watcher_realm(context_token);
         let revoked_blob_object_url_count =
             crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
