@@ -62,52 +62,17 @@ fn queue_top_level_location_navigation(
     true
 }
 
-fn queue_popup_target_navigation(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    target_name: &str,
-    resolved_url: &str,
-    exposes_opener: bool,
-) -> bool {
-    let runtime = unsafe { &mut *runtime_ptr };
-    let dispatch_scope = runtime.entered_owner_dispatch_scope(scope);
-    let Some((_, root_document, source)) =
-        runtime.renderer_window_document_source_for_dispatch_scope(dispatch_scope)
-    else {
-        return false;
-    };
-    let window_open_event = RendererPendingWindowOpenEvent::browser_window(
-        resolved_url,
-        target_name,
-        runtime.protocol_user_gesture_activation(),
-    );
-    runtime.record_pending_popup_activation(
-        RendererPendingPopupActivation::window(
-            root_document,
-            source,
-            exposes_opener,
-            None,
-            resolved_url.to_owned(),
-            target_name.to_owned(),
-            RendererPopupDisposition::Foreground,
-        )
-        .with_initial_auxiliary_state(None, None),
-        Some(window_open_event),
-    );
-    true
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HyperlinkPopupRelations {
+struct ElementPopupRelations {
     suppress_opener: bool,
     suppress_referrer: bool,
 }
 
-fn hyperlink_popup_relations(
+fn element_popup_relations(
     runtime: &JsContextHost,
     source_handle: DomHandle,
     target_name: &str,
-) -> HyperlinkPopupRelations {
+) -> ElementPopupRelations {
     let rel = runtime
         .dom_host()
         .node(source_handle)
@@ -126,7 +91,7 @@ fn hyperlink_popup_relations(
             has_noreferrer = true;
         }
     }
-    HyperlinkPopupRelations {
+    ElementPopupRelations {
         suppress_opener: has_noreferrer
             || has_noopener
             || (target_name.eq_ignore_ascii_case("_blank") && !has_opener),
@@ -134,24 +99,43 @@ fn hyperlink_popup_relations(
     }
 }
 
-struct HyperlinkPopupCreator<'s> {
+struct ElementPopupCreator<'s> {
     opener: v8::Local<'s, v8::Object>,
     base_url: url::Url,
     policy_container: DocumentPolicyContainer,
     document_url: url::Url,
 }
 
-fn hyperlink_popup_creator<'s>(
+fn element_popup_referrer_policy(
+    runtime: &JsContextHost,
+    source_handle: DomHandle,
+) -> Option<&'static str> {
+    let element = runtime
+        .dom_host()
+        .node(source_handle)
+        .and_then(crate::dom::native::Node::as_element)?;
+    if !matches!(
+        (element.namespace(), element.local_name()),
+        ("http://www.w3.org/1999/xhtml", "a" | "area") | ("http://www.w3.org/2000/svg", "a")
+    ) {
+        return None;
+    }
+    let policy =
+        super::super::canonical_referrer_policy_value(element.attribute("referrerpolicy")?);
+    (!policy.is_empty()).then_some(policy)
+}
+
+fn element_popup_creator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
-) -> Option<HyperlinkPopupCreator<'s>> {
+) -> Option<ElementPopupCreator<'s>> {
     let runtime = unsafe { &*runtime_ptr };
     let document = runtime.dom_host().owner_document_handle(source_handle)?;
     let base_url = runtime.document_base_url_for_handle(document);
     let document_url = runtime.document_url_for_handle(document);
     if document == runtime.document_handle() {
-        return Some(HyperlinkPopupCreator {
+        return Some(ElementPopupCreator {
             opener: scope.get_current_context().global(scope),
             base_url,
             policy_container: runtime.document_policy_container().clone(),
@@ -159,7 +143,7 @@ fn hyperlink_popup_creator<'s>(
         });
     }
     if let Some(popup_id) = runtime.lightweight_popup_id_for_document_handle(document) {
-        return Some(HyperlinkPopupCreator {
+        return Some(ElementPopupCreator {
             opener: runtime.lightweight_popup_window(scope, popup_id)?,
             base_url,
             policy_container: runtime
@@ -168,10 +152,16 @@ fn hyperlink_popup_creator<'s>(
             document_url,
         });
     }
-    None
+    let frame = runtime.child_browsing_context_handle_by_document_handle(scope, document)?;
+    Some(ElementPopupCreator {
+        opener: runtime.existing_child_browsing_context_window_wrapper(scope, frame)?,
+        base_url,
+        policy_container: runtime.child_browsing_context_policy_container_snapshot(frame)?,
+        document_url,
+    })
 }
 
-fn navigate_hyperlink_popup_target(
+fn navigate_element_popup_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
@@ -179,7 +169,7 @@ fn navigate_hyperlink_popup_target(
     resolved_url: &str,
     disposition: RendererPopupDisposition,
 ) -> bool {
-    let relations = hyperlink_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
+    let relations = element_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
     let Some(dispatch_scope) =
         browsing_context_dispatch_scope_for_node(scope, runtime_ptr, source_handle)
     else {
@@ -190,7 +180,7 @@ fn navigate_hyperlink_popup_target(
     else {
         return false;
     };
-    let Some(mut creator) = hyperlink_popup_creator(scope, runtime_ptr, source_handle) else {
+    let Some(mut creator) = element_popup_creator(scope, runtime_ptr, source_handle) else {
         let runtime = unsafe { &mut *runtime_ptr };
         let window_open_event = RendererPendingWindowOpenEvent::browser_window(
             resolved_url,
@@ -215,7 +205,18 @@ fn navigate_hyperlink_popup_target(
     creator.policy_container.document_referrer = if relations.suppress_referrer {
         String::new()
     } else {
-        creator.document_url.to_string()
+        let policy = element_popup_referrer_policy(unsafe { &*runtime_ptr }, source_handle);
+        url::Url::parse(resolved_url)
+            .ok()
+            .and_then(|target| {
+                moli_fetch::referrer_value(
+                    &creator.document_url,
+                    &target,
+                    policy,
+                    creator.policy_container.referrer_policy.as_deref(),
+                )
+            })
+            .unwrap_or_default()
     };
     let opener = (!relations.suppress_opener).then_some(creator.opener);
     let runtime = unsafe { &mut *runtime_ptr };
@@ -273,7 +274,7 @@ fn navigate_hyperlink_popup_target(
     true
 }
 
-fn hyperlink_javascript_url_allowed_by_csp(
+fn element_javascript_url_allowed_by_csp(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
@@ -414,76 +415,7 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
     }
 }
 
-pub(crate) fn navigate_target_browsing_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    target_name: Option<&str>,
-    resolved_url: &str,
-    source_element: Option<v8::Local<'s, v8::Object>>,
-    exposes_opener: bool,
-) -> bool {
-    let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
-    if target_name.is_none()
-        || matches!(
-            special_target,
-            Some(
-                SpecialBrowsingContextTarget::Current
-                    | SpecialBrowsingContextTarget::Top
-                    | SpecialBrowsingContextTarget::Parent
-            )
-        )
-    {
-        return match special_target {
-            Some(target) => {
-                navigate_existing_browsing_context_target(scope, runtime_ptr, target, resolved_url)
-                    .is_some()
-            }
-            None => {
-                let dispatch_scope = unsafe { &*runtime_ptr }.entered_owner_dispatch_scope(scope);
-                let Some(source_window) =
-                    browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)
-                else {
-                    return false;
-                };
-                navigate_special_target_from_window(
-                    scope,
-                    runtime_ptr,
-                    source_window,
-                    None,
-                    resolved_url,
-                )
-                .is_some()
-            }
-        };
-    }
-    if special_target == Some(SpecialBrowsingContextTarget::Blank) {
-        return queue_popup_target_navigation(
-            scope,
-            runtime_ptr,
-            "_blank",
-            resolved_url,
-            exposes_opener,
-        );
-    }
-    let Some(target_name) = target_name else {
-        unreachable!("missing target was handled as the source browsing context");
-    };
-    navigate_named_iframe_target(
-        scope,
-        runtime_ptr,
-        target_name,
-        resolved_url,
-        source_element,
-    ) || queue_popup_target_navigation(
-        scope,
-        runtime_ptr,
-        target_name,
-        resolved_url,
-        exposes_opener,
-    )
-}
-
-pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
+pub(in crate::native_bridge) fn navigate_element_target_browsing_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
@@ -492,12 +424,12 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     source_element: Option<v8::Local<'s, v8::Object>>,
     popup_disposition: RendererPopupDisposition,
 ) -> bool {
-    if !hyperlink_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
+    if !element_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
         return true;
     }
     let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
     if special_target == Some(SpecialBrowsingContextTarget::Blank) {
-        return navigate_hyperlink_popup_target(
+        return navigate_element_popup_target(
             scope,
             runtime_ptr,
             source_handle,
@@ -515,7 +447,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             target_name,
             resolved_url,
             source_element,
-        ) || navigate_hyperlink_popup_target(
+        ) || navigate_element_popup_target(
             scope,
             runtime_ptr,
             source_handle,
