@@ -691,7 +691,7 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
             "#,
         )
         .expect("Navigator lazy subobjects should materialize"),
-        r#"{"same":true,"languagesFrozen":false,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"clipboardRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true}"#
+        r#"{"same":true,"languagesFrozen":true,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"clipboardRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true}"#
     );
     assert_eq!(
         default_navigator_subobjects(&mut vm),
@@ -729,6 +729,18 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         constructor_materialization_count(&mut vm, "GeolocationPositionError"),
         0,
         "materializing navigator.geolocation must not eagerly build its error interface"
+    );
+}
+
+#[test]
+fn navigator_languages_are_frozen() {
+    let mut vm = new_storage_test_vm("https://navigator-languages.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../tests/fixtures/navigator-languages.js"
+        ))
+        .expect("Navigator.languages must satisfy the FrozenArray contract"),
+        "ok"
     );
 }
 
@@ -807,6 +819,7 @@ fn borrowed_navigator_getters_materialize_subobjects_in_the_receiver_realm() {
               const permissions = permissionsGetter.call(child.navigator);
               return JSON.stringify({
                 languagesSame: languages === child.navigator.languages,
+                languagesFrozen: Object.isFrozen(languages),
                 languagesRealm:
                   Object.getPrototypeOf(languages) === child.Array.prototype,
                 permissionsSame: permissions === child.navigator.permissions,
@@ -817,7 +830,7 @@ fn borrowed_navigator_getters_materialize_subobjects_in_the_receiver_realm() {
             "#,
         )
         .expect("borrowed Navigator getters should use the receiver realm"),
-        r#"{"languagesSame":true,"languagesRealm":true,"permissionsSame":true,"permissionsRealm":true}"#
+        r#"{"languagesSame":true,"languagesFrozen":true,"languagesRealm":true,"permissionsSame":true,"permissionsRealm":true}"#
     );
     assert!(
         default_navigator_subobjects(&mut vm).is_empty(),
