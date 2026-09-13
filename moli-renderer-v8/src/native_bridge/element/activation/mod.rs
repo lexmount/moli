@@ -1,4 +1,6 @@
 mod click;
+#[cfg(feature = "devtools")]
+mod clipboard;
 mod default_action;
 #[cfg(feature = "molio")]
 pub(crate) use default_action::replace_contenteditable_selection_after_beforeinput;
@@ -10,6 +12,9 @@ mod text_input;
 pub(crate) use text_input::TextInputSource;
 #[cfg(feature = "devtools")]
 pub(crate) use text_input::perform_text_input;
+
+#[cfg(feature = "devtools")]
+pub(crate) use clipboard::perform_clipboard_key_default_action;
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
 #[cfg(feature = "ace-protocol")]

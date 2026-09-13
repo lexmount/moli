@@ -214,6 +214,8 @@ pub(crate) use activation::activate_handle_via_click;
 pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
 #[cfg(feature = "devtools")]
+pub(crate) use activation::perform_clipboard_key_default_action;
+#[cfg(feature = "devtools")]
 pub(crate) use activation::perform_text_input;
 pub(crate) use activation::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
@@ -313,6 +315,8 @@ pub(crate) use events::construct_focus_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
+#[cfg(feature = "devtools")]
+pub(crate) use events::construct_clipboard_event;
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     construct_command_event, construct_form_data_event, construct_input_event,

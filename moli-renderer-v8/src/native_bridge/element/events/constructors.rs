@@ -6,9 +6,10 @@ pub(crate) use moli_webapi::events::subclasses::{
     construct_native_interest_event as construct_interest_event,
     construct_native_toggle_event as construct_toggle_event,
 };
-use moli_webapi::events::subclasses::{
-    construct_native_focus_event, construct_native_input_event, construct_native_submit_event,
-};
+#[cfg(feature = "devtools")]
+pub(crate) use moli_webapi::events::subclasses::construct_native_clipboard_event as construct_clipboard_event;
+pub(super) use moli_webapi::events::subclasses::construct_native_input_event as construct_editing_input_event;
+use moli_webapi::events::subclasses::{construct_native_focus_event, construct_native_submit_event};
 #[cfg(feature = "devtools")]
 mod devtools;
 #[cfg(feature = "devtools")]
@@ -57,7 +58,11 @@ pub(crate) enum TextEditInputType {
     #[cfg(feature = "devtools")]
     InsertFromDrop,
     #[cfg(feature = "molio")]
+    InsertFromViewportPaste,
+    #[cfg(feature = "devtools")]
     InsertFromPaste,
+    #[cfg(feature = "devtools")]
+    DeleteByCut,
     #[cfg(feature = "devtools")]
     DeleteContentBackward,
     #[cfg(feature = "devtools")]
@@ -78,7 +83,11 @@ impl TextEditInputType {
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => "insertFromDrop",
             #[cfg(feature = "molio")]
+            Self::InsertFromViewportPaste => "insertFromPaste",
+            #[cfg(feature = "devtools")]
             Self::InsertFromPaste => "insertFromPaste",
+            #[cfg(feature = "devtools")]
+            Self::DeleteByCut => "deleteByCut",
             #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
             #[cfg(feature = "devtools")]
@@ -90,9 +99,13 @@ impl TextEditInputType {
         match self {
             Self::InsertText => Some(text),
             #[cfg(feature = "molio")]
-            Self::InsertCompositionText | Self::InsertFromPaste => Some(text),
+            Self::InsertCompositionText | Self::InsertFromViewportPaste => Some(text),
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => Some(text),
+            #[cfg(feature = "devtools")]
+            Self::InsertFromPaste => (!text.is_empty()).then_some(text),
+            #[cfg(feature = "devtools")]
+            Self::DeleteByCut => None,
             Self::None => None,
             #[cfg(feature = "devtools")]
             Self::InsertLineBreak
@@ -406,7 +419,7 @@ pub(crate) fn construct_input_event<'s>(
     input_type: TextEditInputType,
     data: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_input_event_with_transfer(scope, event_type, input_type, data, None)
+    construct_editing_input_event(scope, event_type, input_type.as_str(), data, None)
 }
 
 #[cfg(feature = "devtools")]
@@ -422,16 +435,6 @@ pub(crate) fn construct_text_input_event_for_target<'s>(
     let context = crate::native_bridge::node_relevant_context(scope, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     crate::context_bootstrap::construct_original_text_input_event(scope, text)
-}
-
-fn construct_input_event_with_transfer<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    input_type: TextEditInputType,
-    data: Option<&str>,
-    data_transfer: Option<v8::Local<'s, v8::Object>>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_native_input_event(scope, event_type, input_type.as_str(), data, data_transfer)
 }
 
 pub(crate) fn construct_simple_event<'s>(

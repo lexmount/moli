@@ -18,6 +18,10 @@ pub(super) use data_transfer::data_transfer_constructor_callback;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use data_transfer::drag::readonly_data_transfer_for_input;
 #[cfg(feature = "devtools")]
+pub(crate) use data_transfer::{
+    build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer,
+};
+#[cfg(feature = "devtools")]
 pub(crate) use data_transfer::drag::{
     NativeDragDataStore, create_drag_data_transfer_view, create_external_drag_data_store,
     create_native_drag_data_store, finish_drag_data_transfer_view,
