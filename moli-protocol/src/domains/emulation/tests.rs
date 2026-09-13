@@ -1960,17 +1960,21 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
         "params": {
             "awaitPromise": true,
             "returnByValue": true,
-            "expression": r#"(async () => JSON.stringify({
+            "expression": r#"(async () => {
+              globalThis.__identityLanguages = navigator.languages;
+              return JSON.stringify({
                 userAgent: navigator.userAgent,
                 platform: navigator.platform,
                 language: navigator.language,
                 languages: navigator.languages,
+                languagesFrozen: Object.isFrozen(navigator.languages),
                 base: navigator.userAgentData.toJSON(),
                 high: await navigator.userAgentData.getHighEntropyValues([
                     'architecture', 'bitness', 'formFactors', 'fullVersionList',
                     'platformVersion', 'uaFullVersion', 'wow64'
                 ])
-            }))()"#
+              });
+            })()"#
         }
     }))
     .await;
@@ -1985,6 +1989,7 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
     assert_eq!(identity["platform"], json!("Linux x86_64"));
     assert_eq!(identity["language"], json!("fr-CA"));
     assert_eq!(identity["languages"], json!(["fr-CA", "fr;q=0.9"]));
+    assert_eq!(identity["languagesFrozen"], json!(true));
     assert_eq!(identity["base"]["platform"], json!("Linux"));
     assert_eq!(identity["base"]["brands"][0]["brand"], json!("Chromium"));
     assert_eq!(identity["high"]["architecture"], json!("x86"));
@@ -2024,7 +2029,15 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
         "sessionId": "SID-1",
         "params": {
             "returnByValue": true,
-            "expression": "JSON.stringify({ platform: navigator.platform, languages: navigator.languages, uaData: navigator.userAgentData.toJSON() })"
+            "expression": r#"JSON.stringify({
+                platform: navigator.platform,
+                languages: navigator.languages,
+                languagesFrozen: Object.isFrozen(navigator.languages),
+                oldLanguages: __identityLanguages,
+                oldLanguagesFrozen: Object.isFrozen(__identityLanguages),
+                languagesReplaced: __identityLanguages !== navigator.languages,
+                uaData: navigator.userAgentData.toJSON()
+            })"#
         }
     }))
     .await;
@@ -2037,6 +2050,10 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
     .expect("identity result should parse");
     assert_eq!(identity["platform"], json!("Win32"));
     assert_eq!(identity["languages"], json!(["en-US", "en"]));
+    assert_eq!(identity["languagesFrozen"], json!(true));
+    assert_eq!(identity["oldLanguages"], json!(["fr-CA", "fr;q=0.9"]));
+    assert_eq!(identity["oldLanguagesFrozen"], json!(true));
+    assert_eq!(identity["languagesReplaced"], json!(true));
     assert_eq!(identity["uaData"]["brands"], json!([]));
     assert_eq!(identity["uaData"]["platform"], json!(""));
 

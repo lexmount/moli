@@ -972,10 +972,16 @@ fn delete_object_property(
 fn build_languages_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     languages: &[String],
-) -> v8::Local<'s, v8::Array> {
-    serialize_v8_array(scope, languages)
+) -> Result<v8::Local<'s, v8::Array>> {
+    let array = serialize_v8_array(scope, languages)
         .or_else(|| serialize_v8_array(scope, [""]))
-        .unwrap_or_else(|| v8::Array::new(scope, 0))
+        .unwrap_or_else(|| v8::Array::new(scope, 0));
+    // NavigatorLanguage returns a FrozenArray in both Window and Worker realms.
+    // Freeze the native snapshot before it can enter the lazy subobject cache.
+    if array.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        return Err(anyhow!("failed to freeze Navigator.languages"));
+    }
+    Ok(array)
 }
 
 fn build_navigator_connection<'s>(
@@ -1058,7 +1064,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
     let value: v8::Local<'s, v8::Value> = match subobject {
         NavigatorSubobject::Languages => {
             let languages = effective_navigator_languages(scope, backing);
-            build_languages_array(scope, &languages).into()
+            build_languages_array(scope, &languages)?.into()
         }
         NavigatorSubobject::MimeTypes | NavigatorSubobject::Plugins => {
             build_navigator_plugin_collection_subobject(scope, backing, subobject)?

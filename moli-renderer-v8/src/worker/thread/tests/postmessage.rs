@@ -2153,6 +2153,23 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
 }
 
 #[tokio::test]
+async fn worker_navigator_languages_are_frozen() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "try {{ postMessage({}); }} catch (error) {{ postMessage(String(error)); }} close();",
+            include_str!("../../../../tests/fixtures/navigator-languages.js")
+        ),
+        "https://navigator-languages.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker language contract must settle")
+        .expect("worker must return a language contract result");
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
+
+#[tokio::test]
 async fn worker_media_capabilities_matches_the_software_chromium_profile() {
     ensure_v8();
     let mut handle = spawn_worker(
@@ -2310,6 +2327,7 @@ async fn shared_worker_navigator_exposes_canonical_user_agent_data() {
                         sameObject: uaData === navigator.userAgentData,
                         userAgent: navigator.userAgent,
                         languages: Array.from(navigator.languages),
+                        languagesFrozen: Object.isFrozen(navigator.languages),
                         brands: uaData.brands,
                         emptyKeys: Object.keys(empty),
                         selectedKeys: Object.keys(selected),
@@ -2341,7 +2359,7 @@ async fn shared_worker_navigator_exposes_canonical_user_agent_data() {
             "JSON.stringify(__wire)",
         )
         .await,
-        r#"{"constructorType":"function","dataType":"object","instance":true,"sameObject":false,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36","languages":["de-DE","de"],"brands":[{"brand":"Chromium","version":"146"},{"brand":"Not-A.Brand","version":"24"},{"brand":"Google Chrome","version":"146"}],"emptyKeys":["brands","mobile","platform"],"selectedKeys":["architecture","brands","mobile","platform"],"architecture":"x86"}"#
+        r#"{"constructorType":"function","dataType":"object","instance":true,"sameObject":false,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36","languages":["de-DE","de"],"languagesFrozen":true,"brands":[{"brand":"Chromium","version":"146"},{"brand":"Not-A.Brand","version":"24"},{"brand":"Google Chrome","version":"146"}],"emptyKeys":["brands","mobile","platform"],"selectedKeys":["architecture","brands","mobile","platform"],"architecture":"x86"}"#
     );
 }
 
