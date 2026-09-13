@@ -1646,7 +1646,7 @@ fn source_url_matches(
         return false;
     }
     if let Some(matches) =
-        wildcard_host_source_matches(source, protected_url, request_url, redirect_status)
+        wildcard_source_url_matches(source, protected_url, request_url, redirect_status)
     {
         return matches;
     }
@@ -1782,7 +1782,7 @@ fn csp_scheme_and_port_match(scheme_match: CspSchemeMatch, port_match: CspPortMa
     scheme_can_upgrade && port_can_upgrade
 }
 
-fn wildcard_host_source_matches(
+fn wildcard_source_url_matches(
     source: &str,
     protected_url: &Url,
     request_url: &Url,
@@ -1797,7 +1797,10 @@ fn wildcard_host_source_matches(
     };
     let (authority, source_path) = split_authority_and_path(rest);
     let (source_host, source_port) = split_source_authority(authority)?;
-    if source_host != "*" && !source_host.starts_with("*.") {
+    let has_wildcard_host = source_host == "*" || source_host.starts_with("*.");
+    // A wildcard port is CSP syntax even with an exact hostname. URL parsing
+    // cannot represent it; keep matching the scheme, host, and path separately.
+    if !has_wildcard_host && (source_port != Some("*") || source.starts_with("//")) {
         return None;
     }
     let source_scheme = source_scheme.unwrap_or_else(|| protected_url.scheme());
@@ -1812,7 +1815,12 @@ fn wildcard_host_source_matches(
     let Some(request_host) = request_url.host_str() else {
         return Some(false);
     };
-    if !wildcard_source_host_matches(source_host, request_host) {
+    let host_matches = if has_wildcard_host {
+        wildcard_source_host_matches(source_host, request_host)
+    } else {
+        exact_source_host_matches(source_host, request_host)
+    };
+    if !host_matches {
         return Some(false);
     }
     if let Some(source_path) = source_path
@@ -1860,6 +1868,22 @@ fn wildcard_source_host_matches(source_host: &str, request_host: &str) -> bool {
     request_host.len() > source_suffix.len()
         && request_host.ends_with(source_suffix)
         && request_host.as_bytes()[request_host.len() - source_suffix.len() - 1] == b'.'
+}
+
+fn exact_source_host_matches(source_host: &str, request_host: &str) -> bool {
+    if !source_host.eq_ignore_ascii_case(request_host) {
+        return false;
+    }
+    let labels = source_host.strip_suffix('.').unwrap_or(source_host);
+    if !labels.split('.').all(|label| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) {
+        return false;
+    }
+    source_host == "127.0.0.1" || source_host.parse::<std::net::Ipv4Addr>().is_err()
 }
 
 fn wildcard_source_port_match(
@@ -2642,6 +2666,154 @@ mod tests {
             ContentSecurityPolicyResourceKind::WorkerScript,
             "https://assets.cdn.example.com/trusted%2Fevil.js"
         ));
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_apply_across_resource_kinds() {
+        for kind in [
+            ContentSecurityPolicyResourceKind::DocumentConnect,
+            ContentSecurityPolicyResourceKind::DocumentFrame,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+            ContentSecurityPolicyResourceKind::DocumentManifest,
+            ContentSecurityPolicyResourceKind::DocumentMedia,
+            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+            ContentSecurityPolicyResourceKind::DocumentStyleElement,
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyResourceKind::WorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+        ] {
+            for source in ["https://cdn.test:*", "http://cdn.test:*", "CDN.TEST:*"] {
+                for port in ["", ":0", ":80", ":443", ":8443", ":65535"] {
+                    let policy = format!("default-src {source}");
+                    let request = format!("https://cdn.test{port}/asset");
+                    assert!(
+                        allowed(&policy, kind, &request),
+                        "{policy} should allow {request} for {kind:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_preserve_other_source_restrictions() {
+        for (source, request, expected) in [
+            ("http://cdn.test:*", "http://cdn.test:8080/asset", true),
+            ("https://CDN.TEST:*", "https://cdn.test:8443/asset", true),
+            ("cdn.test:*", "https://cdn.test:8443/asset", true),
+            ("cdn.test:*", "http://cdn.test:8080/asset", false),
+            (
+                "https://cdn.test:*",
+                "https://sub.cdn.test:8443/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*",
+                "https://evilcdn.test:8443/asset",
+                false,
+            ),
+            ("https://cdn.test.:*", "https://cdn.test:8443/asset", false),
+            ("https://cdn.test.:*", "https://cdn.test.:8443/asset", true),
+            ("https://cdn.test:*", "http://cdn.test:8080/asset", false),
+            ("http://cdn.test:*", "ws://cdn.test:8080/asset", false),
+            ("ws://cdn.test:*", "wss://cdn.test:8443/asset", true),
+            ("wss://cdn.test:*", "ws://cdn.test:8080/asset", false),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/trusted/asset",
+                true,
+            ),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/trusted%2Fevil",
+                false,
+            ),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/other/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/asset?cache=1",
+                true,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/asset/extra",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/ASSET",
+                false,
+            ),
+            ("//cdn.test:*", "https://cdn.test:8443/asset", false),
+            (
+                "https://user@cdn.test:*",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            ("https://%63dn.test:*", "https://cdn.test:8443/asset", false),
+            (
+                "https://cdn.test:*/asset?ignored",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset#ignored",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            ("https://cdn.test:*0", "https://cdn.test:8443/asset", false),
+            (
+                "https://bad_host.test:*",
+                "https://bad_host.test:8443/asset",
+                false,
+            ),
+            (
+                "https://bad..host.test:*",
+                "https://bad..host.test:8443/asset",
+                false,
+            ),
+            ("https://127.0.0.1:*", "https://127.0.0.1:8443/asset", true),
+            ("https://192.0.2.1:*", "https://192.0.2.1:8443/asset", false),
+            ("https://[::1]:*", "https://[::1]:8443/asset", false),
+        ] {
+            let policy = format!("img-src {source}");
+            assert_eq!(
+                allowed(
+                    &policy,
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                    request
+                ),
+                expected,
+                "{policy} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_preserve_redirect_restrictions() {
+        for (request, expected) in [
+            ("https://cdn.test:9443/other/asset", true),
+            ("https://other.test:9443/other/asset", false),
+            ("http://cdn.test:8080/other/asset", false),
+        ] {
+            assert_eq!(
+                content_security_policy_allows_url_with_redirect_status(
+                    &["script-src https://cdn.test:*/trusted/".to_owned()],
+                    &protected_url(),
+                    &request_url(request),
+                    ContentSecurityPolicyResourceKind::DocumentScriptElement,
+                    ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                ),
+                expected,
+                "a redirected wildcard-port request must still match scheme and host: {request}"
+            );
+        }
     }
 
     #[test]
