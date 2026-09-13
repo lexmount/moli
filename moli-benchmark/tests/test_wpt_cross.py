@@ -4113,16 +4113,6 @@ test(() => {}, "ok");
         self.assertIsNone(store.wait_for_final("example.html", timeout=0))
         self.assertEqual(store.get("example.html"), {"source": "incremental"})
 
-    def test_testdriver_vendor_bridge_accepts_storage_access_permission_setup(self) -> None:
-        self.assertIn(
-            b"params.descriptor.name === 'storage-access'",
-            BENCH_TESTDRIVER_VENDOR_BRIDGE,
-        )
-        self.assertIn(
-            b"set_permission() is not implemented by the Moli WPT bridge",
-            BENCH_TESTDRIVER_VENDOR_BRIDGE,
-        )
-
     def test_testdriver_vendor_bridge_provides_computed_label(self) -> None:
         self.assertIn(b"get_computed_label", BENCH_TESTDRIVER_VENDOR_BRIDGE)
         self.assertIn(b"resolveReferenceTarget", BENCH_TESTDRIVER_VENDOR_BRIDGE)

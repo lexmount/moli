@@ -551,12 +551,6 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = (
   }
   window.test_driver_internal.in_automation = true;
   window.test_driver_internal.get_computed_label = getComputedLabel;
-  window.test_driver_internal.set_permission = async function(params) {
-    if (params && params.descriptor && params.descriptor.name === 'storage-access') {
-      return;
-    }
-    throw new Error("set_permission() is not implemented by the Moli WPT bridge");
-  };
 })();
 """
 )

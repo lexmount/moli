@@ -62,6 +62,25 @@
       if (error !== null) item.reject(new Error(error));
       else item.resolve();
     },
+    permissionFramePath(id, expectedToken) {
+      let context = entry(id, expectedToken).context;
+      if (!context || context.closed || context.top !== window.top) {
+        throw new Error('Permission context is not in the current test target');
+      }
+      const path = [];
+      while (context !== window.top) {
+        const parent = context.parent;
+        let index = 0;
+        while (index < parent.length && parent[index] !== context) index++;
+        if (index === parent.length) throw new Error('Permission frame is no longer attached');
+        path.unshift(index);
+        context = parent;
+      }
+      return path;
+    },
+    permissionFrameMatches(id, expectedToken, owner) {
+      return owner.isConnected && owner.contentWindow === entry(id, expectedToken).context;
+    },
     focus(id, expectedToken) {
       const element = entry(id, expectedToken).element;
       if (!element || !element.isConnected) throw new Error('stale element reference');
@@ -110,6 +129,9 @@
   driver.in_automation = true;
   driver.click = (element, coords) => request({kind: 'click', x: coords.x, y: coords.y}, element);
   driver.send_keys = (element, keys) => request({kind: 'send_keys', keys}, element);
+  driver.set_permission = async (params, context = null) => request({
+    kind: 'set_permission', descriptor: params.descriptor, state: params.state,
+  }, null, context || window);
   driver.action_sequence = (actions, context = null) => {
     const elements = [];
     const serialized = actions.map(source => ({...source, actions: source.actions.map(action => {
