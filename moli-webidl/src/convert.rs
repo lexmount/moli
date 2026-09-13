@@ -358,9 +358,10 @@ where
     Ok(Some(Sequence(values)))
 }
 
-// Records are converted from own property keys and then property values. If two
-// JavaScript keys become the same WebIDL key after key conversion, the later
-// property wins, matching the WebIDL record replacement behavior.
+// Record conversion collects own keys, then observes each descriptor immediately
+// before converting that entry. Getters and Proxy traps can affect later entries.
+// If two JavaScript keys become the same WebIDL key after key conversion, the
+// later property wins, matching the WebIDL record replacement behavior.
 impl<'s, K, V> WebIdlConverter<'s> for Record<K, V>
 where
     K: WebIdlConverter<'s> + PartialEq,
