@@ -2,6 +2,7 @@ use super::*;
 
 mod broadcast_channel;
 mod chrome;
+mod clipboard_storage;
 mod console;
 mod crypto_misc;
 mod crypto_subtle_aes;
