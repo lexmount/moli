@@ -621,6 +621,7 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         "Geolocation",
         "GeolocationPositionError",
         "MediaCapabilities",
+        "Scheduling",
         "Clipboard",
         "ClipboardItem",
     ] {
@@ -663,7 +664,8 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
                   "mediaCapabilities",
                   navigator.mediaCapabilities,
                   navigator.mediaCapabilities
-                ]
+                ],
+                ["scheduling", navigator.scheduling, navigator.scheduling]
               ];
               return JSON.stringify({
                 same: pairs.every(([, first, second]) => first === second),
@@ -685,13 +687,15 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
                     Geolocation.prototype,
                 mediaCapabilitiesRealm:
                   Object.getPrototypeOf(navigator.mediaCapabilities) ===
-                    MediaCapabilities.prototype
+                    MediaCapabilities.prototype,
+                schedulingRealm:
+                  Object.getPrototypeOf(navigator.scheduling) === Scheduling.prototype
               });
             })()
             "#,
         )
         .expect("Navigator lazy subobjects should materialize"),
-        r#"{"same":true,"languagesFrozen":true,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"clipboardRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true}"#
+        r#"{"same":true,"languagesFrozen":true,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"clipboardRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true,"schedulingRealm":true}"#
     );
     assert_eq!(
         default_navigator_subobjects(&mut vm),
@@ -712,10 +716,12 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
             "storageBuckets",
             "geolocation",
             "mediaCapabilities",
+            "scheduling",
         ]
     );
     assert_eq!(constructor_materialization_count(&mut vm, "Geolocation"), 1);
     assert_eq!(constructor_materialization_count(&mut vm, "Clipboard"), 1);
+    assert_eq!(constructor_materialization_count(&mut vm, "Scheduling"), 1);
     assert_eq!(
         constructor_materialization_count(&mut vm, "ClipboardItem"),
         0,

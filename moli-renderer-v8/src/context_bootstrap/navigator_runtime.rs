@@ -6,6 +6,7 @@ mod media_capabilities;
 mod media_devices;
 mod navigator;
 mod navigator_subobjects;
+mod scheduling;
 mod screen;
 mod visual_viewport;
 mod window_state;
