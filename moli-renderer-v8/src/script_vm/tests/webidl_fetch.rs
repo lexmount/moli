@@ -6786,6 +6786,214 @@ fn intersection_observer_margin_errors_preserve_dictionary_conversion_exceptions
 }
 
 #[test]
+fn intersection_observer_threshold_union_converts_numbers_and_iterables() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-threshold-union.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const cases = [
+    ['default', undefined, [0]], ['null', null, [0]],
+    ['false', false, [0]], ['true', true, [1]],
+    ['string', '0.25', [0.25]], ['boxed number', new Number(0.25), [0.25]],
+    ['object', {valueOf() { return 0.25; }}, [0.25]],
+    ['null iterator', {[Symbol.iterator]: null, valueOf() { return 0.25; }}, [0.25]],
+    ['undefined iterator', {[Symbol.iterator]: undefined, valueOf() { return 0.25; }}, [0.25]],
+    ['string object', new String('01'), [0, 1]],
+    ['duplicates', [0.75, 0.25, 0.25], [0.25, 0.25, 0.75]],
+    ['typed array', new Float64Array([0.75, 0.25, 0.25]), [0.25, 0.25, 0.75]],
+    ['empty sequence', [], [0]]
+  ];
+  for (const [label, threshold, expected] of cases) {
+    const observer = new IntersectionObserver(() => {}, {threshold});
+    check(JSON.stringify(observer.thresholds) === JSON.stringify(expected), label);
+    observer.disconnect();
+  }
+
+  let reads = 0;
+  let calls = 0;
+  const iterable = {
+    get [Symbol.iterator]() {
+      reads++;
+      return function*() {
+        calls++;
+        check(this === iterable, 'iterator receiver');
+        yield 0.75;
+        yield 0.25;
+        yield 0.25;
+      };
+    },
+    valueOf() { throw new Error('iterable must not use numeric fallback'); }
+  };
+  const observer = new IntersectionObserver(() => {}, {threshold: iterable});
+  check(reads === 1 && calls === 1, 'iterator must be read and called once');
+  check(JSON.stringify(observer.thresholds) === '[0.25,0.25,0.75]', 'iterable thresholds');
+  observer.disconnect();
+
+  reads = 0;
+  calls = 0;
+  const number = new IntersectionObserver(() => {}, {threshold: {
+    get [Symbol.iterator]() { reads++; return null; },
+    valueOf() { calls++; return 0.5; }
+  }});
+  check(reads === 1 && calls === 1 && number.thresholds[0] === 0.5, 'numeric fallback');
+  number.disconnect();
+  let caught;
+  try {
+    new IntersectionObserver(() => {}, {threshold: {
+      [Symbol.iterator]: 1,
+      valueOf() { throw new Error('noncallable iterator must not fall back'); }
+    }});
+  } catch (error) { caught = error; }
+  check(caught instanceof TypeError, 'noncallable iterator');
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver threshold union should convert through WebIDL");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn intersection_observer_converts_dictionary_members_in_order() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-dictionary-order.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const log = [];
+  const observer = new IntersectionObserver(() => {}, {
+    get trackVisibility() { log.push('trackVisibility'); return false; },
+    get threshold() {
+      log.push('threshold');
+      return {get [Symbol.iterator]() {
+        log.push('iterator');
+        return function*() {
+          log.push('iterate');
+          yield {valueOf() { log.push('double'); return 0.25; }};
+          log.push('done');
+        };
+      }};
+    },
+    get scrollMargin() {
+      log.push('scrollMargin');
+      return {toString() { log.push('scrollMargin string'); return '0px'; }};
+    },
+    get rootMargin() {
+      log.push('rootMargin');
+      return {toString() { log.push('rootMargin string'); return '0px'; }};
+    },
+    get root() { log.push('root'); return document; },
+    get delay() {
+      log.push('delay');
+      return {valueOf() { log.push('delay number'); return 3; }};
+    }
+  });
+  check(log.join(',') === 'delay,delay number,root,rootMargin,rootMargin string,scrollMargin,scrollMargin string,threshold,iterator,iterate,double,done,trackVisibility', log.join(','));
+  check(observer.root === document && observer.delay === 3, 'converted root and delay');
+  observer.disconnect();
+
+  const threshold = [0.25];
+  const snapshot = new IntersectionObserver(() => {}, {
+    threshold,
+    get trackVisibility() { threshold[0] = 0.75; return false; }
+  });
+  check(snapshot.thresholds[0] === 0.25, 'threshold converted before later getter mutation');
+  snapshot.disconnect();
+
+  const sentinel = {};
+  let caught;
+  try {
+    new IntersectionObserver(() => {}, {
+      get delay() { throw sentinel; },
+      get root() { throw new Error('root must not be read'); }
+    });
+  } catch (error) { caught = error; }
+  check(caught === sentinel, 'delay conversion is first');
+
+  for (const root of [{}, document.createTextNode('root'), document.createDocumentFragment()]) {
+    for (const member of ['rootMargin', 'scrollMargin', 'threshold', 'trackVisibility']) {
+      let calls = 0;
+      caught = undefined;
+      try {
+        new IntersectionObserver(() => {}, {
+          root,
+          get [member]() { calls++; throw sentinel; }
+        });
+      } catch (error) { caught = error; }
+      check(caught instanceof TypeError && calls === 0, 'invalid root precedes ' + member);
+    }
+  }
+  for (const root of [null, undefined, document, document.createElement('div')]) {
+    const valid = new IntersectionObserver(() => {}, {root});
+    check(valid.root === (root ?? null), 'valid root');
+    valid.disconnect();
+  }
+  return 'ok';
+})()
+"#).expect("IntersectionObserver options should convert in dictionary member order");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn intersection_observer_validates_thresholds_after_dictionary_conversion() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-threshold-validation.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const capture = options => {
+    try { new IntersectionObserver(() => {}, options); } catch (error) { return error; }
+    return undefined;
+  };
+  for (const value of [NaN, Infinity, -Infinity, 'foo', Symbol(), 1n]) {
+    for (const threshold of [value, [value]]) {
+      check(capture({threshold}) instanceof TypeError, 'invalid double');
+      check(capture({threshold, rootMargin: 'invalid'}) instanceof TypeError,
+            'double conversion precedes margin parsing');
+    }
+  }
+  for (const value of [-0.25, 1.25]) {
+    for (const threshold of [value, [value]]) {
+      check(capture({threshold}) instanceof RangeError, 'out-of-range threshold');
+      for (const member of ['rootMargin', 'scrollMargin']) {
+        const error = capture({threshold, [member]: 'invalid'});
+        check(error instanceof DOMException && error.name === 'SyntaxError',
+              member + ' parsing precedes range validation');
+      }
+      const sentinel = {};
+      check(capture({threshold, get trackVisibility() { throw sentinel; }}) === sentinel,
+            'dictionary conversion precedes range validation');
+    }
+  }
+
+  const sentinel = {};
+  const fail = () => { throw sentinel; };
+  for (const threshold of [
+    {get [Symbol.iterator]() { throw sentinel; }},
+    {valueOf: fail},
+    [{valueOf: fail}],
+    [1.25, {valueOf: fail}]
+  ]) {
+    for (const member of ['rootMargin', 'scrollMargin']) {
+      check(capture({threshold, [member]: 'invalid'}) === sentinel,
+            member + ' must preserve threshold conversion exception');
+    }
+    let calls = 0;
+    check(capture({threshold, get trackVisibility() { calls++; return false; }}) === sentinel,
+          'threshold conversion must preserve exception identity');
+    check(calls === 0, 'failed conversion must stop dictionary reads');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver should separate conversion from threshold validation");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn resize_observer_callbacks_apply_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://resize-observer-webidl.test/");
 
