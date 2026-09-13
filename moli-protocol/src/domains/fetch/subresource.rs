@@ -319,6 +319,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
                     method: info.method.clone(),
                     headers: info.request_headers.clone(),
                     body: info.request_body.clone(),
+                    body_overridden: false,
                     request_cookie_report: info.request_cookie_report.clone(),
                     remaining_sessions,
                 }));
@@ -363,6 +364,17 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
+        if !network_session_ids.is_empty() {
+            // A request is already observable at the Fetch pause. Its body
+            // must be readable before the intercepted transport is resumed.
+            network::record_subresource_request_body(
+                conn,
+                owner,
+                &network_request_id,
+                output.network_output().request_body_bytes(),
+                network_session_ids,
+            );
+        }
         let network_events = network_session_ids
             .iter()
             .flat_map(|session_id| {

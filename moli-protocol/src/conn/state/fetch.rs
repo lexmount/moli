@@ -2476,6 +2476,7 @@ mod tests {
             method: "GET".to_owned(),
             headers: Vec::new().into(),
             body: None,
+            body_overridden: false,
             request_cookie_report: None,
             remaining_sessions: vec![
                 PendingSubresourceFetchRequestStage {
@@ -2647,6 +2648,7 @@ mod tests {
                 method: "GET".to_owned(),
                 headers: Vec::new().into(),
                 body: None,
+                body_overridden: false,
                 request_cookie_report: None,
                 remaining_sessions: vec![
                     PendingSubresourceFetchRequestStage {
