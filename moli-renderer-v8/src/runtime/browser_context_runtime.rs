@@ -171,6 +171,9 @@ pub(crate) struct RendererStoragePartitionIdentity {
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
     id: super::RendererBrowserContextRuntimeId,
+    // Keep clipboard representations independent of any page's V8 objects so
+    // other pages and replacement documents can read them in their own realm.
+    clipboard_data: Mutex<Vec<(String, Vec<u8>)>>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -341,6 +344,14 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
+    pub(crate) fn clipboard_data(&self) -> Vec<(String, Vec<u8>)> {
+        self.inner.clipboard_data.lock().clone()
+    }
+
+    pub(crate) fn set_clipboard_data(&self, data: Vec<(String, Vec<u8>)>) {
+        *self.inner.clipboard_data.lock() = data;
+    }
+
     // A browser-context runtime is only valid while its thread-affine owner is
     // retained, so construction returns that owner rather than a bare handle.
     #[allow(clippy::new_ret_no_self)]
@@ -529,6 +540,7 @@ impl RendererBrowserContextRuntime {
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
+                clipboard_data: Mutex::new(Vec::new()),
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),

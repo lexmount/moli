@@ -10200,7 +10200,7 @@ fn async_clipboard_interfaces_are_branded_and_round_trip_text_data() {
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__asyncClipboardProbe)")
             .expect("Async Clipboard promise result should evaluate"),
-        r#"{"state":"done","initialBlob":[true,"text/plain","hello"],"writtenText":"hello","read":[1,true,"opaque",false],"textWrite":[1,true,"text/plain","next"],"rejections":["TypeError","TypeError","TypeError","NotAllowedError","NotAllowedError","TypeError","NotFoundError","TypeError","NotAllowedError","NotAllowedError","TypeError"]}"#
+        r#"{"state":"done","initialBlob":[true,"text/plain","hello"],"writtenText":"hello","read":[1,false,"opaque",false],"textWrite":[1,true,"text/plain","next"],"rejections":["TypeError","TypeError","TypeError","NotAllowedError","NotAllowedError","TypeError","NotFoundError","TypeError","NotAllowedError","NotAllowedError","TypeError"]}"#
     );
 }
 
