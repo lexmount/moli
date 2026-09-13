@@ -735,7 +735,7 @@ pub(crate) fn construct_keyboard_event<'s>(
     construct_event(scope, "KeyboardEvent", event_type, init)
 }
 
-pub(in crate::native_bridge::element) fn construct_focus_event<'s>(
+pub(crate) fn construct_focus_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     related_target: Option<v8::Local<'s, v8::Value>>,

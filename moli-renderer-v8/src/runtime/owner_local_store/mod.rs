@@ -918,6 +918,7 @@ impl RendererOwnerLocalStore {
                 request.idle_override = configuration.idle_override;
                 request.navigator_overrides = configuration.navigator_overrides;
                 request.viewport_surface = configuration.viewport_surface;
+                request.document_activity = configuration.document_activity;
                 request
                     .loader
                     .replace_browser_resource_runtime(configuration.browser_resource_runtime);

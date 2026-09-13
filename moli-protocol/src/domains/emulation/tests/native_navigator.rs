@@ -284,6 +284,61 @@ async fn focus_override_updates_loaded_background_page_and_preserves_real_focus(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn focus_override_dispatches_native_visibility_and_focus_events() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active");
+    bc.attach_active_session("SID-active");
+    bc.insert_page_target_host(PageTargetHost::new(
+        "TID-1".into(),
+        Some("SID-1".into()),
+        TargetIdentityState::about_blank(),
+        TargetPageSlot::empty_for_test_fixture(),
+    ));
+    install_geolocation_page_for_test(&mut ctx, bc).await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            r#"globalThis.surfaceEvents = [];
+                document.addEventListener('visibilitychange', event =>
+                    surfaceEvents.push(['visibilitychange', event.isTrusted, event.target === document]));
+                window.addEventListener('focus', event =>
+                    surfaceEvents.push(['focus', event.isTrusted, event.target === window]));
+                window.addEventListener('blur', event =>
+                    surfaceEvents.push(['blur', event.isTrusted, event.target === window]));
+                [Object.hasOwn(document, 'hidden'), Object.hasOwn(document, 'visibilityState'),
+                 Object.hasOwn(document, 'hasFocus')]"#,
+        )
+        .await,
+        json!([false, false, false])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.setFocusEmulationEnabled",
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "surfaceEvents").await,
+        json!([["visibilitychange", true, true], ["focus", true, true]])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88002,
+        "SID-1",
+        "Emulation.setFocusEmulationEnabled",
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "surfaceEvents.slice(2)").await,
+        json!([["visibilitychange", true, true], ["blur", true, true]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn max_touch_points_updates_native_getters_and_rejects_invalid_counts_atomically() {
     let mut ctx = setup().await;
     evaluate(&mut ctx, "globalThis.touchGetter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'maxTouchPoints').get").await;

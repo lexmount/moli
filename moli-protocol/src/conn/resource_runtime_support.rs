@@ -94,7 +94,7 @@ impl CdpConnection {
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
     ) -> Option<&mut moli_core::runtime::NavigationEngine> {
-        match (
+        let mut engine = match (
             load_inputs.browser_context_id.as_deref(),
             load_inputs.root_frame_id.as_deref(),
         ) {
@@ -113,7 +113,11 @@ impl CdpConnection {
                 }
             }
             (None, _) => Some(self.standalone_navigation_engine.ensure_mut()),
+        };
+        if let Some(engine) = engine.as_mut() {
+            engine.set_document_activity(load_inputs.document_activity);
         }
+        engine
     }
 
     pub(crate) fn build_registered_browser_resource_runtime_for_navigation_load_inputs(

@@ -36,6 +36,7 @@ pub(crate) enum RendererPageRenderingUpdateTaskKind {
     DocumentScrollEvents,
     AnimationStartScan,
     PostParseAutofocus,
+    EnvironmentChange,
 }
 
 pub(crate) type RendererPageRenderingUpdateOwner = RendererPageWindowDocumentTaskOwner;

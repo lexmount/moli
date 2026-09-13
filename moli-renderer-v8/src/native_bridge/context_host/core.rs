@@ -269,6 +269,7 @@ impl JsContextHost {
             webdriver_bidi_file_prompt_handler_stack: Vec::new(),
             emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
             viewport_surface: None,
+            document_activity: moli_page_types::DocumentActivity::default(),
             wpt_extensions_enabled: false,
             network_offline: false,
             navigator_overrides: Default::default(),

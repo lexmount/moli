@@ -1104,6 +1104,10 @@ impl PageVm {
                 self.set_navigator_overrides(&overrides)?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetDocumentActivity(activity) => {
+                self.set_document_activity(activity)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetScriptExecutionDisabled(disabled) => {
                 self.set_script_execution_disabled(disabled);
                 Ok(RendererPageReply::Unit)

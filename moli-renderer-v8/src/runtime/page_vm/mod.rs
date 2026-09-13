@@ -1088,6 +1088,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(crate) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    pub(crate) document_activity: moli_page_types::DocumentActivity,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -1609,6 +1610,7 @@ pub(crate) struct PageVm {
     pub(super) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub(super) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(super) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    pub(super) document_activity: moli_page_types::DocumentActivity,
     pub(super) network_offline: bool,
     pub(super) blocked_url_patterns: Vec<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -4327,6 +4329,7 @@ impl PageVm {
             idle_override: env.idle_override,
             navigator_overrides: env.navigator_overrides.clone(),
             viewport_surface: env.viewport_surface,
+            document_activity: env.document_activity,
             network_offline: env.network_offline,
             blocked_url_patterns: env.blocked_url_patterns.clone(),
             indexed_db_manager: env.indexed_db_manager.clone(),
@@ -4381,7 +4384,9 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm.vm_mut().set_emulated_media(&env.emulated_media);
+        page_vm
+            .vm_mut()
+            .set_emulated_media_for_bootstrap(&env.emulated_media);
         page_vm.vm_mut().set_idle_override(env.idle_override);
         page_vm
             .vm_mut()
@@ -4389,6 +4394,9 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_viewport_surface_for_bootstrap(env.viewport_surface);
+        page_vm
+            .vm_mut()
+            .set_document_activity_for_bootstrap(env.document_activity);
         page_vm.vm_mut().set_network_offline(env.network_offline);
         page_vm
             .vm_mut()

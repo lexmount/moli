@@ -1562,6 +1562,7 @@ impl CdpConnection {
             idle_override,
             navigator_overrides: load_inputs.navigator_overrides,
             viewport_surface: load_inputs.viewport_surface,
+            document_activity: load_inputs.document_activity,
             browser_resource_runtime,
             navigator_identity,
             network_offline: load_inputs.network_offline,
@@ -2523,10 +2524,11 @@ impl CdpConnection {
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
     ) -> NavigationEngine {
-        let engine = self
+        let mut engine = self
             .configured_navigation_engine_for_load_inputs_mut(load_inputs)
             .expect("navigation load target must retain its resident NavigationEngine")
             .clone();
+        engine.set_document_activity(load_inputs.document_activity);
         // The handle may publish lifecycle or resource activity before the
         // DCL-bound navigation result is committed into a target slot.
         self.apply_scheduler_senders_to_navigation_engine(&engine);

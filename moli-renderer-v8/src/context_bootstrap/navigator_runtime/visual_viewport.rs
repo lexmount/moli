@@ -1,3 +1,4 @@
+use super::super::media_queries::mark_simple_event_target_slot;
 use super::super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, throw_type_error,
@@ -12,6 +13,7 @@ const VISUAL_VIEWPORT_PAGE_TOP_SLOT: &str = "__moliVisualViewportPageTop";
 const VISUAL_VIEWPORT_WIDTH_SLOT: &str = "__moliVisualViewportWidth";
 const VISUAL_VIEWPORT_HEIGHT_SLOT: &str = "__moliVisualViewportHeight";
 const VISUAL_VIEWPORT_SCALE_SLOT: &str = "__moliVisualViewportScale";
+const VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT: &str = "__moliVisualViewportListeners";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::VisualViewport)]
@@ -69,7 +71,7 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
     window: v8::Local<'s, v8::Object>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
-    Ok(VisualViewportObjectDeclaration {
+    let viewport = VisualViewportObjectDeclaration {
         offset_left: 0.0,
         offset_top: 0.0,
         page_left: 0.0,
@@ -78,7 +80,9 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
         height: super::super::window_accessors::window_inner_surface_height(scope, window),
         scale: profile.visual_viewport_scale,
     }
-    .bind(scope)?)
+    .bind(scope)?;
+    mark_simple_event_target_slot(scope, viewport, VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT);
+    Ok(viewport)
 }
 
 pub(crate) fn update_cached_window_visual_viewport_dimensions<'s>(

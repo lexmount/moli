@@ -199,6 +199,15 @@ impl PageVm {
         Ok(())
     }
 
+    pub(crate) fn set_document_activity(
+        &mut self,
+        activity: moli_page_types::DocumentActivity,
+    ) -> anyhow::Result<()> {
+        self.vm_mut().set_document_activity(activity)?;
+        self.document_activity = activity;
+        Ok(())
+    }
+
     pub(crate) fn set_network_offline(&mut self, offline: bool) {
         self.network_offline = offline;
         self.vm_mut().set_network_offline(offline);

@@ -3,6 +3,7 @@ use crate::{context_bootstrap::mark_event_trusted, util::v8_string};
 mod constructors;
 mod dispatch;
 
+pub(crate) use self::constructors::construct_focus_event;
 pub(crate) use self::constructors::{
     TouchEventPoint, construct_command_event, construct_drag_event, construct_interest_event,
     construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
@@ -14,7 +15,7 @@ pub(crate) use self::constructors::{
     construct_touch_event_with_points, construct_wheel_event,
 };
 pub(super) use self::constructors::{
-    construct_click_event, construct_click_event_with_detail_and_modifiers, construct_focus_event,
+    construct_click_event, construct_click_event_with_detail_and_modifiers,
 };
 pub(crate) use self::dispatch::{NodePublicEventDispatchOutcome, dispatch_public_event};
 

@@ -6,13 +6,21 @@ use crate::{
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
+    EnvironmentChange(PendingEnvironmentChange),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PendingEnvironmentChange {
+    pub(super) previous_media: crate::protocol_types::EmulatedMediaOverrides,
+    pub(super) previous_viewport: crate::style_engine::StyleViewport,
+    pub(super) previous_activity: moli_page_types::DocumentActivity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +116,42 @@ impl JsContextHost {
         )
     }
 
+    /// Publish one coalesced environment-change task. Native values are
+    /// updated synchronously; this payload retains the first snapshot so a
+    /// burst of protocol commands produces one observable rendering turn.
+    pub(crate) fn queue_environment_change(
+        &mut self,
+        previous_media: crate::protocol_types::EmulatedMediaOverrides,
+        previous_viewport: crate::style_engine::StyleViewport,
+        previous_activity: moli_page_types::DocumentActivity,
+    ) -> bool {
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top)
+        else {
+            return false;
+        };
+        if self
+            .rendering_updates
+            .find_slot_index(
+                target,
+                RendererPageRenderingUpdateTaskKind::EnvironmentChange,
+                |_| true,
+            )
+            .is_some()
+        {
+            return true;
+        }
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::EnvironmentChange,
+            PendingRenderingUpdatePayload::EnvironmentChange(PendingEnvironmentChange {
+                previous_media,
+                previous_viewport,
+                previous_activity,
+            }),
+        )
+    }
+
     fn queue_rendering_update(
         &mut self,
         target: WindowDocumentTaskTarget,
@@ -116,7 +160,7 @@ impl JsContextHost {
     ) -> bool {
         if self
             .rendering_updates
-            .find_slot_index(target, kind, |pending| *pending == payload)
+            .find_slot_index(target, kind, |pending| pending == &payload)
             .is_some()
         {
             return true;
@@ -125,6 +169,7 @@ impl JsContextHost {
         let task_id = self
             .rendering_updates
             .allocate_task_id(RendererPageRenderingUpdateTaskId::from_raw);
+        let expected_payload = payload.clone();
         self.rendering_updates
             .push(PendingExactWindowDocumentTask::new(
                 task_id, target, kind, payload,
@@ -139,8 +184,8 @@ impl JsContextHost {
 
         let removed = self.rendering_updates.remove_exact(task_id, target, kind);
         debug_assert_eq!(
-            removed.as_ref().map(|pending| *pending.payload()),
-            Some(payload)
+            removed.as_ref().map(|pending| pending.payload()),
+            Some(&expected_payload)
         );
         tracing::debug!(
             ?target,
@@ -189,6 +234,9 @@ impl JsContextHost {
             }
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
+            }
+            PendingRenderingUpdatePayload::EnvironmentChange(change) => {
+                self.dispatch_authorized_environment_change(scope, host_ptr, target, change)
             }
         })
     }
@@ -240,6 +288,155 @@ impl JsContextHost {
         let focused = super::super::element::process_post_parse_autofocus(scope, host_ptr);
         dispatch_scope.restore(scope, previous_scope);
         focused
+    }
+
+    fn dispatch_authorized_environment_change(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        target: WindowDocumentTaskTarget,
+        change: PendingEnvironmentChange,
+    ) -> bool {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return false;
+        };
+        // Environment changes are currently published for the top-level
+        // Window. Keeping the exact target in the normal ledger still gives
+        // us replacement-safe ownership and leaves child fan-out explicit for
+        // a later frame-tree extension.
+        if target.dispatch_scope() != OwnerDispatchScope::Top {
+            return false;
+        }
+        let context_scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let previous_scope = target.dispatch_scope().enter(context_scope);
+        let global = context_scope.get_current_context().global(context_scope);
+        let current_media = self.emulated_media().clone();
+        let current_viewport = self.style_viewport();
+        let current_activity = self.document_activity();
+        let mut dispatched = false;
+
+        if change.previous_media != current_media {
+            crate::context_bootstrap::dispatch_media_query_list_change_events(
+                context_scope,
+                &change.previous_media,
+                change.previous_viewport,
+                &current_media,
+                current_viewport,
+            );
+            dispatched = true;
+        }
+
+        if change.previous_viewport != current_viewport {
+            crate::context_bootstrap::update_cached_window_visual_viewport_dimensions(
+                context_scope,
+                global,
+                current_viewport
+                    .width
+                    .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
+                current_viewport
+                    .height
+                    .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
+            );
+            if let Ok(event) = crate::host::create_host_event(
+                context_scope,
+                "resize",
+                global.into(),
+                global.into(),
+                false,
+                false,
+            ) {
+                dispatched |= self
+                    .dispatch_public_event_best_effort(
+                        context_scope,
+                        host_ptr,
+                        EventTargetHandle::Window,
+                        event,
+                        "window resize event",
+                    )
+                    .is_ok();
+            }
+
+            if let Some(visual_viewport) = global
+                .get(
+                    context_scope,
+                    crate::util::v8str(context_scope, "visualViewport").into(),
+                )
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                && let Ok(event) = crate::host::create_host_event(
+                    context_scope,
+                    "resize",
+                    visual_viewport.into(),
+                    visual_viewport.into(),
+                    false,
+                    false,
+                )
+            {
+                dispatched |= crate::context_bootstrap::dispatch_simple_event_target_event(
+                    context_scope,
+                    visual_viewport,
+                    "__moliVisualViewportListeners",
+                    "resize",
+                    event,
+                );
+            }
+        }
+
+        if change.previous_activity != current_activity {
+            if change.previous_activity.visible != current_activity.visible
+                && let Some(document) = global
+                    .get(
+                        context_scope,
+                        crate::util::v8str(context_scope, "document").into(),
+                    )
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                && let Ok(event) = crate::host::create_host_event(
+                    context_scope,
+                    "visibilitychange",
+                    document.into(),
+                    document.into(),
+                    false,
+                    false,
+                )
+            {
+                dispatched |= self
+                    .dispatch_public_event_best_effort(
+                        context_scope,
+                        host_ptr,
+                        EventTargetHandle::Node(resolved.document_handle),
+                        event,
+                        "document visibilitychange event",
+                    )
+                    .is_ok();
+            }
+            if change.previous_activity.focused != current_activity.focused {
+                let event_type = if current_activity.focused {
+                    "focus"
+                } else {
+                    "blur"
+                };
+                if let Some(event) = super::super::element::construct_focus_event(
+                    context_scope,
+                    event_type,
+                    None,
+                    false,
+                ) {
+                    dispatched |= self
+                        .dispatch_public_event_best_effort(
+                            context_scope,
+                            host_ptr,
+                            EventTargetHandle::Window,
+                            event,
+                            "window focus state event",
+                        )
+                        .is_ok();
+                }
+            }
+        }
+        target
+            .dispatch_scope()
+            .restore(context_scope, previous_scope);
+        dispatched
     }
 
     /// Apply an already-authorized Document rendering update. Realm lookup is

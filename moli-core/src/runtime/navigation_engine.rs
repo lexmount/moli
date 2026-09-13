@@ -207,6 +207,7 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub idle_override: Option<crate::page::EmulatedIdleOverride>,
     pub navigator_overrides: moli_page_types::NavigatorOverrides,
     pub viewport_surface: Option<ViewportSurface>,
+    pub document_activity: moli_page_types::DocumentActivity,
     pub browser_resource_runtime: BrowserResourceRuntime,
     pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub network_offline: bool,
@@ -268,6 +269,7 @@ impl PreparedDocumentPage {
                     idle_override: configuration.idle_override,
                     navigator_overrides: configuration.navigator_overrides,
                     viewport_surface: configuration.viewport_surface,
+                    document_activity: configuration.document_activity,
                     browser_resource_runtime: configuration.browser_resource_runtime,
                     navigator_identity: configuration.navigator_identity,
                     network_offline: configuration.network_offline,
@@ -325,6 +327,7 @@ impl PreparedDocumentPage {
 /// [`Self::await_ready`] when the resulting page is needed.
 pub struct PendingBuiltDocumentPage {
     pending: moli_renderer_v8::PendingHtmlPage,
+    document_activity: moli_page_types::DocumentActivity,
 }
 
 impl PendingBuiltDocumentPage {
@@ -340,8 +343,12 @@ impl PendingBuiltDocumentPage {
             .await_ready()
             .await
             .context("failed to build html page")?;
+        let mut page = Page::from_attached_handle(handle, page_state);
+        page.set_document_activity_async(self.document_activity)
+            .await
+            .context("failed to apply native document activity")?;
         Ok(BuiltDocumentPage {
-            page: Page::from_attached_handle(handle, page_state),
+            page,
             page_creation_diagnostics,
             page_creation_artifacts,
             pending_download,
@@ -424,6 +431,7 @@ pub struct NavigationEngine {
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
+    document_activity: moli_page_types::DocumentActivity,
     // Standalone engines share this last-drop owner. BrowserContext engines
     // leave it empty and borrow only the context's weak, bound access.
     standalone_lifetime_owner: Option<Rc<NavigationEngineLifetimeOwner>>,
@@ -582,6 +590,7 @@ impl NavigationEngine {
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
+            document_activity: Default::default(),
             standalone_lifetime_owner,
         })
     }
@@ -632,6 +641,7 @@ impl NavigationEngine {
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
+            document_activity: Default::default(),
             standalone_lifetime_owner: renderer_owner_source.standalone_lifetime_owner.clone(),
         })
     }
@@ -651,6 +661,10 @@ impl NavigationEngine {
     pub fn terminate_renderer_producers_for_owner_shutdown(&self) {
         self.js_runtime
             .terminate_resource_producers_for_owner_shutdown();
+    }
+
+    pub fn set_document_activity(&mut self, activity: moli_page_types::DocumentActivity) {
+        self.document_activity = activity;
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -1512,7 +1526,7 @@ impl NavigationEngine {
         loader.set_blocked_url_patterns(&blocked_url_patterns);
         let pending = self
             .js_runtime
-            .start_create_html_page_from_response_with_inspector_session_restores(
+            .start_create_html_page_from_response_with_inspector_session_restores_and_activity(
                 page_reservation,
                 requested_url,
                 final_url,
@@ -1534,6 +1548,7 @@ impl NavigationEngine {
                 cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
+                self.document_activity,
                 network_offline,
                 blocked_url_patterns,
                 fetch_subresource_interception_enabled,
@@ -1544,7 +1559,10 @@ impl NavigationEngine {
                 moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
                 main_document_commit,
             )?;
-        Ok(PendingBuiltDocumentPage { pending })
+        Ok(PendingBuiltDocumentPage {
+            pending,
+            document_activity: self.document_activity,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1788,7 +1806,7 @@ impl NavigationEngine {
         loader.set_blocked_url_patterns(&blocked_url_patterns);
         let prepared = self
             .js_runtime
-            .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores(
+            .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores_and_activity(
                 page_reservation,
                 requested_url,
                 final_url,
@@ -1811,6 +1829,7 @@ impl NavigationEngine {
                 cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
+                self.document_activity,
                 network_offline,
                 blocked_url_patterns,
                 fetch_subresource_interception_enabled,
@@ -2052,7 +2071,7 @@ impl NavigationEngine {
             pending_download,
         ) = self
             .js_runtime
-            .create_html_page_from_response_with_inspector_session_restores(
+            .create_html_page_from_response_with_inspector_session_restores_and_activity(
                 options.requested_url.clone(),
                 options.final_url,
                 options.navigation_initiator_url,
@@ -2073,6 +2092,7 @@ impl NavigationEngine {
                 options.cpu_throttling_rate,
                 options.emulated_media,
                 options.viewport_surface,
+                self.document_activity,
                 options.network_offline,
                 options.blocked_url_patterns,
                 options.fetch_subresource_interception_enabled,
@@ -2083,8 +2103,12 @@ impl NavigationEngine {
             )
             .await
             .context("failed to build html page")?;
+        let mut page = Page::from_attached_handle(handle, page_state);
+        page.set_document_activity_async(self.document_activity)
+            .await
+            .context("failed to apply native document activity")?;
         Ok(BuiltDocumentPage {
-            page: Page::from_attached_handle(handle, page_state),
+            page,
             page_creation_diagnostics,
             page_creation_artifacts,
             pending_download,

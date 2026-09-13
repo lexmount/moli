@@ -5,7 +5,6 @@ use super::super::{
 };
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
-use serde_json::json;
 
 struct SurfaceOverrideInputs {
     network_conditions: Option<EmulatedNetworkConditions>,
@@ -79,6 +78,13 @@ impl SurfaceOverrideInputs {
         }
     }
 
+    fn document_activity(&self) -> moli_page_types::DocumentActivity {
+        moli_page_types::DocumentActivity::new(
+            self.document_is_focused(),
+            self.document_is_visible(),
+        )
+    }
+
     fn navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
         moli_page_types::NavigatorOverrides {
             online: self
@@ -137,6 +143,35 @@ impl BrowserContext {
     pub(crate) fn active_navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
         SurfaceOverrideInputs::from_active(self).navigator_overrides()
     }
+
+    pub(crate) fn document_activity_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_page_types::DocumentActivity> {
+        let target = self.page_target(target_id)?;
+        Some(
+            if self.is_active_target(target_id) {
+                SurfaceOverrideInputs::from_active(self)
+            } else {
+                SurfaceOverrideInputs::from_background(
+                    target,
+                    self.default_network_conditions
+                        .or(self.global_network_conditions),
+                    self.default_geolocation_override
+                        .clone()
+                        .or_else(|| self.global_geolocation_override.clone()),
+                )
+            }
+            .document_activity(),
+        )
+    }
+
+    pub(crate) fn active_document_activity(&self) -> moli_page_types::DocumentActivity {
+        self.page_targets
+            .active()
+            .map(|_| SurfaceOverrideInputs::from_active(self).document_activity())
+            .unwrap_or_default()
+    }
     #[cfg(test)]
     async fn mutate_document_cookie_manager_surface_async(
         &mut self,
@@ -170,9 +205,6 @@ impl BrowserContext {
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
         let mut scripts = Vec::new();
-        if let Some(script) = self.generated_surface_override_script() {
-            scripts.push(script);
-        }
         scripts.extend(self.default_document_start_script_descriptors());
         let target_id = self.active_target_id();
         scripts.extend(
@@ -374,47 +406,16 @@ impl BrowserContext {
         SurfaceOverrideInputs::from_active(self).document_visibility_state()
     }
 
-    fn generated_surface_override_script(&self) -> Option<DocumentStartScript> {
-        Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_active(
-            self,
-        ))
-    }
-
-    pub(crate) fn generated_surface_override_script_for_background_target(
-        &self,
-        target_id: &str,
-    ) -> Option<DocumentStartScript> {
-        let target = self.background_target(target_id)?;
-        self.generated_surface_override_script_for_background_state(target)
-    }
-
-    pub(crate) fn generated_surface_override_script_for_background_state(
-        &self,
-        state: &PageTargetHost,
-    ) -> Option<DocumentStartScript> {
-        Self::generated_surface_override_script_from_inputs(
-            &SurfaceOverrideInputs::from_background(
-                state,
-                self.default_network_conditions
-                    .or(self.global_network_conditions),
-                self.default_geolocation_override
-                    .clone()
-                    .or_else(|| self.global_geolocation_override.clone()),
-            ),
-        )
-    }
-
     pub(crate) async fn apply_background_target_surface_overrides_async(
         &mut self,
         target_id: &str,
     ) -> anyhow::Result<bool> {
-        let Some(script) = self.generated_surface_override_script_for_background_target(target_id)
-        else {
-            return Ok(false);
-        };
         let overrides = self
             .navigator_overrides_for_target(target_id)
             .expect("resolved background target retains navigator state");
+        let activity = self
+            .document_activity_for_target(target_id)
+            .expect("resolved background target retains document activity");
         let Some(page) = self
             .background_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
@@ -422,77 +423,20 @@ impl BrowserContext {
             return Ok(false);
         };
         page.set_navigator_overrides_async(&overrides).await?;
-        page.run_page_surface_override_script_async(&script.source)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to hide background page surface: {error}"))?;
+        page.set_document_activity_async(activity).await?;
         Ok(true)
-    }
-
-    pub(crate) fn generated_surface_override_script_for_active_target(
-        &self,
-    ) -> Option<DocumentStartScript> {
-        self.generated_surface_override_script()
-    }
-
-    fn generated_surface_override_script_from_inputs(
-        inputs: &SurfaceOverrideInputs,
-    ) -> Option<DocumentStartScript> {
-        let document_has_focus = inputs.document_has_focus();
-        let document_hidden = inputs.document_hidden();
-        let document_visibility_state = inputs.document_visibility_state();
-
-        let source = format!(
-            "(function() {{
-                const defineGetter = (obj, key, getter) => {{
-                    if (!obj) return;
-                    try {{
-                        Object.defineProperty(obj, key, {{ configurable: true, get: getter }});
-                    }} catch (_error) {{}}
-                }};
-                if (document) {{
-                    // The renderer's Document bridge currently installs these
-                    // surfaces as own accessors, so CDP emulation must shadow
-                    // the document object directly for staged/background
-                    // overrides to win in the same realm.
-                    defineGetter(document, 'hidden', () => {document_hidden});
-                    defineGetter(document, 'visibilityState', () => {document_visibility_state});
-                    try {{
-                        Object.defineProperty(document, 'hasFocus', {{
-                            configurable: true,
-                            value: () => {document_has_focus}
-                        }});
-                    }} catch (_error) {{}}
-                }}
-            }})();",
-            document_hidden = document_hidden,
-            document_visibility_state = json!(document_visibility_state),
-            document_has_focus = document_has_focus,
-        );
-
-        Some(DocumentStartScript {
-            registry_key: None,
-            devtools_session: None,
-            source,
-            world_name: None,
-            has_bidi_channel_argument: false,
-            bidi_channel_handoffs: Vec::new(),
-        })
     }
 
     pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
         &mut self,
     ) -> anyhow::Result<()> {
-        let Some(script) = self.generated_surface_override_script() else {
-            return Ok(());
-        };
         let overrides = self.active_navigator_overrides();
+        let activity = self.active_document_activity();
         let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
             return Ok(());
         };
         page.set_navigator_overrides_async(&overrides).await?;
-        page.run_page_surface_override_script_async(&script.source)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to apply page surface overrides: {error}"))
+        page.set_document_activity_async(activity).await
     }
 
     #[cfg(test)]

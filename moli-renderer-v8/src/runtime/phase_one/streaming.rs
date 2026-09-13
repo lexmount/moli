@@ -951,6 +951,7 @@ mod tests {
             idle_override: None,
             navigator_overrides: Default::default(),
             viewport_surface: None,
+            document_activity: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,

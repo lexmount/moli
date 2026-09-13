@@ -15,12 +15,9 @@ use crate::devtools_runtime::{
 };
 use crate::domains::actions::EmulationAction;
 use crate::domains::command_output::CommandOutputPlan;
-use moli_core::{
-    RendererRuntimeInspectorResponseSender,
-    page::{
-        CompletedDevToolsIoCommandDispatch, CompletedPageCommand, PendingDevToolsIoCommandDispatch,
-        PendingPageCommand,
-    },
+use moli_core::page::{
+    CompletedDevToolsIoCommandDispatch, CompletedPageCommand, PendingDevToolsIoCommandDispatch,
+    PendingPageCommand,
 };
 use serde_json::json;
 
@@ -99,9 +96,9 @@ enum PendingEmulationPageOperation {
     SetNavigatorOverrides,
     SetEmulatedMedia,
     SetViewportSurface,
+    SetDocumentActivity,
     SetUserAgentLoader,
     ReplaceBrowserResourceRuntime,
-    RuntimeProtocolMessage,
 }
 
 impl PendingEmulationPageOperation {
@@ -113,9 +110,9 @@ impl PendingEmulationPageOperation {
             | Self::SetCpuThrottlingRate
             | Self::SetEmulatedMedia
             | Self::SetViewportSurface
+            | Self::SetDocumentActivity
             | Self::SetUserAgentLoader
-            | Self::ReplaceBrowserResourceRuntime
-            | Self::RuntimeProtocolMessage => true,
+            | Self::ReplaceBrowserResourceRuntime => true,
             // Chromium owns this state on RenderFrameHostImpl::IdleManager.
             // It can survive same-site RFH reuse, but it is not target policy
             // that may be replayed after an arbitrary attachment replacement.
@@ -2228,42 +2225,6 @@ fn complete_pending_devtools_emulation_command(
     Ok(DevToolsCommandResult::Empty)
 }
 
-fn start_runtime_emulation_protocol_message(
-    page: &moli_core::page::Page,
-    command_id: u64,
-    expression: String,
-) -> Result<
-    (
-        PendingPageCommand,
-        Option<RuntimeInspectorAsyncCompletionReceiver>,
-    ),
-    String,
-> {
-    let raw_json = runtime_evaluate_json(command_id, expression);
-    let call_id = i32::try_from(command_id)
-        .map_err(|_| format!("runtime inspector command id {command_id} does not fit i32"))?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let attachment_id = page
-        .renderer_agent_attachment_id()
-        .ok_or_else(|| "renderer page has no DevTools attachment".to_owned())?;
-    page.start_runtime_protocol_message_with_deferred_response(
-        raw_json,
-        RendererRuntimeInspectorResponseSender::new(call_id, tx)
-            .with_renderer_agent_attachment(attachment_id),
-    )
-    .map(|pending| (pending, Some(rx)))
-    .map_err(|error| error.to_string())
-}
-
-fn runtime_evaluate_json(command_id: u64, expression: String) -> String {
-    json!({
-        "id": command_id,
-        "method": "Runtime.evaluate",
-        "params": { "expression": expression }
-    })
-    .to_string()
-}
-
 pub(crate) fn complete_pending_emulation_command(
     conn: &mut CdpConnection,
     completed: CompletedEmulationCommandDispatch,
@@ -2578,14 +2539,11 @@ fn start_surface_override_page_commands(
     if cmd.session_id.is_some() {
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
     };
-    let Some(script) = browser_context.generated_surface_override_script_for_active_target() else {
-        return Ok(Vec::new());
-    };
     let navigator_overrides = browser_context.active_navigator_overrides();
+    let document_activity = browser_context.active_document_activity();
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
@@ -2603,9 +2561,8 @@ fn start_surface_override_page_commands(
             target_id,
         },
         page,
-        script,
         navigator_overrides,
-        runtime_call_id,
+        document_activity,
     )
 }
 
@@ -2621,7 +2578,7 @@ fn start_session_surface_override_page_command_for_owner(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let (script, navigator_overrides) = {
+    let (document_activity, navigator_overrides) = {
         let Some((browser_context_id, target_id)) =
             conn.target_owner_identity_for_owner(owner_scope)
         else {
@@ -2634,22 +2591,20 @@ fn start_session_surface_override_page_command_for_owner(
             && browser_context.background_target(target_id).is_some()
         {
             (
-                browser_context.generated_surface_override_script_for_background_target(target_id),
+                browser_context
+                    .document_activity_for_target(target_id)
+                    .expect("resolved target"),
                 browser_context
                     .navigator_overrides_for_target(target_id)
                     .expect("resolved target"),
             )
         } else {
             (
-                browser_context.generated_surface_override_script_for_active_target(),
+                browser_context.active_document_activity(),
                 browser_context.active_navigator_overrides(),
             )
         }
     };
-    let Some(script) = script else {
-        return Ok(Vec::new());
-    };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
         .ok()
@@ -2661,9 +2616,8 @@ fn start_session_surface_override_page_command_for_owner(
             owner_scope: owner_scope.clone(),
         },
         page,
-        script,
         navigator_overrides,
-        runtime_call_id,
+        document_activity,
     )
 }
 
@@ -2672,7 +2626,7 @@ fn start_surface_override_for_route(
     target: PendingEmulationPageTarget,
     route: &CdpSessionRoute,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let (script, navigator_overrides) = match &target {
+    let (document_activity, navigator_overrides) = match &target {
         PendingEmulationPageTarget::BrowserContextTarget {
             browser_context_id,
             target_id,
@@ -2680,13 +2634,10 @@ fn start_surface_override_for_route(
             let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
                 return Err("BrowserContextNotLoaded".to_owned());
             };
-            let script = if browser_context.is_active_target(target_id) {
-                browser_context.generated_surface_override_script_for_active_target()
-            } else {
-                browser_context.generated_surface_override_script_for_background_target(target_id)
-            };
             (
-                script,
+                browser_context
+                    .document_activity_for_target(target_id)
+                    .unwrap_or_default(),
                 browser_context
                     .navigator_overrides_for_target(target_id)
                     .unwrap_or_default(),
@@ -2696,10 +2647,6 @@ fn start_surface_override_for_route(
             return start_session_surface_override_page_command_for_owner(conn, owner_scope);
         }
     };
-    let Some(script) = script else {
-        return Ok(Vec::new());
-    };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
     let owner = CommandOwnerScope::for_route(route.clone());
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_owner(&owner)
@@ -2707,21 +2654,21 @@ fn start_surface_override_for_route(
     else {
         return Ok(Vec::new());
     };
-    start_surface_override_page_command(target, page, script, navigator_overrides, runtime_call_id)
+    start_surface_override_page_command(target, page, navigator_overrides, document_activity)
 }
 
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
-    script: crate::conn::DocumentStartScript,
     navigator_overrides: moli_page_types::NavigatorOverrides,
-    runtime_call_id: u64,
+    document_activity: moli_page_types::DocumentActivity,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
     let native_update = page
         .start_set_navigator_overrides(&navigator_overrides)
         .map_err(|error| error.to_string())?;
-    let (pending, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script.source)?;
+    let activity_update = page
+        .start_set_document_activity(document_activity)
+        .map_err(|error| error.to_string())?;
     Ok(vec![
         PendingEmulationPageCommand {
             target: target.clone(),
@@ -2731,9 +2678,9 @@ fn start_surface_override_page_command(
         },
         PendingEmulationPageCommand {
             target,
-            operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-            pending,
-            runtime_response_rx,
+            operation: PendingEmulationPageOperation::SetDocumentActivity,
+            pending: activity_update,
+            runtime_response_rx: None,
         },
     ])
 }
@@ -2784,12 +2731,7 @@ fn finish_emulation_page_operation_on_current_attachment(
     // frozen completion; decode the terminal reply, but never apply the old
     // PageState snapshot to the replacement attachment. Whether state carries
     // across the navigation is decided separately at the commit boundary.
-    let output = match operation {
-        PendingEmulationPageOperation::RuntimeProtocolMessage => {
-            completion.into_runtime_protocol_message_command_turn()
-        }
-        _ => completion.into_unit_page_command_turn(),
-    };
+    let output = completion.into_unit_page_command_turn();
     output
         .map(drop)
         .map_err(|error| format!("stale Emulation command returned an unexpected reply: {error}"))
@@ -2822,15 +2764,14 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetViewportSurface => page
             .finish_set_viewport_surface(completion)
             .map_err(|error| error.to_string()),
+        PendingEmulationPageOperation::SetDocumentActivity => page
+            .finish_set_document_activity(completion)
+            .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::ReplaceBrowserResourceRuntime => page
             .finish_replace_browser_resource_runtime(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetUserAgentLoader => {
             unreachable!("user agent loader rebuild finishes through the session owner")
         }
-        PendingEmulationPageOperation::RuntimeProtocolMessage => page
-            .finish_runtime_protocol_message(completion)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
     }
 }

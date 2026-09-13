@@ -525,6 +525,34 @@ impl Page {
         )
     }
 
+    pub async fn set_document_activity_async(
+        &mut self,
+        activity: moli_page_types::DocumentActivity,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetDocumentActivity(activity),
+            "set document activity",
+        )
+        .await
+    }
+
+    pub fn start_set_document_activity(
+        &self,
+        activity: moli_page_types::DocumentActivity,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetDocumentActivity(activity))
+    }
+
+    pub fn finish_set_document_activity(&mut self, completion: CompletedPageCommand) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "set document activity",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub fn start_set_network_offline(&self, offline: bool) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::SetNetworkOffline(offline))
     }

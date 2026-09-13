@@ -169,6 +169,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) cpu_throttling_rate: f64,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
+    pub(crate) document_activity: moli_page_types::DocumentActivity,
     pub(crate) network_offline: bool,
     pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(crate) bypass_service_worker: bool,
@@ -244,14 +245,6 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target owner must remain live");
         let page_state = target;
         let mut document_start_scripts = Vec::new();
-        let generated_surface_script = if browser_context.is_active_target(target_id) {
-            browser_context.generated_surface_override_script_for_active_target()
-        } else {
-            browser_context.generated_surface_override_script_for_background_state(page_state)
-        };
-        if let Some(script) = generated_surface_script {
-            document_start_scripts.push(script);
-        }
         document_start_scripts.extend(browser_context.default_document_start_script_descriptors());
         document_start_scripts.extend(target.owner_state.document_start_scripts.iter().map(
             |(identifier, script)| {
@@ -274,6 +267,9 @@ impl TargetNavigationLoadInputs {
             .clone()
             .or_else(|| browser_context.default_emulated_device_metrics.clone());
         let effective_policy = page_state.effective_policy();
+        let document_activity = browser_context
+            .document_activity_for_target(target_id)
+            .expect("resolved Page target retains document activity");
 
         Self {
             browser_context_id: Some(browser_context.id.clone()),
@@ -324,6 +320,7 @@ impl TargetNavigationLoadInputs {
             viewport_surface: emulated_device_metrics
                 .as_ref()
                 .map(|metrics| metrics.viewport_surface().to_page_viewport_surface()),
+            document_activity,
             network_offline: page_state.network_policy.network_offline()
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
@@ -362,6 +359,7 @@ impl TargetNavigationLoadInputs {
             .default_emulated_device_metrics
             .as_ref()
             .map(|metrics| metrics.viewport_surface().to_page_viewport_surface());
+        inputs.document_activity = browser_context.active_document_activity();
         inputs.network_offline = browser_context.effective_active_network_offline();
         inputs
     }
@@ -392,6 +390,7 @@ impl TargetNavigationLoadInputs {
             cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
             viewport_surface: None,
+            document_activity: Default::default(),
             network_offline: false,
             navigator_overrides: Default::default(),
             bypass_service_worker: false,

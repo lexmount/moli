@@ -425,7 +425,6 @@ impl BrowserContext {
         target_id: &str,
         session_id: &str,
     ) -> anyhow::Result<bool> {
-        let is_active = self.is_active_target(target_id);
         let Some(target) = self.page_target_mut(target_id) else {
             return Ok(false);
         };
@@ -442,11 +441,9 @@ impl BrowserContext {
             .page_target(target_id)
             .expect("disposing page target must remain registered");
         let effective_policy = target.effective_policy();
-        let surface_script = if is_active {
-            self.generated_surface_override_script_for_active_target()
-        } else {
-            self.generated_surface_override_script_for_background_target(target_id)
-        };
+        let document_activity = self
+            .document_activity_for_target(target_id)
+            .expect("disposing target retains document activity");
         if let Some(page) = self
             .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
@@ -483,13 +480,9 @@ impl BrowserContext {
                     anyhow::anyhow!("failed to restore native navigator state: {error}")
                 });
             }
-            if let Some(surface_script) = surface_script
-                && let Err(error) = page
-                    .run_page_surface_override_script_async(&surface_script.source)
-                    .await
-            {
+            if let Err(error) = page.set_document_activity_async(document_activity).await {
                 first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore page surface overrides: {error}")
+                    anyhow::anyhow!("failed to restore native document activity: {error}")
                 });
             }
             if let Some(error) = first_error {
@@ -620,29 +613,24 @@ impl BrowserContext {
                 .page_target(target_id)
                 .is_none_or(|host| !host.has_pending_javascript_dialog());
         let previous_active_target_id = self.active_target_id_owned();
-        let previous_surface_script = if synchronize_loaded_page {
-            previous_active_target_id.as_deref().and_then(|target_id| {
-                let host = self.page_target(target_id)?;
-                self.generated_surface_override_script_for_background_state(host)
-            })
-        } else {
-            None
-        };
         let selected = self.page_targets.select(target_id);
         debug_assert!(selected, "existing page target must be selectable");
         if synchronize_loaded_page {
             self.apply_surface_overrides_to_loaded_page_async().await?;
         }
-        if let (Some(previous_active_target_id), Some(script)) =
-            (previous_active_target_id, previous_surface_script)
-            && let Some(page) = self
+        if synchronize_loaded_page
+            && let Some(previous_active_target_id) = previous_active_target_id
+        {
+            let activity = self
+                .document_activity_for_target(&previous_active_target_id)
+                .expect("previous active target remains registered");
+            if let Some(page) = self
                 .page_target_mut(&previous_active_target_id)
                 .and_then(|host| host.runtime_slot.loaded_page_mut())
-            && let Err(error) = page
-                .run_page_surface_override_script_async(&script.source)
-                .await
-        {
-            tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background page visibility");
+                && let Err(error) = page.set_document_activity_async(activity).await
+            {
+                tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background document activity");
+            }
         }
         Ok(true)
     }

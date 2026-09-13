@@ -2,6 +2,19 @@ use super::workers::WorkerExecutionState;
 use super::*;
 
 impl JsContextHost {
+    pub(crate) fn document_activity(&self) -> moli_page_types::DocumentActivity {
+        self.document_activity
+    }
+
+    pub(crate) fn set_document_activity(
+        &mut self,
+        activity: moli_page_types::DocumentActivity,
+    ) -> bool {
+        let changed = self.document_activity != activity;
+        self.document_activity = activity;
+        changed
+    }
+
     pub(crate) fn begin_ordinary_page_turn_navigation_handoff(&mut self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.ordinary_page_turn_navigation_handoff_active,

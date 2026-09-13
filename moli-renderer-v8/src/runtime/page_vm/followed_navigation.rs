@@ -1196,6 +1196,7 @@ impl PageVm {
             idle_override: self.idle_override,
             navigator_overrides: self.navigator_overrides.clone(),
             viewport_surface: self.viewport_surface,
+            document_activity: self.document_activity,
             network_offline: self.network_offline,
             blocked_url_patterns: self.blocked_url_patterns.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),

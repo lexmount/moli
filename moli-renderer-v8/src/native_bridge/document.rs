@@ -1117,9 +1117,9 @@ fn document_hidden_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    rv.set_bool(
-        document_associated_window_for_object(scope, runtime_ptr, handle, args.this()).is_none(),
-    );
+    let visible = document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
+        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible);
+    rv.set_bool(!visible);
 }
 
 fn document_visibility_state_getter_function<'s>(
@@ -1133,7 +1133,7 @@ fn document_visibility_state_getter_function<'s>(
         return;
     };
     let state = if document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some()
+        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible)
     {
         "visible"
     } else {

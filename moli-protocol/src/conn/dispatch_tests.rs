@@ -1598,10 +1598,17 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         background_load_inputs
             .document_start_scripts
             .iter()
-            .any(|script| script
-                .source
-                .contains("defineGetter(document, 'hidden', () => true)")),
-        "background initial document lifecycle should include background document surface script"
+            .all(|script| {
+                !script
+                    .source
+                    .contains("defineGetter(document, 'hidden', () => true)")
+            }),
+        "background document surface must be applied through native state"
+    );
+    assert_eq!(
+        background_load_inputs.document_activity,
+        moli_page_types::DocumentActivity::new(false, false),
+        "background initial document should receive native hidden/unfocused state"
     );
 
     let (name_result, _) = conn

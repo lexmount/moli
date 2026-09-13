@@ -134,6 +134,9 @@ pub(super) fn document_has_focus_callback(
                 .unwrap_or(true)
         })
         .unwrap_or(false);
+    let focused = focused
+        && context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host_ptr| unsafe { &*host_ptr }.document_activity().focused);
     rv.set_bool(focused);
 }
 

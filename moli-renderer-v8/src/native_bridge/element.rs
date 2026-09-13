@@ -195,6 +195,7 @@ use event_handlers::{
     body_onmessageerror_setter_function,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
+pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
     NodePublicEventDispatchOutcome, TouchEventPoint, construct_command_event, construct_drag_event,
     construct_interest_event, construct_keyboard_event,
@@ -205,9 +206,7 @@ pub(crate) use events::{
     construct_submit_event, construct_toggle_event, construct_touch_event,
     construct_touch_event_with_points, construct_wheel_event, dispatch_public_event,
 };
-use events::{
-    construct_click_event, construct_click_event_with_detail_and_modifiers, construct_focus_event,
-};
+use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
     contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
     perform_access_key_default_action_for_dispatched_event,

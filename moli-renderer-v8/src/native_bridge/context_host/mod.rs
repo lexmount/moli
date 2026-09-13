@@ -873,6 +873,7 @@ pub(crate) struct JsContextHost {
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    document_activity: moli_page_types::DocumentActivity,
     wpt_extensions_enabled: bool,
     network_offline: bool,
     navigator_overrides: moli_page_types::NavigatorOverrides,

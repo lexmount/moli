@@ -4,6 +4,7 @@
 //! responses, script execution reports, subresource records, and frame
 //! snapshots that are shared by the facade, renderer, and CDP crates.
 
+mod document_activity;
 mod inspector_identity;
 mod inspector_state;
 mod layout;
@@ -44,6 +45,7 @@ use moli_web_mime::is_json_module_mime;
 const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
 static NEXT_SUBRESOURCE_RESPONSE_BODY_SPOOL_ID: AtomicU64 = AtomicU64::new(1);
 
+pub use document_activity::DocumentActivity;
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
     RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,

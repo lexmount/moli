@@ -5005,19 +5005,40 @@ impl ScriptVm {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        let (previous_media, viewport) = {
+        let (previous_media, previous_viewport) = {
             let host = self._context_host.borrow();
             (host.emulated_media().clone(), host.style_viewport())
         };
+        let changed = {
+            let mut host = self._context_host.borrow_mut();
+            if host.emulated_media() == overrides {
+                false
+            } else {
+                host.set_emulated_media(overrides);
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        // MediaQueryList and FontFaceSet have historically settled during the
+        // emulation command itself. Keep that observable timing while the
+        // Window/Document surface events use the rendering-update route.
+        self.dispatch_media_query_list_change_events(
+            &previous_media,
+            previous_viewport,
+            overrides,
+            previous_viewport,
+        );
+    }
+
+    pub(super) fn set_emulated_media_for_bootstrap(
+        &mut self,
+        overrides: &crate::protocol_types::EmulatedMediaOverrides,
+    ) {
         self._context_host
             .borrow_mut()
             .set_emulated_media(overrides);
-        self.dispatch_media_query_list_change_events(
-            &previous_media,
-            viewport,
-            overrides,
-            viewport,
-        );
     }
 
     pub(super) fn set_idle_override(
@@ -5068,9 +5089,13 @@ impl ScriptVm {
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> Result<()> {
-        let (previous_media, previous_viewport) = {
+        let (previous_media, previous_viewport, previous_activity) = {
             let host = self._context_host.borrow();
-            (host.emulated_media().clone(), host.style_viewport())
+            (
+                host.emulated_media().clone(),
+                host.style_viewport(),
+                host.document_activity(),
+            )
         };
         let changed = self
             ._context_host
@@ -5102,6 +5127,14 @@ impl ScriptVm {
             &current_media,
             current_viewport,
         );
+        // MediaQueryList has already been notified above. Passing the current
+        // media snapshot prevents the later rendering update from repeating
+        // that notification while it delivers resize events.
+        let _ = self._context_host.borrow_mut().queue_environment_change(
+            current_media,
+            previous_viewport,
+            previous_activity,
+        );
         Ok(())
     }
 
@@ -5114,6 +5147,41 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .set_viewport_surface(viewport_surface);
+    }
+
+    pub(super) fn set_document_activity(
+        &mut self,
+        activity: moli_page_types::DocumentActivity,
+    ) -> Result<()> {
+        let (previous_media, previous_viewport, previous_activity) = {
+            let host = self._context_host.borrow();
+            (
+                host.emulated_media().clone(),
+                host.style_viewport(),
+                host.document_activity(),
+            )
+        };
+        if previous_activity == activity {
+            return Ok(());
+        }
+        self._context_host
+            .borrow_mut()
+            .set_document_activity(activity);
+        let _ = self._context_host.borrow_mut().queue_environment_change(
+            previous_media,
+            previous_viewport,
+            previous_activity,
+        );
+        Ok(())
+    }
+
+    pub(super) fn set_document_activity_for_bootstrap(
+        &mut self,
+        activity: moli_page_types::DocumentActivity,
+    ) {
+        self._context_host
+            .borrow_mut()
+            .set_document_activity(activity);
     }
 
     pub(super) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
