@@ -1,4 +1,4 @@
-use super::range_algorithms::range_selection_string_contents;
+use super::range_algorithms::{range_clipboard_string_contents, range_selection_string_contents};
 use super::selection::{
     new_selection_runtime_object, selection_bind_owner_document, selection_owner_document,
     selection_range,
@@ -207,6 +207,13 @@ pub(crate) fn selection_value_for_window<'s>(
     }
     set_private_value(scope, window, WINDOW_SELECTION_SLOT, selection.into());
     Some(selection)
+}
+
+pub(crate) fn selection_text_for_clipboard<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<String> {
+    let window = scope.get_current_context().global(scope);
+    let selection = selection_value_for_window(scope, window)?;
+    let range = selection_range(scope, selection)?;
+    range_clipboard_string_contents(scope, range)
 }
 
 pub(crate) fn sync_selection_owner_document_for_window<'s>(

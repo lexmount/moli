@@ -15,6 +15,7 @@ pub(super) struct CloseWatcherManager {
     allowed_groups: usize,
     next_interaction_allows_group: bool,
     history_action_activation: bool,
+    last_user_activation: Option<std::time::Instant>,
 }
 
 impl Default for CloseWatcherManager {
@@ -24,6 +25,7 @@ impl Default for CloseWatcherManager {
             allowed_groups: 1,
             next_interaction_allows_group: true,
             history_action_activation: false,
+            last_user_activation: None,
         }
     }
 }
@@ -152,8 +154,25 @@ impl JsContextHost {
                 }
                 manager.next_interaction_allows_group = false;
                 manager.history_action_activation = true;
+                manager.last_user_activation = Some(std::time::Instant::now());
             }
         }
+    }
+
+    pub(crate) fn window_has_transient_user_activation(&self, source: OwnerDispatchScope) -> bool {
+        self.window_user_activation_state(source).0
+    }
+
+    pub(crate) fn window_user_activation_state(&self, source: OwnerDispatchScope) -> (bool, bool) {
+        let activation = self
+            .current_window_execution_context_owner(source)
+            .and_then(|owner| self.close_watcher_managers.get(&owner))
+            .and_then(|manager| manager.last_user_activation);
+        (
+            activation
+                .is_some_and(|activated| activated.elapsed() < std::time::Duration::from_secs(5)),
+            activation.is_some(),
+        )
     }
 
     pub(crate) fn consume_close_watcher_history_activation(&mut self, source: OwnerDispatchScope) {
