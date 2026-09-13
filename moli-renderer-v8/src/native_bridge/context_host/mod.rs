@@ -83,6 +83,7 @@ mod child_frame_runtime;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
 mod child_frame_snapshots;
 mod child_frames;
+mod close_watchers;
 mod core;
 mod dialogs;
 mod directory_reader_callbacks;
@@ -885,6 +886,8 @@ pub(crate) struct JsContextHost {
     permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,
+    close_watcher_managers:
+        HashMap<WindowExecutionContextOwner, close_watchers::CloseWatcherManager>,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,

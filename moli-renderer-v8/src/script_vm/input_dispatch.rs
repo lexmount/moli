@@ -867,6 +867,12 @@ impl ScriptVm {
                     modifiers,
                 )
             {
+                if (pointer_event_name == "pointerdown" && pointer.pointer_type == "mouse")
+                    || (pointer_event_name == "pointerup" && pointer.pointer_type != "mouse")
+                {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                }
                 let dispatched =
                     dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                 if event_name == "mousedown" && !dispatched.allows_default() {
@@ -900,6 +906,10 @@ impl ScriptVm {
                     )
                 };
                 if let Some(event) = event {
+                    if event_name == "mousedown" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                    }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                     if event_name == "wheel" && dispatched.allows_default() {
@@ -1328,6 +1338,10 @@ impl ScriptVm {
                     &pointer,
                 )
             {
+                if pointer_event_name == "pointerup" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_handle);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, pointer_handle, event);
             }
             if should_finish_touch {
@@ -1350,6 +1364,9 @@ impl ScriptVm {
                     .wrap_handle(scope, runtime_ptr, handle)
                 && let Some(event) = construct_touch_event(scope, event_name, x, y, target)
             {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }.notify_close_watcher_input_activation(handle);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
             }
             if should_finish_touch {
@@ -1575,6 +1592,10 @@ impl ScriptVm {
                         &pointer,
                     )
                 {
+                    if pointer_event_name == "pointerup" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(changed.pointer_handle);
+                    }
                     let _ =
                         dispatch_public_event(scope, runtime_ptr, changed.pointer_handle, event);
                 }
@@ -1646,6 +1667,10 @@ impl ScriptVm {
                 &active_event_points,
                 &changed_event_points,
             ) {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(event_target);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, event_target, event);
             }
             Ok(input_dispatch_outcome(true))
@@ -1863,6 +1888,19 @@ impl ScriptVm {
         let canceled_raw_keydown = Cell::new(false);
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
+            let runtime = unsafe { &mut *runtime_ptr };
+            let close_request_context =
+                runtime
+                    .owner_dispatch_scope_for_node(handle)
+                    .and_then(|target| {
+                        let owner = runtime.current_window_execution_context_owner(target)?;
+                        runtime
+                            .window_execution_context(scope, owner, target)
+                            .map(|(_, context)| context)
+                    });
+            if event_name == "keydown" && key_lower != "escape" {
+                runtime.notify_close_watcher_input_activation(handle);
+            }
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -1882,6 +1920,13 @@ impl ScriptVm {
                     canceled_raw_keydown.set(true);
                 }
                 return Ok(input_dispatch_outcome(false));
+            }
+
+            if event_name == "keydown"
+                && key_lower == "escape"
+                && let Some(context) = close_request_context
+            {
+                crate::context_bootstrap::process_close_watchers(scope, context);
             }
 
             // Combined keydown/text input includes a cancelable keypress before
