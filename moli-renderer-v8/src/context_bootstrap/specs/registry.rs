@@ -509,6 +509,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Navigator,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::UserActivation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Permissions::DESCRIPTOR,
         kind: ConstructorKind::Permissions,
     },
