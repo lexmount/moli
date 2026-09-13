@@ -162,6 +162,7 @@ pub(crate) fn answer_query(
                 document,
                 *point,
                 MockHitTestOptions {
+                    include_empty_viewport: false,
                     ignore_inert: true,
                     ..MockHitTestOptions::default()
                 },

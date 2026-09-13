@@ -590,6 +590,7 @@ pub(crate) struct MockHitTestOptions {
     pub(crate) ignore_inert: bool,
     pub(crate) clip_to_viewport: bool,
     pub(crate) use_viewport_fallback: bool,
+    pub(crate) include_empty_viewport: bool,
 }
 
 pub(crate) fn mock_hit_test_handle(
@@ -721,6 +722,7 @@ fn mock_hit_test_handle_with_child_frames(
             .dom_host()
             .dom()
             .document_element_handle_for_document(document_handle)
+            .or(options.include_empty_viewport.then_some(document_handle))
     } else {
         None
     }

@@ -44,10 +44,9 @@ use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
     input_target_in_document, is_disabled_form_control, observable_input_hit_test,
     perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
-    perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_text_input,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    perform_drop_default_action, perform_implicit_submission_from_control,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
@@ -1468,7 +1467,11 @@ impl ScriptVm {
             return Ok(outcome);
         }
 
-        let hit_handle = surface_hit.target;
+        let hit_handle = if event_name == "wheel" {
+            surface_hit.document_or_element()
+        } else {
+            surface_hit.target
+        };
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let tracks_hover = tracks_mouse_hover_for_event(event_name);
         let routed_target = self.mouse_routed_target(hit_handle, position, event_name, &prepared);
@@ -1507,11 +1510,7 @@ impl ScriptVm {
                     .pending_pointer_capture_target(pointer_id)
                     .or(routed_target)
             } else {
-                hit_handle.or_else(|| {
-                    (event_name == "wheel")
-                        .then(|| runtime.dom_host().document_element_handle())
-                        .flatten()
-                })
+                hit_handle
             }
         };
         let Some(initial_target) = initial_target else {
