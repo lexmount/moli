@@ -23,7 +23,9 @@ pub(crate) mod named_access;
 mod node;
 pub(crate) mod pointer_lock;
 mod traversal;
+mod user_activation;
 mod window;
+pub(crate) use user_activation::WindowUserActivationState;
 
 use super::{
     document_runtime::DomHandle,

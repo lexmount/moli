@@ -458,19 +458,6 @@ struct ServiceWorkerContainerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::UserActivation)]
-struct UserActivationObjectDeclaration<'s> {
-    #[webapi(slot = "__moliUserActivationDocument")]
-    owner_document: v8::Local<'s, v8::Value>,
-
-    #[webapi(accessor_property, getter = navigator_user_activation_active_getter_callback, enumerable)]
-    is_active: (),
-
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
-    has_been_active: (),
-}
-
-#[derive(WebApiObject)]
 #[webapi(plain, scope_lifetime = 'scope)]
 struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
     #[webapi(data_property, enumerable)]
@@ -705,53 +692,6 @@ pub(crate) fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<
         .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
 }
 
-fn navigator_user_activation_state_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some((_, sticky)) = navigator_user_activation_state(scope, args.this()) {
-        rv.set(v8::Boolean::new(scope, sticky).into());
-    }
-}
-
-fn navigator_user_activation_active_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some((active, _)) = navigator_user_activation_state(scope, args.this()) {
-        rv.set(v8::Boolean::new(scope, active).into());
-    }
-}
-
-fn navigator_user_activation_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    activation: v8::Local<'s, v8::Object>,
-) -> Option<(bool, bool)> {
-    if !web_api_interfaces::UserActivation::is_instance(scope, activation) {
-        throw_type_error(scope, "Illegal invocation");
-        return None;
-    }
-    let owner = get_private_value(scope, activation, "__moliUserActivationDocument")
-        .filter(|value| value.is_number())
-        .and_then(|value| value.number_value(scope))
-        .map(|value| DomHandle::new(value as usize));
-    let host = activation
-        .get_creation_context(scope)
-        .and_then(crate::util::context_host_ptr_from_context_slot);
-    Some(
-        owner
-            .zip(host)
-            .and_then(|(document, host)| {
-                let host = unsafe { &*host };
-                host.owner_dispatch_scope_for_node(document)
-                    .map(|owner| host.window_user_activation_state(owner))
-            })
-            .unwrap_or((false, false)),
-    )
-}
-
 fn navigator_connection_event_target_noop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -831,6 +771,11 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_geolocation_template_bindings(scope, template, interface_name);
     install_navigator_collection_template_bindings(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
+    super::user_activation::install_user_activation_template_bindings(
+        scope,
+        template,
+        interface_name,
+    );
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MediaDevices" => install_media_devices_template_bindings(scope, template),
@@ -951,29 +896,6 @@ pub(in crate::context_bootstrap) fn service_worker_owner_token_value<'s>(
         .unwrap_or_else(|| v8::undefined(scope).into())
 }
 
-fn build_user_activation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
-) -> Result<v8::Local<'s, v8::Object>> {
-    let document = context_host_ptr_from_global_bridge(scope).and_then(|host| {
-        let host = unsafe { &*host };
-        if let Some(child) = owner_child {
-            host.child_browsing_context_document_handle(child)
-        } else if let Some(popup) = owner_popup {
-            host.lightweight_popup_document_handle(popup)
-        } else {
-            Some(host.document_handle())
-        }
-    });
-    let document = document
-        .map(|document| v8::Number::new(scope, document.index() as f64).into())
-        .unwrap_or_else(|| v8::null(scope).into());
-    UserActivationObjectDeclaration::new(document)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind UserActivation object: {error}"))
-}
-
 fn build_navigator_plugin_collection_subobject<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     backing: v8::Local<'s, v8::Object>,
@@ -1035,7 +957,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
         }
         NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
         NavigatorSubobject::UserActivation => {
-            build_user_activation(scope, owner_child, owner_popup)?.into()
+            super::user_activation::associated_user_activation(scope, backing)?.into()
         }
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()
@@ -1193,7 +1115,13 @@ fn build_window_navigator_backing_for_owner<'s>(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
-    .inspect(|&backing| {
+    .and_then(|backing| {
+        super::user_activation::bind_navigator_user_activation(
+            scope,
+            backing,
+            owner_child,
+            owner_popup,
+        )?;
         set_navigator_identity_profile(scope, backing, &identity);
         set_navigator_storage_owner(scope, backing, owner_child, owner_popup);
         if let Some(accept_language) = v8_string(scope, identity.accept_language()) {
@@ -1204,6 +1132,7 @@ fn build_window_navigator_backing_for_owner<'s>(
                 accept_language.into(),
             );
         }
+        Ok(backing)
     })
 }
 
