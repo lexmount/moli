@@ -461,10 +461,15 @@ impl JsContextHost {
         self.stored_document_start_scripts.clone()
     }
 
-    pub(crate) fn stored_default_runtime_binding_names(&self) -> Vec<String> {
+    pub(crate) fn stored_default_native_runtime_binding_names(&self) -> Vec<String> {
         self.stored_runtime_bindings
             .iter()
-            .filter(|binding| binding.execution_context_name.is_none())
+            // Inspector installs session-owned bindings when each V8 context
+            // is reported. Replacing them with a native callback would lose
+            // the registering sessions and their context filters.
+            .filter(|binding| {
+                binding.devtools_session.is_none() && binding.execution_context_name.is_none()
+            })
             .map(|binding| binding.name.clone())
             .collect()
     }
