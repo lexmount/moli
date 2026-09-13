@@ -292,10 +292,11 @@ fn runtime_protocol_message_user_gesture(raw_json: &str) -> bool {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum InspectorWindowDispatchTarget {
     DefaultTop,
     ExecutionContext(i64),
+    UniqueContext(String),
 }
 
 fn runtime_protocol_message_window_dispatch_target(
@@ -303,6 +304,15 @@ fn runtime_protocol_message_window_dispatch_target(
 ) -> Option<InspectorWindowDispatchTarget> {
     let message = serde_json::from_str::<Value>(raw_json).ok()?;
     let params = message.get("params")?;
+    if matches!(
+        message.get("method").and_then(Value::as_str),
+        Some("Runtime.evaluate" | "Runtime.callFunctionOn")
+    ) && let Some(unique_id) = params.get("uniqueContextId").and_then(Value::as_str)
+    {
+        return Some(InspectorWindowDispatchTarget::UniqueContext(
+            unique_id.to_owned(),
+        ));
+    }
     match message.get("method").and_then(Value::as_str) {
         Some("Runtime.evaluate") | Some("Runtime.compileScript") => Some(
             params
@@ -324,6 +334,47 @@ fn runtime_protocol_message_window_dispatch_target(
 struct InspectorWindowDispatchScope {
     context_ptr: *const v8::Global<v8::Context>,
     child_handle: Option<DomHandle>,
+}
+
+fn notify_close_watcher_protocol_activation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    session: &v8::inspector::V8InspectorSession,
+    raw_json: &str,
+    target: Option<InspectorWindowDispatchScope>,
+) {
+    if !runtime_protocol_message_user_gesture(raw_json) {
+        return;
+    }
+    let Ok(message) = serde_json::from_str::<Value>(raw_json) else {
+        return;
+    };
+    let object_id = message
+        .get("params")
+        .and_then(|params| params.get("objectId"))
+        .and_then(Value::as_str);
+    let context = if let Some(object_id) = object_id {
+        let Ok((_, context, _)) =
+            session.unwrap_object(scope, v8::inspector::StringView::from(object_id.as_bytes()))
+        else {
+            return;
+        };
+        context
+    } else if let Some(target) = target {
+        unsafe { v8::Local::new(scope, &*target.context_ptr) }
+    } else {
+        return;
+    };
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return;
+    };
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    let host = unsafe { &mut *host_ptr };
+    if let Some(identity) =
+        host.window_execution_context_identity_for_v8_context(target_scope, context)
+        && host.window_execution_context_identity_is_current(identity)
+    {
+        host.notify_close_watcher_user_activation(identity.dispatch_scope());
+    }
 }
 
 fn enter_inspector_window_dispatch_scope(
@@ -1766,6 +1817,12 @@ impl ScriptVm {
                         // callback even if they settle in this same owner turn.
                         let dispatch_response_capture = outbound.capture_dispatch_responses();
                         let dispatch_started = timing_started.map(|_| Instant::now());
+                        notify_close_watcher_protocol_activation(
+                            scope,
+                            session,
+                            raw_json,
+                            inspector_window_dispatch_scope,
+                        );
                         if let Err(error) = with_scoped_inspector_microtasks(scope, || {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
@@ -3214,6 +3271,12 @@ impl ScriptVm {
             }
             InspectorWindowDispatchTarget::ExecutionContext(execution_context_id) => {
                 execution_context_id
+            }
+            InspectorWindowDispatchTarget::UniqueContext(unique_id) => {
+                self.known_runtime_realm_inventory()
+                    .into_iter()
+                    .find(|realm| realm.realm_id.as_deref() == Some(unique_id.as_str()))?
+                    .context_id
             }
         };
         if self.runtime_observable_default_execution_context_id() == Some(execution_context_id) {

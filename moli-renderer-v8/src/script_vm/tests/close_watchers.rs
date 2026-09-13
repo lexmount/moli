@@ -1,5 +1,377 @@
 use super::*;
 
+fn close_watcher_input_vm() -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm("https://close-watcher-input.test/");
+    setup_close_watcher_input_document(&mut vm);
+    vm
+}
+
+fn setup_close_watcher_input_document(vm: &mut ScriptVm) {
+    vm.eval(r#"
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        globalThis.events = [];
+        globalThis.record = name => {
+          const watcher = new CloseWatcher();
+          watcher.addEventListener('cancel', e => events.push(name + ':cancel:' + e.cancelable + ':' + e.isTrusted));
+          watcher.addEventListener('close', e => events.push(name + ':close:' + e.isTrusted));
+          return watcher;
+        };
+    "#).expect("prepare CloseWatcher input document");
+}
+
+fn close_watcher_key(vm: &mut ScriptVm, event: &str, key: &str) {
+    vm.dispatch_key_event(event, key, key, "", 0, false, false)
+        .expect("native key input");
+}
+
+fn close_watcher_protocol(
+    vm: &mut ScriptVm,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let messages = vm
+        .dispatch_inspector_protocol_message(
+            &serde_json::json!({"id": 1001, "method": method, "params": params}).to_string(),
+        )
+        .expect("CloseWatcher protocol command");
+    let response = messages
+        .into_iter()
+        .find(|message| message["id"] == 1001)
+        .expect("protocol response");
+    assert!(response.get("error").is_none(), "{response}");
+    assert!(
+        response["result"].get("exceptionDetails").is_none(),
+        "{response}"
+    );
+    response["result"].clone()
+}
+
+#[test]
+fn close_watcher_protocol_activation_survives_evaluate_and_call_function_on() {
+    let mut vm = close_watcher_input_vm();
+    close_watcher_protocol(&mut vm, "Runtime.enable", serde_json::json!({}));
+    for use_object_id in [false, true] {
+        vm.eval("events.length = 0; globalThis.watcher = record('watcher'); watcher.oncancel = e => e.preventDefault()").unwrap();
+        if use_object_id {
+            let object = close_watcher_protocol(
+                &mut vm,
+                "Runtime.evaluate",
+                serde_json::json!({"expression":"({})"}),
+            );
+            close_watcher_protocol(
+                &mut vm,
+                "Runtime.callFunctionOn",
+                serde_json::json!({"objectId":object["result"]["objectId"],"functionDeclaration":"function() {}","userGesture":true}),
+            );
+        } else {
+            close_watcher_protocol(
+                &mut vm,
+                "Runtime.evaluate",
+                serde_json::json!({"expression":"0","userGesture":true}),
+            );
+        }
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            "watcher:cancel:true:true|watcher:cancel:false:true|watcher:close:true"
+        );
+    }
+}
+
+#[test]
+fn close_watcher_groups_are_shared_by_isolated_realms_and_release_retired_watchers() {
+    let mut vm = close_watcher_input_vm();
+    close_watcher_protocol(&mut vm, "Runtime.enable", serde_json::json!({}));
+    vm.eval("record('main')").unwrap();
+    let isolated = vm
+        .create_isolated_world("close-watcher", true)
+        .expect("isolated world");
+    vm.exec_in_execution_context(
+        isolated,
+        "globalThis.watcherClosed = false; new CloseWatcher().onclose = () => globalThis.watcherClosed = true",
+    )
+    .unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "main:cancel:false:true|main:close:true"
+    );
+    let result = close_watcher_protocol(
+        &mut vm,
+        "Runtime.evaluate",
+        serde_json::json!({"expression":"globalThis.watcherClosed","contextId":isolated,"returnByValue":true}),
+    );
+    assert_eq!(result["result"]["value"], true);
+
+    vm.eval("events.length = 0; record('main')").unwrap();
+    close_watcher_key(&mut vm, "keydown", "x");
+    vm.exec_in_execution_context(isolated, "new CloseWatcher()")
+        .unwrap();
+    vm.destroy_isolated_world_context(isolated);
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "main:cancel:true:true|main:close:true"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn close_watcher_activation_and_consumption_follow_the_focused_frame_tree() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for sandboxed in [false, true] {
+        let mut vm = new_storage_test_vm_with_loader("https://close-watcher-input.test/", &loader);
+        setup_close_watcher_input_document(&mut vm);
+        close_watcher_protocol(&mut vm, "Runtime.enable", serde_json::json!({}));
+        vm.eval(&format!(
+            r#"
+            globalThis.watcher = record('parent');
+            watcher.oncancel = e => e.preventDefault();
+            globalThis.frame = document.createElement('iframe');
+            if ({sandboxed}) frame.sandbox = 'allow-scripts';
+            frame.srcdoc = '<!doctype html><body>child</body>';
+            document.body.appendChild(frame);
+        "#
+        ))
+        .unwrap();
+        run_child_navigation_commit_and_host_load_for_test(&mut vm, "CloseWatcher input frame")
+            .await;
+        let realms = vm.live_child_default_runtime_realm_inventory();
+        assert_eq!(realms.len(), 1);
+        let child = realms[0].context_id;
+        let unique_id = realms[0]
+            .realm_id
+            .as_ref()
+            .expect("child unique context ID");
+        vm.exec_in_execution_context(child, r#"
+            if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+            document.body.tabIndex = -1;
+            globalThis.events = [];
+            globalThis.record = () => {
+                const watcher = new CloseWatcher();
+                watcher.oncancel = e => { events.push('cancel:' + e.cancelable); e.preventDefault(); };
+                watcher.onclose = () => events.push('close');
+            };
+            record();
+        "#).unwrap();
+
+        // Parent input reaches same-origin descendants, but not an opaque child.
+        close_watcher_key(&mut vm, "keydown", "x");
+        vm.exec_in_execution_context(child, "document.body.focus()")
+            .unwrap();
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        let child_events = close_watcher_protocol(
+            &mut vm,
+            "Runtime.evaluate",
+            serde_json::json!({
+                "contextId":child, "expression":"events.join('|')", "returnByValue":true,
+            }),
+        );
+        assert_eq!(
+            child_events["result"]["value"],
+            if sandboxed {
+                "cancel:false|close"
+            } else {
+                "cancel:true"
+            }
+        );
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            "",
+            "Esc must target the focused child"
+        );
+
+        // A canceled child request consumes activation in the entire tree.
+        vm.eval("document.body.tabIndex = -1; document.body.focus()")
+            .unwrap();
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            if sandboxed {
+                "parent:cancel:true:true"
+            } else {
+                "parent:cancel:false:true|parent:close:true"
+            }
+        );
+        vm.eval("watcher.destroy(); events.length = 0; globalThis.watcher = record('parent'); watcher.oncancel = e => e.preventDefault()").unwrap();
+
+        // Protocol activation in a child reaches its ancestors regardless of origin.
+        close_watcher_protocol(
+            &mut vm,
+            "Runtime.evaluate",
+            serde_json::json!({
+                "uniqueContextId":unique_id, "expression":"0", "userGesture":true,
+            }),
+        );
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            "parent:cancel:true:true"
+        );
+    }
+}
+
+#[test]
+fn close_watcher_native_escape_honors_keydown_cancellation_and_ignores_synthetic_input() {
+    let mut vm = close_watcher_input_vm();
+    vm.eval(
+        r#"
+        record('first'); record('second');
+        dispatchEvent(new KeyboardEvent('keydown', {key: 'x'}));
+        dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+        globalThis.stopEscape = e => { if (e.key === 'Escape') e.preventDefault(); };
+        addEventListener('keydown', stopEscape);
+    "#,
+    )
+    .expect("watchers and canceling key listener");
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    vm.eval("removeEventListener('keydown', stopEscape)")
+        .expect("remove key listener");
+    close_watcher_key(&mut vm, "keyup", "Escape");
+    close_watcher_key(&mut vm, "keypress", "Escape");
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "");
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "second:cancel:false:true|second:close:true|first:cancel:false:true|first:close:true"
+    );
+}
+
+#[test]
+fn close_watcher_native_requests_close_only_the_last_activation_group() {
+    let mut vm = close_watcher_input_vm();
+    vm.eval("record('first')").unwrap();
+    close_watcher_key(&mut vm, "keydown", "x");
+    vm.eval("record('second'); record('third')").unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "third:cancel:false:true|third:close:true|second:cancel:false:true|second:close:true"
+    );
+    vm.eval("events.length = 0").unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "first:cancel:false:true|first:close:true"
+    );
+}
+
+#[test]
+fn close_watcher_canceling_a_request_consumes_activation_until_the_next_input() {
+    let mut vm = close_watcher_input_vm();
+    vm.eval("globalThis.watcher = record('watcher'); watcher.oncancel = e => e.preventDefault()")
+        .unwrap();
+    close_watcher_key(&mut vm, "keydown", "x");
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "watcher:cancel:true:true"
+    );
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "watcher:cancel:true:true|watcher:cancel:false:true|watcher:close:true"
+    );
+    vm.eval("events.length = 0; globalThis.next = record('next'); next.oncancel = e => e.preventDefault()").unwrap();
+    close_watcher_key(&mut vm, "keydown", "x");
+    vm.eval("next.requestClose()").unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "next:cancel:true:true|next:cancel:false:true|next:close:true"
+    );
+}
+
+#[test]
+fn close_watcher_user_activation_cannot_bank_unlimited_groups() {
+    let mut vm = close_watcher_input_vm();
+    for _ in 0..4 {
+        close_watcher_key(&mut vm, "keydown", "x");
+    }
+    vm.eval("record('first'); record('second'); record('third')")
+        .unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "third:cancel:false:true|third:close:true|second:cancel:false:true|second:close:true"
+    );
+    vm.eval("events.length = 0").unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "first:cancel:false:true|first:close:true"
+    );
+}
+
+#[test]
+fn close_watcher_native_group_snapshot_survives_mutation_inside_cancel() {
+    let mut vm = close_watcher_input_vm();
+    vm.eval(
+        r#"
+        const first = record('first'); record('second');
+        const third = record('third');
+        third.oncancel = () => { first.destroy(); record('new'); };
+    "#,
+    )
+    .unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "third:cancel:false:true|third:close:true|second:cancel:false:true|second:close:true"
+    );
+    vm.eval("events.length = 0").unwrap();
+    close_watcher_key(&mut vm, "keydown", "Escape");
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "new:cancel:false:true|new:close:true"
+    );
+}
+
+#[test]
+fn close_watcher_mouse_and_touch_activate_at_their_respective_input_phases() {
+    for touch in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://close-watcher-input.test/",
+            "<html><body><div>input target</div></body></html>",
+        );
+        setup_close_watcher_input_document(&mut vm);
+        vm.eval("record('first').oncancel = e => e.preventDefault()")
+            .unwrap();
+        if touch {
+            vm.dispatch_touch_event_at_point(10.0, 11.0, "touchstart", false)
+                .unwrap();
+        } else {
+            vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousemove", 0, Some(0), 0.0, 0.0)
+                .unwrap();
+        }
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            "first:cancel:false:true|first:close:true"
+        );
+        vm.eval("events.length = 0; record('next').oncancel = e => e.preventDefault()")
+            .unwrap();
+        if touch {
+            vm.dispatch_touch_event_at_point(10.0, 11.0, "touchend", false)
+                .unwrap();
+        } else {
+            // Canceling pointerdown suppresses the compatibility mousedown,
+            // but the trusted pointer input still activates this Window.
+            vm.eval("addEventListener('pointerdown', e => e.preventDefault())")
+                .unwrap();
+            vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, Some(1), 0.0, 0.0)
+                .unwrap();
+        }
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        close_watcher_key(&mut vm, "keydown", "Escape");
+        assert_eq!(
+            vm.eval("events.join('|')").unwrap(),
+            "next:cancel:true:true|next:cancel:false:true|next:close:true"
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn close_watcher_respects_its_document_and_event_realm_after_frame_removal() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
