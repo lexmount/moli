@@ -63,6 +63,15 @@ uv run python -m moli_benchmark.wpt_cross \
 Use `--mode cdp` to check the same cases through CDP. Unsupported formats
 remain failures in the report; they are not filtered out of this suite.
 
+Explicit cases that reference `testdriver.js` use CDP in `--mode auto`.
+The CDP runner delivers trusted keyboard and mouse/pen input on an independent
+connection, so input can finish while a harness probe awaits a JavaScript
+promise. It supports `click`, ASCII and WebDriver special keys in `send_keys`,
+and keyboard, mouse/pen, wheel, and pause actions. Unsupported touch sources,
+pointer geometry properties, and cross-origin or transformed frame pointer
+coordinates reject the automation request. CLI mode cannot run these input
+cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
