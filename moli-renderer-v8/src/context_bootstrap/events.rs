@@ -28,6 +28,7 @@ pub(in crate::context_bootstrap) use device::{
     install_device_event_template_bindings,
 };
 
+pub(in crate::context_bootstrap) use modifiers::initialize_legacy_event_modifiers;
 pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
