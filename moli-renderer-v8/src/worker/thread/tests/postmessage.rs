@@ -2148,7 +2148,7 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"offscreenCanvas":"function","offscreen2d":"function","webgl":"function","webgl2":"function","extensionGlobal":"undefined","contextInstance":true,"twoDimensionalInstance":true,"vendor":"WebKit","renderer":"WebKit WebGL"}"#
+        r#"{"offscreenCanvas":"function","offscreen2d":"function","webgl":"function","webgl2":"function","extensionGlobal":"undefined","contextInstance":true,"twoDimensionalInstance":true,"vendor":"Google Inc. (NVIDIA)","renderer":"ANGLE (NVIDIA, NVIDIA Quadro P1000 Direct3D11 vs_5_0 ps_5_0, D3D11-23.21.13.9077)"}"#
     );
 }
 
@@ -2184,6 +2184,26 @@ async fn worker_media_capabilities_matches_the_software_chromium_profile() {
         .expect("timed out")
         .expect("channel closed");
     assert_eq!(expect_post_json(msg), "[3,3,3,0,3,3,3,3]");
+}
+
+#[tokio::test]
+async fn worker_webgl_compatibility_profile_matches_the_window_profile() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "try {{ postMessage(JSON.parse({})); }} catch (error) {{ postMessage(String(error)); }} close();",
+            include_str!("../../../../tests/fixtures/webgl-compatibility-profile.js")
+        ),
+        "https://webgl-compatibility-profile.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker WebGL profile must settle")
+        .expect("worker must return its WebGL profile result");
+    assert_eq!(
+        expect_post_json(message),
+        r#"["offscreen:webgl","offscreen:webgl2"]"#
+    );
 }
 
 #[tokio::test]

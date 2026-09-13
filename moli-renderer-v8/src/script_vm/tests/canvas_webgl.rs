@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn webgl_compatibility_profile_uses_d3d11_identity_and_precision() {
+    let mut vm = new_storage_test_vm("https://webgl-compatibility-profile.test/");
+    let result = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/webgl-compatibility-profile.js"
+        ))
+        .expect("WebGL identity and precision should share the compatibility profile");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
 fn webgl_basic_queries_preserve_types_extension_gates_and_errors() {
     let mut vm = new_storage_test_vm("https://webgl-query-contract.test/");
     let result = vm
