@@ -261,7 +261,14 @@ def _target_ids(infos: list[dict[str, Any]]) -> frozenset[str]:
 
 async def _close_target(client: RawCdpClient, target_id: str) -> None:
     command_id = await client.send("Target.closeTarget", {"targetId": target_id})
-    response, _ = await client.recv_until_id(command_id, timeout=5)
+    try:
+        response, _ = await client.recv_until_id(command_id, timeout=5)
+    except RawCdpError:
+        # Closing a parent or disposing a context can remove a target between
+        # getTargets and closeTarget. Only ignore the error if it is gone.
+        if target_id not in _target_ids(await _target_infos(client)):
+            return
+        raise
     success = (response.get("result") or {}).get("success")
     if success is False:
         raise RawCdpError(f"Target.closeTarget rejected target {target_id}")
@@ -270,8 +277,12 @@ async def _close_target(client: RawCdpClient, target_id: str) -> None:
 async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
     """Dispose one case's storage context and every target created inside it."""
 
+    input_cleanup_error = None
     if page.native_input is not None:
-        await page.native_input.close()
+        try:
+            await page.native_input.close()
+        except Exception as error:
+            input_cleanup_error = error
 
     try:
         before = await _target_infos(client)
@@ -305,6 +316,8 @@ async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
     try:
         after = await _target_infos(client)
     except (RawCdpError, asyncio.TimeoutError):
+        if input_cleanup_error is not None and page.browser_context_id is None:
+            raise input_cleanup_error
         return
 
     residual_ids = {
@@ -339,6 +352,8 @@ async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
             raise RawCdpError(
                 f"case cleanup left auxiliary targets alive: {sorted(leaked)}"
             )
+    if input_cleanup_error is not None and page.browser_context_id is None:
+        raise input_cleanup_error
 
 
 async def _attach_page(
@@ -415,7 +430,7 @@ async def _attach_page(
             target_id=target,
             session_id=session_id,
             baseline_target_ids=baseline_target_ids,
-            native_input=await NativeInput.attach(input_endpoint, target) if input_endpoint else None,
+            native_input=await NativeInput.attach(input_endpoint, target, browser_context_id) if input_endpoint else None,
         )
     except BaseException:
         if target is not None:

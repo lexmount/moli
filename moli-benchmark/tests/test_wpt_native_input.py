@@ -8,10 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from moli_benchmark.raw_cdp import RawCdpConnectionClosed
+from moli_benchmark.raw_cdp import RawCdpConnectionClosed, RawCdpError
 from moli_benchmark.wpt_cross.__main__ import _case_references_testdriver
 from moli_benchmark.wpt_cross.case_set import WptCase
-from moli_benchmark.wpt_cross.native_input import NativeInput, Pointer, key_description
+from moli_benchmark.wpt_cross.native_input import NativeInput, Pointer, key_description, permission_origin
+from moli_benchmark.wpt_cross.runner import _AttachedPage, _close_page, _close_target
 
 
 class RecordingClient:
@@ -172,8 +173,151 @@ class NativeInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.command.await_count, 2)
         self.client.close.assert_awaited_once()
 
+    async def test_permissions_use_the_selected_frame_origin_and_case_browser_context(self):
+        self.driver.browser_context_id = "case-context"
+        self.driver.evaluate = AsyncMock(return_value=[1, 0])
+        self.driver.command = AsyncMock(side_effect=[{"frameTree": {
+            "frame": {"securityOrigin": "https://top.test"},
+            "childFrames": [
+                {"frame": {"securityOrigin": "https://sibling.test"}},
+                {"frame": {"securityOrigin": "https://outer.test"}, "childFrames": [
+                    {"frame": {"id": "child-frame", "securityOrigin": "https://child.test", "url": "about:blank"}},
+                ]},
+            ],
+        }}, {"backendNodeId": 42}, {"object": {"objectId": "owner-object"}},
+            {"result": {"value": True}}, {}])
+        descriptor = {"name": "clipboard-write", "allowWithoutSanitization": True}
+        await self.driver.perform(9, {
+            "id": 4, "token": "realm", "kind": "set_permission", "descriptor": descriptor, "state": "denied",
+        })
+        method, params, kwargs = self.client.commands[-1]
+        self.assertEqual(method, "Browser.setPermission")
+        self.assertEqual(params, {
+            "permission": descriptor, "setting": "denied", "browserContextId": "case-context",
+            "origin": "https://top.test", "embeddedOrigin": "https://child.test",
+        })
+        self.assertNotIn("session_id", kwargs)
+        self.driver.command.assert_any_await("DOM.getFrameOwner", {"frameId": "child-frame"})
+        self.driver.command.assert_any_await("Runtime.releaseObject", {"objectId": "owner-object"})
+        self.driver.command.side_effect = None
+        self.driver.command.return_value = {}
+        await self.driver.close()
+        reset = next(command for command in self.client.commands if command[0] == "Browser.resetPermissions")
+        self.assertEqual(reset[1], {"browserContextId": "case-context"})
+        self.assertNotIn("session_id", reset[2])
+
+    async def test_permissions_reject_malformed_requests_before_any_protocol_mutation(self):
+        for descriptor, state in [({}, "granted"), ({"name": ""}, "granted"), ({"name": 1}, "granted"),
+                                  ({"name": "geolocation"}, "invalid"), ({"name": "geolocation"}, {})]:
+            with self.subTest(descriptor=descriptor, state=state), self.assertRaises(ValueError):
+                await self.driver.perform(1, {"id": 1, "token": "realm", "kind": "set_permission",
+                                              "descriptor": descriptor, "state": state})
+        self.assertEqual(self.client.commands, [])
+
+    async def test_permissions_reject_detached_moved_and_opaque_frames(self):
+        request = {"id": 1, "token": "realm", "kind": "set_permission", "descriptor": {"name": "geolocation"}, "state": "granted"}
+        for paths, frame in [
+            ([[0]], {"securityOrigin": "https://top.test"}),
+            ([[], [0]], {"securityOrigin": "https://top.test"}),
+            ([[]], {"securityOrigin": "null", "url": "https://opaque.test/"}),
+        ]:
+            with self.subTest(paths=paths, frame=frame):
+                self.driver.evaluate = AsyncMock(side_effect=paths)
+                self.driver.command = AsyncMock(return_value={"frameTree": {"frame": frame}})
+                with self.assertRaises(ValueError):
+                    await self.driver.perform(1, request)
+        self.assertEqual(self.client.commands, [])
+
+    async def test_failed_permission_command_propagates_and_still_schedules_reset(self):
+        self.driver.evaluate = AsyncMock(return_value=[])
+        self.driver.command = AsyncMock(return_value={"frameTree": {"frame": {"securityOrigin": "https://top.test"}}})
+        self.client.command = AsyncMock(side_effect=RawCdpError("unsupported permission"))
+        with self.assertRaisesRegex(RawCdpError, "unsupported permission"):
+            await self.driver.perform(1, {"id": 1, "token": "realm", "kind": "set_permission",
+                                          "descriptor": {"name": "unsupported"}, "state": "granted"})
+        with self.assertRaisesRegex(RawCdpError, "reset WPT permissions"):
+            await self.driver.close()
+        self.assertEqual([call.args[0] for call in self.client.command.await_args_list], [
+            "Browser.setPermission", "Browser.resetPermissions", "Runtime.removeBinding", "Target.detachFromTarget",
+        ])
+        self.client.close.assert_awaited_once()
+        with self.assertRaisesRegex(RawCdpError, "reset WPT permissions"):
+            await self.driver.close()
+        self.client.close.assert_awaited_once()
+
+    async def test_omitted_frame_cannot_grant_permission_to_a_sibling(self):
+        self.driver.evaluate = AsyncMock(return_value=[0])
+        self.driver.command = AsyncMock(side_effect=[
+            {"frameTree": {"frame": {"securityOrigin": "https://top.test"}, "childFrames": [
+                {"frame": {"id": "sibling", "securityOrigin": "https://sibling.test"}},
+            ]}},
+            {"backendNodeId": 42}, {"object": {"objectId": "sibling-owner"}},
+            {"result": {"value": False}}, {},
+        ])
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            await self.driver.perform(1, {"id": 1, "token": "realm", "kind": "set_permission",
+                                          "descriptor": {"name": "geolocation"}, "state": "granted"})
+        self.assertEqual(self.client.commands, [])
+        self.driver.command.assert_awaited_with("Runtime.releaseObject", {"objectId": "sibling-owner"})
+
+    async def test_failed_permission_cleanup_still_disposes_case_targets(self):
+        class PageClient:
+            def __init__(self):
+                self.commands = []
+
+            async def send(self, method, params=None, **kwargs):
+                self.commands.append((method, params))
+                return len(self.commands)
+
+            async def recv_until_id(self, command_id, **kwargs):
+                method, _ = self.commands[command_id - 1]
+                result = {"targetInfos": []} if method == "Target.getTargets" else {"success": True}
+                return {"result": result}, []
+
+        for browser_context_id in (None, "isolated-context"):
+            with self.subTest(browser_context_id=browser_context_id):
+                client = PageClient()
+                native = SimpleNamespace(close=AsyncMock(side_effect=RawCdpError("reset failed")))
+                page = _AttachedPage(browser_context_id, "test-target", "test-session", frozenset(), native)
+                if browser_context_id is None:
+                    with self.assertRaisesRegex(RawCdpError, "reset failed"):
+                        await _close_page(client, page)
+                    self.assertIn(("Target.closeTarget", {"targetId": "test-target"}), client.commands)
+                else:
+                    await _close_page(client, page)
+                    self.assertIn(("Target.disposeBrowserContext", {"browserContextId": browser_context_id}), client.commands)
+
+
+    async def test_target_cleanup_accepts_a_concurrently_closed_target(self):
+        client = SimpleNamespace(
+            send=AsyncMock(side_effect=[1, 2]),
+            recv_until_id=AsyncMock(side_effect=[
+                RawCdpError("No target with given id found"),
+                ({"result": {"targetInfos": [{"targetId": "unrelated"}]}}, []),
+            ]),
+        )
+        await _close_target(client, "case-target")
+
+    async def test_target_cleanup_preserves_errors_for_a_live_target(self):
+        client = SimpleNamespace(
+            send=AsyncMock(side_effect=[1, 2]),
+            recv_until_id=AsyncMock(side_effect=[
+                RawCdpError("close rejected"),
+                ({"result": {"targetInfos": [{"targetId": "case-target"}]}}, []),
+            ]),
+        )
+        with self.assertRaisesRegex(RawCdpError, "close rejected"):
+            await _close_target(client, "case-target")
+
 
 class NativeInputSelectionTests(unittest.TestCase):
+    def test_permission_origins_keep_inherited_and_opaque_origin_semantics(self):
+        self.assertEqual(permission_origin({"url": "about:blank", "securityOrigin": "https://parent.test:8443"}), "https://parent.test:8443")
+        self.assertEqual(permission_origin({"url": "https://top.test/path?q=1"}), "https://top.test")
+        for origin in ("null", "", "file://", "https://user:password@top.test"):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                permission_origin({"url": "https://top.test", "securityOrigin": origin})
+
     def test_testdriver_detection_in_html_and_generated_variants(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,8 +1,10 @@
-"""Trusted WPT input, served on a separate CDP connection from harness probes.
+"""Native WPT automation on a separate CDP connection from harness probes.
 
 The input connection must remain runnable while the harness connection awaits a
 JavaScript promise. Each instance belongs to one case target and is disposed
 with it; no pressed keys, pending bindings, or pointer state cross case borders.
+Permission requests use frames exposed by the attached page session; out-of-
+process iframe targets require a separate attachment and report an error here.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..raw_cdp import (
     RawCdpConnectionClosed,
@@ -174,22 +177,42 @@ def validate_actions(sources: Any) -> None:
                 raise ValueError("native pointer geometry properties are not supported")
 
 
+def permission_origin(frame: dict[str, Any]) -> str:
+    # Frame.securityOrigin preserves inherited about:blank origins and opaque
+    # sandbox origins, which cannot be reconstructed from location.href.
+    origin = frame.get("securityOrigin", frame.get("url"))
+    if not isinstance(origin, str):
+        raise ValueError("permission frame has no origin")
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("cannot set permission for an opaque or unsupported origin")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class NativeInput:
-    def __init__(self, client: RoutedRawCdpClient, session_id: str) -> None:
+    def __init__(
+        self, client: RoutedRawCdpClient, session_id: str,
+        browser_context_id: str | None = None,
+    ) -> None:
         self.client = client
         self.session_id = session_id
+        self.browser_context_id = browser_context_id
         self.deadline: float | None = None
         self.task: asyncio.Task[None] | None = None
         self.keyboards: dict[str, dict[str, Key]] = {}
         self.pointers: dict[str, Pointer] = {}
         self._closed = False
+        self._permissions_changed = False
+        self._permission_cleanup_error: Exception | None = None
 
     @classmethod
-    async def attach(cls, endpoint: str, target_id: str) -> NativeInput:
+    async def attach(
+        cls, endpoint: str, target_id: str, browser_context_id: str | None = None,
+    ) -> NativeInput:
         client = await connect_routed_raw_cdp(endpoint)
         try:
             result = await client.command("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-            instance = cls(client, result.response["result"]["sessionId"])
+            instance = cls(client, result.response["result"]["sessionId"], browser_context_id)
             await instance.command("Runtime.enable")
             await instance.command("Runtime.addBinding", {"name": BINDING_NAME})
             instance.task = asyncio.create_task(instance.run(), name="wpt-native-input")
@@ -200,12 +223,20 @@ class NativeInput:
 
     async def close(self) -> None:
         if self._closed:
+            if self._permission_cleanup_error is not None:
+                raise RawCdpError("failed to reset WPT permissions") from self._permission_cleanup_error
             return
         self._closed = True
         if self.task is not None:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self.task
+        if self._permissions_changed:
+            params = {"browserContextId": self.browser_context_id} if self.browser_context_id else {}
+            try:
+                await self.client.command("Browser.resetPermissions", params, timeout=5)
+            except Exception as error:
+                self._permission_cleanup_error = error
         # The engine can exit before cleanup. Still detach when possible and
         # always close our own receiver and socket, even after a send fails.
         with contextlib.suppress(Exception):
@@ -218,6 +249,8 @@ class NativeInput:
                 "Target.detachFromTarget", {"sessionId": self.session_id}, timeout=5,
             )
         await self.client.close()
+        if self._permission_cleanup_error is not None:
+            raise RawCdpError("failed to reset WPT permissions") from self._permission_cleanup_error
 
     async def command(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         timeout = 10.0 if self.deadline is None else max(0.01, self.deadline - time.perf_counter())
@@ -392,7 +425,9 @@ class NativeInput:
         request_id = request["id"]
         token = request["token"]
         kind = request["kind"]
-        if kind == "send_keys":
+        if kind == "set_permission":
+            await self.set_permission(context_id, request)
+        elif kind == "send_keys":
             await self.evaluate(context_id, f"{STATE_NAME}.focus({request_id}, {json.dumps(token)})")
             await self.send_keys(request["keys"])
         elif kind == "click":
@@ -434,6 +469,73 @@ class NativeInput:
                 await asyncio.sleep(max(0, duration - (time.perf_counter() - started)))
         else:
             raise ValueError(f"unsupported native input request: {kind}")
+
+    async def set_permission(self, context_id: int, request: dict[str, Any]) -> None:
+        descriptor = request.get("descriptor")
+        state = request.get("state")
+        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("name"), str) or not descriptor["name"]:
+            raise ValueError("permission descriptor requires a name")
+        if not isinstance(state, str) or state not in {"granted", "denied", "prompt"}:
+            raise ValueError("invalid permission state")
+        path = await self.evaluate(
+            context_id,
+            f"{STATE_NAME}.permissionFramePath({request['id']}, {json.dumps(request['token'])})",
+        )
+        if not isinstance(path, list) or any(type(index) is not int or index < 0 for index in path):
+            raise ValueError("invalid permission frame path")
+        tree = (await self.command("Page.getFrameTree")).get("frameTree")
+        if not isinstance(tree, dict) or not isinstance(tree.get("frame"), dict):
+            raise ValueError("permission target has no frame tree")
+        embedding_origin = permission_origin(tree["frame"])
+        for index in path:
+            children = tree.get("childFrames", [])
+            if not isinstance(children, list) or index >= len(children):
+                raise ValueError("permission frame is unavailable in this CDP session (detached or out of process)")
+            tree = children[index]
+        embedded_origin = permission_origin(tree["frame"])
+        if path:
+            # A session's frame tree can omit out-of-process frames. Verify the
+            # owner instead of letting an omitted sibling shift the indices.
+            owner = await self.command("DOM.getFrameOwner", {"frameId": tree["frame"]["id"]})
+            resolved = await self.command("DOM.resolveNode", {
+                "backendNodeId": owner["backendNodeId"], "executionContextId": context_id,
+            })
+            object_id = resolved["object"]["objectId"]
+            try:
+                matches = await self.command("Runtime.callFunctionOn", {
+                    "executionContextId": context_id,
+                    "functionDeclaration": (
+                        "function(owner, id, token) { return "
+                        f"{STATE_NAME}.permissionFrameMatches(id, token, owner); }}"
+                    ),
+                    "arguments": [
+                        {"objectId": object_id}, {"value": request["id"]}, {"value": request["token"]},
+                    ],
+                    "returnByValue": True,
+                })
+                if matches.get("exceptionDetails") or matches.get("result", {}).get("value") is not True:
+                    raise ValueError("permission frame does not match the requested Window")
+            finally:
+                await self.command("Runtime.releaseObject", {"objectId": object_id})
+        # Resolve the retained Window again after the protocol read, so a
+        # detached or moved frame cannot grant a sibling's origin by index.
+        current_path = await self.evaluate(
+            context_id,
+            f"{STATE_NAME}.permissionFramePath({request['id']}, {json.dumps(request['token'])})",
+        )
+        if current_path != path:
+            raise ValueError("permission frame changed during the request")
+        params = {
+            "permission": descriptor, "setting": state,
+            "origin": embedding_origin, "embeddedOrigin": embedded_origin,
+        }
+        if self.browser_context_id is not None:
+            params["browserContextId"] = self.browser_context_id
+        # A command can be applied even if its response is lost. Always reset
+        # after attempting a mutation, and never attach a page sessionId to it.
+        self._permissions_changed = True
+        timeout = 10.0 if self.deadline is None else max(0.01, self.deadline - time.perf_counter())
+        await self.client.command("Browser.setPermission", params, timeout=timeout)
 
     async def action(
         self, context_id: int, request_id: int, token: str,
