@@ -72,11 +72,13 @@ test(function () {
     () => new IntersectionObserver(function () {}, { threshold: [1.1] }),
     "threshold must be in range",
   );
-  assert_throws_name(
-    "TypeError",
-    () => new IntersectionObserver(function () {}, { rootMargin: "1px 1px 1px 1px 1px" }),
-    "rootMargin must contain one to four values",
-  );
+  for (const member of ["rootMargin", "scrollMargin"]) {
+    assert_throws_dom(
+      "SyntaxError",
+      () => new IntersectionObserver(function () {}, { [member]: "1px 1px 1px 1px 1px" }),
+      `${member} must contain one to four values`,
+    );
+  }
   assert_throws_name(
     "TypeError",
     () => new IntersectionObserver(function () {}, { root: document.createTextNode("root") }),
