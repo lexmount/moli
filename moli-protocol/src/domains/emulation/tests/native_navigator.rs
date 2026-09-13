@@ -333,3 +333,80 @@ async fn max_touch_points_updates_native_getters_and_rejects_invalid_counts_atom
     .await;
     assert_eq!(evaluate(&mut ctx, "initialTouch").await, json!(5));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_metrics_zero_axes_use_visible_size_and_clear_restores_native_defaults() {
+    let mut ctx = setup().await;
+    let snapshot = "[innerWidth, innerHeight, devicePixelRatio, outerWidth, outerHeight, screen.width, screen.height]";
+    let baseline = evaluate(&mut ctx, snapshot).await;
+    let base = baseline.as_array().unwrap();
+    for (width, height, dpr, expected_width, expected_height) in [
+        (640, 480, 2, 640, 480),
+        (1000, 0, 2, 1000, 480),
+        (0, 0, 0, 640, 480),
+        (0, 200, 0, 640, 200),
+        (0, 0, 0, 640, 480),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": width,"height": height,"deviceScaleFactor": dpr,"mobile": false}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, snapshot).await,
+            json!([
+                expected_width,
+                expected_height,
+                if dpr == 0 {
+                    base[2].clone()
+                } else {
+                    json!(dpr)
+                },
+                base[3],
+                base[4],
+                base[5],
+                base[6]
+            ])
+        );
+    }
+    let previous = evaluate(&mut ctx, snapshot).await;
+    for invalid in [
+        json!({"width": -1}),
+        json!({"height": 10_000_001}),
+        json!({"deviceScaleFactor": -1}),
+        json!({"screenWidth": -1}),
+    ] {
+        let mut params = json!({"width":640,"height":480,"deviceScaleFactor":1,"mobile":false});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(invalid.as_object().unwrap().clone());
+        ctx.process_async(json!({"id":88001,"sessionId":"SID-1", "method":"Emulation.setDeviceMetricsOverride","params":params})).await;
+        ctx.expect_error(88001, -32602, "InvalidParams");
+        assert_eq!(evaluate(&mut ctx, snapshot).await, previous);
+    }
+    expect_session_command_result(&mut ctx, 88001, "SID-1", "Emulation.setDeviceMetricsOverride",
+        json!({"width":640,"height":480,"deviceScaleFactor":1,"mobile":false,"screenWidth":1500,"screenHeight":1200})).await;
+    assert_eq!(
+        evaluate(&mut ctx, "[screen.width,screen.height,screen.availHeight]").await,
+        json!([1500, 1200, 1200])
+    );
+    expect_session_command_result(&mut ctx, 88001, "SID-1", "Emulation.setDeviceMetricsOverride",
+        json!({"width":640,"height":480,"deviceScaleFactor":1,"mobile":false,"screenWidth":1500,"screenHeight":0})).await;
+    assert_eq!(
+        evaluate(&mut ctx, "[screen.width,screen.height]").await,
+        json!([base[5], base[6]])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, snapshot).await, baseline);
+}

@@ -4,9 +4,15 @@ use serde_json::json;
 pub struct EmulatedDeviceMetrics {
     pub width: u32,
     pub height: u32,
+    /// Actual visible widget dimensions, retained across single-axis overrides.
+    pub visible_width: u32,
+    pub visible_height: u32,
+    pub outer_width: u32,
+    pub outer_height: u32,
     pub device_scale_factor: f64,
     pub screen_width: u32,
     pub screen_height: u32,
+    pub screen_avail_height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,16 +30,6 @@ impl EmulatedNetworkConditions {
     }
 }
 
-const DEFAULT_VIEWPORT_WIDTH: u32 = 1920;
-const DEFAULT_VIEWPORT_HEIGHT: u32 = 1080;
-const DEFAULT_SCREEN_WIDTH: u32 = 1920;
-const DEFAULT_SCREEN_HEIGHT: u32 = 1080;
-const DEFAULT_SCREEN_AVAIL_HEIGHT: u32 = 1040;
-
-fn screen_avail_height_from_screen_height(screen_height: u32) -> u32 {
-    screen_height.min(DEFAULT_SCREEN_AVAIL_HEIGHT)
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EmulatedViewportSurface {
     pub inner_width: u32,
@@ -49,16 +45,17 @@ pub(crate) struct EmulatedViewportSurface {
 
 impl Default for EmulatedViewportSurface {
     fn default() -> Self {
+        let profile = moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
         Self {
-            inner_width: DEFAULT_VIEWPORT_WIDTH,
-            inner_height: DEFAULT_VIEWPORT_HEIGHT,
-            outer_width: DEFAULT_VIEWPORT_WIDTH,
-            outer_height: DEFAULT_VIEWPORT_HEIGHT,
-            device_pixel_ratio: 1.0,
-            screen_width: DEFAULT_SCREEN_WIDTH,
-            screen_height: DEFAULT_SCREEN_HEIGHT,
-            screen_avail_width: DEFAULT_SCREEN_WIDTH,
-            screen_avail_height: screen_avail_height_from_screen_height(DEFAULT_SCREEN_HEIGHT),
+            inner_width: profile.inner_width as u32,
+            inner_height: profile.inner_height as u32,
+            outer_width: profile.inner_width as u32,
+            outer_height: profile.inner_height as u32,
+            device_pixel_ratio: profile.device_pixel_ratio,
+            screen_width: profile.screen_width as u32,
+            screen_height: profile.screen_height as u32,
+            screen_avail_width: profile.screen_avail_width as u32,
+            screen_avail_height: profile.screen_avail_height as u32,
         }
     }
 }
@@ -100,7 +97,7 @@ impl EmulatedViewportSurface {
 
 impl EmulatedDeviceMetrics {
     pub(crate) fn screen_avail_height(&self) -> u32 {
-        screen_avail_height_from_screen_height(self.screen_height)
+        self.screen_avail_height
     }
 
     pub(crate) fn device_pixel_ratio(&self) -> f64 {
@@ -115,8 +112,8 @@ impl EmulatedDeviceMetrics {
         EmulatedViewportSurface {
             inner_width: self.width,
             inner_height: self.height,
-            outer_width: self.width,
-            outer_height: self.height,
+            outer_width: self.outer_width,
+            outer_height: self.outer_height,
             device_pixel_ratio: self.device_pixel_ratio(),
             screen_width: self.screen_width,
             screen_height: self.screen_height,
@@ -386,22 +383,22 @@ impl EffectiveTargetEmulationState {
 mod tests {
     use super::{
         EffectiveTargetEmulationState, EmulatedDeviceMetrics, EmulatedViewportSurface,
-        screen_avail_height_from_screen_height, viewport_surface_install_script,
+        viewport_surface_install_script,
     };
-
-    #[test]
-    fn screen_available_height_never_exceeds_zero_screen_height() {
-        assert_eq!(screen_avail_height_from_screen_height(0), 0);
-    }
 
     #[test]
     fn device_pixel_ratio_normalizes_non_positive_and_non_finite_values() {
         let mut metrics = EmulatedDeviceMetrics {
             width: 800,
             height: 600,
+            visible_width: 800,
+            visible_height: 600,
+            outer_width: 800,
+            outer_height: 600,
             device_scale_factor: 2.0,
             screen_width: 800,
             screen_height: 600,
+            screen_avail_height: 600,
         };
         assert_eq!(metrics.device_pixel_ratio(), 2.0);
 

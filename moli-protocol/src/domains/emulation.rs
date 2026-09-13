@@ -838,47 +838,29 @@ fn start_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    let (Ok(width), Ok(height)) = (u32::try_from(params.width), u32::try_from(params.height))
-    else {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32602,
-            "InvalidParams",
-        ));
-    };
-    let screen_width = match params.screen_width {
-        Some(value) => match value.try_into() {
-            Ok(value) => value,
-            Err(_) => {
-                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32602,
-                    "InvalidParams",
-                ));
-            }
-        },
-        None => width,
-    };
-    let screen_height = match params.screen_height {
-        Some(value) => match value.try_into() {
-            Ok(value) => value,
-            Err(_) => {
-                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32602,
-                    "InvalidParams",
-                ));
-            }
-        },
-        None => height,
-    };
-    let command = DevToolsSetViewportCommand {
-        context: cmd.devtools_command_context(None::<&str>, None::<&str>),
-        browser_context_ids: Vec::new(),
-        viewport: DevToolsViewportSetting::Dimensions { width, height },
-        device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(params.device_scale_factor),
-        screen_width: Some(screen_width),
-        screen_height: Some(screen_height),
-    };
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    match start_devtools_set_viewport_command(conn, cmd.id, command, owner) {
+    let previous = conn.target_session_owner_emulated_device_metrics_for_owner(&owner);
+    let mut base = EmulatedViewportSurface::default();
+    if let Some(state) = conn.target_owner_state_for_owner(&owner) {
+        let geometry = state.window_surface_geometry;
+        if geometry.width != 0 {
+            base.inner_width = geometry.width;
+            base.outer_width = geometry.width;
+        }
+        if geometry.height != 0 {
+            base.inner_height = geometry.height;
+            base.outer_height = geometry.height;
+        }
+    }
+    let metrics = match device::metrics_from_cdp(params, previous.as_ref(), &base) {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+                error,
+            ));
+        }
+    };
+    match start_apply_device_metrics(conn, cmd.id, metrics, owner) {
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(pending),
         Ok(None) => EmulationCommandTaskStep::Complete(CommandOutputPlan::success()),
         Err(error) => {
@@ -966,6 +948,15 @@ fn start_devtools_set_viewport_command(
         return Ok(None);
     }
     let metrics = set_viewport_metrics_from_command(conn, &owner_scope, &command)?;
+    start_apply_device_metrics(conn, command_id, metrics, owner_scope)
+}
+
+fn start_apply_device_metrics(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    metrics: EmulatedDeviceMetrics,
+    owner_scope: CommandOwnerScope,
+) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
     let had_existing_device_metrics = conn
         .target_session_owner_emulated_device_metrics_for_owner(&owner_scope)
         .is_some();
@@ -1052,9 +1043,16 @@ fn set_viewport_metrics_from_current(
     Ok(EmulatedDeviceMetrics {
         width,
         height,
+        visible_width: width,
+        visible_height: height,
+        outer_width: width,
+        outer_height: height,
         device_scale_factor,
         screen_width: command.screen_width.unwrap_or(width),
         screen_height: command.screen_height.unwrap_or(height),
+        // Preserve the existing WebDriver/BiDi headless work area. CDP device
+        // emulation supplies its own available screen dimensions instead.
+        screen_avail_height: command.screen_height.unwrap_or(height).min(1040),
     })
 }
 
