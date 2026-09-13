@@ -17,6 +17,10 @@ const WEBGL_VIEWPORT: u32 = 0x0BA2;
 const WEBGL_INVALID_ENUM: u32 = 0x0500;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
 const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
+// This query-only compatibility profile has no physical GPU identity provider.
+// Keep enabled debug queries usable without inventing a device or driver name.
+const WEBGL_COMPAT_VENDOR: &str = "WebKit";
+const WEBGL_COMPAT_RENDERER: &str = "WebKit WebGL";
 const WEBGL2_DRAWING_BUFFER_COLOR_SPACE_SLOT: &str = "__moliWebGl2DrawingBufferColorSpace";
 const WEBGL2_UNPACK_COLOR_SPACE_SLOT: &str = "__moliWebGl2UnpackColorSpace";
 const WEBGL2_COLOR_SPACE_SLOTS: &[&str] = &[
@@ -397,12 +401,13 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 8).into()),
         0x8B4D => rv.set(v8::Integer::new(scope, 16).into()),
         0x8DFB..=0x8DFD => rv.set(v8::Integer::new(scope, 128).into()),
-        // These masked API strings match the Chromium service surface, not a
-        // claim about the physical GPU. Unmasked hardware identity stays empty.
-        0x1F00 => rv.set(v8str(scope, "WebKit").into()),
-        0x1F01 => rv.set(v8str(scope, "WebKit WebGL").into()),
-        0x9245 | 0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8::String::empty(scope).into())
+        0x1F00 => rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into()),
+        0x1F01 => rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into()),
+        0x9245 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into())
+        }
+        0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into())
         }
         0x1F02 => rv.set(v8str(scope, "WebGL 1.0 (OpenGL ES 2.0 Chromium)").into()),
         0x8B8C => rv.set(v8str(scope, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)").into()),
@@ -449,10 +454,13 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         0x9111 | 0x9247 => rv.set(v8::Integer::new(scope, 0).into()),
         0x8D6B => rv.set(v8::Integer::new(scope, 1_073_741_823).into()),
         0x8A34 => rv.set(v8::Integer::new(scope, 256).into()),
-        0x1F00 => rv.set(v8str(scope, "WebKit").into()),
-        0x1F01 => rv.set(v8str(scope, "WebKit WebGL").into()),
-        0x9245 | 0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
-            rv.set(v8::String::empty(scope).into())
+        0x1F00 => rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into()),
+        0x1F01 => rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into()),
+        0x9245 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8str(scope, WEBGL_COMPAT_VENDOR).into())
+        }
+        0x9246 if webgl_debug_renderer_info_enabled(scope, extensions) => {
+            rv.set(v8str(scope, WEBGL_COMPAT_RENDERER).into())
         }
         0x1F02 => rv.set(v8str(scope, "WebGL 2.0 (OpenGL ES 3.0 Chromium)").into()),
         0x8B8C => {

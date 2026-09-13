@@ -2148,7 +2148,7 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"offscreenCanvas":"function","offscreen2d":"function","webgl":"function","webgl2":"function","extensionGlobal":"undefined","contextInstance":true,"twoDimensionalInstance":true,"vendor":"","renderer":""}"#
+        r#"{"offscreenCanvas":"function","offscreen2d":"function","webgl":"function","webgl2":"function","extensionGlobal":"undefined","contextInstance":true,"twoDimensionalInstance":true,"vendor":"WebKit","renderer":"WebKit WebGL"}"#
     );
 }
 
