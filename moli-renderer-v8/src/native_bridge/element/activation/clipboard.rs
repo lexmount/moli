@@ -129,26 +129,17 @@ fn perform_clipboard_action(
     } else {
         Vec::new()
     };
-    let Some(transfer) =
-        build_clipboard_data_transfer(scope, &contents, action == ClipboardAction::Paste)
-    else {
+    let Some(allows_default) = dispatch_clipboard_action_event(
+        scope,
+        runtime_ptr,
+        handle,
+        action.event_type(),
+        &contents,
+        action == ClipboardAction::Paste,
+    ) else {
         return false;
     };
-    let Some(event) = construct_clipboard_event(scope, action.event_type(), transfer) else {
-        disable_clipboard_data_transfer(scope, transfer);
-        return false;
-    };
-    let outcome = dispatch_public_event(scope, runtime_ptr, handle, event);
-    let authored_contents = if !outcome.allows_default() && action != ClipboardAction::Paste {
-        clipboard_data_transfer_contents(scope, transfer)
-    } else {
-        Vec::new()
-    };
-    disable_clipboard_data_transfer(scope, transfer);
-    if !outcome.allows_default() {
-        if !authored_contents.is_empty() {
-            clipboard.set_clipboard_data(authored_contents);
-        }
+    if !allows_default {
         return true;
     }
 
@@ -164,7 +155,10 @@ fn perform_clipboard_action(
                 return true;
             }
             if let Some(text) = selected_control_text(runtime, handle) {
-                clipboard.set_clipboard_data(vec![("text/plain".to_owned(), text.into_bytes())]);
+                clipboard.set_clipboard_data(vec![(
+                    "text/plain".to_owned(),
+                    native_clipboard_text_bytes(&text),
+                )]);
                 if action == ClipboardAction::Cut {
                     replace_text_control_selection_with_input_type(
                         scope,
@@ -194,4 +188,56 @@ fn perform_clipboard_action(
         }
     }
     true
+}
+
+pub(super) fn dispatch_clipboard_action_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    event_type: &str,
+    contents: &[(String, Vec<u8>)],
+    read_only: bool,
+) -> Option<bool> {
+    let clipboard = unsafe { &*runtime_ptr }.browser_context_runtime();
+    let transfer = build_clipboard_data_transfer(scope, contents, read_only)?;
+    let Some(event) = construct_clipboard_event(scope, event_type, transfer) else {
+        disable_clipboard_data_transfer(scope, transfer);
+        return None;
+    };
+    let outcome = dispatch_public_event(scope, runtime_ptr, handle, event);
+    let authored_contents = if !outcome.allows_default() && !read_only {
+        clipboard_data_transfer_contents(scope, transfer)
+    } else {
+        Vec::new()
+    };
+    disable_clipboard_data_transfer(scope, transfer);
+    if !outcome.allows_default() {
+        if !authored_contents.is_empty() {
+            clipboard.set_clipboard_data(authored_contents);
+        }
+        return Some(false);
+    }
+
+    Some(true)
+}
+
+pub(super) fn native_clipboard_text_bytes(text: &str) -> Vec<u8> {
+    // Like Blob's native endings, the virtual clipboard uses the browser's
+    // platform profile. Clipboard writes preserve lone CR characters.
+    if !moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE
+        .platform
+        .starts_with("Win")
+    {
+        return text.as_bytes().to_vec();
+    }
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut previous = None;
+    for byte in text.bytes() {
+        if byte == b'\n' && previous != Some(b'\r') {
+            bytes.push(b'\r');
+        }
+        bytes.push(byte);
+        previous = Some(byte);
+    }
+    bytes
 }

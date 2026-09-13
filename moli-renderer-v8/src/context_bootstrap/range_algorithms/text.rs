@@ -2,7 +2,8 @@ use super::ordering::point_order_handles;
 use super::*;
 use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::element::{
-    StyleMode, observable_sources_with_fragments, style_property_value,
+    StyleMode, fresh_observable_sources_with_fragments, observable_sources_with_fragments,
+    style_property_value,
 };
 use crate::util::string_from_utf16_units_lossy;
 use std::{cmp::Ordering, collections::HashSet};
@@ -34,6 +35,21 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    selection_string_contents(scope, range, false)
+}
+
+pub(in crate::context_bootstrap) fn range_clipboard_string_contents<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    selection_string_contents(scope, range, true)
+}
+
+fn selection_string_contents<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+    fresh: bool,
+) -> Option<String> {
     let (start, start_offset, end, end_offset) =
         if let Some(boundaries) = native_range_boundary_handles(scope, range) {
             (
@@ -62,7 +78,12 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
     let mut text_sources = Vec::new();
     collect_selection_text_sources(runtime, root, &mut text_sources);
     let document = runtime.layout_document_for_source(start)?;
-    let rendered_text_sources = match observable_sources_with_fragments(
+    let observe = if fresh {
+        fresh_observable_sources_with_fragments
+    } else {
+        observable_sources_with_fragments
+    };
+    let rendered_text_sources = match observe(
         runtime,
         document,
         &text_sources,
@@ -300,6 +321,17 @@ fn append_selected_character_data(
     }
     if state.in_visible_script_or_style {
         append_collapsed_trimmed_text(out, &data);
+    } else if runtime
+        .dom_host()
+        .parent_node(handle)
+        .is_some_and(|parent| {
+            matches!(
+                style_property_value(runtime, parent, StyleMode::Computed, "white-space").as_str(),
+                "pre" | "pre-wrap" | "break-spaces"
+            )
+        })
+    {
+        out.push_str(&data);
     } else {
         append_rendered_text_node(out, &data);
     }
