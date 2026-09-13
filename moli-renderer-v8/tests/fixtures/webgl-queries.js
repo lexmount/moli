@@ -9,6 +9,26 @@
       };
       const create = () => (offscreen ? new OffscreenCanvas(1, 1) : document.createElement('canvas')).getContext(kind);
       const gl = create();
+      const attrs = gl.getContextAttributes();
+      const attributeKeys = ['alpha', 'antialias', 'depth', 'desynchronized',
+        'failIfMajorPerformanceCaveat', 'powerPreference', 'premultipliedAlpha',
+        'preserveDrawingBuffer', 'stencil', 'xrCompatible'];
+      check(Object.getPrototypeOf(attrs) === Object.prototype, 'context attributes are a plain dictionary');
+      check(Object.keys(attrs).join('|') === attributeKeys.join('|'), 'dictionary members have WebIDL lexicographic order');
+      for (const key of attributeKeys) {
+        const descriptor = Object.getOwnPropertyDescriptor(attrs, key);
+        check(descriptor.writable && descriptor.enumerable && descriptor.configurable,
+          'context attributes are ordinary data properties');
+        check(typeof attrs[key] === (key === 'powerPreference' ? 'string' : 'boolean'),
+          'context attribute value type');
+      }
+      const alpha = attrs.alpha;
+      attrs.alpha = !alpha;
+      delete attrs.powerPreference;
+      const freshAttrs = gl.getContextAttributes();
+      check(freshAttrs !== attrs && freshAttrs.alpha === alpha && freshAttrs.powerPreference === 'default',
+        'context attribute dictionaries are fresh copies');
+      check(Object.keys(freshAttrs).join('|') === attributeKeys.join('|'), 'fresh dictionary retains member order');
       check(gl.getParameter(gl.VENDOR) === 'WebKit', 'masked vendor');
       check(gl.getParameter(gl.RENDERER) === 'WebKit WebGL', 'masked renderer');
       check(gl.getParameter(gl.VERSION).startsWith(kind === 'webgl' ? 'WebGL 1.0 (' : 'WebGL 2.0 ('), 'version format');
