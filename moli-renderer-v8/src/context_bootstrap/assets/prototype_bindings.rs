@@ -7,6 +7,7 @@ use super::super::{
         install_animation_template_bindings,
     },
     broadcast_channel::install_broadcast_channel_template_bindings,
+    close_watchers::install_close_watcher_template_bindings,
     constructors::{
         install_custom_element_registry_template_bindings, install_dom_exception_template_bindings,
         install_dom_implementation_template_bindings, install_text_codec_template_bindings,
@@ -437,6 +438,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     if spec.interface.name() == "IdleDetector" {
         install_idle_detector_template_bindings(scope, template);
+    }
+    if spec.interface.name() == "CloseWatcher" {
+        install_close_watcher_template_bindings(scope, template);
     }
     if spec.interface.name() == "IdleDeadline" {
         crate::window_host::install_idle_deadline_template_bindings(scope, template);

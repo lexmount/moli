@@ -8,6 +8,7 @@ pub(crate) use runtime_state::install_lightweight_popup_legacy_objects;
 mod broadcast_channel;
 mod canvas;
 mod chrome_runtime;
+mod close_watchers;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;
