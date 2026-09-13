@@ -49,6 +49,7 @@ mod pointer_lock;
 mod popup_hyperlinks;
 mod promise_rejection;
 mod rtc_error;
+mod scheduling;
 mod security_policy;
 mod security_policy_event_init;
 mod service_worker_drain;
