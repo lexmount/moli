@@ -318,6 +318,46 @@ impl JsContextHost {
         DocumentCspOutcome::Blocked(violation)
     }
 
+    pub(crate) fn check_element_subresource_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        element: DomHandle,
+        request_url: &url::Url,
+        kind: DocumentSubresourceCspKind,
+    ) -> DocumentCspOutcome {
+        let Some(owner) = self.owner_dispatch_scope_for_node(element) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        // The element's Document owns this request even when a different
+        // Window's script changes its source or queues the update microtask.
+        // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
+        let (report_only_violation, enforced_violation) = unsafe { &*self.runtime }
+            .document_subresource_csp_check_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                request_url,
+                kind,
+            )
+            .into_violations();
+        let host_ptr: *mut JsContextHost = self;
+        if let Some(violation) = report_only_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        let Some(violation) = enforced_violation else {
+            return DocumentCspOutcome::Allowed;
+        };
+        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+            scope, host_ptr, owner, &violation,
+        );
+        DocumentCspOutcome::Blocked(violation)
+    }
+
     pub(crate) fn owner_dispatch_scope_for_node(
         &self,
         handle: DomHandle,

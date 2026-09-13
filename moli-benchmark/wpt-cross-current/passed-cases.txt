@@ -164,8 +164,10 @@ content-security-policy/generic/generic-0_1-img-src.html
 content-security-policy/generic/generic-0_1-script-src.html
 content-security-policy/generic/generic-0_2.html
 content-security-policy/generic/generic-0_2_3.html
+content-security-policy/generic/invalid-characters-in-policy.html
 content-security-policy/img-src/img-src-none-blocks-data-uri.html
 content-security-policy/img-src/img-src-none-blocks.html
+content-security-policy/img-src/img-src-self-unique-origin.html
 content-security-policy/img-src/img-src-targeting.html
 content-security-policy/img-src/img-src-wildcard-allowed.html
 content-security-policy/inheritance/blob-inherits-from-meta-http-equiv-with-invalid-characters.html
