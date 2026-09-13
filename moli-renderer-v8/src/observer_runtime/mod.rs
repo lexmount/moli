@@ -2591,7 +2591,7 @@ mod tests {
     #[test]
     fn root_margin_helpers_are_available_to_observer_runtime() {
         assert_eq!(
-            normalize_root_margin("10px /*comment*/ 5% 0 -2.5px").as_deref(),
+            normalize_root_margin("10px /*comment*/ 5% 0px -2.5px").as_deref(),
             Some("10px 5% 0px -2.5px")
         );
         assert_eq!(
