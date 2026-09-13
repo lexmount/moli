@@ -14,10 +14,6 @@ struct KeyboardEventInitDeclaration<'scope> {
     which: f64,
     repeat: bool,
     is_composing: bool,
-    ctrl_key: bool,
-    shift_key: bool,
-    alt_key: bool,
-    meta_key: bool,
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_keyboard_event<'s>(
@@ -29,6 +25,9 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_keyboard_even
         return false;
     };
     let detail = init_number_property(scope, init, "detail", 0.0);
+    if !super::super::modifiers::initialize_event_modifiers(scope, event, init) {
+        return false;
+    }
     let key = init_string_property(scope, init, "key", "");
     let code = init_string_property(scope, init, "code", "");
     let key = v8_string(scope, &key).expect("KeyboardEvent key");
@@ -45,10 +44,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_keyboard_even
         init_number_property(scope, init, "which", 0.0),
         init_bool_property(scope, init, "repeat", false),
         init_bool_property(scope, init, "isComposing", false),
-        init_bool_property(scope, init, "ctrlKey", false),
-        init_bool_property(scope, init, "shiftKey", false),
-        init_bool_property(scope, init, "altKey", false),
-        init_bool_property(scope, init, "metaKey", false),
     )
     .initialize(scope, event)
     .expect("KeyboardEvent init declaration should initialize");

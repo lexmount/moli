@@ -49,15 +49,6 @@ struct MouseEventBaseInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct MouseEventModifierInitDeclaration {
-    ctrl_key: bool,
-    shift_key: bool,
-    alt_key: bool,
-    meta_key: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct MouseEventRelatedTargetDeclaration<'scope> {
     related_target: v8::Local<'scope, v8::Value>,
 }
@@ -389,9 +380,12 @@ fn define_mouse_event_base_fields<'s>(
     let Ok(view) = init_window_view_property(scope, init, constructor_name) else {
         return None;
     };
+    let detail = init_number_property(scope, init, "detail", 0.0);
+    if !super::super::modifiers::initialize_event_modifiers(scope, event, init) {
+        return None;
+    }
     let client_x = init_number_property(scope, init, "clientX", 0.0);
     let client_y = init_number_property(scope, init, "clientY", 0.0);
-    let detail = init_number_property(scope, init, "detail", 0.0);
     let related_target =
         init_value_property(scope, init, "relatedTarget").unwrap_or_else(|| v8::null(scope).into());
 
@@ -416,21 +410,6 @@ fn define_mouse_event_base_fields<'s>(
     Some(related_target)
 }
 
-fn define_mouse_event_modifier_fields<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    MouseEventModifierInitDeclaration::new(
-        init_bool_property(scope, init, "ctrlKey", false),
-        init_bool_property(scope, init, "shiftKey", false),
-        init_bool_property(scope, init, "altKey", false),
-        init_bool_property(scope, init, "metaKey", false),
-    )
-    .initialize(scope, event)
-    .expect("MouseEvent modifier init declaration should initialize");
-}
-
 fn define_mouse_event_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -450,7 +429,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_mouse_event<'
     else {
         return false;
     };
-    define_mouse_event_modifier_fields(scope, event, init);
     define_mouse_event_related_target(scope, event, related_target);
     true
 }
@@ -472,7 +450,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_wheel_event<'
     )
     .initialize(scope, event)
     .expect("WheelEvent delta init declaration should initialize");
-    define_mouse_event_modifier_fields(scope, event, init);
     define_mouse_event_related_target(scope, event, related_target);
     true
 }
@@ -523,7 +500,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pointer_event
     )
     .initialize(scope, event)
     .expect("PointerEvent number init declaration should initialize");
-    define_mouse_event_modifier_fields(scope, event, init);
     PointerEventTailInitDeclaration::new(
         init_bool_property(scope, init, "isPrimary", false),
         pointer_type,
