@@ -381,7 +381,7 @@ impl RendererPageSlotHandle {
             page_id.as_u64()
         );
         self.begin_command(page_id, command_epoch)?;
-        let result = vm.dispatch_renderer_page_command_async(command).await;
+        let result = vm.dispatch_renderer_page_command(command);
         self.finish_command(page_id, command_epoch)?;
         let reply = result?;
         self.update_command_epoch(page_id, command_epoch)?;

@@ -173,12 +173,11 @@ new MutationObserver(records => {
             .expect("test Page should expose its root frame")
             .to_owned();
 
-        let reply = page_vm
-            .dispatch_renderer_page_command_async(RendererPageCommand::SetDocumentContent {
+        let reply =
+            page_vm.dispatch_renderer_page_command(RendererPageCommand::SetDocumentContent {
                 frame_id,
                 html: "<main>after</main>".to_owned(),
-            })
-            .await?;
+            })?;
         assert!(matches!(
             reply,
             RendererPageReply::SetDocumentContentResult(RendererSetDocumentContentResult::Updated)
@@ -233,14 +232,12 @@ Promise.resolve().then(() => __fetchCommandCheckpoint += 1);
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
-        let reply = page_vm
-            .dispatch_renderer_page_command_async(
-                RendererPageCommand::FailPendingSubresourceFetch {
-                    internal_id: pending[0].internal_id,
-                    error_text: "command checkpoint witness".to_owned(),
-                },
-            )
-            .await?;
+        let reply = page_vm.dispatch_renderer_page_command(
+            RendererPageCommand::FailPendingSubresourceFetch {
+                internal_id: pending[0].internal_id,
+                error_text: "command checkpoint witness".to_owned(),
+            },
+        )?;
         assert!(matches!(reply, RendererPageReply::Unit));
         assert_eq!(
             page_vm
@@ -291,9 +288,8 @@ fetch("https://offline-command-checkpoint.test/resource").then(
             "the fixture should pause one Window Fetch"
         );
 
-        let reply = page_vm
-            .dispatch_renderer_page_command_async(RendererPageCommand::SetNetworkOffline(true))
-            .await?;
+        let reply =
+            page_vm.dispatch_renderer_page_command(RendererPageCommand::SetNetworkOffline(true))?;
         assert!(matches!(reply, RendererPageReply::Unit));
         page_vm
             .vm_mut()
@@ -306,19 +302,17 @@ Promise.resolve().then(() => __offlineContinueCheckpoint += 1);
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
-        let reply = page_vm
-            .dispatch_renderer_page_command_async(
-                RendererPageCommand::ContinuePendingSubresourceFetch {
-                    internal_id: pending[0].internal_id,
-                    url: None,
-                    method: None,
-                    body: None,
-                    headers: None,
-                    intercept_response: false,
-                    handle_auth_requests: false,
-                },
-            )
-            .await?;
+        let reply = page_vm.dispatch_renderer_page_command(
+            RendererPageCommand::ContinuePendingSubresourceFetch {
+                internal_id: pending[0].internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests: false,
+            },
+        )?;
         assert!(matches!(
             reply,
             RendererPageReply::PendingSubresourceContinueOutcome(
@@ -377,15 +371,12 @@ Promise.resolve().then(() => __rejectedFetchCommandCheckpoint += 1);
 "#,
             )?;
 
-        let error = match page_vm
-            .dispatch_renderer_page_command_async(
-                RendererPageCommand::FailPendingSubresourceFetch {
-                    internal_id: u64::MAX,
-                    error_text: "missing request".to_owned(),
-                },
-            )
-            .await
-        {
+        let error = match page_vm.dispatch_renderer_page_command(
+            RendererPageCommand::FailPendingSubresourceFetch {
+                internal_id: u64::MAX,
+                error_text: "missing request".to_owned(),
+            },
+        ) {
             Ok(_) => panic!("an unknown interception request should be rejected"),
             Err(error) => error,
         };

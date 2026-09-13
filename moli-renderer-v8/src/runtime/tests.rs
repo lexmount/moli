@@ -2177,43 +2177,29 @@ document.body.appendChild(frame);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn cpu_throttling_rate_slows_runtime_evaluate_command() {
+async fn cpu_throttling_rate_rejects_unavailable_rates() {
     let runtime = JsRuntime::initialize();
-    let loader =
-        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let url = url::Url::parse("https://example.test/cpu-throttling").unwrap();
     let mut page = create_test_html_page(&runtime, &loader, url, "<!doctype html>").await;
-
-    let (reply, _) = page
+    let error = page
         .run_async_command(RendererPageCommand::SetCpuThrottlingRate(3.0))
         .await
-        .expect("CPU throttling rate should update live page");
-    assert!(matches!(reply, RendererPageReply::Unit));
-
-    let started = std::time::Instant::now();
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::EvaluateExpression {
-            expression: r#"
-(() => {
-  const end = Date.now() + 40;
-  while (Date.now() < end) {}
-  return true;
-})()
-"#
-            .to_owned(),
-            await_promise: false,
-        })
-        .await
-        .expect("throttled evaluate should run");
-    assert_eq!(renderer_json_value(reply), Some(serde_json::json!(true)));
+        .err()
+        .expect("unavailable throttling must fail");
     assert!(
-        started.elapsed() >= Duration::from_millis(75),
-        "rate=3 should add renderer-side delay to a CPU-bound evaluate command"
+        error
+            .to_string()
+            .contains("CPU throttling is not supported")
     );
-
-    page.close_async()
-        .await
-        .expect("CPU throttling test page should close");
+    for rate in [0.0, 1.0] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::SetCpuThrottlingRate(rate))
+            .await
+            .unwrap();
+        assert!(matches!(reply, RendererPageReply::Unit));
+    }
+    page.close_async().await.unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

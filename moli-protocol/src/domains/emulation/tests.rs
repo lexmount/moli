@@ -935,11 +935,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
             "Emulation.setGeolocationOverride",
             json!({ "latitude": 48.85837, "longitude": 2.294481, "accuracy": 7 }),
         ),
-        (
-            9128,
-            "Emulation.setCPUThrottlingRate",
-            json!({ "rate": 2.5 }),
-        ),
+        (9128, "Emulation.setCPUThrottlingRate", json!({ "rate": 1 })),
     ] {
         let raw = json!({
             "id": id,
@@ -967,7 +963,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
             .active_page_target()
             .effective_emulation_state
             .cpu_throttling_rate,
-        2.5
+        1.0
     );
 }
 
@@ -1069,7 +1065,7 @@ async fn device_metrics_completion_survives_initial_page_replacement() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
+async fn clearing_cpu_throttling_uses_pending_command_dispatch() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
 
@@ -1077,7 +1073,7 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
         "id": 9129,
         "sessionId": "SID-1",
         "method": "Emulation.setCPUThrottlingRate",
-        "params": { "rate": 3.0 }
+        "params": { "rate": 1 }
     })
     .to_string();
     let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
@@ -1103,7 +1099,7 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
             .active_page_target()
             .effective_emulation_state
             .cpu_throttling_rate,
-        3.0
+        1.0
     );
 }
 
@@ -1385,7 +1381,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         71_101,
         "SID-primary",
         "Emulation.setCPUThrottlingRate",
-        json!({ "rate": 4 }),
+        json!({ "rate": 1 }),
     )
     .await;
     expect_session_command_result(
@@ -1393,7 +1389,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         71_102,
         "SID-attached",
         "Emulation.setCPUThrottlingRate",
-        json!({ "rate": 2 }),
+        json!({ "rate": 1 }),
     )
     .await;
     expect_session_command_result(
@@ -1439,8 +1435,8 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .conn
         .emulation_session_state_for_session_owner(Some("SID-attached"))
         .expect("attached Emulation handler state");
-    assert_eq!(primary.cpu_throttling_rate, 4.0);
-    assert_eq!(attached.cpu_throttling_rate, 2.0);
+    assert_eq!(primary.cpu_throttling_rate, 1.0);
+    assert_eq!(attached.cpu_throttling_rate, 1.0);
     assert_eq!(
         primary
             .emulated_device_metrics
@@ -1464,7 +1460,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .as_ref()
         .expect("browser context")
         .active_page_target();
-    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 2.0);
+    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
     assert_eq!(
         target
             .effective_emulation_state
@@ -1499,7 +1495,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
         .expect("primary Emulation handler state survives attached disposal");
-    assert_eq!(primary.cpu_throttling_rate, 4.0);
+    assert_eq!(primary.cpu_throttling_rate, 1.0);
     assert!(primary.emulated_device_metrics.is_some());
     assert!(primary.focus_emulation_enabled);
     assert_eq!(
@@ -3465,7 +3461,7 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
         "id": 1901,
         "method": "Emulation.setCPUThrottlingRate",
         "sessionId": session_id,
-        "params": { "rate": 4 }
+        "params": { "rate": 1 }
     }))
     .await;
     ctx.expect_result(1901, json!({}), Some(&session_id));

@@ -1307,10 +1307,9 @@ async fn emulate_network_conditions_updates_browser_context_state() {
         "method": "Network.emulateNetworkConditions",
         "params": {
             "offline": true,
-            "latency": 150,
-            "downloadThroughput": 1024,
-            "uploadThroughput": 512,
-            "connectionType": "cellular3g"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -1318,30 +1317,6 @@ async fn emulate_network_conditions_updates_browser_context_state() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(bc.active_page_target().network_policy.network_offline());
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_network_latency(),
-        150.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_download_throughput(),
-        1024.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_upload_throughput(),
-        512.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_connection_type(),
-        Some("cellular3g")
-    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_navigation_fails_before_completion_events() {

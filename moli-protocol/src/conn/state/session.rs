@@ -538,33 +538,14 @@ pub(crate) struct InspectorSessionState {
     pub(crate) v8_state: Option<V8InspectorSessionState>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct TargetNetworkPolicyState {
     // Target-wide policy contributed by WebDriver BiDi or connection defaults.
     base_cache_disabled: bool,
     network_offline: bool,
-    emulated_network_latency: f64,
-    emulated_download_throughput: f64,
-    emulated_upload_throughput: f64,
-    emulated_connection_type: Option<String>,
     base_browser_identity: super::BaseBrowserIdentityOverrideState,
     // Target-scoped headers contributed by WebDriver BiDi.
     base_extra_headers: Vec<(String, String)>,
-}
-
-impl Default for TargetNetworkPolicyState {
-    fn default() -> Self {
-        Self {
-            base_cache_disabled: false,
-            network_offline: false,
-            emulated_network_latency: 0.0,
-            emulated_download_throughput: -1.0,
-            emulated_upload_throughput: -1.0,
-            emulated_connection_type: None,
-            base_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
-            base_extra_headers: Vec::new(),
-        }
-    }
 }
 
 impl TargetNetworkPolicyState {
@@ -586,7 +567,6 @@ impl TargetNetworkPolicyState {
         self.network_offline
     }
 
-    #[cfg(test)]
     pub(crate) fn set_network_offline(&mut self, network_offline: bool) {
         self.network_offline = network_offline;
     }
@@ -637,42 +617,6 @@ impl TargetNetworkPolicyState {
     ) {
         self.base_browser_identity
             .set_accept_language(accept_language, fallback);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_network_latency(&self) -> f64 {
-        self.emulated_network_latency
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_download_throughput(&self) -> f64 {
-        self.emulated_download_throughput
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_upload_throughput(&self) -> f64 {
-        self.emulated_upload_throughput
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_connection_type(&self) -> Option<&str> {
-        self.emulated_connection_type.as_deref()
-    }
-
-    pub(crate) fn set_emulated_network_conditions(
-        &mut self,
-        offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
-    ) -> bool {
-        self.network_offline = offline;
-        self.emulated_network_latency = latency;
-        self.emulated_download_throughput = download_throughput;
-        self.emulated_upload_throughput = upload_throughput;
-        self.emulated_connection_type = connection_type;
-        self.network_offline
     }
 }
 

@@ -1461,10 +1461,7 @@ window.addEventListener("pageshow", () => {
                     .eval("__stopLoadingLifecycleEvents.length = 0; 'cleared'")?;
 
                 let reply = page_vm
-                    .dispatch_renderer_page_command_async(
-                        RendererPageCommand::StopDocumentLifecycle,
-                    )
-                    .await?;
+                    .dispatch_renderer_page_command(RendererPageCommand::StopDocumentLifecycle)?;
                 assert!(matches!(reply, RendererPageReply::Unit));
                 assert_eq!(
                     page_vm.vm_mut().eval(

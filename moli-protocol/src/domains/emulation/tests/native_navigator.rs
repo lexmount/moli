@@ -410,3 +410,65 @@ async fn device_metrics_zero_axes_use_visible_size_and_clear_restores_native_def
     .await;
     assert_eq!(evaluate(&mut ctx, snapshot).await, baseline);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_throttling_rejects_before_changing_live_offline_state() {
+    let mut ctx = setup().await;
+    for offline in [false, true] {
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Network.emulateNetworkConditions",
+            json!({"offline":offline,"latency":0,"downloadThroughput":-1,"uploadThroughput":0}),
+        )
+        .await;
+        for unsupported in [
+            json!({"latency":100}),
+            json!({"downloadThroughput":1024}),
+            json!({"uploadThroughput":1024}),
+            json!({"connectionType":"cellular3g"}),
+            json!({"packetLoss":1}),
+            json!({"packetQueueLength":1}),
+            json!({"packetReordering":true}),
+        ] {
+            let mut params = json!({"offline": !offline,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1});
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(unsupported.as_object().unwrap().clone());
+            ctx.process_async(json!({"id":88001,"sessionId":"SID-1","method":"Network.emulateNetworkConditions","params":params})).await;
+            ctx.expect_error(
+                88001,
+                -32000,
+                "Network throttling and connection type overrides are not supported",
+            );
+            assert_eq!(
+                evaluate(&mut ctx, "navigator.onLine").await,
+                json!(!offline)
+            );
+        }
+    }
+    for rate in [-1.0, 0.0, 0.5, 1.0] {
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Emulation.setCPUThrottlingRate",
+            json!({"rate":rate}),
+        )
+        .await;
+    }
+    ctx.process_async(json!({"id":88001,"sessionId":"SID-1","method":"Emulation.setCPUThrottlingRate","params":{"rate":4}})).await;
+    ctx.expect_error(88001, -32000, "CPU throttling is not supported");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_emulation_state
+            .cpu_throttling_rate,
+        1.0
+    );
+}

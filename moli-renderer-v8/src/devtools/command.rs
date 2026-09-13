@@ -629,18 +629,6 @@ impl RendererInspectorCommandEnvelope {
             _ => None,
         }
     }
-
-    pub(crate) fn uses_cpu_throttling(&self) -> bool {
-        matches!(
-            self.main_thread_payload(),
-            RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { .. }
-                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse { .. }
-                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { .. }
-                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse { .. }
-                | RendererInspectorPageCommand::DomDebuggerGetEventListeners { .. }
-                | RendererInspectorPageCommand::FocusDocumentNodeForObjectId { .. }
-        )
-    }
 }
 
 fn main_protocol_can_dispatch_at_inspector_session_boundary(

@@ -1554,10 +1554,9 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         "sessionId": "SID-active",
         "params": {
             "offline": false,
-            "latency": 10,
-            "downloadThroughput": 4096,
-            "uploadThroughput": 2048,
-            "connectionType": "wifi"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -1590,10 +1589,9 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         "sessionId": second_session_id,
         "params": {
             "offline": true,
-            "latency": 25,
-            "downloadThroughput": 1024,
-            "uploadThroughput": 256,
-            "connectionType": "cellular3g"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -1607,25 +1605,12 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PN"));
         assert!(!active.active_page_target().network_policy.network_offline());
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            10.0
-        );
+
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
         assert!(staged.network_policy.network_offline());
-        assert_eq!(staged.network_policy.emulated_network_latency(), 25.0);
-        assert_eq!(staged.network_policy.emulated_download_throughput(), 1024.0);
-        assert_eq!(staged.network_policy.emulated_upload_throughput(), 256.0);
-        assert_eq!(
-            staged.network_policy.emulated_connection_type(),
-            Some("cellular3g")
-        );
     }
 
     ctx.process_async(json!({
@@ -1672,34 +1657,6 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
                 .active_page_target()
                 .network_policy
                 .network_offline()
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            25.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            1024.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            256.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("cellular3g")
         );
     }
 
@@ -1921,10 +1878,9 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
         "sessionId": second_session_id,
         "params": {
             "offline": true,
-            "latency": 250,
-            "downloadThroughput": 1024,
-            "uploadThroughput": 512,
-            "connectionType": "cellular3g"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -1939,7 +1895,6 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             "latency": 0,
             "downloadThroughput": -1,
             "uploadThroughput": -1,
-            "connectionType": "none"
         }
     }))
     .await;
@@ -1958,15 +1913,11 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
         );
         let staged = active
             .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
         assert!(!staged.network_policy.network_offline());
-        assert_eq!(staged.network_policy.emulated_network_latency(), 0.0);
-        assert_eq!(staged.network_policy.emulated_download_throughput(), -1.0);
-        assert_eq!(staged.network_policy.emulated_upload_throughput(), -1.0);
-        assert_eq!(
-            staged.network_policy.emulated_connection_type(),
-            Some("none")
+        assert!(
+            !staged.has_non_default_session_state(),
+            "offline reset should return to the default policy"
         );
     }
 
@@ -2010,34 +1961,6 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
                 .active_page_target()
                 .network_policy
                 .network_offline()
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            0.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            -1.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            -1.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("none")
         );
     }
 }

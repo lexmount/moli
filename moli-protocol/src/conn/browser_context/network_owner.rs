@@ -17,21 +17,9 @@ impl TargetSessionStateMut<'_> {
         true
     }
 
-    fn set_emulated_network_conditions(
-        mut self,
-        offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
-    ) -> bool {
-        self.network_policy_mut().set_emulated_network_conditions(
-            offline,
-            latency,
-            download_throughput,
-            upload_throughput,
-            connection_type,
-        )
+    fn set_network_offline(mut self, offline: bool) -> bool {
+        self.network_policy_mut().set_network_offline(offline);
+        offline
     }
 }
 
@@ -289,23 +277,12 @@ impl TargetSessionOwnerMut<'_> {
         self.mutate_session_state_ref(|state| state.set_tls_verify_host_override(enabled))
     }
 
-    fn start_set_emulated_network_conditions(
+    fn start_set_network_offline(
         mut self,
         offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let effective_offline = self.mutate_session_state_ref(|state| {
-            state.set_emulated_network_conditions(
-                offline,
-                latency,
-                download_throughput,
-                upload_throughput,
-                connection_type,
-            )
-        });
+        let effective_offline =
+            self.mutate_session_state_ref(|state| state.set_network_offline(offline));
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
@@ -818,45 +795,24 @@ impl CdpConnection {
         self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
 
-    pub(crate) fn start_set_emulated_network_conditions_for_session_owner(
+    pub(crate) fn start_set_network_offline_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
-        self.start_set_emulated_network_conditions_for_owner(
-            &owner,
-            offline,
-            latency,
-            download_throughput,
-            upload_throughput,
-            connection_type,
-        )
+        self.start_set_network_offline_for_owner(&owner, offline)
     }
 
-    pub(crate) fn start_set_emulated_network_conditions_for_owner(
+    pub(crate) fn start_set_network_offline_for_owner(
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_emulated_network_conditions(
-            offline,
-            latency,
-            download_throughput,
-            upload_throughput,
-            connection_type,
-        )
+        owner.start_set_network_offline(offline)
     }
 }
 
@@ -958,13 +914,7 @@ mod tests {
             network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())];
         }
-        let active_offline = active_session_state_mut(&mut active).set_emulated_network_conditions(
-            true,
-            25.0,
-            1024.0,
-            256.0,
-            Some("cellular3g".to_owned()),
-        );
+        let active_offline = active_session_state_mut(&mut active).set_network_offline(true);
 
         assert!(
             active
@@ -994,34 +944,6 @@ mod tests {
         );
         assert!(active_offline);
         assert!(active.active_page_target().network_policy.network_offline());
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            25.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            1024.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            256.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("cellular3g")
-        );
 
         let mut background = PageTargetHost::empty("TID-network-owner-test".to_owned());
         {
@@ -1035,14 +957,8 @@ mod tests {
             network.blocked_url_patterns = vec!["*://background-blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())];
         }
-        let background_offline = background_session_state_mut(&mut background)
-            .set_emulated_network_conditions(
-                true,
-                50.0,
-                2048.0,
-                512.0,
-                Some("cellular4g".to_owned()),
-            );
+        let background_offline =
+            background_session_state_mut(&mut background).set_network_offline(true);
 
         assert!(background.effective_policy().cache_disabled());
         assert!(background.effective_policy().bypass_service_worker());
@@ -1056,19 +972,6 @@ mod tests {
         );
         assert!(background_offline);
         assert!(background.network_policy.network_offline());
-        assert_eq!(background.network_policy.emulated_network_latency(), 50.0);
-        assert_eq!(
-            background.network_policy.emulated_download_throughput(),
-            2048.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_upload_throughput(),
-            512.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_connection_type(),
-            Some("cellular4g")
-        );
     }
 
     #[test]

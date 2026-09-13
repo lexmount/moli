@@ -16,14 +16,6 @@ struct SetBlockedUrlsParams {
     urls: Vec<String>,
 }
 
-pub(super) struct EmulatedNetworkConditionsForCommand {
-    pub(super) offline: bool,
-    pub(super) latency: f64,
-    pub(super) download_throughput: f64,
-    pub(super) upload_throughput: f64,
-    pub(super) connection_type: Option<String>,
-}
-
 pub(super) fn enabled_command_output_plan(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
@@ -82,24 +74,34 @@ pub(super) fn blocked_urls_for_command(cmd: &Cmd<'_>) -> Result<Vec<String>, Com
 }
 
 #[allow(deprecated)]
-pub(super) fn emulated_network_conditions_for_command(
+pub(super) fn network_offline_for_emulation_command(
     cmd: &Cmd<'_>,
-) -> Result<EmulatedNetworkConditionsForCommand, CommandOutputPlan> {
+) -> Result<bool, CommandOutputPlan> {
     let params: EmulateNetworkConditionsParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
     };
-    let connection_type = params
-        .connection_type
-        .as_ref()
-        .and_then(cdp_connection_type_string);
-    Ok(EmulatedNetworkConditionsForCommand {
-        offline: params.offline,
-        latency: params.latency,
-        download_throughput: params.download_throughput,
-        upload_throughput: params.upload_throughput,
-        connection_type,
-    })
+    if !params.latency.is_finite()
+        || !params.download_throughput.is_finite()
+        || !params.upload_throughput.is_finite()
+        || params.packet_loss.is_some_and(|value| !value.is_finite())
+    {
+        return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
+    }
+    if params.latency > 0.0
+        || params.download_throughput > 0.0
+        || params.upload_throughput > 0.0
+        || params.connection_type.is_some()
+        || params.packet_loss.is_some_and(|value| value != 0.0)
+        || params.packet_queue_length.is_some_and(|value| value != 0)
+        || params.packet_reordering == Some(true)
+    {
+        return Err(CommandOutputPlan::error(
+            -32000,
+            "Network throttling and connection type overrides are not supported",
+        ));
+    }
+    Ok(params.offline)
 }
 
 pub(super) fn extra_http_headers_for_command(
@@ -250,12 +252,4 @@ fn extra_http_headers_from_params(
             .filter_map(|(name, value)| value.as_str().map(|v| (name.clone(), v.to_owned())))
             .collect::<Vec<_>>()
     })
-}
-
-fn cdp_connection_type_string(
-    connection_type: &chromiumoxide_cdp::cdp::browser_protocol::network::ConnectionType,
-) -> Option<String> {
-    serde_json::to_value(connection_type)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
 }

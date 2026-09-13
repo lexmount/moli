@@ -356,6 +356,11 @@ Its current intentional boundaries include:
   paint architecture.
 - It does not pursue pixel-for-pixel parity with Chrome or provide
   high-fidelity Canvas/WebGL/media playback.
+- Emulation supports offline mode, but CPU throttling, network latency/throughput,
+  packet shaping, and connection type overrides return a protocol error. CPU rates
+  at or below 1 disable throttling; non-positive latency and throughput values
+  disable network throttling. Unsupported combinations are rejected before
+  changing offline state.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 

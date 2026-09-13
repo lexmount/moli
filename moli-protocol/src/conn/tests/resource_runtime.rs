@@ -3298,7 +3298,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
         r#"{"id":3,"method":"Network.setBlockedURLs","sessionId":"SID-B","params":{"urls":["*://blocked.test/*"]}}"#,
         r#"{"id":4,"method":"Network.setExtraHTTPHeaders","sessionId":"SID-B","params":{"headers":{"X-Test":"direct"}}}"#,
         r#"{"id":5,"method":"Network.setUserAgentOverride","sessionId":"SID-B","params":{"userAgent":"Moli/Direct-UA"}}"#,
-        r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-B","params":{"offline":true,"latency":25,"downloadThroughput":1024,"uploadThroughput":256,"connectionType":"cellular3g"}}"#,
+        r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-B","params":{"offline":true,"latency": 0,"downloadThroughput": -1,"uploadThroughput": -1}}"#,
     ] {
         let response = conn.process_message_messages_only_for_test(raw).await;
         let request_id = serde_json::from_str::<serde_json::Value>(raw)
@@ -3360,34 +3360,6 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
             .active_page_target()
             .network_policy
             .network_offline()
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_network_latency(),
-        25.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_download_throughput(),
-        1024.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_upload_throughput(),
-        256.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_connection_type(),
-        Some("cellular3g")
     );
 }
 
@@ -3465,7 +3437,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         r#"{"id":3,"method":"Network.setBlockedURLs","sessionId":"SID-background","params":{"urls":["*://blocked-background.test/*"]}}"#,
         r#"{"id":4,"method":"Network.setExtraHTTPHeaders","sessionId":"SID-background","params":{"headers":{"X-Background":"direct"}}}"#,
         r#"{"id":5,"method":"Network.setUserAgentOverride","sessionId":"SID-background","params":{"userAgent":"Moli/Background-UA"}}"#,
-        r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-background","params":{"offline":true,"latency":50,"downloadThroughput":2048,"uploadThroughput":512,"connectionType":"wifi"}}"#,
+        r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-background","params":{"offline":true,"latency": 0,"downloadThroughput": -1,"uploadThroughput": -1}}"#,
     ] {
         let response = conn.process_message_messages_only_for_test(raw).await;
         let request_id = serde_json::from_str::<serde_json::Value>(raw)
@@ -3510,13 +3482,6 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         Some("Moli/Background-UA")
     );
     assert!(staged.network_policy.network_offline());
-    assert_eq!(staged.network_policy.emulated_network_latency(), 50.0);
-    assert_eq!(staged.network_policy.emulated_download_throughput(), 2048.0);
-    assert_eq!(staged.network_policy.emulated_upload_throughput(), 512.0);
-    assert_eq!(
-        staged.network_policy.emulated_connection_type(),
-        Some("wifi")
-    );
 }
 
 #[tokio::test]

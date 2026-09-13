@@ -8000,10 +8000,9 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
         "method": "Network.emulateNetworkConditions",
         "params": {
             "offline": true,
-            "latency": 20,
-            "downloadThroughput": 1024,
-            "uploadThroughput": 512,
-            "connectionType": "cellular3g"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .unwrap();

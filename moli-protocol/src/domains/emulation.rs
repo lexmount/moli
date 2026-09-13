@@ -361,12 +361,18 @@ fn start_cpu_throttling_rate_command(
                 ));
             }
         };
+    if params.rate > 1.0 {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            "CPU throttling is not supported",
+        ));
+    }
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
         if let Some(mut state) = state {
-            state.set_cpu_throttling_rate(params.rate);
+            state.set_cpu_throttling_rate(1.0);
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -378,7 +384,7 @@ fn start_cpu_throttling_rate_command(
     let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    match page.start_set_cpu_throttling_rate(params.rate) {
+    match page.start_set_cpu_throttling_rate(1.0) {
         Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
             cmd.id,
             owner_scope,
@@ -1389,14 +1395,7 @@ fn start_network_conditions_update_for_current_route(
     };
     let owner = CommandOwnerScope::for_route(route.clone());
     let network_update = conn
-        .start_set_emulated_network_conditions_for_owner(
-            &owner,
-            effective_offline,
-            0.0,
-            -1.0,
-            -1.0,
-            None,
-        )
+        .start_set_network_offline_for_owner(&owner, effective_offline)
         .map_err(devtools_emulation_owner_error)?;
     let mut pending = Vec::new();
     if let Some(network_update) = network_update {

@@ -275,10 +275,9 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
         "sessionId": "SID-active",
         "params": {
             "offline": false,
-            "latency": 150,
-            "downloadThroughput": 1024,
-            "uploadThroughput": 512,
-            "connectionType": "cellular3g"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -333,10 +332,9 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
         "sessionId": second_session_id,
         "params": {
             "offline": true,
-            "latency": 25,
-            "downloadThroughput": 2048,
-            "uploadThroughput": 256,
-            "connectionType": "wifi"
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1,
         }
     }))
     .await;
@@ -376,19 +374,6 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should keep background network state");
         assert!(background.network_policy.network_offline());
-        assert_eq!(background.network_policy.emulated_network_latency(), 25.0);
-        assert_eq!(
-            background.network_policy.emulated_download_throughput(),
-            2048.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_upload_throughput(),
-            256.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_connection_type(),
-            Some("wifi")
-        );
     }
 
     ctx.process_async(json!({
@@ -409,34 +394,6 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .expect("active browser context after restoring first target");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
         assert!(!active.active_page_target().network_policy.network_offline());
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            150.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            1024.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            512.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("cellular3g")
-        );
     }
 }
 

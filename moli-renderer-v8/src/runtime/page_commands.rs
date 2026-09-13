@@ -2,18 +2,6 @@ use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
 impl PageVm {
-    pub(in crate::runtime) async fn dispatch_renderer_page_command_async(
-        &mut self,
-        command: RendererPageCommand,
-    ) -> Result<RendererPageReply> {
-        let throttling_started =
-            renderer_page_command_uses_cpu_throttling(&command).then(std::time::Instant::now);
-        let result = self.dispatch_renderer_page_command(command);
-        self.apply_cpu_throttling_delay_after_page_command(throttling_started)
-            .await;
-        result
-    }
-
     pub(in crate::runtime) fn dispatch_renderer_page_command(
         &mut self,
         command: RendererPageCommand,
@@ -1125,7 +1113,10 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetCpuThrottlingRate(rate) => {
-                self.set_cpu_throttling_rate(rate);
+                if !rate.is_finite() || rate > 1.0 {
+                    return Err(anyhow!("CPU throttling is not supported"));
+                }
+                self.set_cpu_throttling_rate(1.0);
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetEmulatedMedia(overrides) => {
@@ -1385,31 +1376,6 @@ impl PageVm {
             }
         }
     }
-
-    async fn apply_cpu_throttling_delay_after_page_command(
-        &self,
-        started: Option<std::time::Instant>,
-    ) {
-        let Some(started) = started else {
-            return;
-        };
-        let rate = self.cpu_throttling_rate;
-        if !rate.is_finite() || rate <= 1.0 {
-            return;
-        }
-        let elapsed = started.elapsed();
-        if elapsed.is_zero() {
-            return;
-        }
-        let delay_secs = elapsed.as_secs_f64() * (rate - 1.0);
-        if !delay_secs.is_finite() || delay_secs <= 0.0 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs_f64(
-            delay_secs.min(std::time::Duration::MAX.as_secs_f64()),
-        ))
-        .await;
-    }
 }
 
 fn renderer_page_command_action_barrier(
@@ -1430,34 +1396,4 @@ fn renderer_page_command_action_barrier(
         }
         _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
-}
-
-fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> bool {
-    if let RendererPageCommand::Inspector(envelope) = command {
-        return envelope.uses_cpu_throttling();
-    }
-    matches!(
-        command,
-        RendererPageCommand::EvaluateExpression { .. }
-            | RendererPageCommand::EvaluateExpressionByValue { .. }
-            | RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation { .. }
-            | RendererPageCommand::EvaluateExpressionInExecutionContext { .. }
-            | RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }
-            | RendererPageCommand::DispatchMouseEventAtPoint { .. }
-            | RendererPageCommand::DispatchTouchEvent { .. }
-            | RendererPageCommand::DispatchDragEventAtPoint { .. }
-            | RendererPageCommand::InsertTextIntoActiveControl(_)
-            | RendererPageCommand::DispatchKeyEvent { .. }
-            | RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint { .. }
-            | RendererPageCommand::DomDebuggerConfigureXhrBreakpoint { .. }
-            | RendererPageCommand::DomDebuggerConfigureDomBreakpoint { .. }
-            | RendererPageCommand::PerformanceMetricSnapshot
-            | RendererPageCommand::CreateIsolatedWorldRuntimeActivity { .. }
-            | RendererPageCommand::AddDocumentStartScriptRuntimeActivity { .. }
-            | RendererPageCommand::RunPageSurfaceOverrideScript { .. }
-            | RendererPageCommand::MutateDocumentBackendNodeAttribute { .. }
-            | RendererPageCommand::EditDocumentNode { .. }
-            | RendererPageCommand::FocusDocumentBackendNode { .. }
-            | RendererPageCommand::SetDocumentContent { .. }
-    )
 }

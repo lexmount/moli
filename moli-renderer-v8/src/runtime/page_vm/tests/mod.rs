@@ -14184,8 +14184,7 @@ async fn direct_page_vm_wait_commands_fail_closed() {
         for (command, expected_error) in commands {
             let mut page_vm = test_page_vm();
             let error = match page_vm
-                .dispatch_renderer_page_command_async(command)
-                .await
+                .dispatch_renderer_page_command(command)
             {
                 Ok(_) => panic!("direct wait command should fail closed"),
                 Err(error) => error,
