@@ -487,7 +487,7 @@ fn webgl_fingerprint_pipeline_methods_are_available() {
 
     assert_eq!(
         result,
-        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[8192,8192],"redBits":8,"vendor":"WebKit","version":"WebGL 1.0 (OpenGL ES 2.0 Chromium)","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":1280}"#
+        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[32767,32767],"redBits":8,"vendor":"WebKit","version":"WebGL 1.0 (OpenGL ES 2.0 Chromium)","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":1280}"#
     );
 }
 

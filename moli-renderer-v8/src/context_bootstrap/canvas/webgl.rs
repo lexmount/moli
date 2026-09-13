@@ -16,13 +16,15 @@ const WEBGL_EXTENSIONS_SLOT: &str = "__moliWebGlExtensions";
 const WEBGL_VIEWPORT: u32 = 0x0BA2;
 const WEBGL_INVALID_ENUM: u32 = 0x0500;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
-const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
+const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [32767, 32767];
+const WEBGL_MAX_TEXTURE_IMAGE_UNITS: i32 = 16;
 const WEBGL_MASKED_VENDOR: &str = "WebKit";
 const WEBGL_MASKED_RENDERER: &str = "WebKit WebGL";
 // A declared Windows/ANGLE compatibility identity, not physical GPU discovery.
 // The renderer spelling is from Chromium's ui/gl/gl_version_info_unittest.cc.
-// Keep shader precision below consistent with D3D11; these query declarations
-// do not imply a native D3D11 rendering backend or additional GPU extensions.
+// Resource limits and shader precision below follow the corresponding D3D11
+// declarations. This is not a complete hardware profile and does not imply a
+// native D3D11 rendering backend or additional GPU extensions.
 const WEBGL_UNMASKED_VENDOR: &str = "Google Inc. (NVIDIA)";
 const WEBGL_UNMASKED_RENDERER: &str =
     "ANGLE (NVIDIA, NVIDIA Quadro P1000 Direct3D11 vs_5_0 ps_5_0, D3D11-23.21.13.9077)";
@@ -393,18 +395,18 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if let Some(limit) = webgl_resource_limit(scope, parsed.pname) {
+        rv.set(limit);
+        return;
+    }
     match parsed.pname {
         WEBGL_VIEWPORT => return_webgl_viewport(scope, args.this(), &mut rv),
-        0x846D | 0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
+        0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
         0x86A3 => rv.set(webgl_uint32_array(scope, &[])),
-        0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
         0x0D57 => rv.set(v8::Integer::new(scope, 0).into()),
-        0x0D33 | 0x84E8 | 0x851C => rv.set(v8::Integer::new(scope, 4096).into()),
         0x8869 => rv.set(v8::Integer::new(scope, 16).into()),
-        0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 8).into()),
-        0x8B4D => rv.set(v8::Integer::new(scope, 16).into()),
         0x8DFB..=0x8DFD => rv.set(v8::Integer::new(scope, 128).into()),
         0x1F00 => rv.set(v8str(scope, WEBGL_MASKED_VENDOR).into()),
         0x1F01 => rv.set(v8str(scope, WEBGL_MASKED_RENDERER).into()),
@@ -435,6 +437,10 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if let Some(limit) = webgl_resource_limit(scope, parsed.pname) {
+        rv.set(limit);
+        return;
+    }
     match parsed.pname {
         WEBGL_VIEWPORT => return_webgl_viewport(scope, args.this(), &mut rv),
         0x8B9B => rv.set(v8::Integer::new(scope, 0x1908).into()),
@@ -472,20 +478,32 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
             rv.set(v8str(scope, "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)").into())
         }
         0x86A3 => rv.set(webgl_uint32_array(scope, &[])),
-        0x0D33 | 0x84E8 | 0x851C => rv.set(v8::Integer::new(scope, 8192).into()),
-        0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
-        0x846D | 0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
+        0x846E => rv.set(webgl_float32_array(scope, &[1.0, 1.0])),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
         0x0D57 => rv.set(v8::Integer::new(scope, 0).into()),
         0x8869 => rv.set(v8::Integer::new(scope, 16).into()),
-        0x8872 | 0x8B4C => rv.set(v8::Integer::new(scope, 16).into()),
-        0x8B4D => rv.set(v8::Integer::new(scope, 64).into()),
         _ => {
             record_webgl_error(scope, args.this(), WEBGL_INVALID_ENUM);
             rv.set_null();
         }
     }
+}
+
+fn webgl_resource_limit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    pname: u32,
+) -> Option<v8::Local<'s, v8::Value>> {
+    // ANGLE renderer11_utils.cpp: feature level 11 resource caps, shared by
+    // WebGL1/2. Querying these compatibility limits does not allocate resources.
+    Some(match pname {
+        0x0D33 | 0x84E8 | 0x851C => v8::Integer::new(scope, 16_384).into(),
+        0x0D3A => webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS),
+        0x846D => webgl_float32_array(scope, &[1.0, 1024.0]),
+        0x8872 | 0x8B4C => v8::Integer::new(scope, WEBGL_MAX_TEXTURE_IMAGE_UNITS).into(),
+        0x8B4D => v8::Integer::new(scope, WEBGL_MAX_TEXTURE_IMAGE_UNITS * 2).into(),
+        _ => return None,
+    })
 }
 
 fn webgl_debug_renderer_info_enabled(
