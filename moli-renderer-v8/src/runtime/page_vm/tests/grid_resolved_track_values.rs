@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
-async fn computed_style_serializes_used_grid_tracks_from_the_frozen_layout_tree() {
+async fn computed_style_refreshes_used_grid_tracks_after_style_mutation() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -89,6 +89,7 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
             "resolved horizontal Grid longhands must expose used tracks while preserving expanded line names, without publishing physical-axis values for vertical Grid",
         );
 
+        let passes = page_vm.vm().layout_pass_observability_for_test().1;
         page_vm
             .vm_mut()
             .eval("document.getElementById('named').style.cssText='width:400px;grid-template-columns:[new] 1fr 1fr';'mutated'")?;
@@ -96,9 +97,17 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
             page_vm.vm_mut().eval(
                 "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
             )?,
-            "[a] 21px [b c] 22px [d] 23px [e c] 22px [d] 23px [e f] 189px [g]",
-            "a synchronous style read must stay on the last published layout epoch",
+            "[new] 200px 200px",
+            "a synchronous used-track read must reflect the current grid styles",
         );
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes + 1);
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('named')).gridTemplateColumns",
+            )?,
+            "[new] 200px 200px",
+        );
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes + 1);
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?
@@ -110,6 +119,7 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
             "[new] 200px 200px",
             "a screenshot must publish the new Grid track sizes",
         );
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, passes + 2);
         Ok::<_, anyhow::Error>(())
     })
     .await
