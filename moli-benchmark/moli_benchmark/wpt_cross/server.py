@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import http.client
 import json
 import math
 import mimetypes
@@ -65,6 +66,11 @@ from .case_set import (
     WINDOW_JS_WINDOW_QUERY_VALUE,
     parse_any_js_meta,
 )
+
+
+# Match wptserve's limit: header-values.any.js sends over 250 headers, exceeding
+# the stdlib's default of 100. Keep the same bounded cap for requests and responses.
+http.client._MAXHEADERS = 512
 
 
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0

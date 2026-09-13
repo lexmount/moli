@@ -84,6 +84,29 @@ class FetchHeaderFixtureTests(unittest.TestCase):
                 self.assertIn(b"Connection: close\r\n", head + b"\r\n")
                 self.assertEqual(body, b"")
 
+    def test_can_send_and_receive_all_253_header_values(self) -> None:
+        request_headers = {
+            f"val{byte}": "x" + chr(byte) + "x"
+            for byte in range(256) if byte not in (0, 10, 13)
+        }
+        for method in ("GET", "POST"):
+            with self.subTest(method=method):
+                status, headers, body = self.request(
+                    method, "headers=" + "|".join(request_headers), request_headers
+                )
+                self.assertEqual((status, body), (200, b""))
+                for name, value in request_headers.items():
+                    self.assertEqual(headers["x-request-" + name], value, name)
+
+    def test_header_count_and_line_length_remain_bounded(self) -> None:
+        for request_headers in (
+            {f"val{index}": "value" for index in range(512)},
+            {"X-Long": "x" * (64 * 1024)},
+        ):
+            with self.subTest(header_count=len(request_headers)):
+                status, _, _ = self.request("GET", "", request_headers)
+                self.assertEqual(status, 431)
+
 
 if __name__ == "__main__":
     unittest.main()
