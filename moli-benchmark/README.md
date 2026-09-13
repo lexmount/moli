@@ -130,6 +130,15 @@ them. The runner waits for load, fonts, two animation frames, and removal of
 `crashtest` with zero subtests. An outstanding wait remains a timeout, and a
 renderer crash is reported even when the browser process stays alive.
 
+Explicit cases that reference `testdriver.js` use CDP in `--mode auto`.
+The CDP runner delivers trusted keyboard and mouse/pen input on an independent
+connection, so input can finish while a harness probe awaits a JavaScript
+promise. It supports `click`, ASCII and WebDriver special keys in `send_keys`,
+and keyboard, mouse/pen, wheel, and pause actions. Unsupported touch sources,
+pointer geometry properties, and cross-origin or transformed frame pointer
+coordinates reject the automation request. CLI mode cannot run these input
+cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
