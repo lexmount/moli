@@ -13,6 +13,8 @@ mod broadcast_channel;
 mod canvas;
 mod chrome_runtime;
 mod close_watchers;
+#[cfg(feature = "devtools")]
+pub(crate) use close_watchers::process_close_watchers;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;

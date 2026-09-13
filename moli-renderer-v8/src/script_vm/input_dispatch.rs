@@ -253,7 +253,7 @@ fn finish_drag_session<'s>(
         );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
-    unsafe { &mut *runtime_ptr }.clear_mouse_press();
+    unsafe { &mut *runtime_ptr }.clear_mouse_presses();
 }
 
 fn author_drag_operation<'s>(
@@ -1045,38 +1045,6 @@ impl ScriptVm {
         )?)
     }
 
-    fn mouse_input_root_to_frame(
-        &self,
-        target: DomHandle,
-        hit: crate::native_bridge::element::InputSurfaceHit,
-    ) -> Result<moli_layout::LayoutTransform2D> {
-        let runtime = self._context_host.borrow();
-        let dom = runtime.dom_host();
-        let document = dom
-            .owner_document_handle(target)
-            .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
-        if let Some(hit) = hit
-            .input
-            .filter(|hit| dom.owner_document_handle(hit.handle) == Some(document))
-        {
-            return Ok(hit.root_to_frame);
-        }
-        // Capture keeps its own frame even when the physical hit moves out of
-        // that frame. Read the same frozen content box and inverse transform
-        // used by hit testing, without requiring the point to hit the iframe.
-        if let Some(transform) = root_to_document_frame(&runtime, document) {
-            return Ok(transform);
-        }
-        if self
-            .hovered_mouse_handle
-            .and_then(|handle| dom.owner_document_handle(handle))
-            == Some(document)
-        {
-            return Ok(self.hovered_mouse_root_to_frame);
-        }
-        Err(moli_layout::LayoutError::NoLayoutSnapshot.into())
-    }
-
     fn prepare_mouse_input_dispatch(
         &mut self,
         event_name: &str,
@@ -1394,16 +1362,30 @@ impl ScriptVm {
         };
 
         if event_name == "mousedown" && button >= 0 {
-            self._context_host
-                .borrow_mut()
-                .begin_mouse_press(handle, button);
-            if button == 0 {
-                self.pending_drag_gesture = Some(PendingDragGesture {
-                    handle: hit_handle.unwrap_or(handle),
-                    x: client_x,
-                    y: client_y,
-                    root_to_frame,
-                });
+            let mut host = self._context_host.borrow_mut();
+            host.clear_mouse_button_press(button);
+            if let Some(handle) = capture_handle.or(hit_handle) {
+                host.begin_mouse_press(handle, button);
+                if button == 0
+                    && buttons == 1
+                    && click_count <= 1
+                    && let Some(document) = host.dom_host().owner_document_handle(handle)
+                    && let Some(root_to_frame) = hit
+                        .filter(|hit| {
+                            host.dom_host().owner_document_handle(hit.handle) == Some(document)
+                        })
+                        .map(|hit| hit.root_to_frame)
+                        .or_else(|| root_to_document_frame(&host, document))
+                {
+                    let point = root_to_frame.map_point(root_point);
+                    self.pending_drag_gesture = Some(PendingDragGesture {
+                        document,
+
+                        x: f64::from(point.x),
+                        y: f64::from(point.y),
+                        root_to_frame,
+                    });
+                }
             }
         }
 
@@ -1571,6 +1553,12 @@ impl ScriptVm {
                     modifiers,
                 )
             {
+                if (pointer_event_name == "pointerdown" && pointer.pointer_type == "mouse")
+                    || (pointer_event_name == "pointerup" && pointer.pointer_type != "mouse")
+                {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                }
                 let dispatched =
                     dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                 if event_name == "mousedown" && !dispatched.allows_default() {
@@ -1613,6 +1601,10 @@ impl ScriptVm {
                     )
                 };
                 if let Some(event) = event {
+                    if event_name == "mousedown" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                    }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
                     if event_name == "wheel" && dispatched.allows_default() {
@@ -1923,7 +1915,7 @@ impl ScriptVm {
             .map(|session| session.coordinates)
             .unwrap_or_default();
         self.pending_drag_gesture = None;
-        self._context_host.borrow_mut().clear_mouse_press();
+        self._context_host.borrow_mut().clear_mouse_presses();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         self.with_default_context_scope(|scope, runtime_ptr| {
             // SAFETY: with_default_context_scope runs synchronously under
@@ -2284,6 +2276,10 @@ impl ScriptVm {
                         &pointer,
                     )
                 {
+                    if pointer_event_name == "pointerup" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(pointer_handle);
+                    }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, pointer_handle, event);
                     if event_name == "touchstart"
@@ -2360,9 +2356,15 @@ impl ScriptVm {
                 event_name,
                 &active_event_points,
                 &changed_event_points,
-            ) && !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
-            {
-                tap = None;
+            ) {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(event_target);
+                }
+                if !dispatch_public_event(scope, runtime_ptr, event_target, event).allows_default()
+                {
+                    tap = None;
+                }
             }
             if event_name == "touchend"
                 && let Some(candidate) = tap.take()
@@ -2643,6 +2645,19 @@ impl ScriptVm {
         let canceled_raw_keydown = Cell::new(false);
 
         let result = self.with_native_keyboard_event_scope(|scope, runtime_ptr| {
+            let runtime = unsafe { &mut *runtime_ptr };
+            let close_request_context =
+                runtime
+                    .owner_dispatch_scope_for_node(handle)
+                    .and_then(|target| {
+                        let owner = runtime.current_window_execution_context_owner(target)?;
+                        runtime
+                            .window_execution_context(scope, owner, target)
+                            .map(|(_, context)| context)
+                    });
+            if event_name == "keydown" && key_lower != "escape" {
+                runtime.notify_close_watcher_input_activation(handle);
+            }
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -2663,6 +2678,13 @@ impl ScriptVm {
                     canceled_raw_keydown.set(true);
                 }
                 return Ok(input_dispatch_outcome(false));
+            }
+
+            if event_name == "keydown"
+                && key_lower == "escape"
+                && let Some(context) = close_request_context
+            {
+                crate::context_bootstrap::process_close_watchers(scope, context);
             }
 
             // Combined keydown/text input includes a cancelable keypress before
