@@ -2,6 +2,8 @@ use super::{
     DomHandle, JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity,
     WindowExecutionContextOwner,
 };
+use crate::native_bridge::WindowUserActivationState;
+use std::rc::Rc;
 
 struct RegisteredCloseWatcher {
     object: v8::Global<v8::Object>,
@@ -15,7 +17,7 @@ pub(super) struct CloseWatcherManager {
     allowed_groups: usize,
     next_interaction_allows_group: bool,
     history_action_activation: bool,
-    last_user_activation: Option<std::time::Instant>,
+    user_activation: Rc<WindowUserActivationState>,
 }
 
 impl Default for CloseWatcherManager {
@@ -25,7 +27,7 @@ impl Default for CloseWatcherManager {
             allowed_groups: 1,
             next_interaction_allows_group: true,
             history_action_activation: false,
-            last_user_activation: None,
+            user_activation: Rc::default(),
         }
     }
 }
@@ -154,7 +156,7 @@ impl JsContextHost {
                 }
                 manager.next_interaction_allows_group = false;
                 manager.history_action_activation = true;
-                manager.last_user_activation = Some(std::time::Instant::now());
+                manager.user_activation.notify();
             }
         }
     }
@@ -164,14 +166,23 @@ impl JsContextHost {
     }
 
     pub(crate) fn window_user_activation_state(&self, source: OwnerDispatchScope) -> (bool, bool) {
-        let activation = self
-            .current_window_execution_context_owner(source)
+        self.current_window_execution_context_owner(source)
             .and_then(|owner| self.close_watcher_managers.get(&owner))
-            .and_then(|manager| manager.last_user_activation);
-        (
-            activation
-                .is_some_and(|activated| activated.elapsed() < std::time::Duration::from_secs(5)),
-            activation.is_some(),
+            .map(|manager| manager.user_activation.state())
+            .unwrap_or((false, false))
+    }
+
+    pub(crate) fn retain_window_user_activation_state(
+        &mut self,
+        source: OwnerDispatchScope,
+    ) -> Option<Rc<WindowUserActivationState>> {
+        let owner = self.current_window_execution_context_owner(source)?;
+        Some(
+            self.close_watcher_managers
+                .entry(owner)
+                .or_default()
+                .user_activation
+                .clone(),
         )
     }
 
