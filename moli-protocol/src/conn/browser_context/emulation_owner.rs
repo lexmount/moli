@@ -46,9 +46,9 @@ impl TargetEmulationStateUpdate<'_> {
         self.effective.cpu_throttling_rate = cpu_throttling_rate;
     }
 
-    pub(crate) fn set_touch_emulation_enabled(&mut self, enabled: bool) {
-        self.raw.touch_emulation_enabled = enabled;
-        self.effective.touch_emulation_enabled = enabled;
+    pub(crate) fn set_max_touch_points(&mut self, max_touch_points: u32) {
+        self.raw.max_touch_points = max_touch_points;
+        self.effective.max_touch_points = max_touch_points;
     }
 
     pub(crate) fn set_emit_touch_events_for_mouse(&mut self, enabled: bool) {

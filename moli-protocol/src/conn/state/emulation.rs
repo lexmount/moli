@@ -286,7 +286,7 @@ pub(crate) struct EffectiveTargetEmulationState {
     pub(crate) emulated_media: EmulatedMediaOverrides,
     pub(crate) emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     pub(crate) cpu_throttling_rate: f64,
-    pub(crate) touch_emulation_enabled: bool,
+    pub(crate) max_touch_points: u32,
     pub(crate) emit_touch_events_for_mouse: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
@@ -300,7 +300,7 @@ impl Default for EffectiveTargetEmulationState {
             emulated_media: EmulatedMediaOverrides::default(),
             emulated_device_metrics: None,
             cpu_throttling_rate: 1.0,
-            touch_emulation_enabled: false,
+            max_touch_points: 0,
             emit_touch_events_for_mouse: false,
             focus_emulation_enabled: false,
             script_execution_disabled: false,
@@ -315,7 +315,7 @@ pub(crate) struct EffectiveTargetEmulationStateDelta {
     pub(crate) emulated_media: bool,
     pub(crate) emulated_device_metrics: bool,
     pub(crate) cpu_throttling_rate: bool,
-    pub(crate) touch_emulation_enabled: bool,
+    pub(crate) max_touch_points: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
 }
@@ -325,7 +325,7 @@ impl EffectiveTargetEmulationStateDelta {
         self.network_conditions
             || self.geolocation_override
             || self.emulated_device_metrics
-            || self.touch_emulation_enabled
+            || self.max_touch_points
             || self.focus_emulation_enabled
     }
 }
@@ -354,8 +354,8 @@ impl EffectiveTargetEmulationState {
         if raw.cpu_throttling_rate != 1.0 {
             self.cpu_throttling_rate = 1.0;
         }
-        if raw.touch_emulation_enabled {
-            self.touch_emulation_enabled = false;
+        if raw.max_touch_points != 0 {
+            self.max_touch_points = 0;
         }
         if raw.emit_touch_events_for_mouse {
             self.emit_touch_events_for_mouse = false;
@@ -373,8 +373,7 @@ impl EffectiveTargetEmulationState {
             emulated_device_metrics: previous.emulated_device_metrics
                 != self.emulated_device_metrics,
             cpu_throttling_rate: previous.cpu_throttling_rate != self.cpu_throttling_rate,
-            touch_emulation_enabled: previous.touch_emulation_enabled
-                != self.touch_emulation_enabled,
+            max_touch_points: previous.max_touch_points != self.max_touch_points,
             focus_emulation_enabled: previous.focus_emulation_enabled
                 != self.focus_emulation_enabled,
             script_execution_disabled: previous.script_execution_disabled

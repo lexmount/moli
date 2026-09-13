@@ -12,7 +12,7 @@ struct SurfaceOverrideInputs {
     network_conditions: Option<EmulatedNetworkConditions>,
     geolocation_override: Option<EmulatedGeolocationOverrideState>,
     emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    touch_emulation_enabled: bool,
+    max_touch_points: u32,
     focus_emulation_enabled: bool,
     active_target_surface: bool,
     window_document_hidden: bool,
@@ -24,10 +24,10 @@ impl SurfaceOverrideInputs {
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
             emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
-            touch_emulation_enabled: browser_context
+            max_touch_points: browser_context
                 .active_page_target()
                 .effective_emulation_state
-                .touch_emulation_enabled,
+                .max_touch_points,
             focus_emulation_enabled: browser_context
                 .active_page_target()
                 .effective_emulation_state
@@ -61,7 +61,7 @@ impl SurfaceOverrideInputs {
                 .emulated_device_metrics
                 .clone()
                 .or(default_emulated_device_metrics),
-            touch_emulation_enabled: state.effective_emulation_state.touch_emulation_enabled,
+            max_touch_points: state.effective_emulation_state.max_touch_points,
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: false,
@@ -69,7 +69,7 @@ impl SurfaceOverrideInputs {
     }
 
     fn max_touch_points(&self) -> u32 {
-        if self.touch_emulation_enabled { 1 } else { 0 }
+        self.max_touch_points
     }
 
     fn document_has_focus(&self) -> bool {
@@ -367,15 +367,9 @@ impl BrowserContext {
     }
 
     pub fn max_touch_points(&self) -> u32 {
-        if self
-            .active_page_target()
+        self.active_page_target()
             .effective_emulation_state
-            .touch_emulation_enabled
-        {
-            1
-        } else {
-            0
-        }
+            .max_touch_points
     }
 
     pub fn document_has_focus(&self) -> bool {

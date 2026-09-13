@@ -3576,7 +3576,8 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
             active
                 .active_page_target()
                 .effective_emulation_state
-                .touch_emulation_enabled
+                .max_touch_points
+                != 0
         );
         assert!(
             active
@@ -3603,7 +3604,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
                 )),
             Some((640, 360, 1.0, 800, 600))
         );
-        assert!(!staged.effective_emulation_state.touch_emulation_enabled);
+        assert_eq!(staged.effective_emulation_state.max_touch_points, 0);
         assert!(!staged.effective_emulation_state.focus_emulation_enabled);
     }
 
@@ -4107,10 +4108,11 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
+            active
                 .active_page_target()
                 .effective_emulation_state
-                .touch_emulation_enabled,
+                .max_touch_points
+                == 0,
             "active target should keep default touch emulation"
         );
         assert!(

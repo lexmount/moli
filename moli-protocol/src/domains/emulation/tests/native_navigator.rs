@@ -279,3 +279,57 @@ async fn focus_override_updates_loaded_background_page_and_preserves_real_focus(
         json!([true, false, "visible"])
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn max_touch_points_updates_native_getters_and_rejects_invalid_counts_atomically() {
+    let mut ctx = setup().await;
+    evaluate(&mut ctx, "globalThis.touchGetter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'maxTouchPoints').get").await;
+    for (params, expected) in [
+        (json!({"enabled": true}), 1),
+        (json!({"enabled": true, "maxTouchPoints": 5}), 5),
+        (json!({"enabled": true, "maxTouchPoints": 16}), 16),
+        (json!({"enabled": false, "maxTouchPoints": 5}), 0),
+        (json!({"enabled": true, "maxTouchPoints": 5}), 5),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Emulation.setTouchEmulationEnabled",
+            params,
+        )
+        .await;
+        assert_eq!(evaluate(&mut ctx, "[navigator.maxTouchPoints, touchGetter.call(navigator), touchGetter === Object.getOwnPropertyDescriptor(Navigator.prototype, 'maxTouchPoints').get]").await, json!([expected, expected, true]));
+    }
+    for enabled in [true, false] {
+        for max_touch_points in [0, 17, -1] {
+            ctx.process_async(json!({"id": 88001,"sessionId": "SID-1", "method": "Emulation.setTouchEmulationEnabled", "params": {"enabled": enabled,"maxTouchPoints": max_touch_points}})).await;
+            ctx.expect_error(88001, -32602, "Touch points must be between 1 and 16");
+            assert_eq!(
+                evaluate(&mut ctx, "navigator.maxTouchPoints").await,
+                json!(5)
+            );
+        }
+    }
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            r#"(async () => {
+        const frame = document.createElement('iframe');
+        frame.srcdoc = '<body>child</body>';
+        await new Promise(resolve => { frame.onload = resolve; document.body.append(frame); });
+        return frame.contentWindow.navigator.maxTouchPoints;
+    })()"#
+        )
+        .await,
+        json!(5)
+    );
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://geolocation.example/next-touch").unwrap(),
+        "<!doctype html><script>globalThis.initialTouch = navigator.maxTouchPoints;</script>"
+            .into(),
+        Some("SID-1"),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, "initialTouch").await, json!(5));
+}
