@@ -24,6 +24,18 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
+/// Inputs sampled by the owner of the latest layout pass. The frozen tree
+/// remains available to snapshot consumers, but synchronous geometry queries
+/// must rebuild it after any of these inputs change.
+#[derive(PartialEq)]
+pub(super) struct LayoutSnapshotInputs {
+    pub(super) dom_version: u64,
+    pub(super) style_generations: Vec<(DomHandle, u64, u64, u64)>,
+    pub(super) style_viewport_generation: u64,
+    pub(super) environment: StyloStyleEnvironment,
+    pub(super) visual_resource_generation: u64,
+}
+
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
@@ -43,6 +55,7 @@ pub(super) struct DocumentLayoutState {
     web_font_resource_generation: Option<StylesheetResourceGeneration>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
+    latest_layout_inputs: Option<LayoutSnapshotInputs>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -139,12 +152,19 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        inputs: LayoutSnapshotInputs,
     ) {
         self.latest_layout.publish(document, tree);
+        self.latest_layout_inputs = Some(inputs);
+    }
+
+    pub(super) fn latest_layout_inputs_match(&self, inputs: &LayoutSnapshotInputs) -> bool {
+        self.latest_layout_inputs.as_ref() == Some(inputs)
     }
 
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
+        self.latest_layout_inputs = None;
         self.mark_visual_state_dirty();
     }
 
