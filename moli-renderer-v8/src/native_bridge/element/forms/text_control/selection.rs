@@ -108,6 +108,9 @@ pub(crate) fn text_control_set_selection_range_with_direction_internal(
         (end, end)
     };
     let changed = runtime.set_selection_range_with_direction(handle, start, end, direction);
+    if runtime.active_element_handle() == Some(handle) {
+        runtime.note_text_control_selection(handle);
+    }
     if changed {
         queue_text_control_select_event(scope, runtime_ptr, handle);
         queue_text_control_selection_change_event(scope, runtime_ptr, handle);
@@ -629,7 +632,7 @@ pub(in crate::native_bridge) fn text_control_select_callback(
         return;
     };
     let len = text_control_value(unsafe { &*runtime_ptr }, handle)
-        .chars()
+        .encode_utf16()
         .count() as u32;
     let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
     rv.set_undefined();

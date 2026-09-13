@@ -141,6 +141,7 @@ pub(crate) use activation::{
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
+pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
     queue_deferred_named_iframe_target_navigation_from_document,

@@ -7,10 +7,10 @@ use super::{
     JsContextHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
-    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
+    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
     form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
-    replace_text_control_selection, text_control_value,
+    replace_text_control_selection, run_document_copy_command, text_control_value,
 };
 use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
@@ -530,6 +530,22 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
+    if !unsafe { &mut *runtime_ptr }.begin_document_editing_command(document_handle) {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    }
+    execute_document_editing_command(scope, runtime_ptr, document_handle, &args, command, &mut rv);
+    unsafe { &mut *runtime_ptr }.end_document_editing_command(document_handle);
+}
+
+fn execute_document_editing_command<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document_handle: DomHandle,
+    args: &v8::FunctionCallbackArguments<'s>,
+    command: EditingCommand,
+    rv: &mut v8::ReturnValue<'s, v8::Value>,
+) {
     match command {
         EditingCommand::SelectAll => {
             let selected =
@@ -538,12 +554,12 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::Copy => {
-            let active = current_protocol_user_gesture_activation(scope);
-            rv.set(v8::Boolean::new(scope, active).into());
+            let copied = run_document_copy_command(scope, runtime_ptr, document_handle, false);
+            rv.set(v8::Boolean::new(scope, copied).into());
             return;
         }
         EditingCommand::InsertText => {
-            let Some(value) = editing_command_value(scope, &args) else {
+            let Some(value) = editing_command_value(scope, args) else {
                 return;
             };
             let inserted = exec_command_insert_text(scope, runtime_ptr, &value);
@@ -551,7 +567,7 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::InsertHtml => {
-            let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, &args) else {
+            let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, args) else {
                 return;
             };
             let inserted = exec_command_insert_html(scope, runtime_ptr, &value);
@@ -600,7 +616,7 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let command = normalized_editing_command(scope, &args);
-    let Some((_runtime_ptr, _document_handle)) = editing_command_document(
+    let Some((runtime_ptr, document_handle)) = editing_command_document(
         scope,
         &args,
         &mut rv,
@@ -608,7 +624,14 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     ) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, command.parse::<EditingCommand>().is_ok()).into());
+    let supported = match command.parse::<EditingCommand>() {
+        Ok(EditingCommand::Copy) => {
+            document_copy_command_supported(unsafe { &*runtime_ptr }, document_handle)
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    rv.set(v8::Boolean::new(scope, supported).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>(
@@ -638,7 +661,9 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         Ok(EditingCommand::SelectAll) => {
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
-        Ok(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
+        Ok(EditingCommand::Copy) => {
+            run_document_copy_command(scope, runtime_ptr, document_handle, true)
+        }
         Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
@@ -766,11 +791,6 @@ fn current_modal_dialog(runtime: &JsContextHost, document: DomHandle) -> Option<
                 && element.attribute("open").is_some())
             .then_some(node.id())
         })
-}
-
-fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    crate::util::context_host_ptr_from_global_bridge(scope)
-        .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
 }
 
 fn editing_command_value<'s>(

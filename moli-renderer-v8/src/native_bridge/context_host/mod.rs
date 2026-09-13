@@ -146,6 +146,7 @@ mod runtime_bindings;
 mod runtime_observable;
 mod security_policy;
 
+mod document_editing;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
@@ -837,6 +838,7 @@ pub(crate) struct JsContextHost {
     bridge_ref_count: Rc<Cell<usize>>,
     range_record_registry: range_records::RangeRecordRegistry,
     selection_record_registry: selection_records::SelectionRecordRegistry,
+    executing_editing_commands: std::collections::HashSet<DomHandle>,
     custom_elements: CustomElementStore,
     custom_element_reactions: CustomElementReactionCoordinator,
     child_custom_elements: HashMap<DomHandle, CustomElementStore>,
