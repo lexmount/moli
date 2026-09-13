@@ -28,6 +28,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .case_set import (
     ANY_JS_GLOBAL_CHOICES,
@@ -55,6 +56,22 @@ from ..config import clear_current_proxy_env
 REPO_CASE_LIST_DIR = Path(__file__).resolve().parents[2] / "wpt-cross-current"
 WPT_CROSS_CASE_TIMEOUT_SECONDS = 120.0
 WPT_CROSS_PARALLELISM = 50
+
+
+def _case_references_testdriver(wpt_root: Path, case: WptCase) -> bool:
+    path = urlsplit(case.case_path).path.lstrip("/")
+    for suffix, source_suffix in ((".any.html", ".any.js"), (".window.html", ".window.js")):
+        if path.endswith(suffix):
+            path = path.removesuffix(suffix) + source_suffix
+            break
+    source = (wpt_root / path).resolve()
+    try:
+        source.relative_to(wpt_root.resolve())
+        return b"/resources/testdriver" in source.read_bytes()
+    except (OSError, ValueError):
+        return False
+
+
 WPT_CROSS_PROFILES = (
     "default",
     "layout-testharness",
@@ -656,6 +673,13 @@ def main(argv: list[str] | None = None) -> int:
 
     has_reftests = any(case.test_type == "reftest" for case in cases)
     fixed_layout_viewport = _is_layout_profile(args.profile) or has_reftests
+    native_input_required = args.mode != "cdp" and any(
+        _case_references_testdriver(args.wpt_root, case) for case in cases
+    )
+    if native_input_required and args.mode == "cli":
+        print("error: testdriver cases require CDP mode for native input", file=sys.stderr)
+        return 4
+    requires_cdp = fixed_layout_viewport or native_input_required
     if fixed_layout_viewport and args.mode == "cli":
         print(
             "error: layout profiles and reftests require CDP mode for fixed viewport screenshots",
@@ -704,7 +728,7 @@ def main(argv: list[str] | None = None) -> int:
         for engine in args.engine:
             driver = build_driver(engine)
             external = engine == "obscura"
-            mode_for_check = "cdp" if fixed_layout_viewport else args.mode
+            mode_for_check = "cdp" if requires_cdp else args.mode
             if mode_for_check == "auto":
                 mode_for_check = "cli" if driver.cli_fetch_command is not None else "cdp"
             if external and mode_for_check == "cdp" and server.external_base_url is None:
@@ -741,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
                 for case in scheduled_cases
             ]
 
-            mode = "cdp" if fixed_layout_viewport else args.mode
+            mode = "cdp" if requires_cdp else args.mode
             if mode == "auto":
                 mode = "cli" if driver.cli_fetch_command is not None else "cdp"
             elif mode == "cli" and driver.cli_fetch_command is None:
