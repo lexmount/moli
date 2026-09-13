@@ -23,6 +23,15 @@ clipboard-apis/clipboard-events-synthetic.html
 clipboard-apis/data-transfer-file-list-change-reference-updates.html
 clipboard-apis/dataTransfer-clearData.html
 clipboard-apis/drag-multiple-urls.html
+close-watcher/abortsignal.html
+close-watcher/inside-event-listeners.html
+close-watcher/user-activation/ny-activate-preventDefault.html?CloseWatcher
+close-watcher/user-activation/nyyn-CloseWatcher.html
+close-watcher/user-activation/nyyyn-CloseWatcher.html
+close-watcher/user-activation/yn-activate.html?CloseWatcher
+close-watcher/user-activation/yy.html?CloseWatcher
+close-watcher/user-activation/yyn.html?CloseWatcher
+close-watcher/user-activation/yyy.html?CloseWatcher
 compat/css-style-declaration-alias-enumeration.html
 compat/historical.html
 compat/webkit-box-removing-triggering-anonymous-merge.html

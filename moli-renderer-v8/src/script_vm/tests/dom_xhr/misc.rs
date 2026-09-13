@@ -1615,7 +1615,7 @@ body.setHTMLUnsafe(`
 }
 
 #[test]
-fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
+fn geometry_getters_reuse_layout_until_dom_mutation() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1664,18 +1664,21 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
         )
         .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|38|0");
+    assert_eq!(result, "38|8|38|8|38|43|8");
     let passes = vm
         ._context_host
         .borrow()
         .layout_pass_observability_for_test()
         .1
         .saturating_sub(passes_before);
-    assert_eq!(passes, 1, "only the cold getter may build layout");
+    assert_eq!(
+        passes, 2,
+        "the first getter after mutation must refresh layout"
+    );
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 10);
-    assert_eq!(cache_after.1, cache_before.1 + 1);
-    assert_eq!(cache_after.2, cache_before.2 + 1);
+    assert_eq!(cache_after.0, cache_before.0 + 9);
+    assert_eq!(cache_after.1, cache_before.1 + 2);
+    assert_eq!(cache_after.2, cache_before.2 + 2);
     assert!(cache_after.3.is_some());
 }
 
@@ -1713,6 +1716,32 @@ fn switching_to_mock_geometry_drops_the_latest_real_layout_snapshot() {
             .3
             .is_none()
     );
+}
+
+#[test]
+fn geometry_getters_refresh_after_cssom_changes_without_dom_mutation() {
+    let mut vm = new_parsed_test_vm(
+        "https://layout-cssom-inputs.test/",
+        "<!doctype html><style>#target { width: 10px; height: 20px }</style><div id=target></div>",
+    );
+    assert_eq!(vm.eval("target.offsetWidth").unwrap(), "10");
+    let passes_before = vm.layout_pass_observability_for_test().1;
+    let dom_version = vm._context_host.borrow().dom_host().dom_version();
+    assert_eq!(
+        vm.eval("document.styleSheets[0].cssRules[0].style.width = '40px'; target.offsetWidth")
+            .unwrap(),
+        "40",
+    );
+    assert_eq!(
+        vm._context_host.borrow().dom_host().dom_version(),
+        dom_version
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+    assert_eq!(
+        vm.eval("target.getBoundingClientRect().width").unwrap(),
+        "40"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
 }
 
 #[test]

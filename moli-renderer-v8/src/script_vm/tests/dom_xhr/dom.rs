@@ -8598,8 +8598,11 @@ for (let index = 0; index < 128; index++) {
     );
     assert_eq!(layout_after_first.1, layout_before.1 + 1);
     assert_eq!(layout_after_repeated.1, layout_after_first.1);
-    assert_eq!(layout_after_second.1, layout_after_first.1);
-    assert_eq!(layout_after_stylesheet_mutation.1, layout_after_first.1);
+    assert_eq!(layout_after_second.1, layout_after_first.1 + 1);
+    assert_eq!(
+        layout_after_stylesheet_mutation.1,
+        layout_after_second.1 + 1
+    );
     assert_eq!(
         update_materializations_after_first.saturating_sub(update_materializations_before),
         1,
@@ -8644,7 +8647,7 @@ for (let index = 0; index < 128; index++) {
 }
 
 #[test]
-fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
+fn inner_text_new_sources_refresh_layout_before_paint() {
     let mut vm = new_parsed_test_vm(
         "https://inner-text-latest-layout.test/",
         "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
@@ -8664,30 +8667,30 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
             "const added = document.createElement('span'); added.textContent = 'b'; target.append(added); target.innerText",
         )
         .expect("the warm innerText read should evaluate"),
-        "a",
-        "a text source absent from the latest frozen layout tree remains unrendered until refresh"
+        "ab",
+        "a connected text source must be rendered by the next synchronous innerText read"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
 
     vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
         .expect("fresh paint layout should succeed")
         .expect("the fixture should have a layout root");
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 3);
     assert_eq!(
         vm.eval("target.innerText")
             .expect("innerText should read the refreshed geometry snapshot"),
         "ab"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 2);
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 3);
 
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 2);
-    assert_eq!(cache_after.1, cache_before.1 + 1);
-    assert_eq!(cache_after.2, cache_before.2 + 2);
+    assert_eq!(cache_after.0, cache_before.0 + 1);
+    assert_eq!(cache_after.1, cache_before.1 + 2);
+    assert_eq!(cache_after.2, cache_before.2 + 3);
 }
 
 #[test]
-fn parser_connected_inner_text_bypasses_a_stale_layout_snapshot() {
+fn inner_text_refreshes_during_and_after_parsing() {
     let mut vm = new_parsed_test_vm(
         "https://parser-inner-text-layout.test/",
         "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
@@ -8730,12 +8733,21 @@ fn parser_connected_inner_text_bypasses_a_stale_layout_snapshot() {
             "const addedAfterParser = document.createElement('span'); addedAfterParser.textContent = 'c'; target.append(addedAfterParser); target.innerText",
         )
         .expect("post-parse innerText should evaluate"),
-        "ab",
-        "ordinary post-parse reads should keep the demand-driven snapshot contract"
+        "abc",
+        "ordinary post-parse reads must also render newly inserted text"
     );
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        passes_after_initial_read + 1
+        passes_after_initial_read + 2
+    );
+    assert_eq!(
+        vm.eval("target.innerText")
+            .expect("unchanged innerText read"),
+        "abc"
+    );
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_after_initial_read + 2
     );
 }
 
