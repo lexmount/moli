@@ -401,6 +401,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::IdleDetector,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CloseWatcher::DESCRIPTOR,
+        kind: ConstructorKind::CloseWatcher,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Notification::DESCRIPTOR,
         kind: ConstructorKind::Notification,
     },
