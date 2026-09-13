@@ -11,7 +11,6 @@ content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-ur
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/generic/image-document-applies-csp.html
-content-security-policy/generic/invalid-characters-in-policy.html
 content-security-policy/generic/only-valid-whitespaces-are-allowed.html
 content-security-policy/generic/policy-inherited-correctly-by-plznavigate.html
 content-security-policy/inheritance/document-write-iframe.html
