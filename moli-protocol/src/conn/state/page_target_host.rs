@@ -336,14 +336,6 @@ impl PageTargetRegistry {
             .filter(move |host| Some(host.target_id()) != active_target_id.as_deref())
     }
 
-    pub(crate) fn background_at(&self, index: usize) -> Option<&PageTargetHost> {
-        self.background().nth(index)
-    }
-
-    pub(crate) fn background_at_mut(&mut self, index: usize) -> Option<&mut PageTargetHost> {
-        self.background_mut().nth(index)
-    }
-
     pub(crate) fn background_len(&self) -> usize {
         self.background().count()
     }

@@ -21,6 +21,7 @@ pub(super) use child_context::{
     window_frame_element_getter, window_length_getter,
 };
 pub(super) use helpers::window_child_context_handle;
+pub(crate) use helpers::window_host_ptr;
 pub(super) use interceptors::{
     window_indexed_property_descriptor, window_indexed_property_enumerator,
     window_indexed_property_getter, window_indexed_property_query, window_named_property_getter,

@@ -588,16 +588,16 @@ fn window_inner_width_replaceable_getter<'s>(
 
 fn window_outer_height_replaceable_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(
-        v8::Number::new(
-            scope,
+    let value = super::window_accessors::window_host_ptr(scope, args.this())
+        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+        .map_or(
             moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height,
-        )
-        .into(),
-    );
+            |surface| f64::from(surface.outer_height),
+        );
+    rv.set(v8::Number::new(scope, value).into());
 }
 
 fn window_length_replaceable_getter<'s>(

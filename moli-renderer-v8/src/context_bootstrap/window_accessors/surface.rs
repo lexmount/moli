@@ -138,9 +138,15 @@ pub(in crate::context_bootstrap) fn window_outer_width_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
-        rv.set(v8::Number::new(scope, DEFAULT_WINDOW_SURFACE_PROFILE.inner_width).into());
-    }
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = window_host_ptr(scope, receiver)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+        .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width, |v| {
+            f64::from(v.outer_width)
+        });
+    rv.set(v8::Number::new(scope, value).into());
 }
 
 pub(in crate::context_bootstrap) fn window_outer_height_getter<'s>(
@@ -148,9 +154,15 @@ pub(in crate::context_bootstrap) fn window_outer_height_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
-        rv.set(v8::Number::new(scope, DEFAULT_WINDOW_SURFACE_PROFILE.inner_height).into());
-    }
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = window_host_ptr(scope, receiver)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+        .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height, |v| {
+            f64::from(v.outer_height)
+        });
+    rv.set(v8::Number::new(scope, value).into());
 }
 
 pub(in crate::context_bootstrap) fn window_device_pixel_ratio_getter<'s>(
@@ -158,9 +170,15 @@ pub(in crate::context_bootstrap) fn window_device_pixel_ratio_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
-        rv.set(v8::Number::new(scope, DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio).into());
-    }
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = window_host_ptr(scope, receiver)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
+        .map_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio, |v| {
+            v.device_pixel_ratio
+        });
+    rv.set(v8::Number::new(scope, value).into());
 }
 
 pub(in crate::context_bootstrap) fn window_scroll_x_getter<'s>(

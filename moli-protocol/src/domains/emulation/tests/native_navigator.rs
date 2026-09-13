@@ -1,4 +1,7 @@
 use super::*;
+use crate::devtools_runtime::{
+    DevToolsDevicePixelRatioSetting, DevToolsSetViewportCommand, DevToolsViewportSetting,
+};
 
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
     ctx.process_async(json!({
@@ -470,5 +473,113 @@ async fn unsupported_throttling_rejects_before_changing_live_offline_state() {
             .effective_emulation_state
             .cpu_throttling_rate,
         1.0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_viewport_overrides_preserve_getters_and_ignore_page_property_hooks() {
+    let mut ctx = setup().await;
+    assert_eq!(evaluate(&mut ctx,r#"
+        globalThis.originalInner = Object.getOwnPropertyDescriptor(globalThis, 'innerWidth').get;
+        globalThis.originalDpr = Object.getOwnPropertyDescriptor(globalThis, 'devicePixelRatio').get;
+        globalThis.originalScreenWidth = Object.getOwnPropertyDescriptor(Screen.prototype, 'width').get;
+        globalThis.heldScreen = screen;
+        globalThis.heldVisual = visualViewport;
+        globalThis.originalDefine = Object.defineProperty;
+        Object.defineProperty(globalThis, '__moliDeviceMetricsOriginalDescriptors', {
+            configurable: true, get() { throw new Error('page-owned property'); }
+        });
+        Object.defineProperty = () => { throw new Error('page-owned defineProperty'); };
+        true
+    "#).await,json!(true));
+    for width in [640, 800] {
+        expect_session_command_result(&mut ctx,88001,"SID-1","Emulation.setDeviceMetricsOverride",
+            json!({"width":width,"height":480,"deviceScaleFactor":2,"mobile":false,"screenWidth":1000,"screenHeight":700})).await;
+        assert_eq!(
+            evaluate(
+                &mut ctx,
+                r#"[
+            innerWidth, originalInner.call(globalThis), heldVisual.width,
+            devicePixelRatio, originalDpr.call(globalThis),
+            heldScreen.width, originalScreenWidth.call(heldScreen),
+            originalInner === Object.getOwnPropertyDescriptor(globalThis,'innerWidth').get,
+            originalScreenWidth === Object.getOwnPropertyDescriptor(Screen.prototype,'width').get,
+            Function.prototype.toString.call(originalInner).includes('[native code]')
+        ]"#
+            )
+            .await,
+            json!([width, width, width, 2, 2, 1000, 1000, true, true, true])
+        );
+    }
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx,"[innerWidth === originalInner.call(globalThis), originalInner === Object.getOwnPropertyDescriptor(globalThis,'innerWidth').get, !Object.hasOwn(screen,'width')]").await,json!([true,true,true]));
+    evaluate(&mut ctx,"Object.defineProperty = originalDefine; delete globalThis.__moliDeviceMetricsOriginalDescriptors").await;
+    expect_session_command_result(&mut ctx,88001,"SID-1","Emulation.setDeviceMetricsOverride",
+        json!({"width":800,"height":600,"deviceScaleFactor":2,"mobile":false,"screenWidth":1000,"screenHeight":700})).await;
+    assert_eq!(evaluate(&mut ctx,r#"(async () => {
+        const frame = document.createElement('iframe');
+        frame.style.width = '321px'; frame.style.height = '123px'; frame.srcdoc = '<body>child</body>';
+        await new Promise(resolve => { frame.onload = resolve; document.body.append(frame); });
+        const child = frame.contentWindow;
+        return [child.innerWidth, child.visualViewport.width, child.devicePixelRatio, child.screen.width];
+    })()"#).await,json!([321,321,2,1000]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clearing_target_metrics_restores_browser_context_viewport_defaults() {
+    let mut ctx = setup().await;
+    let (result, _) = ctx
+        .conn
+        .execute_devtools_command(DevToolsCommand::SetViewport(DevToolsSetViewportCommand {
+            context: bidi_command_context(),
+            browser_context_ids: vec!["BID-1".into()],
+            viewport: DevToolsViewportSetting::Dimensions {
+                width: 900,
+                height: 700,
+            },
+            device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(3.0),
+            screen_width: None,
+            screen_height: None,
+        }))
+        .await
+        .into_parts();
+    assert_eq!(
+        result.expect("context viewport default"),
+        DevToolsCommandResult::Empty
+    );
+    assert_eq!(
+        evaluate(&mut ctx, "[innerWidth, innerHeight, devicePixelRatio]").await,
+        json!([900, 700, 3])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width":640,"height":480,"deviceScaleFactor":0,"mobile":false}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "[innerWidth, innerHeight, devicePixelRatio]").await,
+        json!([640, 480, 3])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.clearDeviceMetricsOverride",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "[innerWidth, innerHeight, devicePixelRatio]").await,
+        json!([900, 700, 3])
     );
 }

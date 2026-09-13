@@ -1,8 +1,7 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedViewportSurface, PageTargetHost,
-    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
-    TargetWindowSurfaceState,
+    EmulatedGeolocationOverrideState, EmulatedViewportSurface, RendererCommandCorrelation,
+    RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver, TargetWindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -846,7 +845,12 @@ fn start_device_metrics_override_command(
     }
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let previous = conn.target_session_owner_emulated_device_metrics_for_owner(&owner);
-    let mut base = EmulatedViewportSurface::default();
+    let mut base = conn
+        .target_owner_identity_for_owner(&owner)
+        .and_then(|(context_id, _)| conn.browser_context_by_id(&context_id))
+        .and_then(|context| context.default_emulated_device_metrics.as_ref())
+        .map(EmulatedDeviceMetrics::viewport_surface)
+        .unwrap_or_default();
     if let Some(state) = conn.target_owner_state_for_owner(&owner) {
         let geometry = state.window_surface_geometry;
         if geometry.width != 0 {
@@ -897,11 +901,13 @@ fn start_clear_device_metrics_override_command(
         ));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let viewport_surface = conn
+        .navigation_load_inputs_for_owner(&owner_scope)
+        .viewport_surface;
     let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    let pending_viewport = match page.start_set_viewport_surface(None) {
+    let pending_viewport = match page.start_set_viewport_surface(viewport_surface) {
         Ok(pending) => pending,
         Err(error) => {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -910,36 +916,13 @@ fn start_clear_device_metrics_override_command(
             ));
         }
     };
-    match start_runtime_emulation_protocol_message(
-        page,
-        runtime_call_id,
-        device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT.to_owned(),
-    ) {
-        Ok((pending_runtime, runtime_response_rx)) => {
-            let session_id = owner_scope.session_id().map(str::to_owned);
-            EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
-                command_id: cmd.id,
-                session_id: session_id.clone(),
-                pending: PendingEmulationRendererDispatch::Pages(vec![
-                    PendingEmulationPageCommand {
-                        target: PendingEmulationPageTarget::SessionOwner {
-                            owner_scope: owner_scope.clone(),
-                        },
-                        operation: PendingEmulationPageOperation::SetViewportSurface,
-                        pending: pending_viewport,
-                        runtime_response_rx: None,
-                    },
-                    PendingEmulationPageCommand {
-                        target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-                        operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-                        pending: pending_runtime,
-                        runtime_response_rx,
-                    },
-                ]),
-            })
-        }
-        Err(error) => EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
-    }
+    EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
+        cmd.id,
+        owner_scope,
+        PendingEmulationPageOperation::SetViewportSurface,
+        pending_viewport,
+        None,
+    ))
 }
 
 fn start_devtools_set_viewport_command(
@@ -963,9 +946,6 @@ fn start_apply_device_metrics(
     metrics: EmulatedDeviceMetrics,
     owner_scope: CommandOwnerScope,
 ) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
-    let had_existing_device_metrics = conn
-        .target_session_owner_emulated_device_metrics_for_owner(&owner_scope)
-        .is_some();
     if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
         if let Some(mut state) = state {
             state.set_emulated_device_metrics(Some(metrics.clone()));
@@ -976,43 +956,23 @@ fn start_apply_device_metrics(
             "BrowserContextNotLoaded",
         ));
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
         .ok()
     else {
         return Ok(None);
     };
-    let session_id = owner_scope.session_id().map(str::to_owned);
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
     let pending_viewport = page
         .start_set_viewport_surface(viewport_surface)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
-    let script =
-        device::live_device_metrics_override_script(&metrics, !had_existing_device_metrics);
-    let (pending_runtime, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script)
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-    Ok(Some(PendingEmulationCommandDispatch {
+    Ok(Some(single_pending_emulation_dispatch(
         command_id,
-        session_id: session_id.clone(),
-        pending: PendingEmulationRendererDispatch::Pages(vec![
-            PendingEmulationPageCommand {
-                target: PendingEmulationPageTarget::SessionOwner {
-                    owner_scope: owner_scope.clone(),
-                },
-                operation: PendingEmulationPageOperation::SetViewportSurface,
-                pending: pending_viewport,
-                runtime_response_rx: None,
-            },
-            PendingEmulationPageCommand {
-                target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-                operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-                pending: pending_runtime,
-                runtime_response_rx,
-            },
-        ]),
-    }))
+        owner_scope,
+        PendingEmulationPageOperation::SetViewportSurface,
+        pending_viewport,
+        None,
+    )))
 }
 
 fn set_viewport_metrics_from_command(
@@ -2121,23 +2081,12 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
             .and_then(|context| context.default_emulated_device_metrics.as_ref());
         let metrics = set_viewport_metrics_from_current(current_default, &command)?;
         let browser_context = conn
-            .browser_context_by_id(&browser_context_id)
-            .expect("resolved browser context must remain addressable");
-        let runtime_command_count =
-            browser_context_default_device_metrics_runtime_command_count(browser_context);
-        let mut runtime_call_ids = (0..runtime_command_count)
-            .map(|_| conn.next_internal_runtime_command_id())
-            .collect::<Vec<_>>();
-        let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)
             .expect("resolved browser context must remain addressable");
-        let had_existing_default = browser_context.default_emulated_device_metrics.is_some();
         browser_context.default_emulated_device_metrics = Some(metrics.clone());
         pending.extend(start_browser_context_default_device_metrics_page_commands(
             browser_context,
             &metrics,
-            had_existing_default,
-            &mut runtime_call_ids,
         )?);
     }
     if pending.is_empty() {
@@ -2204,98 +2153,29 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
             })
 }
 
-fn browser_context_default_device_metrics_runtime_command_count(
-    browser_context: &BrowserContext,
-) -> usize {
-    browser_context
-        .page_targets
-        .iter()
-        .filter(|target| {
-            target
-                .effective_emulation_state
-                .emulated_device_metrics
-                .is_none()
-                && target.loaded_page().is_some()
-        })
-        .count()
-}
-
 fn start_browser_context_default_device_metrics_page_commands(
     browser_context: &mut BrowserContext,
     metrics: &EmulatedDeviceMetrics,
-    had_existing_default: bool,
-    runtime_call_ids: &mut Vec<u64>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let browser_context_id = browser_context.id.clone();
-    let active_target_id = browser_context.active_target_id_owned();
-    let mut pending = Vec::new();
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
-    if let Some(active_target_id) = active_target_id
-        && let Some(active_target) = browser_context.page_targets.active_mut()
-        && active_target
+    let mut pending = Vec::new();
+    for target in browser_context.page_targets.iter_mut() {
+        if target
             .effective_emulation_state
             .emulated_device_metrics
-            .is_none()
-        && let Some(page) = active_target.runtime_slot.loaded_page_mut()
-    {
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id: active_target_id.clone(),
-            },
-            operation: PendingEmulationPageOperation::SetViewportSurface,
-            pending: page
-                .start_set_viewport_surface(viewport_surface)
-                .map_err(|error| {
-                    DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
-                })?,
-            runtime_response_rx: None,
-        });
-        let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
-            runtime_call_ids.pop().ok_or_else(|| {
-                DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
-            })?,
-            device::live_device_metrics_override_script(metrics, !had_existing_default),
-        )
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id: active_target_id,
-            },
-            operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-            pending: pending_runtime,
-            runtime_response_rx,
-        });
-    }
-    for index in 0..browser_context.background_target_count() {
-        let target_id = browser_context
-            .background_target_at(index)
-            .expect("background target index must remain valid")
-            .target_id()
-            .to_owned();
-        let has_target_override = browser_context
-            .page_target(&target_id)
-            .is_some_and(|state| {
-                state
-                    .effective_emulation_state
-                    .emulated_device_metrics
-                    .is_some()
-            });
-        if has_target_override {
+            .is_some()
+        {
             continue;
         }
-        let Some(page) = browser_context
-            .background_target_at_mut(index)
-            .and_then(PageTargetHost::loaded_page_mut)
-        else {
+        let target_id = target.target_id().to_owned();
+        let Some(page) = target.loaded_page_mut() else {
             continue;
         };
         pending.push(PendingEmulationPageCommand {
             target: PendingEmulationPageTarget::BrowserContextTarget {
                 browser_context_id: browser_context_id.clone(),
-                target_id: target_id.clone(),
+                target_id,
             },
             operation: PendingEmulationPageOperation::SetViewportSurface,
             pending: page
@@ -2304,23 +2184,6 @@ fn start_browser_context_default_device_metrics_page_commands(
                     DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
                 })?,
             runtime_response_rx: None,
-        });
-        let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
-            runtime_call_ids.pop().ok_or_else(|| {
-                DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
-            })?,
-            device::live_device_metrics_override_script(metrics, !had_existing_default),
-        )
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id,
-            },
-            operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-            pending: pending_runtime,
-            runtime_response_rx,
         });
     }
     Ok(pending)
@@ -2597,14 +2460,6 @@ pub(crate) async fn dispose_page_session_async(
                 "device metrics viewport",
                 page.set_viewport_surface_async(load_inputs.viewport_surface)
                     .await,
-            );
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics script",
-                page.run_page_surface_override_script_async(
-                    device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
-                )
-                .await,
             );
         }
     }

@@ -120,7 +120,7 @@ pub use navigation::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate}
 
 pub(crate) use emulation::{
     EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
-    EmulatedViewportSurface, viewport_surface_install_script,
+    EmulatedViewportSurface,
 };
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,

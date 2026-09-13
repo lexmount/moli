@@ -94,7 +94,7 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
     }
 }
 
-pub(super) fn window_host_ptr(
+pub(crate) fn window_host_ptr(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
 ) -> Option<*mut JsContextHost> {

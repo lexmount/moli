@@ -1,8 +1,7 @@
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
-    BrowserContext, CdpConnection, DocumentStartScript, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedNetworkConditions, EmulatedViewportSurface,
-    PageTargetHost, viewport_surface_install_script,
+    BrowserContext, CdpConnection, DocumentStartScript, EmulatedGeolocationOverrideState,
+    EmulatedNetworkConditions, EmulatedViewportSurface, PageTargetHost,
 };
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
@@ -11,7 +10,6 @@ use serde_json::json;
 struct SurfaceOverrideInputs {
     network_conditions: Option<EmulatedNetworkConditions>,
     geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     max_touch_points: u32,
     focus_emulation_enabled: bool,
     active_target_surface: bool,
@@ -23,7 +21,6 @@ impl SurfaceOverrideInputs {
         Self {
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
-            emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
             max_touch_points: browser_context
                 .active_page_target()
                 .effective_emulation_state
@@ -44,7 +41,6 @@ impl SurfaceOverrideInputs {
         state: &PageTargetHost,
         default_network_conditions: Option<EmulatedNetworkConditions>,
         default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-        default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     ) -> Self {
         Self {
             network_conditions: state
@@ -56,11 +52,6 @@ impl SurfaceOverrideInputs {
                 .geolocation_override
                 .clone()
                 .or(default_geolocation_override),
-            emulated_device_metrics: state
-                .effective_emulation_state
-                .emulated_device_metrics
-                .clone()
-                .or(default_emulated_device_metrics),
             max_touch_points: state.effective_emulation_state.max_touch_points,
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
@@ -138,7 +129,6 @@ impl BrowserContext {
                 self.default_geolocation_override
                     .clone()
                     .or_else(|| self.global_geolocation_override.clone()),
-                self.default_emulated_device_metrics.clone(),
             )
             .navigator_overrides(),
         )
@@ -410,7 +400,6 @@ impl BrowserContext {
                 self.default_geolocation_override
                     .clone()
                     .or_else(|| self.global_geolocation_override.clone()),
-                self.default_emulated_device_metrics.clone(),
             ),
         )
     }
@@ -448,17 +437,6 @@ impl BrowserContext {
     fn generated_surface_override_script_from_inputs(
         inputs: &SurfaceOverrideInputs,
     ) -> Option<DocumentStartScript> {
-        // Preserve the renderer's native Window/Screen descriptors unless a
-        // client explicitly enabled device emulation. Installing the default
-        // profile as JS getters makes otherwise native attributes observable
-        // as closure-backed properties and can mask child-frame dimensions.
-        // An explicit override retains the original descriptors so a later
-        // CDP clear can restore the native WebIDL surface.
-        let viewport_surface_script = inputs
-            .emulated_device_metrics
-            .as_ref()
-            .map(|metrics| viewport_surface_install_script(&metrics.viewport_surface(), true))
-            .unwrap_or_default();
         let document_has_focus = inputs.document_has_focus();
         let document_hidden = inputs.document_hidden();
         let document_visibility_state = inputs.document_visibility_state();
@@ -471,7 +449,6 @@ impl BrowserContext {
                         Object.defineProperty(obj, key, {{ configurable: true, get: getter }});
                     }} catch (_error) {{}}
                 }};
-                {viewport_surface_script}
                 if (document) {{
                     // The renderer's Document bridge currently installs these
                     // surfaces as own accessors, so CDP emulation must shadow
@@ -487,7 +464,6 @@ impl BrowserContext {
                     }} catch (_error) {{}}
                 }}
             }})();",
-            viewport_surface_script = viewport_surface_script,
             document_hidden = document_hidden,
             document_visibility_state = json!(document_visibility_state),
             document_has_focus = document_has_focus,

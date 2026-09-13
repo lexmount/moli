@@ -1,5 +1,3 @@
-use serde_json::json;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmulatedDeviceMetrics {
     pub width: u32,
@@ -78,21 +76,6 @@ impl EmulatedViewportSurface {
             screen_avail_height: self.screen_avail_height,
         }
     }
-
-    pub(crate) fn as_json_string(&self) -> String {
-        json!({
-            "innerWidth": self.inner_width,
-            "innerHeight": self.inner_height,
-            "outerWidth": self.outer_width,
-            "outerHeight": self.outer_height,
-            "devicePixelRatio": self.device_pixel_ratio,
-            "screenWidth": self.screen_width,
-            "screenHeight": self.screen_height,
-            "screenAvailWidth": self.screen_avail_width,
-            "screenAvailHeight": self.screen_avail_height,
-        })
-        .to_string()
-    }
 }
 
 impl EmulatedDeviceMetrics {
@@ -121,95 +104,6 @@ impl EmulatedDeviceMetrics {
             screen_avail_height: self.screen_avail_height(),
         }
     }
-}
-
-pub(crate) fn viewport_surface_install_script(
-    surface: &EmulatedViewportSurface,
-    remember_original_descriptors: bool,
-) -> String {
-    let descriptor_setup = if remember_original_descriptors {
-        r#"
-  const storeKey = '__moliDeviceMetricsOriginalDescriptors';
-  const descriptors = globalThis[storeKey] || {};
-  try {
-    Object.defineProperty(globalThis, storeKey, {
-      configurable: true,
-      value: descriptors,
-    });
-  } catch (_) {
-  }
-  const rememberViewportSurfaceDescriptor = (scope, object, property) => {
-    if (!object) {
-      return;
-    }
-    const key = `${scope}.${property}`;
-    if (Object.prototype.hasOwnProperty.call(descriptors, key)) {
-      return;
-    }
-    descriptors[key] = {
-      existed: Object.prototype.hasOwnProperty.call(object, property),
-      descriptor: Object.getOwnPropertyDescriptor(object, property),
-    };
-  };
-"#
-    } else {
-        r#"
-  const rememberViewportSurfaceDescriptor = (_scope, _object, _property) => {};
-"#
-    };
-    format!(
-        r#"
-(() => {{
-  const surface = {surface};
-  {descriptor_setup}
-  let isTopLevelWindow = true;
-  try {{
-    isTopLevelWindow = globalThis.parent === globalThis;
-  }} catch (_) {{
-  }}
-  const defineViewportSurfaceGetter = (object, property, value) => {{
-    if (!object) {{
-      return;
-    }}
-    try {{
-      Object.defineProperty(object, property, {{
-        configurable: true,
-        get: () => value,
-      }});
-    }} catch (_) {{
-    }}
-  }};
-  const installViewportSurfaceGetter = (scope, object, property, value) => {{
-    rememberViewportSurfaceDescriptor(scope, object, property);
-    defineViewportSurfaceGetter(object, property, value);
-  }};
-  const windowValues = [
-    ['innerWidth', surface.innerWidth, true],
-    ['innerHeight', surface.innerHeight, true],
-    ['outerWidth', surface.outerWidth, false],
-    ['outerHeight', surface.outerHeight, false],
-    ['devicePixelRatio', surface.devicePixelRatio, false],
-  ];
-  const screenValues = [
-    ['width', surface.screenWidth],
-    ['height', surface.screenHeight],
-    ['availWidth', surface.screenAvailWidth],
-    ['availHeight', surface.screenAvailHeight],
-  ];
-  for (const [property, value, topLevelOnly] of windowValues) {{
-    if (topLevelOnly && !isTopLevelWindow) {{
-      continue;
-    }}
-    installViewportSurfaceGetter('window', globalThis, property, value);
-  }}
-  for (const [property, value] of screenValues) {{
-    installViewportSurfaceGetter('screen', globalThis.screen, property, value);
-  }}
-}})();
-"#,
-        surface = surface.as_json_string(),
-        descriptor_setup = descriptor_setup,
-    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -381,10 +275,7 @@ impl EffectiveTargetEmulationState {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        EffectiveTargetEmulationState, EmulatedDeviceMetrics, EmulatedViewportSurface,
-        viewport_surface_install_script,
-    };
+    use super::{EffectiveTargetEmulationState, EmulatedDeviceMetrics};
 
     #[test]
     fn device_pixel_ratio_normalizes_non_positive_and_non_finite_values() {
@@ -410,16 +301,6 @@ mod tests {
 
         metrics.device_scale_factor = f64::NAN;
         assert_eq!(metrics.device_pixel_ratio(), 1.0);
-    }
-
-    #[test]
-    fn viewport_surface_install_script_uses_plain_helper_store() {
-        let script = viewport_surface_install_script(&EmulatedViewportSurface::default(), true);
-
-        assert!(!script.contains("Object.create(null)"));
-        assert!(script.contains("globalThis.parent === globalThis"));
-        assert!(script.contains("['innerWidth', surface.innerWidth, true]"));
-        assert!(script.contains("if (topLevelOnly && !isTopLevelWindow)"));
     }
 
     #[test]

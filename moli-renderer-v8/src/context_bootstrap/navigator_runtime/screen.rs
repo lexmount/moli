@@ -397,6 +397,21 @@ fn screen_attribute_getter_callback<'s>(
         rv.set(v8::Number::new(scope, 0.0).into());
         return;
     }
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(viewport) = unsafe { &*host_ptr }.viewport_surface()
+    {
+        let dimension = match slot {
+            SCREEN_WIDTH_SLOT => Some(viewport.screen_width),
+            SCREEN_HEIGHT_SLOT => Some(viewport.screen_height),
+            SCREEN_AVAIL_WIDTH_SLOT => Some(viewport.screen_avail_width),
+            SCREEN_AVAIL_HEIGHT_SLOT => Some(viewport.screen_avail_height),
+            _ => None,
+        };
+        if let Some(dimension) = dimension {
+            rv.set_uint32(dimension);
+            return;
+        }
+    }
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );

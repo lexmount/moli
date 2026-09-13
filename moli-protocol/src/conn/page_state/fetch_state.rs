@@ -41,12 +41,14 @@ impl BrowserContext {
         self.page_targets.background_mut()
     }
 
+    #[cfg(test)]
     pub(crate) fn background_target_at(&self, index: usize) -> Option<&PageTargetHost> {
-        self.page_targets.background_at(index)
+        self.background_targets().nth(index)
     }
 
+    #[cfg(test)]
     pub(crate) fn background_target_at_mut(&mut self, index: usize) -> Option<&mut PageTargetHost> {
-        self.page_targets.background_at_mut(index)
+        self.background_targets_mut().nth(index)
     }
 
     pub(crate) fn background_target_count(&self) -> usize {
