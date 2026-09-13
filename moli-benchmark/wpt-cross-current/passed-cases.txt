@@ -137,6 +137,7 @@ compression/decompression-uint8array-output.any.js?moli-wpt-any=window
 compression/decompression-with-detach.window.js?moli-wpt-script=window
 compression/idlharness.https.any.js?moli-wpt-any=dedicatedworker
 compression/idlharness.https.any.js?moli-wpt-any=window
+content-security-policy/default-src/default-src-sri_hash.sub.html
 content-security-policy/default-src/default-src-strict_dynamic_and_unsafe_inline.html
 content-security-policy/embedded-enforcement/iframe-csp-attribute.html
 content-security-policy/font-src/font-self-allowed.html
@@ -241,6 +242,7 @@ content-security-policy/script-src/script-src-multiple-policies-multiple-hashing
 content-security-policy/script-src/script-src-multiple-policies-one-using-hashing-algorithms.html
 content-security-policy/script-src/script-src-report-only-policy-works-with-external-hash-policy.html
 content-security-policy/script-src/script-src-report-only-policy-works-with-hash-policy.html
+content-security-policy/script-src/script-src-sri_hash.sub.html
 content-security-policy/script-src/script-src-strict_dynamic_and_unsafe_eval_eval.html
 content-security-policy/script-src/script-src-strict_dynamic_and_unsafe_eval_new_function.html
 content-security-policy/script-src/script-src-strict_dynamic_double_policy_different_nonce.html
