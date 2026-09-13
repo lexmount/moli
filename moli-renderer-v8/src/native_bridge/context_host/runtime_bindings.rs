@@ -42,6 +42,10 @@ impl JsContextHost {
         handle: DomHandle,
         window: v8::Local<'_, v8::Object>,
     ) {
+        let binding_names = self.stored_default_native_runtime_binding_names();
+        if binding_names.is_empty() {
+            return;
+        }
         let execution_context_id = self.child_default_execution_context_id(handle).unwrap_or(0);
         let Some(document_owner) = self.current_child_document_task_owner(handle) else {
             return;
@@ -54,12 +58,6 @@ impl JsContextHost {
         if !self.register_runtime_binding_execution_context(execution_context, document_owner) {
             return;
         }
-        let binding_names = self
-            .stored_runtime_bindings
-            .iter()
-            .filter(|binding| binding.execution_context_name.is_none())
-            .map(|binding| binding.name.clone())
-            .collect::<Vec<_>>();
         for binding_name in binding_names {
             let Some(key) = v8_string(scope, &binding_name) else {
                 continue;
