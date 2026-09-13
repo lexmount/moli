@@ -13,11 +13,19 @@ use moli_file_api::data_transfer::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod clipboard;
+pub(crate) use clipboard::{
+    build_clipboard_data_transfer, clipboard_data_transfer_contents,
+    disable_clipboard_data_transfer,
+};
+
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
 const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
+const DATA_TRANSFER_MODE_SLOT: &str = "__lmDataTransferMode";
+const DATA_TRANSFER_CLIPBOARD_SLOT: &str = "__lmDataTransferClipboard";
 const DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT: &str = "__lmDataTransferItemArray";
 const DATA_TRANSFER_ITEM_LIST_OWNER_SLOT: &str = "__lmDataTransferOwner";
 const DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT: &str = "__lmDataTransferItemListIndexedLength";
@@ -58,6 +66,10 @@ struct DataTransferObjectDeclaration<'s> {
     drop_effect: &'static str,
     #[webapi(slot = DATA_TRANSFER_EFFECT_ALLOWED_SLOT, constructor_default = "none")]
     effect_allowed: &'static str,
+    #[webapi(slot = DATA_TRANSFER_MODE_SLOT, init = 0)]
+    mode: (),
+    #[webapi(slot = DATA_TRANSFER_CLIPBOARD_SLOT, init = false)]
+    clipboard: (),
 }
 
 pub(crate) fn is_branded_data_transfer_object<'s>(
@@ -80,6 +92,36 @@ struct DataTransferShellDeclaration {
     drop_effect: (),
     #[webapi(slot = DATA_TRANSFER_EFFECT_ALLOWED_SLOT, init = string("uninitialized"))]
     effect_allowed: (),
+    #[webapi(slot = DATA_TRANSFER_MODE_SLOT, init = 0)]
+    mode: (),
+    #[webapi(slot = DATA_TRANSFER_CLIPBOARD_SLOT, init = false)]
+    clipboard: (),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DataTransferMode {
+    ReadWrite,
+    ReadOnly,
+    Disabled,
+}
+
+fn data_transfer_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> DataTransferMode {
+    match private_number_property(scope, object, DATA_TRANSFER_MODE_SLOT) {
+        Some(1.0) => DataTransferMode::ReadOnly,
+        Some(2.0) => DataTransferMode::Disabled,
+        _ => DataTransferMode::ReadWrite,
+    }
+}
+
+fn item_list_is_writable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    item_list: v8::Local<'s, v8::Object>,
+) -> bool {
+    item_list_owner(scope, item_list)
+        .is_some_and(|owner| data_transfer_mode(scope, owner) == DataTransferMode::ReadWrite)
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1099,7 +1141,10 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    if valid_drop_effect(&value) {
+    if data_transfer_mode(scope, args.this()) != DataTransferMode::Disabled
+        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
+        && valid_drop_effect(&value)
+    {
         set_private_string(scope, args.this(), DATA_TRANSFER_DROP_EFFECT_SLOT, &value);
     }
 }
@@ -1131,7 +1176,10 @@ fn data_transfer_effect_allowed_setter<'s>(
             return;
         }
     };
-    if valid_effect_allowed(&value) {
+    if data_transfer_mode(scope, args.this()) == DataTransferMode::ReadWrite
+        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
+        && valid_effect_allowed(&value)
+    {
         set_private_string(
             scope,
             args.this(),
@@ -1278,6 +1326,9 @@ pub(crate) fn data_transfer_set_data_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferSetDataArgs>(scope, &args) else {
         return;
     };
+    if data_transfer_mode(scope, args.this()) != DataTransferMode::ReadWrite {
+        return;
+    }
     let normalized_type = normalize_drag_data_type(&parsed.format);
     let value = parsed.data;
     let Some(store) = DataTransferItemStore::for_owner(scope, args.this()) else {
@@ -1294,6 +1345,9 @@ pub(crate) fn data_transfer_clear_data_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferClearDataArgs>(scope, &args) else {
         return;
     };
+    if data_transfer_mode(scope, args.this()) != DataTransferMode::ReadWrite {
+        return;
+    }
     let target_type = parsed.format.as_deref().map(normalize_drag_data_type);
     let Some(store) = DataTransferItemStore::for_owner(scope, args.this()) else {
         return;
@@ -1314,6 +1368,7 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
         return;
     };
     let store = DataTransferItemStore::new(args.this());
+    let writable = item_list_is_writable(scope, args.this());
 
     let item = if let Some(item_type) = parsed.item_type {
         let mime_type = normalize_drag_data_type(&item_type);
@@ -1328,6 +1383,10 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
                 return;
             }
         };
+        if !writable {
+            rv.set(v8::null(scope).into());
+            return;
+        }
         if store.contains_string_type(scope, &mime_type) {
             throw_dom_exception(
                 scope,
@@ -1339,6 +1398,10 @@ pub(crate) fn data_transfer_item_list_add_callback<'s>(
         }
         build_data_transfer_item_for_string(scope, &mime_type, &data)
     } else {
+        if !writable {
+            rv.set(v8::null(scope).into());
+            return;
+        }
         v8::Local::<v8::Object>::try_from(data)
             .ok()
             .filter(|file| selected_file_from_object(scope, *file).is_some())
@@ -1384,6 +1447,15 @@ pub(crate) fn data_transfer_item_list_remove_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DataTransferItemListRemoveArgs>(scope, &args) else {
         return;
     };
+    if !item_list_is_writable(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "The data store is not writable.",
+        );
+        return;
+    }
     DataTransferItemStore::new(args.this()).remove(scope, parsed.index);
 }
 
@@ -1392,6 +1464,9 @@ pub(crate) fn data_transfer_item_list_clear_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !item_list_is_writable(scope, args.this()) {
+        return;
+    }
     DataTransferItemStore::new(args.this()).clear(scope);
 }
 
