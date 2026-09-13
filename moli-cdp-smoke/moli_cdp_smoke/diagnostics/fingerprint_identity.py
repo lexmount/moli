@@ -12,6 +12,11 @@ from urllib.parse import urlsplit
 from .browser import browser_session, save
 
 URL = "https://demo.fingerprint.com/playground"
+SIGNAL_KEYS = (
+    "bot", "tampering", "suspect_score", "tampering_ml_score",
+    "virtual_machine", "virtual_machine_ml_score", "developer_tools", "incognito",
+    "high_activity_device", "rare_device", "rare_device_percentile_bucket",
+)
 ATTRIBUTE_KEYS = ("fonts", "font_preferences", "touch_support", "platform", "vendor", "languages",
                   "screen_resolution", "color_depth", "hardware_concurrency", "device_memory",
                   "timezone", "os_cpu", "architecture", "audio", "math", "webgl_basics")
@@ -26,8 +31,12 @@ IDENTITY = """async () => ({
 
 def select_result(value: dict) -> dict:
     # No visitor/request IDs, IPs, request bodies, cookies or opaque SDK tokens.
-    result = {key: value[key] for key in ["bot", "tampering", "suspect_score", "tampering_ml_score"]
-              if key in value}
+    result = {key: value[key] for key in SIGNAL_KEYS if key in value}
+    details = value.get("tampering_details")
+    if isinstance(details, dict):
+        result["tampering_details"] = {
+            key: details[key] for key in ["anti_detect_browser", "anomaly_score"] if key in details
+        }
     raw = value.get("raw_device_attributes", {})
     result["attributes"] = {key: raw[key] for key in ATTRIBUTE_KEYS if key in raw}
     return result
