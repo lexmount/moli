@@ -1430,6 +1430,7 @@ fn exact_host_port_wildcards_apply_across_resource_kinds() {
         ContentSecurityPolicyResourceKind::WorkerScript,
         ContentSecurityPolicyResourceKind::WorkerConstructor,
         ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+        ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
     ] {
         for source in ["https://cdn.test:*", "http://cdn.test:*", "CDN.TEST:*"] {
             for port in ["", ":0", ":80", ":443", ":8443", ":65535"] {
