@@ -237,6 +237,22 @@ fn registered_isolate_owners() -> Vec<RegisteredIsolateOwner> {
         .collect()
 }
 
+/// Publish only to live mailboxes and retain only the notifiers needing a wake.
+/// The caller must release its configuration lock before waking or dropping
+/// these callbacks. Foreground routes and runtime handles are not needed here.
+fn publish_environment_invalidation(
+    invalidation: ProcessEnvironmentInvalidation,
+) -> Vec<ProcessEnvironmentNotifier> {
+    registry_map()
+        .values()
+        .filter(|registration| {
+            registration.generation.is_active()
+                && registration.environment_notifications.publish(invalidation)
+        })
+        .map(|registration| registration.environment_notifications.clone())
+        .collect()
+}
+
 fn registered_isolate_owner(
     isolate_addr: usize,
     registration_id: u64,
@@ -290,7 +306,7 @@ fn register_isolate_with_wake(
     };
     let generation = IsolateRegistrationGeneration::new();
     let mut guard = registry_map();
-    if let Some(previous) = guard.insert(
+    let previous = guard.insert(
         isolate_key,
         IsolateRuntimeRegistration {
             handle,
@@ -298,13 +314,17 @@ fn register_isolate_with_wake(
             generation: generation.clone(),
             environment_notifications,
         },
-    ) {
+    );
+    if let Some(previous) = &previous {
         // A raw isolate address may be reused after disposal. Invalidate queued
         // work from the previous generation before publishing the replacement.
         previous.generation.cancel();
         previous.environment_notifications.close();
     }
     drop(guard);
+    // Captured owner state may reenter the registry or environment controller
+    // from its destructor, just as it can from an explicitly invoked callback.
+    drop(previous);
     trace!(isolate = isolate_key, "registered isolate with V8 platform");
     cpu_tracing::isolate_registered(isolate_key, generation.clone());
     generation
@@ -361,12 +381,18 @@ impl V8PlatformIsolateRegistration {
         if !isolate_ptr.is_null() {
             let isolate_key = unsafe_raw_isolate_addr(isolate_ptr);
             let mut registry = registry_map();
-            if registry.get(&isolate_key).is_some_and(|registration| {
+            let retired = if registry.get(&isolate_key).is_some_and(|registration| {
                 registration.generation.is_same_generation(&self.generation)
-            }) && let Some(registration) = registry.remove(&isolate_key)
-            {
+            }) {
+                registry.remove(&isolate_key)
+            } else {
+                None
+            };
+            if let Some(registration) = &retired {
                 registration.environment_notifications.close();
             }
+            drop(registry);
+            drop(retired);
             trace!(
                 isolate = isolate_key,
                 "unregistered isolate from V8 platform"
@@ -564,6 +590,84 @@ mod tests {
     }
 
     #[test]
+    fn owner_callback_captures_are_released_outside_the_registry_lock() {
+        struct ObserveDrop {
+            name: &'static str,
+            tx: std::sync::mpsc::Sender<(&'static str, bool)>,
+        }
+
+        impl Drop for ObserveDrop {
+            fn drop(&mut self) {
+                // Probe without blocking: a regression should fail an assertion,
+                // not deadlock the test while dropping an owner callback.
+                let unlocked = ISOLATE_RUNTIME_REGISTRY.try_lock().is_some();
+                let _ = self.tx.send((self.name, unlocked));
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut observations = Vec::new();
+        runtime.block_on(async {
+            for replace in [false, true] {
+                let mut marker = 0_u8;
+                let isolate_ptr = fake_isolate_ptr((&mut marker as *mut u8).cast());
+                let (tx, rx) = std::sync::mpsc::channel();
+                let foreground = ObserveDrop {
+                    name: "foreground",
+                    tx: tx.clone(),
+                };
+                let environment = ObserveDrop {
+                    name: "environment",
+                    tx,
+                };
+                let generation = register_isolate_with_wake(
+                    isolate_ptr,
+                    V8ForegroundTaskWake::queued(move |_| {
+                        std::hint::black_box(&foreground);
+                    }),
+                    ProcessEnvironmentNotifications::default().notifier(move || {
+                        std::hint::black_box(&environment);
+                    }),
+                );
+                let owner = V8PlatformIsolateRegistration {
+                    isolate_ptr: AtomicCell::new(isolate_ptr),
+                    generation,
+                };
+                if replace {
+                    let generation = register_isolate_with_wake(
+                        isolate_ptr,
+                        V8ForegroundTaskWake::queued(|_| {}),
+                        ProcessEnvironmentNotifications::default().notifier(|| {}),
+                    );
+                    let replacement = V8PlatformIsolateRegistration {
+                        isolate_ptr: AtomicCell::new(isolate_ptr),
+                        generation,
+                    };
+                    drop(owner);
+                    drop(replacement);
+                } else {
+                    drop(owner);
+                }
+                let dropped: Vec<_> = rx.try_iter().collect();
+                assert_eq!(dropped.len(), 2, "both captures must be released");
+                observations.extend(dropped.into_iter().map(|(name, unlocked)| {
+                    (
+                        if replace { "replace" } else { "unregister" },
+                        name,
+                        unlocked,
+                    )
+                }));
+            }
+        });
+        assert!(
+            observations.iter().all(|(_, _, unlocked)| *unlocked),
+            "owner callback destructors must be free to reenter the registry: {observations:?}"
+        );
+    }
+
+    #[test]
     fn unregister_invalidates_cloned_registration_for_already_queued_work() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -575,7 +679,7 @@ mod tests {
 
         runtime.block_on(async {
             let notifications = ProcessEnvironmentNotifications::default();
-            let notifier = notifications.notifier(|| {});
+            let notifier = notifications.notifier(|| panic!("retired owner must not be woken"));
             let generation = register_isolate_with_wake(
                 isolate_ptr,
                 V8ForegroundTaskWake::new(|| {}),
@@ -588,7 +692,13 @@ mod tests {
                 generation,
             };
 
+            let delayed_wakes =
+                publish_environment_invalidation(ProcessEnvironmentInvalidation::DateTime);
+            assert_eq!(delayed_wakes.len(), 1);
             owner.unregister();
+            for notifier in delayed_wakes {
+                notifier.wake();
+            }
             notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
             assert_eq!(
                 notifications.take(),

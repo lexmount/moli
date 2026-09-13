@@ -80,11 +80,11 @@ impl ProcessEnvironmentNotifier {
         }
     }
 
-    pub(super) fn publish(&self, invalidation: ProcessEnvironmentInvalidation) -> bool {
+    pub(crate) fn publish(&self, invalidation: ProcessEnvironmentInvalidation) -> bool {
         self.notifications.publish(invalidation)
     }
 
-    pub(super) fn wake(&self) {
+    pub(crate) fn wake(&self) {
         if self.notifications.has_pending() {
             (self.wake)();
         }

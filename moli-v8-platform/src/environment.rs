@@ -12,7 +12,7 @@ use std::sync::{
 
 use parking_lot::Mutex;
 
-use super::registered_isolate_owners;
+use super::publish_environment_invalidation;
 
 mod notifications;
 pub use notifications::{ProcessEnvironmentNotifications, ProcessEnvironmentNotifier};
@@ -247,23 +247,11 @@ fn publish_invalidation(
     state: parking_lot::MutexGuard<'_, Environment>,
     invalidation: ProcessEnvironmentInvalidation,
 ) {
-    let owners: Vec<_> = registered_isolate_owners()
-        .into_iter()
-        .map(|owner| {
-            let wake = owner.registration.generation.is_active()
-                && owner
-                    .registration
-                    .environment_notifications
-                    .publish(invalidation);
-            (owner, wake)
-        })
-        .collect();
+    let wakes = publish_environment_invalidation(invalidation);
     // Also drop retained callback captures only after releasing this mutex.
     drop(state);
-    for (owner, wake) in owners {
-        if wake {
-            owner.registration.environment_notifications.wake();
-        }
+    for notifier in wakes {
+        notifier.wake();
     }
 }
 
@@ -329,6 +317,10 @@ mod tests {
                     assert!(
                         environment().try_lock().is_some(),
                         "owner wake must not hold ICU lock"
+                    );
+                    assert!(
+                        crate::ISOLATE_RUNTIME_REGISTRY.try_lock().is_some(),
+                        "owner wake must not hold registry lock"
                     );
                     assert!(
                         wake_notifications.has_pending(),
