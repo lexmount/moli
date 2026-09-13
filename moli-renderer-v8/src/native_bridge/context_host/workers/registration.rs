@@ -865,7 +865,7 @@ impl JsContextHost {
 
 async fn fetch_worker_script_source(
     request_client: &crate::network::ResourceRequestClient,
-    network: &std::sync::Arc<crate::worker::WorkerResourceTransfer>,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
     cancel_handle: moli_fetch::FetchCancelHandle,
     script_url: &Url,
@@ -939,7 +939,7 @@ async fn fetch_worker_script_source(
 
 fn loaded_worker_script_from_navigation_response(
     response: crate::protocol_types::NavigationResponse,
-    network: &crate::worker::WorkerResourceTransfer,
+    network: &crate::network::ResourceTransfer,
     initiator_url: &Url,
     network_partition_key: Option<String>,
     creator_policy_context: SubresourcePolicyContext,

@@ -8188,6 +8188,7 @@ async fn runtime_fetch_subresource_fulfill_request_resolves_with_synthetic_respo
         .expect("subresource fetch request id")
         .to_owned();
     assert_eq!(paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -8204,12 +8205,13 @@ async fn runtime_fetch_subresource_fulfill_request_resolves_with_synthetic_respo
     .await;
     ctx.expect_result(369, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
@@ -8326,6 +8328,7 @@ async fn runtime_fetch_subresource_fulfill_request_preserves_binary_body() {
         .expect("binary subresource fetch request id")
         .to_owned();
     assert_eq!(paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -8342,12 +8345,13 @@ async fn runtime_fetch_subresource_fulfill_request_preserves_binary_body() {
     .await;
     ctx.expect_result(37_924, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("binary network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("binary network request id")

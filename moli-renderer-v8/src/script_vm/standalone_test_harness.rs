@@ -93,7 +93,7 @@ impl ScriptVmDefaultWorldBootstrap {
             bootstrap_dom_host,
             page_task_tx,
             page_task_parser_boundary_injection_tx,
-            RendererResourceCompletionSender::direct_completion_only(),
+            RendererResourceCompletionSender::closed_for_test(),
         )
     }
 

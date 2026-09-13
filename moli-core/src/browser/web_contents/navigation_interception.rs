@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn browser_retirement_cancels_buffered_auth_transport_before_response() {
+    async fn browser_retirement_cancels_auth_transport_before_response() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/auth", listener.local_addr().unwrap())).unwrap();
         let (seen_tx, seen_rx) = oneshot::channel();
@@ -1085,7 +1085,7 @@ mod tests {
         });
         let mut browser = BrowserFixture::new();
         let navigation = browser.contents.navigation.start_document_navigation();
-        let work = browser.start(navigation).unwrap();
+        let mut work = browser.start(navigation).unwrap();
         let auth = SubresourceAuthCredentials {
             target: crate::page::SubresourceAuthTarget::Server,
             username: "user".to_owned(),
@@ -1094,12 +1094,12 @@ mod tests {
         };
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let (result, ()) = tokio::join!(
-                work.fetch_intercepted_auth_response(
+                work.fetch_navigation_with_auth(
                     "POST",
                     url.as_str(),
                     Some(vec![0, 255, 1]),
                     vec![("content-type".into(), "application/octet-stream".into())].into(),
-                    auth,
+                    Some(auth),
                 ),
                 async {
                     seen_rx.await.unwrap();
@@ -1113,6 +1113,6 @@ mod tests {
             server.await.unwrap();
         })
         .await
-        .expect("Browser retirement must cancel the buffered auth transport");
+        .expect("Browser retirement must cancel the auth transport");
     }
 }

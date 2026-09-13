@@ -1,5 +1,5 @@
 use super::fetch::{
-    publish_worker_network_item, publish_worker_request_failure, record_worker_fetch_response,
+    publish_worker_network_item, publish_worker_request_failure, publish_worker_response,
     worker_request_started,
 };
 use super::*;
@@ -44,7 +44,7 @@ impl PreparedWorkerXhrSendRequest {
 
 fn record_worker_xhr_started(
     state: &WorkerGlobalState,
-    network: &crate::runtime::RendererWorkerNetworkRequest,
+    network: &crate::runtime::RendererNetworkRequest,
     prepared: &PreparedWorkerXhrSendRequest,
 ) {
     publish_worker_network_item(
@@ -91,24 +91,6 @@ pub(super) fn update_worker_xhr_request(
         );
     }
     pending.network_record = Some(record);
-}
-
-fn record_worker_xhr_response(
-    state: &WorkerGlobalState,
-    network: &crate::runtime::RendererWorkerNetworkRequest,
-    head: Option<ResponseHead>,
-    body: SubresourceBodyFinished,
-    network_request_headers: Option<Vec<(String, String)>>,
-) {
-    let observer = state.parent_tx.network_observer();
-    if let Some(head) = head {
-        record_worker_fetch_response(&observer, network, head, network_request_headers);
-    }
-    publish_worker_network_item(
-        &observer,
-        network,
-        ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(body)),
-    );
 }
 
 #[derive(Debug)]
@@ -521,8 +503,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         record_worker_xhr_started(&state.borrow(), &network, &prepared);
         match result {
             Ok(response) => {
-                record_worker_xhr_response(
-                    &state.borrow(),
+                publish_worker_response(
+                    &state.borrow().parent_tx.network_observer(),
                     &network,
                     Some(response.head()),
                     SubresourceBodyFinished::ready(
@@ -534,8 +516,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 apply_xhr_response(scope, xhr, response);
             }
             Err(error) => {
-                record_worker_xhr_response(
-                    &state.borrow(),
+                publish_worker_response(
+                    &state.borrow().parent_tx.network_observer(),
                     &network,
                     None,
                     SubresourceBodyFinished::failed(network.handle(), error.to_string()),
@@ -795,8 +777,8 @@ fn send_synchronous_worker_xhr(
             let native_body = response.native_body(network.handle());
             match response.into_body_source() {
                 Ok((head, body)) => {
-                    record_worker_xhr_response(
-                        &state.borrow(),
+                    publish_worker_response(
+                        &observer,
                         &network,
                         native_head,
                         native_body,
@@ -1117,8 +1099,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                     match response.into_body_source() {
                         Ok((mut response_head, body)) => {
                             let record = pending.network_record.as_ref();
-                            record_worker_xhr_response(
-                                &state.borrow(),
+                            publish_worker_response(
+                                &state.borrow().parent_tx.network_observer(),
                                 &pending.network,
                                 native_head,
                                 native_body,

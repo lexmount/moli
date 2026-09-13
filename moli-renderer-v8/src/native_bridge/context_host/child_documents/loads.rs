@@ -251,7 +251,6 @@ impl JsContextHost {
                             &request,
                             task_resource_loader.request_client(),
                             task_resource_loader.task_runner(),
-                            completion_tx.clone(),
                         )
                         .await
                         .map_err(record_failure)?

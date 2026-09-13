@@ -184,6 +184,7 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
         .expect("network id")
         .to_owned();
     assert_eq!(request_paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -240,17 +241,20 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
     .await;
     ctx.expect_result(387, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
         .to_owned();
     assert_eq!(request["params"]["type"], "Fetch");
+    // Include the admission captured before the pause in the whole-request audit.
+    ctx.sent.insert(0, request);
     assert_chromium_successful_http_extra_info(&ctx, &network_request_id, &addr.to_string());
     let response = ctx
         .sent
@@ -862,6 +866,7 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
         .to_owned();
     assert_eq!(request_paused["params"]["resourceType"], "XHR");
     assert_eq!(request_paused["params"]["request"]["url"], xhr_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -913,12 +918,13 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
     .await;
     ctx.expect_result(394, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
@@ -1046,6 +1052,7 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
         .as_str()
         .expect("network id")
         .to_owned();
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1081,9 +1088,8 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
     .await;
     ctx.expect_result(400, json!({}), Some("SID-1"));
 
-    let fetch_requests = ctx
-        .sent
-        .iter()
+    let fetch_requests = std::iter::once(&request)
+        .chain(ctx.sent.iter())
         .filter(|message| {
             message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["requestId"] == json!(network_id)
@@ -1230,6 +1236,7 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
         .as_str()
         .expect("network id")
         .to_owned();
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1266,9 +1273,8 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
     .await;
     ctx.expect_result(406, json!({}), Some("SID-1"));
 
-    let xhr_requests = ctx
-        .sent
-        .iter()
+    let xhr_requests = std::iter::once(&request)
+        .chain(ctx.sent.iter())
         .filter(|message| {
             message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["requestId"] == json!(network_id)
@@ -4161,6 +4167,7 @@ async fn runtime_fetch_subresource_continue_response_can_override_status_and_hea
         .expect("request id")
         .to_owned();
     assert_eq!(request_paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -4199,12 +4206,13 @@ async fn runtime_fetch_subresource_continue_response_can_override_status_and_hea
     .await;
     ctx.expect_result(416, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")

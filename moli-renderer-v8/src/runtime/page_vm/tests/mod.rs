@@ -4779,6 +4779,7 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                 );
 
                 let mut classic_completion = None;
+                let mut module_terminal_applied = false;
                 for _ in 0..4 {
                     if !page_vm.page_resource_completion_queue().has_ready_completion() {
                         tokio::time::timeout(
@@ -4809,9 +4810,24 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                         "module terminal retained behind the moved classic defer",
                     )
                     .await;
+                    module_terminal_applied = true;
                 }
-                classic_completion
-                    .expect("classic source completion must arrive after retained module terminals");
+                classic_completion.expect("classic source completion must arrive");
+                if !module_terminal_applied {
+                    // Transport completion order is unconstrained. Retain the
+                    // ready module behind the classic slot before moving it.
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        wait_for_typed_page_resource_completion(&mut page_vm),
+                    )
+                    .await
+                    .expect("later module source completion should arrive");
+                    let completion = run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                    assert!(matches!(
+                        completion.action.source(),
+                        RendererOwnerResourceActivitySource::ModuleGraphFetch
+                    ));
+                }
                 page_vm.vm_mut().eval(
                     r#"
 (() => {
@@ -4837,6 +4853,15 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                     events_after_dispose, "before|after|ready:interactive|moved",
                     "disposed classic defer must not execute or dispatch load"
                 );
+                if !module_terminal_applied {
+                    // A ready classic slot precedes module-terminal work in
+                    // the production scheduler. Disposal releases that barrier.
+                    run_expected_child_module_script_terminal_turn(
+                        &mut page_vm,
+                        "module terminal after moved classic disposal",
+                    )
+                    .await;
+                }
                 sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,

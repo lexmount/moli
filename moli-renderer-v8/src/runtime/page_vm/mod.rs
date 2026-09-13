@@ -1309,15 +1309,16 @@ impl PageVmRuntimeHooks {
         owner_wake: RendererOwnerWakeSender,
         browser_context_runtime: super::RendererBrowserContextRuntime,
     ) -> Self {
+        let resource_task_runner = browser_context_runtime.bind_resource_task_runner(
+            crate::network::RendererResourceTaskRunner::from_current_tokio()
+                .expect("renderer owner must install its Context resource executor"),
+        );
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
             popup_broker: super::RendererPopupBroker::default(),
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
-            resource_task_runner: Some(
-                crate::network::RendererResourceTaskRunner::from_current_tokio()
-                    .expect("renderer owner must install its resource task runner"),
-            ),
+            resource_task_runner: Some(resource_task_runner),
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::ReuseOrCreateInitial,

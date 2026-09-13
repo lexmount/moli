@@ -1,6 +1,8 @@
 use super::*;
 use std::path::Path;
 
+mod csp_reports;
+
 #[tokio::test]
 async fn websocket_cdp_created_target_queues_runtime_until_its_initial_url_commits() {
     let (release, body_ready) = tokio::sync::watch::channel(false);

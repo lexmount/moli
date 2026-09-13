@@ -940,17 +940,21 @@ impl Request {
         self.auth.as_ref()
     }
 
-    pub fn auth_requires_buffered_transport(&self) -> bool {
-        self.auth
-            .as_ref()
-            .is_some_and(|auth| !auth.can_use_header_transport())
+    pub(crate) fn curl_auth_for_url(&self, url: &Url) -> Option<&RequestAuth> {
+        self.auth.as_ref().filter(|auth| {
+            !auth.can_use_header_transport()
+                && auth.target != RequestAuthTarget::ProxyHeader
+                && (auth.target != RequestAuthTarget::Server
+                    || (same_origin(&self.url, url) && self.allows_credentials_for_url(url)))
+        })
     }
 
     pub fn preemptive_server_basic_auth_for_url(&self, request_url: &Url) -> Option<(&str, &str)> {
         let auth = self.auth.as_ref()?;
         (auth.target == RequestAuthTarget::Server
             && auth.scheme == RequestAuthScheme::Basic
-            && same_origin(&self.url, request_url))
+            && same_origin(&self.url, request_url)
+            && self.allows_credentials_for_url(request_url))
         .then_some((auth.username.as_str(), auth.password.as_str()))
     }
 

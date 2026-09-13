@@ -6,8 +6,8 @@ impl crate::runtime::RendererDedicatedWorkerHost {
         &self,
         script_url: &Url,
         initiator_url: &Url,
-    ) -> Option<std::sync::Arc<super::WorkerResourceTransfer>> {
-        super::WorkerResourceTransfer::start_main_script(
+    ) -> Option<std::sync::Arc<crate::network::ResourceTransfer>> {
+        crate::network::ResourceTransfer::start_main_script(
             self.network(),
             super::WorkerNetworkObserver::Dedicated(self.network_observer()),
             script_url,
@@ -16,14 +16,14 @@ impl crate::runtime::RendererDedicatedWorkerHost {
     }
 }
 
-impl super::WorkerResourceTransfer {
+impl crate::network::ResourceTransfer {
     pub(crate) fn start_script(
         source: &crate::runtime::RendererWorkerNetworkReporter,
         observer: super::WorkerNetworkObserver,
         script_url: &Url,
         initiator_url: &Url,
     ) -> Option<std::sync::Arc<Self>> {
-        Self::start(source, observer, |request| {
+        Self::for_worker(source, observer, |request| {
             super::global_scope::worker_request_started(
                 request,
                 initiator_url,
@@ -59,7 +59,7 @@ impl super::WorkerResourceTransfer {
     ) -> Option<std::sync::Arc<Self>> {
         let mut url = script_url.clone();
         url.set_fragment(None);
-        super::WorkerResourceTransfer::start(source, observer, |request| {
+        crate::network::ResourceTransfer::for_worker(source, observer, |request| {
             moli_page_types::SubresourceRequestStarted::new(
                 request.handle(),
                 None,

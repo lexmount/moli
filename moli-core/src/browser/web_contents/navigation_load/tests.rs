@@ -447,19 +447,10 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
             .await
             .err()
             .expect("offline document load must fail"),
-        load.fetch_navigation_with_auth(
-            method,
-            url,
-            None,
-            headers.clone(),
-            Some(credentials.clone()),
-        )
-        .await
-        .err()
-        .expect("offline streaming response fetch must fail"),
-        load.fetch_intercepted_auth_response(method, url, None, headers.clone(), credentials)
+        load.fetch_navigation_with_auth(method, url, None, headers.clone(), Some(credentials))
             .await
-            .expect_err("offline authenticated response fetch must fail"),
+            .err()
+            .expect("offline streaming response fetch must fail"),
     ];
     for error in errors {
         let error = error

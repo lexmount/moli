@@ -278,42 +278,21 @@ enum RuntimeCommand {
     Shutdown,
 }
 
-type RuntimeTextResponseTx = oneshot::Sender<Result<Response>>;
 pub(crate) type RuntimeTextResponseCallback = Box<dyn FnOnce(Result<Response>) + Send + 'static>;
-type RuntimeRawResponseTx = oneshot::Sender<Result<RawResponse>>;
 type RuntimeStreamingCompletionTx = oneshot::Sender<Result<()>>;
 type RuntimeCurlCompletion = CurlMultiCompletion<FetchTransferHandler, ActiveTransferContext>;
 
-enum RuntimeResponseTx {
-    Text(RuntimeTextResponseTx),
-    TextCallback(RuntimeTextResponseCallback),
-    Raw(RuntimeRawResponseTx),
-}
+struct RuntimeResponseTx(RuntimeTextResponseCallback);
 
 impl fmt::Debug for RuntimeResponseTx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Text(_) => f.write_str("RuntimeResponseTx::Text"),
-            Self::TextCallback(_) => f.write_str("RuntimeResponseTx::TextCallback"),
-            Self::Raw(_) => f.write_str("RuntimeResponseTx::Raw"),
-        }
+        f.write_str("RuntimeResponseTx")
     }
 }
 
 impl RuntimeResponseTx {
-    fn send(self, response: Result<CompletedBufferedResponse>) {
-        match self {
-            Self::Text(tx) => {
-                let _ = tx.send(response.map(CompletedBufferedResponse::into_text_response));
-            }
-            Self::TextCallback(callback) => {
-                callback(response.map(CompletedBufferedResponse::into_text_response));
-            }
-            Self::Raw(tx) => {
-                let _ = tx
-                    .send(response.map(CompletedBufferedResponse::into_materialized_raw_response));
-            }
-        }
+    fn send(self, response: Result<RawResponse>) {
+        (self.0)(response.map(RawResponse::into_lossy_materialized_text_response));
     }
 }
 
@@ -548,38 +527,14 @@ impl FetchRuntimeHandle {
 
     #[cfg(test)]
     pub(crate) fn submit(&self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
-        self.submit_with_cancel(request, FetchCancelHandle::new())
-    }
-
-    pub(crate) fn submit_auth_raw(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<oneshot::Receiver<Result<RawResponse>>> {
-        debug_assert!(
-            request.auth_requires_buffered_transport(),
-            "buffered raw fetch is reserved for auth credential replay"
-        );
         let (response_tx, response_rx) = oneshot::channel();
-        self.enqueue(RuntimeJob::new(
+        self.submit_with_cancel_callback(
             request,
-            RuntimeResponseTx::Raw(response_tx),
-            cancel_handle,
-        ))?;
-        Ok(response_rx)
-    }
-
-    pub(crate) fn submit_with_cancel(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<oneshot::Receiver<Result<Response>>> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.enqueue(RuntimeJob::new(
-            request,
-            RuntimeResponseTx::Text(response_tx),
-            cancel_handle,
-        ))?;
+            FetchCancelHandle::new(),
+            Box::new(move |result| {
+                let _ = response_tx.send(result);
+            }),
+        )?;
         Ok(response_rx)
     }
 
@@ -591,7 +546,7 @@ impl FetchRuntimeHandle {
     ) -> Result<()> {
         self.enqueue(RuntimeJob::new(
             request,
-            RuntimeResponseTx::TextCallback(callback),
+            RuntimeResponseTx(callback),
             cancel_handle,
         ))
     }
@@ -1344,6 +1299,7 @@ impl RuntimeOwner {
             cache_plan,
             stale_cached_lookup.is_some(),
         );
+        collector.set_authentication(prepared_request.request.curl_auth_for_url(&job.current_url));
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
         let label = job.current_url.to_string();
@@ -1444,10 +1400,7 @@ impl RuntimeOwner {
                     request_cookie_report,
                     response,
                 );
-                return Ok(JobOutcome::Complete(
-                    job.response_tx,
-                    Box::new(CompletedBufferedResponse::Raw(response)),
-                ));
+                return Ok(JobOutcome::Complete(job.response_tx, Box::new(response)));
             }
             let used_http2 = easy.as_ref().is_some_and(transfer_used_http2);
             if should_retry_http2_failure_over_http1(
@@ -1607,10 +1560,7 @@ impl RuntimeOwner {
 
         response.redirected = !job.request.redirect_chain.is_empty();
         response.redirect_chain = job.request.redirect_chain;
-        Ok(JobOutcome::Complete(
-            job.response_tx,
-            Box::new(CompletedBufferedResponse::Raw(response)),
-        ))
+        Ok(JobOutcome::Complete(job.response_tx, Box::new(response)))
     }
 
     fn finish_streaming_transfer(
@@ -1955,6 +1905,13 @@ impl RuntimeOwner {
                 anyhow!("curl runtime returned non-raw-streaming easy for raw streaming request"),
             );
             return;
+        }
+
+        if !job.cancel_handle.is_cancelled() {
+            easy.get_mut()
+                .raw_streaming_mut()
+                .expect("raw streaming collector checked above")
+                .finish_authentication_response();
         }
 
         if self.shutdown_requested.load(Ordering::SeqCst) {
@@ -2798,6 +2755,9 @@ impl Handler for FetchTransferHandler {
     fn debug(&mut self, kind: InfoType, data: &[u8]) {
         match kind {
             InfoType::HeaderOut => {
+                if let Some(collector) = self.raw_streaming_mut() {
+                    collector.authentication_retry_started();
+                }
                 let is_proxy_connect = self
                     .proxy_connect_response_recorder
                     .record_outgoing_header_block(data);
@@ -2822,7 +2782,9 @@ fn configure_network_observation(
     capture_proxy_connect_response: bool,
 ) -> Result<()> {
     let recorder = request.network_observation_recorder().cloned();
-    let verbose = recorder.is_some() || capture_proxy_connect_response;
+    let verbose = recorder.is_some()
+        || capture_proxy_connect_response
+        || request.curl_auth_for_url(&request.url).is_some();
     if let Some(recorder) = recorder.as_ref() {
         recorder.set_current_request_cookie_report(request_cookie_report.cloned());
     }
@@ -2834,31 +2796,13 @@ fn configure_network_observation(
 
 enum JobOutcome {
     Submitted,
-    Complete(RuntimeResponseTx, Box<CompletedBufferedResponse>),
+    Complete(RuntimeResponseTx, Box<RawResponse>),
     Retry(Box<RuntimeJob>),
 }
 
 enum StreamingJobOutcome {
     Submitted,
     Complete,
-}
-
-enum CompletedBufferedResponse {
-    Raw(RawResponse),
-}
-
-impl CompletedBufferedResponse {
-    fn into_text_response(self) -> Response {
-        match self {
-            Self::Raw(response) => response.into_lossy_materialized_text_response(),
-        }
-    }
-
-    fn into_materialized_raw_response(self) -> RawResponse {
-        match self {
-            Self::Raw(response) => response,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -3460,7 +3404,7 @@ fn default_runtime_transfer_count() -> usize {
     DEFAULT_RUNTIME_TRANSFERS
 }
 
-fn send_response(response_tx: RuntimeResponseTx, response: Result<CompletedBufferedResponse>) {
+fn send_response(response_tx: RuntimeResponseTx, response: Result<RawResponse>) {
     response_tx.send(response);
 }
 

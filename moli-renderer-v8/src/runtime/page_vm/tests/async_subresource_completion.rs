@@ -537,7 +537,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stale_observed_network_record_is_captured_without_consuming_current_request() {
+async fn stale_native_network_receipt_is_captured_without_consuming_current_request() {
     run_page_vm_async_test(async move {
         let request_url = Url::parse("https://typed-subresource.test/historical").unwrap();
         let document_url = Url::parse("https://typed-subresource.test/retired-document").unwrap();
@@ -560,14 +560,20 @@ async fn stale_observed_network_record_is_captured_without_consuming_current_req
         let outcome = run_completion(
             &mut page_vm,
             stale_root,
-            AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
+            AsyncSubresourceFetchEvent::NativeNetwork(
+                crate::runtime::RendererNetworkRequest::unobserved_for_test().report(
+                    crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                        record,
+                    )),
+                ),
+            ),
         );
         assert_eq!(
             outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::DiscardedStaleOwner {
                 current_owner: Some(RendererPageResourceCompletionOwner::async_subresource(
                     current_root,
-                    AsyncSubresourceFetchEventTarget::ObservedNetworkRecord,
+                    AsyncSubresourceFetchEventTarget::NativeNetwork,
                 )),
             }
         );

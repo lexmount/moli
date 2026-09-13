@@ -70,6 +70,28 @@ fn synthetic_document_context_preserves_its_inherited_origin() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn document_bootstrap_uses_the_executor_already_owned_by_its_context() {
+    let browser_context = crate::runtime::RendererBrowserContextRuntime::new();
+    let worker = browser_context.worker_context_runtime();
+    let selected = crate::network::RendererResourceTaskRunner::for_test();
+    browser_context.bind_resource_task_runner(selected.clone());
+    let page_executor = resource_task_runner();
+    assert!(!page_executor.shares_executor_with(&selected));
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let document = super::DocumentResourceLoaderBootstrap::new(transport.handle(), page_executor)
+        .commit(context(1, "https://example.test/page"), &browser_context);
+    let child = document.fork_for_document(context(2, "https://example.test/child"));
+
+    for executor in [
+        document.task_runner(),
+        child.task_runner(),
+        worker.resource_task_runner().unwrap(),
+    ] {
+        assert!(executor.shares_executor_with(&selected));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn document_authorities_share_backend_but_not_lifecycle() {
     let transport =
         ResourceRequestClient::new(&FetchConfig::default()).expect("resource transport");

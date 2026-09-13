@@ -549,93 +549,48 @@ async fn navigate(
             let mut auth: Option<crate::page::SubresourceAuthCredentials> = None;
             let mut prior = moli_fetch::NetworkObservationJournal::default();
             loop {
-                let (head, mut body, resource_source, reserved_client, observations) =
-                    if let Some(credentials) = auth
-                        .as_ref()
-                        .filter(|auth| auth.scheme == crate::page::SubresourceAuthScheme::Digest)
+                let (head, mut body, resource_source, reserved_client, observations) = {
+                    let fetched = match load
+                        .fetch_navigation_with_auth(
+                            &method,
+                            requested_url.as_str(),
+                            request_body.clone(),
+                            request_headers.clone(),
+                            auth.clone(),
+                        )
+                        .await
                     {
-                        // Keep Digest's existing buffered transport: libcurl
-                        // consumes its intermediate challenges before returning.
-                        let fetched = match load
-                            .fetch_intercepted_auth_response(
-                                &method,
-                                requested_url.as_str(),
-                                request_body.clone(),
-                                request_headers.clone(),
-                                credentials.clone(),
+                        Ok(fetched) => fetched,
+                        Err(error) => {
+                            return commit_fetch_error(
+                                owner,
+                                request,
+                                &mut load,
+                                requested_url,
+                                error,
+                                completed,
                             )
-                            .await
-                        {
-                            Ok(fetched) => fetched,
-                            Err(error) => {
-                                return commit_fetch_error(
-                                    owner,
-                                    request,
-                                    &mut load,
-                                    requested_url,
-                                    error,
-                                    completed,
-                                )
-                                .await;
-                            }
-                        };
-                        let (response, observations) =
-                            fetched.into_parts_with_observation_journal();
-                        (
-                            response.head(),
-                            DocumentBodySource::BufferedRaw {
-                                requested_url: requested_url.clone(),
-                                request_method: method.clone(),
-                                request_headers: request_headers.clone(),
-                                response,
-                                network_observation_journal: observations.clone(),
-                            },
-                            CommittedDocumentResourceSource::Synthetic,
-                            None,
-                            observations,
-                        )
-                    } else {
-                        let fetched = match load
-                            .fetch_navigation_with_auth(
-                                &method,
-                                requested_url.as_str(),
-                                request_body.clone(),
-                                request_headers.clone(),
-                                auth.clone(),
-                            )
-                            .await
-                        {
-                            Ok(fetched) => fetched,
-                            Err(error) => {
-                                return commit_fetch_error(
-                                    owner,
-                                    request,
-                                    &mut load,
-                                    requested_url,
-                                    error,
-                                    completed,
-                                )
-                                .await;
-                            }
-                        };
-                        let (response, observations) =
-                            fetched.fetch_result.into_parts_with_observation_journal();
-                        (
-                            response.head(),
-                            DocumentBodySource::StreamingRaw {
-                                requested_url: requested_url.clone(),
-                                request_method: method.clone(),
-                                request_headers: request_headers.clone(),
-                                response,
-                                network_observation_journal: observations.clone(),
-                            },
-                            CommittedDocumentResourceSource::Navigation(Box::new(
-                                fetched.document_fetch_context_seed,
-                            )),
-                            fetched.reserved_service_worker_client,
-                            observations,
-                        )
+                            .await;
+                        }
                     };
+                    let (response, observations) =
+                        fetched.fetch_result.into_parts_with_observation_journal();
+                    (
+                        response.head(),
+                        DocumentBodySource::StreamingRaw {
+                            requested_url: requested_url.clone(),
+                            request_method: method.clone(),
+                            request_headers: request_headers.clone(),
+                            response,
+                            network_observation_journal: observations.clone(),
+                        },
+                        CommittedDocumentResourceSource::Navigation(Box::new(
+                            fetched.document_fetch_context_seed,
+                        )),
+                        fetched.reserved_service_worker_client,
+                        observations,
+                    )
+                };
                 prior.append(observations);
                 match &mut body {
                     DocumentBodySource::BufferedRaw {

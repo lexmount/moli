@@ -30,8 +30,6 @@ use crate::network::ResourceRequestClient;
 pub(crate) use self::async_fetch::{
     collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer,
-    fetch_browser_subresource_with_preflight_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers,
     fetch_browser_subresource_with_preflight_headers_and_observer, spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
@@ -67,10 +65,12 @@ pub(crate) use self::browser_response::{
     LocalUrlError, local_url_response, local_url_response_result,
 };
 pub(crate) use self::csp_reports::{
-    WindowCspReportRequestContext, capture_window_csp_report_request_context,
+    CompletedCspReport, CspReportResource, WindowCspReportRequestContext,
+    capture_window_csp_report_request_context, csp_report_request_started,
+    fetch_buffered_csp_report, finish_report_result,
     send_content_security_policy_reports_for_lightweight_popup,
     send_content_security_policy_reports_for_window,
-    send_content_security_policy_violation_report_from_window_context,
+    send_content_security_policy_violation_report_from_window_context, send_report_completion,
 };
 pub(crate) use self::event_source::{
     EVENT_SOURCE_CLOSED, EventSourceMessage, EventSourceParser, EventSourceTerminalMode,

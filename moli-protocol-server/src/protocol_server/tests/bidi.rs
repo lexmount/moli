@@ -6095,6 +6095,17 @@ async fn websocket_bidi_network_before_request_intercept_blocks_fetch_until_cont
             .all(|message| message["method"] != json!("network.responseCompleted")),
         "responseCompleted must not emit before continueRequest: {messages:?}"
     );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "network.beforeRequestSent"
+                    && message["params"]["request"]["url"] == fetch_url
+            })
+            .count(),
+        1,
+        "the admitted request must have one blocked notification"
+    );
     let before_request = messages
         .iter()
         .find(|message| {
@@ -6153,6 +6164,13 @@ async fn websocket_bidi_network_before_request_intercept_blocks_fetch_until_cont
         );
     }
 
+    assert!(
+        !continue_messages.iter().any(|message| {
+            message["method"] == "network.beforeRequestSent"
+                && message["params"]["request"]["url"] == fetch_url
+        }),
+        "continuing the same request must not announce it again"
+    );
     let completed = continue_messages
         .iter()
         .find(|message| message["method"] == json!("network.responseCompleted"))

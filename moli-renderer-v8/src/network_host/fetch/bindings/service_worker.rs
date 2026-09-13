@@ -1,7 +1,8 @@
 use super::super::*;
 use super::request::PreparedWindowFetchRequest;
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerFetchResultSender,
+    ServiceWorkerRequestDestination,
 };
 use moli_fetch::FetchCancelHandle;
 
@@ -37,16 +38,6 @@ pub(super) fn dispatch_service_worker_fetch(
         resource_type: SubresourceResourceType::Fetch,
         policy_context: prepared.policy_context,
     };
-    let requires_preflight = prepared.request_mode == moli_fetch::RequestMode::Cors
-        && crate::network_host::cors_preflight_request_headers(
-            !prepared
-                .request_origin
-                .same_origin(&(&prepared.resolved_url).into()),
-            &prepared.resolved_url,
-            &prepared.method,
-            &prepared.cors_preflight_request_headers,
-        )
-        .is_some();
     let request_body_text = request_body_text(&prepared.body);
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context.duplicate(scope),
@@ -74,7 +65,6 @@ pub(super) fn dispatch_service_worker_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report: request_cookie_report.clone(),
         },
-        requires_preflight,
     );
     let request = host.service_worker_fetch_request(
         client_id,
@@ -101,11 +91,13 @@ pub(super) fn dispatch_service_worker_fetch(
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
         request_cookie_report,
         network_context,
-        completion_tx: host.resource_completion_sender(),
+        result_tx: ServiceWorkerFetchResultSender::Page {
+            completion_tx: host.resource_completion_sender(),
+            network: host.pending_subresource_network_request(internal_id),
+        },
         request_client: prepared.resource_loader.request_client().clone(),
         resource_task_runner: prepared.resource_loader.task_runner(),
         cancel_handle,
-        direct_completion_tx: None,
     };
     if host.dispatch_service_worker_fetch(dispatch) {
         return Some(internal_id);

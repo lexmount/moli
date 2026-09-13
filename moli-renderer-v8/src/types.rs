@@ -68,6 +68,7 @@ pub(super) enum PendingSubresourceContinuation {
     Beacon,
     CspReport {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
+        network: std::sync::Arc<crate::network::ResourceTransfer>,
     },
     EventSource(v8::Global<v8::Object>),
     Fetch(PendingWindowFetchContinuation),
@@ -475,6 +476,7 @@ pub(super) struct PendingSubresourceFetchState {
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
+    pub(super) network_request: crate::runtime::RendererNetworkRequest,
     pub(super) load: crate::network::loads::ResourceLoadLease,
     pub(super) execution_context: PendingSubresourceExecutionContext,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -482,12 +484,23 @@ pub(super) struct PendingSubresourceFetchState {
     pub(super) network_partition_key: Option<String>,
     pub(super) policy_context: SubresourcePolicyContext,
     pub(super) continuation: PendingSubresourceContinuation,
-    // Window fetches that need CORS preflight emit the actual request-start
-    // after the preflight record, not when the pending fetch is registered.
-    pub(super) deferred_request_started: bool,
 }
 
 impl PendingSubresourceFetchState {
+    pub(crate) fn preflight_observer(
+        &self,
+        completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
+    ) -> crate::network_host::CorsPreflightNetworkObserver {
+        crate::network_host::CorsPreflightNetworkObserver {
+            request: self.network_request.clone(),
+            observer: completion_tx.network_observer(),
+            frame_id: self.info.frame_id.clone(),
+            resource_type: self.info.resource_type,
+            keepalive: self.load.disposition()
+                == crate::network::loads::ResourceLoadDisposition::Keepalive,
+        }
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
@@ -749,13 +762,14 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
     },
     /// A producer-captured network fact has no live JS request owner. It is
     /// still namespaced by the root Document in the Page task envelope.
-    ObservedNetworkRecord,
+    NativeNetwork,
 }
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
     Completion(Box<AsyncSubresourceFetchCompletion>),
-    ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
+    CspReport(Box<crate::network_host::CompletedCspReport>),
+    NativeNetwork(crate::runtime::RendererNetworkObservation),
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
     StreamingChunk(AsyncSubresourceStreamingChunk),
     StreamingFinished(AsyncSubresourceStreamingFinished),
@@ -767,9 +781,10 @@ impl AsyncSubresourceFetchEvent {
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
-            Self::ObservedNetworkRecord(_) => {
-                AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
-            }
+            Self::CspReport(completion) => AsyncSubresourceFetchEventTarget::Completion {
+                internal_id: completion.internal_id(),
+            },
+            Self::NativeNetwork(_) => AsyncSubresourceFetchEventTarget::NativeNetwork,
             Self::StreamingStarted(started) => AsyncSubresourceFetchEventTarget::StreamingStart {
                 internal_id: started.internal_id,
                 body_source_id: started.body_source_id,

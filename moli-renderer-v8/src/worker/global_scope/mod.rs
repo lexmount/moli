@@ -80,7 +80,6 @@ use crate::network_host::{
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer,
-    fetch_browser_subresource_with_preflight_headers_and_observer,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
     local_url_response_result, parse_fetch_init, request_input_snapshot,
     request_object_credentials_mode, reset_xhr_response_for_request_error, resolve_context_url,
@@ -1070,7 +1069,7 @@ pub(super) struct PendingWorkerFetch {
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) network: crate::runtime::RendererWorkerNetworkRequest,
+    pub(super) network: crate::runtime::RendererNetworkRequest,
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
@@ -1132,7 +1131,7 @@ impl WorkerRequestError {
 /// The VM claims delivery before applying policy/interception. If it is gone,
 /// dropping the packet still settles the original native transport request.
 pub(super) struct WorkerRequestDelivery {
-    network: crate::runtime::RendererWorkerNetworkRequest,
+    network: crate::runtime::RendererNetworkRequest,
     observer: crate::worker::WorkerNetworkObserver,
     completion: Option<Box<WorkerRequestCompletion>>,
 }
@@ -1144,7 +1143,7 @@ impl WorkerRequestDelivery {
 
     fn claim(
         mut self,
-        request: &crate::runtime::RendererWorkerNetworkRequest,
+        request: &crate::runtime::RendererNetworkRequest,
     ) -> Option<WorkerRequestCompletion> {
         if request.handle() != self.network.handle() {
             return None;
@@ -1168,7 +1167,7 @@ pub(super) struct WorkerFetchStreamingChunk {
 pub(super) struct WorkerFetchStreamingFinished {
     fetch_id: u32,
     body_source_id: NetworkBodySourceId,
-    network: crate::runtime::RendererWorkerNetworkRequest,
+    network: crate::runtime::RendererNetworkRequest,
     observer: crate::worker::WorkerNetworkObserver,
     result: moli_page_types::SubresourceBodyFinished,
 }
@@ -1310,13 +1309,13 @@ pub(super) struct PendingWorkerXhr {
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) network: crate::runtime::RendererWorkerNetworkRequest,
+    pub(super) network: crate::runtime::RendererNetworkRequest,
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
 }
 
 pub(super) struct WorkerCspReport {
-    network: Arc<super::network_transfer::WorkerResourceTransfer>,
+    network: Arc<crate::network::ResourceTransfer>,
     pub(super) load: ResourceLoadLease,
     pub(super) document_url: Url,
     pub(super) request: Request,

@@ -105,7 +105,7 @@ use super::module_runtime::{
     worker_dynamic_module_import_waits_for_fetch, worker_has_pending_dynamic_module_imports,
     worker_has_runnable_dynamic_module_imports,
 };
-use super::network_transfer::WorkerResourceTransfer;
+use crate::network::ResourceTransfer;
 
 pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
 
@@ -642,7 +642,7 @@ fn start_worker_module_graph_fetch(
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let Some(network) = WorkerResourceTransfer::start_script(
+    let Some(network) = ResourceTransfer::start_script(
         state.global_kind.network(),
         state.parent_tx.network_observer(),
         request.url(),

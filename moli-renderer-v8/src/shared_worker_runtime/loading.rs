@@ -403,7 +403,7 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     cancel_handle: FetchCancelHandle,
     cancel_wait: tokio::sync::oneshot::Receiver<()>,
-    network: &crate::worker::WorkerResourceTransfer,
+    network: &crate::network::ResourceTransfer,
 ) -> Result<SharedWorkerLoadedScript, String> {
     if cancel_handle.is_cancelled() {
         return Err("SharedWorker script load canceled.".to_owned());
@@ -539,7 +539,7 @@ pub(super) fn shared_worker_script_credentials_mode(
 
 pub(super) fn load_shared_worker_local_script(
     script_url: &Url,
-    network: &crate::worker::WorkerResourceTransfer,
+    network: &crate::network::ResourceTransfer,
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);

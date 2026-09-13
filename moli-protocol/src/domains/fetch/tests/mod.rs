@@ -29,6 +29,35 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
 
+fn request_started_before_fetch_pause(ctx: &TestContext, pause: &Value) -> Value {
+    let requests = ctx
+        .sent
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == pause["params"]["networkId"]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "one initial Network event per admitted request"
+    );
+    let (index, request) = requests[0];
+    let pause_index = ctx
+        .sent
+        .iter()
+        .position(|message| message == pause)
+        .expect("Fetch pause");
+    assert!(index < pause_index, "Network start precedes Fetch pause");
+    assert_eq!(
+        request["params"]["request"]["url"],
+        pause["params"]["request"]["url"]
+    );
+    request.clone()
+}
+
 fn attached_browser_context(conn: &crate::conn::CdpConnection) -> BrowserContext {
     let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.attach_active_session("SID-1");

@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData, ops::Deref, rc::Rc, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use moli_cookie_jar::SharedBrowserCookieStore;
 
 use crate::{
@@ -55,9 +55,7 @@ impl FetchClientHandle {
 
     /// Materialized raw compatibility API.
     ///
-    /// Non-auth requests enter the streaming raw transport first and only
-    /// materialize at this API boundary. Auth challenge-response still uses the
-    /// buffered libcurl path so intermediate 401/407 bodies are hidden.
+    /// Requests use the raw streaming transport and materialize at this API boundary.
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
         self.fetch_raw_with_cancel(request, FetchCancelHandle::new())
             .await
@@ -68,18 +66,6 @@ impl FetchClientHandle {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<RawResponse> {
-        if request.auth_requires_buffered_transport() {
-            // Digest auth retries are still completed inside libcurl on the
-            // buffered path. Keep auth requests there until the raw streaming
-            // collector can model intermediate auth challenges without
-            // surfacing them as final responses.
-            return self
-                .runtime
-                .submit_auth_raw(request, cancel_handle)?
-                .await
-                .context("fetch runtime task dropped raw response channel")?;
-        }
-
         let response = self
             .fetch_raw_stream_with_cancel(request, cancel_handle)
             .await?;
@@ -137,17 +123,6 @@ impl FetchClientHandle {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() {
-            // Auth retries still need the buffered libcurl path so
-            // intermediate 401/407 challenge bodies are not exposed as final
-            // streaming responses.
-            return self
-                .runtime
-                .submit_with_cancel(request, cancel_handle)?
-                .await
-                .context("fetch runtime task dropped response channel")?;
-        }
-
         let response = self
             .fetch_raw_stream_with_cancel(request, cancel_handle)
             .await?;

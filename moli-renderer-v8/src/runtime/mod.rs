@@ -50,7 +50,8 @@ pub use network_observation::{
     RendererWorkerIdentity,
 };
 pub(crate) use network_observation::{
-    RendererNetworkReporter, RendererWorkerNetworkReporter, RendererWorkerNetworkRequest,
+    RendererDocumentNetworkReporter, RendererNetworkReporter, RendererNetworkRequest,
+    RendererWorkerNetworkReporter,
 };
 mod worker_fetch;
 pub use worker_fetch::{

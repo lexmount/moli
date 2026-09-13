@@ -189,7 +189,7 @@ impl ServiceWorkerScriptLoader {
         url: &Url,
         initiator: &Url,
         cache_mode: RequestCacheMode,
-        network: &crate::worker::WorkerResourceTransfer,
+        network: &crate::network::ResourceTransfer,
     ) -> Result<(moli_fetch::Response, u64), String> {
         let started = Instant::now();
         let request = Request::new("GET", url.as_str(), None, vec![])
@@ -225,7 +225,7 @@ impl ServiceWorkerScriptLoader {
     ) -> Result<LoadedServiceWorkerScript, String> {
         let mut request_url = params.script_url.clone();
         request_url.set_fragment(None);
-        let network = crate::worker::WorkerResourceTransfer::start_main_script(
+        let network = crate::network::ResourceTransfer::start_main_script(
             &self.source,
             self.observer.clone(),
             &request_url,
@@ -373,7 +373,7 @@ impl ServiceWorkerScriptLoader {
     ) -> Result<ServiceWorkerScriptResource, String> {
         let mut request_url_without_fragment = request_url.clone();
         request_url_without_fragment.set_fragment(None);
-        let network = crate::worker::WorkerResourceTransfer::start_script(
+        let network = crate::network::ResourceTransfer::start_script(
             &self.source,
             self.observer.clone(),
             &request_url_without_fragment,

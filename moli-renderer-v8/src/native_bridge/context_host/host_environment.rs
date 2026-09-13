@@ -386,18 +386,6 @@ impl JsContextHost {
         self.clear_layout_rect_cache();
     }
 
-    fn apply_page_network_policy_to_document_loader(&self, loader: &DocumentResourceLoader) {
-        loader
-            .request_client()
-            .set_extra_http_headers(&self.extra_http_headers);
-        loader
-            .request_client()
-            .set_network_offline(self.network_offline);
-        loader
-            .request_client()
-            .set_blocked_url_patterns(&self.blocked_url_patterns);
-    }
-
     /// Registers the exact resource authority of the initial committed main
     /// Document.
     pub(crate) fn register_main_document_resource_loader(
@@ -405,7 +393,8 @@ impl JsContextHost {
         loader: &DocumentResourceLoader,
     ) {
         let loader = loader.clone();
-        self.apply_page_network_policy_to_document_loader(&loader);
+        // This loader already carries the admitted policy used by concurrent
+        // preloads. Host defaults have not been replaced by the PageVm environment yet.
         let owner = self
             .current_main_document_task_owner()
             .expect("main Document must have an owner before its resource loader is installed");
@@ -422,7 +411,10 @@ impl JsContextHost {
         loader: &DocumentResourceLoader,
     ) {
         let loader = loader.clone();
-        self.apply_page_network_policy_to_document_loader(&loader);
+        let client = loader.request_client();
+        client.set_extra_http_headers(&self.extra_http_headers);
+        client.set_network_offline(self.network_offline);
+        client.set_blocked_url_patterns(&self.blocked_url_patterns);
         let owner = self
             .current_main_document_task_owner()
             .expect("main Document must retain an owner while replacing its resource transport");

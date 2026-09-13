@@ -1075,8 +1075,16 @@ impl BrowserContext {
                     .runtime_slot
                     .projected_document_network_binding(source_renderer_page?)
             });
+        // document.open() advances the lifecycle within the same Document.
+        // Its admitted network requests keep their handles and output queue;
+        // these historical facts never authorize work in the new lifecycle.
+        let belongs_to_document = |binding: &CommittedRendererDocumentBinding| {
+            binding.renderer_frame == source_document.frame
+                && binding.renderer_document == source_document.document
+                && source_document.epoch.0 <= binding.renderer_epoch.0
+        };
         if let Some(binding) = binding
-            && binding.renderer_document_identity() == source_document
+            && belongs_to_document(binding)
         {
             let loader_id = binding.loader_id.clone();
             if self
@@ -1126,7 +1134,7 @@ impl BrowserContext {
             .retiring_renderer_document_outputs
             .iter_mut()
             .find(|entry| {
-                entry.binding.renderer_document_identity() == source_document
+                belongs_to_document(&entry.binding)
                     && source_renderer_page.is_none_or(|page| entry.renderer_page == page)
             })?;
         if retiring.network_agent.has_observed_network_phase(item) {

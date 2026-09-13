@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::{
     network::ResourceRequestClient,
-    page_task_queue::{RendererPageServiceWorkerTaskSender, RendererResourceCompletionSender},
+    page_task_queue::RendererPageServiceWorkerTaskSender,
     runtime::{
         RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
         RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
@@ -36,7 +36,7 @@ use super::{
     diagnostics::ServiceWorkerMainScriptUpdateCheckDiagnostics,
     errors::ServiceWorkerRegistrationError,
     events::{
-        ServiceWorkerDirectFetchResult, ServiceWorkerFetchRequestMetadata,
+        ServiceWorkerFetchRequestMetadata, ServiceWorkerFetchResultSender,
         ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent, ServiceWorkerNotificationEvent,
         ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
         ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerRequestDestination,
@@ -714,14 +714,12 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) metadata: ServiceWorkerFetchRequestMetadata,
     pub(super) request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     pub(super) network_context: AsyncSubresourceNetworkContext,
-    pub(super) completion_tx: RendererResourceCompletionSender,
+    pub(super) result_tx: ServiceWorkerFetchResultSender,
     pub(super) request_client: ResourceRequestClient,
     pub(super) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(super) navigation_preload_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     pub(super) streaming_body_source_id: Option<crate::types::NetworkBodySourceId>,
-    pub(super) direct_completion_tx:
-        Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
 }
 
 impl ServiceWorkerFetchJob {

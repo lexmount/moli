@@ -6,7 +6,8 @@ use crate::network_host::{
     observe_subresource_request_cookie_report, resolve_context_url, spawn_async_subresource_fetch,
 };
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerFetchResultSender,
+    ServiceWorkerRequestDestination,
 };
 use crate::types::{
     PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceResourceType,
@@ -296,13 +297,7 @@ pub(crate) fn start_event_source_request<'s>(
         Some(cancel_handle),
         prepared.cors_preflight_request_headers,
         registered.internal_id,
-        crate::types::AsyncSubresourceNetworkContext {
-            frame_id: prepared.frame_id,
-            request_origin: prepared.request_origin.clone(),
-            document_url: prepared.document_url,
-            resource_type: SubresourceResourceType::EventSource,
-            policy_context: prepared.policy_context,
-        },
+        host.pending_subresource_preflight_observer(registered.internal_id),
         prepared.resolved_url,
         "GET".to_owned(),
         prepared.request_headers,
@@ -427,11 +422,13 @@ fn dispatch_service_worker_event_source<'s>(
             resource_type: SubresourceResourceType::EventSource,
             policy_context: prepared.policy_context,
         },
-        completion_tx: host.resource_completion_sender(),
+        result_tx: ServiceWorkerFetchResultSender::Page {
+            completion_tx: host.resource_completion_sender(),
+            network: host.pending_subresource_network_request(registered.internal_id),
+        },
         request_client: registered.load.request_client(),
         resource_task_runner: registered.load.task_runner(),
         cancel_handle,
-        direct_completion_tx: None,
     };
     if !host.dispatch_service_worker_fetch(dispatch) {
         let _ = host.resource_completion_sender().send_async_subresource(

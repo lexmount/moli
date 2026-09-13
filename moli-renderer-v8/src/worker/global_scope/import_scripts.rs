@@ -1,6 +1,6 @@
 use super::*;
+use crate::network::ResourceTransfer;
 use crate::network::{ResourceResponseFailure, ResourceResponseResult};
-use crate::worker::network_transfer::WorkerResourceTransfer;
 
 pub(super) struct WorkerImportScriptSource {
     pub(super) final_url: Url,
@@ -45,7 +45,7 @@ pub(super) fn materialize_worker_import_source(
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
     let network = {
         let state = state.borrow();
-        WorkerResourceTransfer::start_script(
+        ResourceTransfer::start_script(
             state.global_kind.network(),
             state.parent_tx.network_observer(),
             script_url,
@@ -163,7 +163,7 @@ pub(super) fn fetch_worker_import_source_blocking(
     initiator_url: Option<Url>,
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
-    network: &Arc<WorkerResourceTransfer>,
+    network: &Arc<ResourceTransfer>,
 ) -> Result<WorkerImportScriptSource, String> {
     let request_url = script_url.clone();
     let mut request = moli_fetch::Request::new("GET", script_url.as_str(), None, vec![])

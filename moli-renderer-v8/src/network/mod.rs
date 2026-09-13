@@ -58,3 +58,6 @@ pub(crate) fn request_resource_type_for_subresource(
         | SubresourceResourceType::WebSocket => None,
     }
 }
+
+mod resource_transfer;
+pub(crate) use resource_transfer::ResourceTransfer;

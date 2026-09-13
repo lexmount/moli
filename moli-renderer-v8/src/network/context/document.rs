@@ -101,12 +101,13 @@ impl DocumentResourceLoaderBootstrap {
         }
     }
 
-    pub(crate) fn commit(self, context: DocumentFetchContext) -> DocumentResourceLoader {
-        DocumentResourceLoader::new(self.request_client, self.task_runner, context)
-    }
-
-    pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
-        self.task_runner.clone()
+    pub(crate) fn commit(
+        self,
+        context: DocumentFetchContext,
+        browser_context: &crate::runtime::RendererBrowserContextRuntime,
+    ) -> DocumentResourceLoader {
+        let task_runner = browser_context.bind_resource_task_runner(self.task_runner);
+        DocumentResourceLoader::new(self.request_client, task_runner, context)
     }
 
     pub(crate) fn author_styles_disabled(&self) -> bool {

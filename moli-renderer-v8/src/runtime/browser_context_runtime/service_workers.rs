@@ -7,11 +7,12 @@ use crate::network::{
 use crate::service_worker_runtime::{
     ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerClientType,
     ServiceWorkerControlState, ServiceWorkerDirectFetchResponse, ServiceWorkerDirectFetchResult,
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest, ServiceWorkerNavigationPreloadState,
-    ServiceWorkerNavigationPreloadStateError, ServiceWorkerNotificationAction,
-    ServiceWorkerNotificationMetadata, ServiceWorkerPushSubscriptionSnapshot,
-    ServiceWorkerRegistrationSnapshot, ServiceWorkerRequestDestination,
-    ServiceWorkerUnregisterStart, ServiceWorkerVersionId, service_worker_fetch_request_metadata,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest, ServiceWorkerFetchResultSender,
+    ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
+    ServiceWorkerNotificationAction, ServiceWorkerNotificationMetadata,
+    ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerRegistrationSnapshot,
+    ServiceWorkerRequestDestination, ServiceWorkerUnregisterStart, ServiceWorkerVersionId,
+    service_worker_fetch_request_metadata,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
@@ -71,7 +72,7 @@ impl RendererBrowserContextRuntime {
         request: &Request,
         navigation_loader: &NavigationResourceLoader,
     ) -> Result<RendererServiceWorkerMainResourceFetch> {
-        self.bind_worker_resource_task_runner(navigation_loader.task_runner());
+        self.bind_resource_task_runner(navigation_loader.task_runner());
         let bypass_service_worker = navigation_loader.request_client().bypass_service_worker();
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(RendererServiceWorkerMainResourceFetch {
@@ -94,8 +95,6 @@ impl RendererBrowserContextRuntime {
         let storage_key =
             moli_storage_key::MoliStorageKey::first_party_from_url(&request.url, None)
                 .serialized_storage_key();
-        let completion_tx =
-            crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let client_id = if bypass_service_worker {
             self.register_reserved_service_worker_client_bypassing_service_worker(
                 request.url.clone(),
@@ -147,7 +146,6 @@ impl RendererBrowserContextRuntime {
                 request,
                 navigation_loader.request_client(),
                 navigation_loader.task_runner(),
-                completion_tx,
                 ServiceWorkerRequestDestination::Document,
             )
             .await?;
@@ -163,14 +161,12 @@ impl RendererBrowserContextRuntime {
         request: &Request,
         request_client: &ResourceRequestClient,
         resource_task_runner: RendererResourceTaskRunner,
-        completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
         self.fetch_service_worker_main_resource_for_reserved_client(
             client_id,
             request,
             request_client,
             resource_task_runner,
-            completion_tx,
             ServiceWorkerRequestDestination::Iframe,
         )
         .await
@@ -182,7 +178,6 @@ impl RendererBrowserContextRuntime {
         request: &Request,
         request_client: &ResourceRequestClient,
         resource_task_runner: RendererResourceTaskRunner,
-        completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
         destination: ServiceWorkerRequestDestination,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
         if !matches!(request.url.scheme(), "http" | "https") {
@@ -225,11 +220,10 @@ impl RendererBrowserContextRuntime {
                 resource_type: SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
             },
-            completion_tx,
+            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
             request_client: request_client.clone(),
             resource_task_runner,
             cancel_handle: FetchCancelHandle::new(),
-            direct_completion_tx: Some(direct_completion_tx),
         };
 
         if !self.dispatch_service_worker_fetch(dispatch) {
@@ -266,8 +260,6 @@ impl RendererBrowserContextRuntime {
             return Ok(None);
         }
 
-        let completion_tx =
-            crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
             internal_id: 0,
@@ -295,11 +287,10 @@ impl RendererBrowserContextRuntime {
                 resource_type,
                 policy_context: Default::default(),
             },
-            completion_tx,
+            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
             request_client: request_client.clone(),
             resource_task_runner,
             cancel_handle: FetchCancelHandle::new(),
-            direct_completion_tx: Some(direct_completion_tx),
         };
 
         if !self.dispatch_service_worker_fetch(dispatch) {

@@ -30,7 +30,7 @@ impl RendererSharedWorkerHost {
         self: &Arc<Self>,
         params: SharedWorkerLaunchParams,
         fetch: SharedWorkerScriptFetch,
-        network: Arc<crate::worker::WorkerResourceTransfer>,
+        network: Arc<crate::network::ResourceTransfer>,
     ) {
         let (cancel_handle, cancel_wait) = self.begin_loading_task();
         spawn_shared_worker_loading_task(

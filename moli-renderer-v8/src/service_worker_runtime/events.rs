@@ -520,7 +520,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
         integrity: subresource_metadata
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
-        keepalive: false,
+        keepalive: request.resource_type == moli_fetch::RequestResourceType::CspReport,
     }
 }
 
@@ -724,10 +724,60 @@ pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) cors_preflight_request_headers: Vec<(String, String)>,
     pub(crate) request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     pub(crate) network_context: AsyncSubresourceNetworkContext,
-    pub(crate) completion_tx: RendererResourceCompletionSender,
+    pub(crate) result_tx: ServiceWorkerFetchResultSender,
     pub(crate) request_client: ResourceRequestClient,
     pub(crate) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(crate) cancel_handle: moli_fetch::FetchCancelHandle,
-    pub(crate) direct_completion_tx:
-        Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
+}
+
+pub(crate) enum ServiceWorkerFetchResultSender {
+    Page {
+        completion_tx: RendererResourceCompletionSender,
+        network: crate::runtime::RendererNetworkRequest,
+    },
+    CspReport(std::sync::Arc<crate::network_host::CspReportResource>),
+    Direct(tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>),
+}
+
+impl ServiceWorkerFetchResultSender {
+    pub(super) fn stream_sender(&self) -> Option<ServiceWorkerFetchStreamSender> {
+        match self {
+            Self::Page { completion_tx, .. } => {
+                Some(ServiceWorkerFetchStreamSender::Page(completion_tx.clone()))
+            }
+            Self::CspReport(resource) => {
+                Some(ServiceWorkerFetchStreamSender::CspReport(resource.clone()))
+            }
+            Self::Direct(_) => None,
+        }
+    }
+}
+
+pub(super) enum ServiceWorkerFetchStreamSender {
+    Page(RendererResourceCompletionSender),
+    CspReport(std::sync::Arc<crate::network_host::CspReportResource>),
+}
+
+impl ServiceWorkerFetchStreamSender {
+    pub(super) fn response_started(&self, started: crate::types::AsyncSubresourceStreamingStarted) {
+        match self {
+            Self::Page(sender) => {
+                let _ = sender.send_async_subresource_event(
+                    crate::types::AsyncSubresourceFetchEvent::StreamingStarted(Box::new(started)),
+                );
+            }
+            Self::CspReport(resource) => resource.response_started(started.head),
+        }
+    }
+
+    pub(super) fn data_received(&self, chunk: crate::types::AsyncSubresourceStreamingChunk) {
+        match self {
+            Self::Page(sender) => {
+                let _ = sender.send_async_subresource_event(
+                    crate::types::AsyncSubresourceFetchEvent::StreamingChunk(chunk),
+                );
+            }
+            Self::CspReport(resource) => resource.data_received(&chunk.bytes),
+        }
+    }
 }

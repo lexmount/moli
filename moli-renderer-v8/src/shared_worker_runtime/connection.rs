@@ -148,7 +148,7 @@ impl SharedWorkerRuntimeService {
         host.publish_created_target_event();
         let script_url = url::Url::parse(params.key.script_url())
             .expect("SharedWorker key has a resolved script URL");
-        let Some(network) = crate::worker::WorkerResourceTransfer::start_main_script(
+        let Some(network) = crate::network::ResourceTransfer::start_main_script(
             &host.network,
             host.network_observer(),
             &script_url,

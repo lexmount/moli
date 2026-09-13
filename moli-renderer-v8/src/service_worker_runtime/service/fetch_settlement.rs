@@ -1,7 +1,7 @@
 use super::*;
 use crate::service_worker_runtime::{
-    ServiceWorkerDirectFetchResponse, ServiceWorkerFetchRequest, ServiceWorkerRequestDestination,
-    service_worker_fetch_request_metadata,
+    ServiceWorkerDirectFetchResponse, ServiceWorkerFetchRequest, ServiceWorkerFetchResultSender,
+    ServiceWorkerRequestDestination, service_worker_fetch_request_metadata,
 };
 use crate::types::{
     AsyncSubresourceFetchEvent, AsyncSubresourceFetchResponseFilter,
@@ -127,19 +127,21 @@ fn service_worker_fetch_can_forward_stream(
         final_url,
         &response_head.headers,
     )?;
-    Ok(job.direct_completion_tx.is_none()
-        && !matches!(
-            job.network_context.resource_type,
-            crate::types::SubresourceResourceType::Audio
-                | crate::types::SubresourceResourceType::Font
-                | crate::types::SubresourceResourceType::Image
-                | crate::types::SubresourceResourceType::Media
-                | crate::types::SubresourceResourceType::TextTrack
-                | crate::types::SubresourceResourceType::Video
-        )
-        && !is_redirect_status(response_head.status)
-        && matches!(response_head.response_type.as_str(), "default" | "basic")
-        && !service_worker_fetch_response_requires_body_security_policy(job))
+    Ok(
+        !matches!(job.result_tx, ServiceWorkerFetchResultSender::Direct(_))
+            && !matches!(
+                job.network_context.resource_type,
+                crate::types::SubresourceResourceType::Audio
+                    | crate::types::SubresourceResourceType::Font
+                    | crate::types::SubresourceResourceType::Image
+                    | crate::types::SubresourceResourceType::Media
+                    | crate::types::SubresourceResourceType::TextTrack
+                    | crate::types::SubresourceResourceType::Video
+            )
+            && !is_redirect_status(response_head.status)
+            && matches!(response_head.response_type.as_str(), "default" | "basic")
+            && !service_worker_fetch_response_requires_body_security_policy(job),
+    )
 }
 
 fn apply_service_worker_synthetic_redirect(
@@ -191,8 +193,6 @@ impl ServiceWorkerRuntimeService {
             return Ok(None);
         }
 
-        let completion_tx =
-            crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
             internal_id: 0,
@@ -223,11 +223,10 @@ impl ServiceWorkerRuntimeService {
                 resource_type: crate::types::SubresourceResourceType::Script,
                 policy_context: Default::default(),
             },
-            completion_tx,
+            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
             request_client: request_client.clone(),
             resource_task_runner,
             cancel_handle,
-            direct_completion_tx: Some(direct_completion_tx),
         };
 
         if !self.dispatch_controlled_fetch(dispatch) {
@@ -246,96 +245,106 @@ impl ServiceWorkerRuntimeService {
 
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
         job.cancel_pending_navigation_preload();
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            if job.request.redirect_count() != 0 {
-                self.dispatch_direct_fetch_network_fallback(job, completion_tx);
-                return;
-            }
+        if job.request.redirect_count() == 0
+            && let ServiceWorkerFetchResultSender::Direct(completion_tx) = job.result_tx
+        {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Fallback);
             return;
         }
-        let request_client = job.request_client.clone();
         let request = service_worker_network_fallback_request_for_job(&job);
-        crate::network_host::spawn_async_subresource_fetch(
-            job.resource_task_runner.clone(),
-            job.completion_tx,
-            request_client,
-            request,
-            Some(job.cancel_handle),
-            job.cors_preflight_request_headers,
-            job.internal_id,
-            job.network_context,
-            job.request.url,
-            job.request.method,
-            job.request.request_headers.clone(),
-            request_body_text(&job.request.body),
-        );
-    }
-
-    fn dispatch_direct_fetch_network_fallback(
-        &self,
-        job: ServiceWorkerFetchJob,
-        completion_tx: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
-    ) {
-        let request_client = job.request_client.clone();
-        let request = service_worker_network_fallback_request_for_job(&job);
-        let cancel_handle = job.cancel_handle.clone();
-        let request_origin = match request.browser_origin() {
-            Ok(origin) => origin.clone(),
-            Err(error) => {
-                let _ =
-                    completion_tx.send(ServiceWorkerDirectFetchResult::Failure(error.to_string()));
-                return;
+        match job.result_tx {
+            ServiceWorkerFetchResultSender::CspReport(resource) => {
+                resource.fetch(job.request_client, request, job.cancel_handle);
             }
-        };
-        let request_mode = job.request.request_mode;
-        let credentials_mode = job.request.credentials_mode;
-        job.resource_task_runner.spawn(async move {
-            let result = match request_client
-                .fetch_raw_stream_with_cancel(request, cancel_handle)
-                .await
-            {
-                Ok(response) => response.into_materialized_raw_response().await,
-                Err(error) => Err(error),
-            };
-            let result = match result {
-                Ok(response) => {
-                    let head = response.head();
-                    // This is a network response after a synthetic redirect,
-                    // not a worker-produced readable Response. Authorize CORS
-                    // before the direct consumer can trust an absent filter.
-                    if request_mode == moli_fetch::RequestMode::Cors
-                        && let Err(message) = crate::network_host::validate_cors_response_chain(
-                            &request_origin,
-                            &head,
-                            credentials_mode,
-                        )
-                    {
-                        let _ =
-                            completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
+            ServiceWorkerFetchResultSender::Page {
+                completion_tx,
+                network,
+            } => {
+                crate::network_host::spawn_async_subresource_fetch(
+                    job.resource_task_runner,
+                    completion_tx.clone(),
+                    job.request_client,
+                    request,
+                    Some(job.cancel_handle),
+                    job.cors_preflight_request_headers,
+                    job.internal_id,
+                    crate::network_host::CorsPreflightNetworkObserver {
+                        request: network,
+                        observer: completion_tx.network_observer(),
+                        frame_id: job.network_context.frame_id,
+                        resource_type: job.network_context.resource_type,
+                        keepalive: job.metadata.keepalive,
+                    },
+                    job.request.url,
+                    job.request.method,
+                    job.request.request_headers,
+                    request_body_text(&job.request.body),
+                );
+            }
+            ServiceWorkerFetchResultSender::Direct(completion_tx) => {
+                let request_client = job.request_client.clone();
+                let cancel_handle = job.cancel_handle.clone();
+                let request_origin = match request.browser_origin() {
+                    Ok(origin) => origin.clone(),
+                    Err(error) => {
+                        let _ = completion_tx
+                            .send(ServiceWorkerDirectFetchResult::Failure(error.to_string()));
                         return;
                     }
-                    let response_filter = crate::network_host::network_response_filter(
-                        &request_origin,
-                        &head,
-                        request_mode,
-                    );
-                    let body = response.clone_body_bytes();
-                    let navigation_response =
-                        crate::protocol_types::NavigationResponse::from_head_and_body(
-                            head,
-                            String::from_utf8_lossy(&body).into_owned(),
-                            body,
-                        );
-                    ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
-                        response: Box::new(navigation_response),
-                        response_filter,
-                    })
-                }
-                Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
-            };
-            let _ = completion_tx.send(result);
-        });
+                };
+                let request_mode = job.request.request_mode;
+                let credentials_mode = job.request.credentials_mode;
+                job.resource_task_runner.spawn(async move {
+                    let result = match request_client
+                        .fetch_raw_stream_with_cancel(request, cancel_handle)
+                        .await
+                    {
+                        Ok(response) => response.into_materialized_raw_response().await,
+                        Err(error) => Err(error),
+                    };
+                    let result = match result {
+                        Ok(response) => {
+                            let head = response.head();
+                            // This is a network response after a synthetic redirect,
+                            // not a worker-produced readable Response. Authorize CORS
+                            // before the direct consumer can trust an absent filter.
+                            if request_mode == moli_fetch::RequestMode::Cors
+                                && let Err(message) =
+                                    crate::network_host::validate_cors_response_chain(
+                                        &request_origin,
+                                        &head,
+                                        credentials_mode,
+                                    )
+                            {
+                                let _ = completion_tx
+                                    .send(ServiceWorkerDirectFetchResult::Failure(message));
+                                return;
+                            }
+                            let response_filter = crate::network_host::network_response_filter(
+                                &request_origin,
+                                &head,
+                                request_mode,
+                            );
+                            let body = response.clone_body_bytes();
+                            let navigation_response =
+                                crate::protocol_types::NavigationResponse::from_head_and_body(
+                                    head,
+                                    String::from_utf8_lossy(&body).into_owned(),
+                                    body,
+                                );
+                            ServiceWorkerDirectFetchResult::Response(
+                                ServiceWorkerDirectFetchResponse {
+                                    response: Box::new(navigation_response),
+                                    response_filter,
+                                },
+                            )
+                        }
+                        Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
+                    };
+                    let _ = completion_tx.send(result);
+                });
+            }
+        }
     }
 
     pub(super) fn finish_fetch_stream_started(&self, started: ServiceWorkerFetchStreamStarted) {
@@ -373,33 +382,31 @@ impl ServiceWorkerRuntimeService {
                     return;
                 }
             }
+            let Some(completion_tx) = job.result_tx.stream_sender() else {
+                return;
+            };
             job.streaming_body_source_id = Some(started.body_source_id);
             Some((
-                job.completion_tx.clone(),
-                AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
-                    AsyncSubresourceStreamingStarted {
-                        skip_fetch_security_validation: true,
-                        response_filter: service_worker_response_type_filter(
-                            &started.response_head.response_type,
-                        ),
-                        internal_id: job.internal_id,
-                        request_url: job.request.url.clone(),
-                        request_method: job.request.method.clone(),
-                        request_headers: job.request.request_headers.clone(),
-                        request_body: request_body_text(&job.request.body),
-                        body_source_id: started.body_source_id,
-                        network_request_headers: None,
-                        head: service_worker_fetch_stream_response_head(
-                            job,
-                            &started.response_head,
-                        ),
-                    },
-                )),
+                completion_tx,
+                AsyncSubresourceStreamingStarted {
+                    skip_fetch_security_validation: true,
+                    response_filter: service_worker_response_type_filter(
+                        &started.response_head.response_type,
+                    ),
+                    internal_id: job.internal_id,
+                    request_url: job.request.url.clone(),
+                    request_method: job.request.method.clone(),
+                    request_headers: job.request.request_headers.clone(),
+                    request_body: request_body_text(&job.request.body),
+                    body_source_id: started.body_source_id,
+                    network_request_headers: None,
+                    head: service_worker_fetch_stream_response_head(job, &started.response_head),
+                },
             ))
         }) else {
             return;
         };
-        let _ = completion_tx.send_async_subresource_event(streaming_started);
+        completion_tx.response_started(streaming_started);
     }
 
     fn reject_fetch_stream_started(
@@ -490,17 +497,16 @@ impl ServiceWorkerRuntimeService {
                 .get(&chunk.event_id)
                 .and_then(|job| {
                     (job.streaming_body_source_id == Some(chunk.body_source_id))
-                        .then(|| job.completion_tx.clone())
+                        .then(|| job.result_tx.stream_sender())
+                        .flatten()
                 })
         }) else {
             return;
         };
-        let _ = completion_tx.send_async_subresource_event(
-            AsyncSubresourceFetchEvent::StreamingChunk(AsyncSubresourceStreamingChunk {
-                body_source_id: chunk.body_source_id,
-                bytes: chunk.bytes,
-            }),
-        );
+        completion_tx.data_received(AsyncSubresourceStreamingChunk {
+            body_source_id: chunk.body_source_id,
+            bytes: chunk.bytes,
+        });
     }
 
     pub(super) fn complete_fetch_with_service_worker_response(
@@ -613,17 +619,24 @@ impl ServiceWorkerRuntimeService {
             String::from_utf8_lossy(&response.body).into_owned(),
             response.body,
         );
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
-                ServiceWorkerDirectFetchResponse {
-                    response: Box::new(navigation_response),
-                    response_filter,
-                },
-            ));
-            return;
-        }
+        let completion_tx = match job.result_tx {
+            ServiceWorkerFetchResultSender::CspReport(resource) => {
+                resource.response_completed(&navigation_response);
+                return;
+            }
+            ServiceWorkerFetchResultSender::Direct(completion_tx) => {
+                let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
+                    ServiceWorkerDirectFetchResponse {
+                        response: Box::new(navigation_response),
+                        response_filter,
+                    },
+                ));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Page { completion_tx, .. } => completion_tx,
+        };
         if let Some(body_source_id) = job.streaming_body_source_id.take() {
-            let _ = job.completion_tx.send_async_subresource_event(
+            let _ = completion_tx.send_async_subresource_event(
                 AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
                     internal_id: job.internal_id,
                     body_source_id,
@@ -632,20 +645,18 @@ impl ServiceWorkerRuntimeService {
             );
             return;
         }
-        let _ = job
-            .completion_tx
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id: job.internal_id,
-                request_url: job.request.url,
-                request_method: job.request.method,
-                request_headers: job.request.request_headers.clone(),
-                request_body: request_body_text(&job.request.body),
-                response_status_text: Some(response.status_text),
-                skip_fetch_security_validation: true,
-                response_filter,
-                network_error_text: None,
-                result: Ok(navigation_response).into(),
-            });
+        let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+            internal_id: job.internal_id,
+            request_url: job.request.url,
+            request_method: job.request.method,
+            request_headers: job.request.request_headers,
+            request_body: request_body_text(&job.request.body),
+            response_status_text: Some(response.status_text),
+            skip_fetch_security_validation: true,
+            response_filter,
+            network_error_text: None,
+            result: Ok(navigation_response).into(),
+        });
     }
 
     pub(super) fn complete_fetch_with_failure(&self, job: ServiceWorkerFetchJob, message: String) {
@@ -671,12 +682,19 @@ impl ServiceWorkerRuntimeService {
         if network_error_text.is_none() {
             network_error_text = service_worker_fetch_failure_network_error_text(&message);
         }
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
-            return;
-        }
+        let completion_tx = match job.result_tx {
+            ServiceWorkerFetchResultSender::CspReport(resource) => {
+                resource.fail(network_error_text.unwrap_or(message));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Direct(completion_tx) => {
+                let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Page { completion_tx, .. } => completion_tx,
+        };
         if let Some(body_source_id) = job.streaming_body_source_id.take() {
-            let _ = job.completion_tx.send_async_subresource_event(
+            let _ = completion_tx.send_async_subresource_event(
                 AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
                     internal_id: job.internal_id,
                     body_source_id,
@@ -685,20 +703,18 @@ impl ServiceWorkerRuntimeService {
             );
             return;
         }
-        let _ = job
-            .completion_tx
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id: job.internal_id,
-                request_url: job.request.url,
-                request_method: job.request.method,
-                request_headers: job.request.request_headers.clone(),
-                request_body: request_body_text(&job.request.body),
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text,
-                result: Err(message).into(),
-            });
+        let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+            internal_id: job.internal_id,
+            request_url: job.request.url,
+            request_method: job.request.method,
+            request_headers: job.request.request_headers,
+            request_body: request_body_text(&job.request.body),
+            response_status_text: None,
+            skip_fetch_security_validation: false,
+            response_filter: None,
+            network_error_text,
+            result: Err(message).into(),
+        });
     }
 }
 
@@ -1171,13 +1187,15 @@ mod tests {
                     resource_type,
                     policy_context: Default::default(),
                 },
-                completion_tx,
+                result_tx: ServiceWorkerFetchResultSender::Page {
+                    completion_tx,
+                    network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                },
                 request_client: test_request_client(service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
                 navigation_preload_cancel_handle: None,
                 streaming_body_source_id: None,
-                direct_completion_tx: None,
             },
         );
         request_url
@@ -1922,13 +1940,15 @@ mod tests {
                 resource_type: crate::types::SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
             },
-            completion_tx: completion_queue.sender(),
+            result_tx: ServiceWorkerFetchResultSender::Page {
+                completion_tx: completion_queue.sender(),
+                network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+            },
             request_client: test_request_client(&service),
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             navigation_preload_cancel_handle: None,
             streaming_body_source_id: None,
-            direct_completion_tx: None,
         };
         let origin = moli_url::WebOrigin::from_url(&url("https://initiator.test/"));
         job.request = job
@@ -3277,7 +3297,7 @@ mod tests {
             .pending_fetch_jobs
             .get_mut(&event_id)
             .expect("active fetch job")
-            .direct_completion_tx = Some(direct_completion_tx);
+            .result_tx = ServiceWorkerFetchResultSender::Direct(direct_completion_tx);
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
@@ -3351,7 +3371,7 @@ mod tests {
             from_cache: false,
             negotiated_http_version: None,
         });
-        job.direct_completion_tx = Some(direct_completion_tx);
+        job.result_tx = ServiceWorkerFetchResultSender::Direct(direct_completion_tx);
 
         // This test intentionally calls from a plain test thread. The
         // fallback must use the runner captured by the original resource

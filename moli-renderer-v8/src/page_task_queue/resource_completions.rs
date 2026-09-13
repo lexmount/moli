@@ -326,11 +326,6 @@ impl RendererOwnerWakeSender {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RendererResourceCompletionSender {
-    page_completion_route: Option<RendererPageResourceCompletionRoute>,
-}
-
-#[derive(Debug, Clone)]
-struct RendererPageResourceCompletionRoute {
     sender: RendererPageResourceCompletionSender,
     root_document: RendererDocumentToken,
 }
@@ -341,22 +336,14 @@ impl RendererResourceCompletionSender {
         root_document: RendererDocumentToken,
     ) -> Self {
         Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
+            sender: page_completion_sender,
+            root_document,
         }
     }
 
-    /// Capability used by ServiceWorker interception paths whose actual
-    /// result travels through a dedicated oneshot channel.
-    ///
-    /// It deliberately owns no Page route. If an error path accidentally
-    /// attempts a Page completion, the typed send returns `RouteClosed`.
-    pub(crate) fn direct_completion_only() -> Self {
-        Self {
-            page_completion_route: None,
-        }
+    #[cfg(test)]
+    pub(crate) fn closed_for_test() -> Self {
+        RendererResourceCompletionTestHarness::new().sender()
     }
 
     /// Narrow constructor for tests that exercise one production Networking
@@ -371,10 +358,8 @@ impl RendererResourceCompletionSender {
         root_document: RendererDocumentToken,
     ) -> Self {
         Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
+            sender: page_completion_sender,
+            root_document,
         }
     }
 
@@ -382,11 +367,17 @@ impl RendererResourceCompletionSender {
         &self,
         make_completion: impl FnOnce(RendererDocumentToken) -> RendererPageResourceCompletion,
     ) -> Result<(), RendererResourceCompletionRouteClosed> {
-        let route = self
-            .page_completion_route
-            .as_ref()
-            .ok_or(RendererResourceCompletionRouteClosed)?;
-        route.sender.send(make_completion(route.root_document))
+        self.sender.send(make_completion(self.root_document))
+    }
+
+    pub(crate) fn network_observer(
+        &self,
+    ) -> std::sync::Arc<dyn Fn(crate::runtime::RendererNetworkObservation) + Send + Sync> {
+        let completion = self.clone();
+        std::sync::Arc::new(move |event| {
+            let _ = completion
+                .send_async_subresource_event(AsyncSubresourceFetchEvent::NativeNetwork(event));
+        })
     }
 
     pub(crate) fn send_async_subresource(
@@ -812,15 +803,15 @@ mod tests {
     }
 
     #[test]
-    fn direct_completion_capability_rejects_page_routes_without_panicking() {
-        let sender = RendererResourceCompletionSender::direct_completion_only();
+    fn closed_page_route_rejects_script_completion_without_panicking() {
+        let sender = RendererResourceCompletionSender::closed_for_test();
         assert!(
             sender
                 .send_document_write_external_script(
                     DocumentWriteExternalScriptLoadCompletion::for_test(91),
                 )
                 .is_err(),
-            "direct-result ServiceWorker paths must not silently acquire a Page terminal route"
+            "a closed Page must reject script completion"
         );
     }
 
@@ -2006,14 +1997,14 @@ mod tests {
     }
 
     #[test]
-    fn async_subresource_rejects_a_sender_without_a_page_route() {
-        let sender = RendererResourceCompletionSender::direct_completion_only();
+    fn closed_page_route_rejects_async_subresource_completion() {
+        let sender = RendererResourceCompletionSender::closed_for_test();
 
         assert!(
             sender
                 .send_async_subresource(async_subresource_completion(11))
                 .is_err(),
-            "typed async-subresource completion requires a stable Page route"
+            "a closed Page must reject async-subresource completion"
         );
     }
 }

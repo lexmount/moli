@@ -894,7 +894,7 @@ fn child_context_handle_from_global<'s>(
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
-    network: &std::sync::Arc<crate::worker::WorkerResourceTransfer>,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     if let Some(response) = materialize_worker_script_response(script_url)? {
         network.main_script_response(&response, Ok(()))?;

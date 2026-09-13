@@ -233,24 +233,7 @@ pub(super) fn spawn_network_fetch(
         &prepared.method,
         prepared.credentials_mode,
     );
-    let network_context = AsyncSubresourceNetworkContext {
-        frame_id: prepared.frame_id.clone(),
-        request_origin: prepared.request_origin.clone(),
-        document_url: prepared.document_url.clone(),
-        resource_type: SubresourceResourceType::Fetch,
-        policy_context: prepared.policy_context,
-    };
     let cancel_handle = FetchCancelHandle::new();
-    let requires_preflight = prepared.request_mode == moli_fetch::RequestMode::Cors
-        && crate::network_host::cors_preflight_request_headers(
-            !prepared
-                .request_origin
-                .same_origin(&(&prepared.resolved_url).into()),
-            &prepared.resolved_url,
-            &prepared.method,
-            &prepared.cors_preflight_request_headers,
-        )
-        .is_some();
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
@@ -277,7 +260,6 @@ pub(super) fn spawn_network_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report,
         },
-        requires_preflight,
     );
     spawn_async_subresource_fetch(
         prepared.resource_loader.task_runner(),
@@ -287,7 +269,7 @@ pub(super) fn spawn_network_fetch(
         Some(cancel_handle),
         prepared.cors_preflight_request_headers,
         internal_id,
-        network_context,
+        host.pending_subresource_preflight_observer(internal_id),
         prepared.resolved_url,
         prepared.method,
         prepared.request_headers,
