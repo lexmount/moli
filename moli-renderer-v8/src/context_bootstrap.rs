@@ -271,7 +271,10 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
-pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
+pub(crate) use self::file_api::{
+    apply_drag_modifier_drop_effect, build_clipboard_data_transfer, build_data_transfer_object,
+    clipboard_data_transfer_contents, disable_clipboard_data_transfer,
+};
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,
     flush_one_pending_file_reader, selected_file_from_object,

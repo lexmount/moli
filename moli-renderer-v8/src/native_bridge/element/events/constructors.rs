@@ -1,8 +1,67 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
-use super::{construct_event, event_constructor};
+use super::{construct_event, construct_intrinsic_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct ClipboardEventInitDeclaration<'s> {
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    clipboard_data: v8::Local<'s, v8::Object>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct EditingInputEventInitDeclaration<'s> {
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    input_type: v8::Local<'s, v8::String>,
+    data: v8::Local<'s, v8::Value>,
+    data_transfer: v8::Local<'s, v8::Value>,
+}
+
+pub(crate) fn construct_clipboard_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ClipboardEventInitDeclaration::new(true, true, true, data)
+        .bind(scope)
+        .ok()?;
+    construct_intrinsic_event(scope, "ClipboardEvent", event_type, init)
+}
+
+pub(crate) fn construct_editing_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    input_type: &str,
+    data: Option<&str>,
+    transfer: Option<v8::Local<'s, v8::Object>>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let input_type = v8_string(scope, input_type)?;
+    let data = match data {
+        Some(data) => v8_string(scope, data)?.into(),
+        None => v8::null(scope).into(),
+    };
+    let transfer = transfer
+        .map(Into::into)
+        .unwrap_or_else(|| v8::null(scope).into());
+    let init = EditingInputEventInitDeclaration::new(
+        true,
+        event_type == "beforeinput",
+        true,
+        input_type,
+        data,
+        transfer,
+    )
+    .bind(scope)
+    .ok()?;
+    construct_intrinsic_event(scope, "InputEvent", event_type, init)
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
@@ -124,21 +183,13 @@ struct KeyboardEventInitDeclaration<'scope> {
     repeat: bool,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct InputEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    input_type: v8::Local<'scope, v8::String>,
-    data: v8::Local<'scope, v8::Value>,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum TextEditInputType {
     InsertText,
     InsertLineBreak,
     InsertFromDrop,
+    InsertFromPaste,
+    DeleteByCut,
     DeleteContentBackward,
     DeleteContentForward,
 }
@@ -149,6 +200,8 @@ impl TextEditInputType {
             Self::InsertText => "insertText",
             Self::InsertLineBreak => "insertLineBreak",
             Self::InsertFromDrop => "insertFromDrop",
+            Self::InsertFromPaste => "insertFromPaste",
+            Self::DeleteByCut => "deleteByCut",
             Self::DeleteContentBackward => "deleteContentBackward",
             Self::DeleteContentForward => "deleteContentForward",
         }
@@ -157,6 +210,8 @@ impl TextEditInputType {
     pub(crate) fn data(self, text: &str) -> Option<&str> {
         match self {
             Self::InsertText | Self::InsertFromDrop => Some(text),
+            Self::InsertFromPaste => (!text.is_empty()).then_some(text),
+            Self::DeleteByCut => None,
             Self::InsertLineBreak | Self::DeleteContentBackward | Self::DeleteContentForward => {
                 None
             }
@@ -798,16 +853,7 @@ pub(crate) fn construct_input_event<'s>(
     input_type: TextEditInputType,
     data: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let input_type = v8_string(scope, input_type.as_str())?;
-    let data = match data {
-        Some(text) => v8_string(scope, text)?.into(),
-        None => v8::null(scope).into(),
-    };
-    let init =
-        InputEventInitDeclaration::new(true, event_type == "beforeinput", true, input_type, data)
-            .bind(scope)
-            .ok()?;
-    construct_event(scope, "InputEvent", event_type, init)
+    construct_editing_input_event(scope, event_type, input_type.as_str(), data, None)
 }
 
 pub(crate) fn construct_simple_event<'s>(
