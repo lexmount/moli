@@ -29492,6 +29492,16 @@ async fn spawn_lightweight_popup_response_html_server(
     policy_header: &'static str,
     body: &'static str,
 ) -> (String, tokio::task::JoinHandle<()>) {
+    spawn_lightweight_popup_html_responses(bind_label, io_label, policy_header, body, 1).await
+}
+
+pub(super) async fn spawn_lightweight_popup_html_responses(
+    bind_label: &'static str,
+    io_label: &'static str,
+    policy_header: &'static str,
+    body: &'static str,
+    response_count: usize,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .unwrap_or_else(|_| panic!("bind {bind_label}"));
@@ -29501,24 +29511,26 @@ async fn spawn_lightweight_popup_response_html_server(
     let server = tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .unwrap_or_else(|_| panic!("accept {io_label} request"));
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .unwrap_or_else(|_| panic!("read {io_label} request"));
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{policy_header}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .unwrap_or_else(|_| panic!("write {io_label} response"));
+        for _ in 0..response_count {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .unwrap_or_else(|_| panic!("accept {io_label} request"));
+            let mut buffer = [0; 1024];
+            let _ = stream
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("read {io_label} request"));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{policy_header}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .unwrap_or_else(|_| panic!("write {io_label} response"));
+        }
     });
     (format!("http://{addr}/popup.html"), server)
 }
