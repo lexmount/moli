@@ -12,7 +12,7 @@ use super::provider::{
 };
 use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::JsContextHost};
 
-const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
+pub(super) const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct InputHit {
@@ -27,6 +27,32 @@ pub(crate) struct InputHit {
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+    // Inspectors and wheel input can target a Document viewport even when
+    // pointer and mouse input have no element target.
+    viewport_document: Option<InputHit>,
+}
+
+impl InputSurfaceHit {
+    fn element(input: InputHit) -> Self {
+        Self {
+            input: Some(input),
+            ..Self::default()
+        }
+    }
+
+    fn empty_viewport(document: DomHandle, root_to_frame: LayoutTransform2D) -> Self {
+        Self {
+            viewport_document: Some(InputHit {
+                handle: document,
+                root_to_frame,
+            }),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn document_or_element(self) -> Option<InputHit> {
+        self.input.or(self.viewport_document)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -105,11 +131,12 @@ pub(crate) fn observable_input_surface_hit_test(
     include_scrollbars: bool,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
-        return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
-            .map(|input| InputSurfaceHit {
-                input,
-                control: None,
-            });
+        return input_surface_hit_test_in_frame(
+            runtime,
+            FrameHitTest::root(runtime, document, point),
+            ignore_pointer_events_none,
+            0,
+        );
     }
 
     let viewport = runtime.layout_viewport_for_document(document);
@@ -119,8 +146,12 @@ pub(crate) fn observable_input_surface_hit_test(
             input_surface_hit_test_in_tree(
                 runtime,
                 tree,
-                point,
-                LayoutTransform2D::IDENTITY,
+                FrameHitTest {
+                    document,
+                    viewport: tree.viewport,
+                    point,
+                    root_to_frame: LayoutTransform2D::IDENTITY,
+                },
                 ignore_pointer_events_none,
                 include_scrollbars,
                 0,
@@ -135,66 +166,77 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(observable_input_surface_hit_test(
+    let hit = observable_input_surface_hit_test(
         runtime,
         document,
         point,
         ignore_pointer_events_none,
         false,
-    )?
-    .input
-    .map(|hit| hit.handle))
+    )?;
+    Ok(hit.document_or_element().map(|input| input.handle))
 }
 
-fn input_hit_test_via_documents(
-    runtime: &JsContextHost,
-    document: DomHandle,
-    point: LayoutPoint,
-    ignore_pointer_events_none: bool,
-) -> Result<Option<InputHit>, LayoutError> {
-    input_hit_test_in_frame(
-        runtime,
-        FrameHitTest::root(runtime, document, point),
-        ignore_pointer_events_none,
-        0,
-    )
-}
-
-fn input_hit_test_in_frame(
+fn input_surface_hit_test_in_frame(
     runtime: &JsContextHost,
     frame: FrameHitTest,
     ignore_pointer_events_none: bool,
     depth: usize,
-) -> Result<Option<InputHit>, LayoutError> {
+) -> Result<InputSurfaceHit, LayoutError> {
     let Some((layout_hit, target)) = live_hit_in_frame(runtime, frame, ignore_pointer_events_none)?
     else {
-        return Ok(None);
+        if !point_in_viewport(frame.viewport, frame.point) {
+            return Ok(InputSurfaceHit::default());
+        }
+        let mut hit = InputSurfaceHit::empty_viewport(frame.document, frame.root_to_frame);
+        let Some(root) =
+            viewport_root_element(runtime, frame.document, frame.viewport, frame.point)
+        else {
+            return Ok(hit);
+        };
+        let answers = observable_geometry_batch(
+            runtime,
+            frame.document,
+            LayoutFlushReason::HitTest,
+            &LayoutQueryBatch::new(vec![LayoutQuery::BoxModel { source: root }]),
+        )?;
+        return match answers.answers.into_iter().next() {
+            Some(LayoutQueryAnswer::BoxModel(model)) => {
+                hit.input = model.map(|_| InputHit {
+                    handle: root,
+                    root_to_frame: frame.root_to_frame,
+                });
+                Ok(hit)
+            }
+            _ => Err(provider_contract_error("viewport root box")),
+        };
     };
     let target_hit = InputHit {
         handle: target,
         root_to_frame: frame.root_to_frame,
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return Ok(Some(target_hit));
+        return Ok(InputSurfaceHit::element(target_hit));
     }
     let Some(child) = frame.child(runtime, target, layout_hit) else {
-        return Ok(Some(target_hit));
+        return Ok(InputSurfaceHit::element(target_hit));
     };
-    Ok(
-        input_hit_test_in_frame(runtime, child, ignore_pointer_events_none, depth + 1)?
-            .or(Some(target_hit)),
-    )
+    input_surface_hit_test_in_frame(runtime, child, ignore_pointer_events_none, depth + 1)
 }
 
 fn input_surface_hit_test_in_tree(
     runtime: &JsContextHost,
     tree: &FrozenLayoutTree<DomHandle>,
-    point: LayoutPoint,
-    root_to_frame: LayoutTransform2D,
+    frame: FrameHitTest,
     ignore_pointer_events_none: bool,
     include_scrollbars: bool,
     depth: usize,
 ) -> InputSurfaceHit {
+    let FrameHitTest {
+        document,
+        point,
+        root_to_frame,
+        ..
+    } = frame;
     let live_dom_hit = if include_scrollbars {
         let mut live_dom_hit = None;
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
@@ -218,8 +260,8 @@ fn input_surface_hit_test_in_tree(
                         }
                     }
                     return InputSurfaceHit {
-                        input: None,
                         control: Some(control),
+                        ..InputSurfaceHit::default()
                     };
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
@@ -236,64 +278,88 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        return InputSurfaceHit::default();
+        if !point_in_viewport(tree.viewport, point) {
+            return InputSurfaceHit::default();
+        }
+        let input = viewport_root_element(runtime, document, tree.viewport, point)
+            .filter(|root| {
+                tree.boxes
+                    .get(tree.root_box.index())
+                    .is_some_and(|layout_box| layout_box.principal_source == Some(*root))
+            })
+            .map(|handle| InputHit {
+                handle,
+                root_to_frame,
+            });
+        return InputSurfaceHit {
+            input,
+            ..InputSurfaceHit::empty_viewport(document, root_to_frame)
+        };
     };
     let target_hit = InputHit {
         handle: target,
         root_to_frame,
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
+        return InputSurfaceHit::element(target_hit);
     }
-    let Some(child_tree) = tree.embedded_frame_tree(target) else {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
+    let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
+        return InputSurfaceHit::element(target_hit);
     };
-    if runtime
-        .child_browsing_context_document_handle(target)
-        .is_none()
-    {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
-    }
     let Some(content_box) = layout_hit.local_content_box else {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
+        return InputSurfaceHit::element(target_hit);
     };
     if !content_box.contains(layout_hit.local_point) {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
+        return InputSurfaceHit::element(target_hit);
     }
+    // The child viewport owns input inside its content area. In particular,
+    // removing or hiding its root must not redirect clicks to the frame in
+    // the parent document.
     let frame_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
         .concatenate(layout_hit.viewport_to_local);
-    let child_hit = input_surface_hit_test_in_tree(
+    let Some(child_tree) = tree.embedded_frame_tree(target) else {
+        return InputSurfaceHit::empty_viewport(
+            child_document,
+            frame_to_child.concatenate(root_to_frame),
+        );
+    };
+    input_surface_hit_test_in_tree(
         runtime,
         child_tree,
-        frame_to_child.map_point(point),
-        frame_to_child.concatenate(root_to_frame),
+        FrameHitTest {
+            document: child_document,
+            viewport: child_tree.viewport,
+            point: frame_to_child.map_point(point),
+            root_to_frame: frame_to_child.concatenate(root_to_frame),
+        },
         ignore_pointer_events_none,
         include_scrollbars,
         depth + 1,
-    );
-    if child_hit.input.is_some() || child_hit.control.is_some() {
-        child_hit
-    } else {
-        InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        }
+    )
+}
+
+fn viewport_root_element(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+) -> Option<DomHandle> {
+    if !point_in_viewport(viewport, point) {
+        return None;
     }
+    // Like elementFromPoint, the viewport fallback can return the root even
+    // when ordinary box hit testing excludes it (for example, pointer-events
+    // or inert). Callers additionally require a generated root layout box.
+    runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(document)
+        .filter(|root| runtime.dom_host().is_connected(*root))
+}
+
+fn point_in_viewport(viewport: LayoutViewport, point: LayoutPoint) -> bool {
+    (0.0..viewport.css_width as f32).contains(&point.x)
+        && (0.0..viewport.css_height as f32).contains(&point.y)
 }
 
 fn live_hit_in_tree(
