@@ -36,6 +36,12 @@ impl ScriptVm {
             InspectorWindowDispatchTarget::ExecutionContext(execution_context_id) => {
                 execution_context_id
             }
+            InspectorWindowDispatchTarget::UniqueContext(unique_id) => {
+                self.known_runtime_realm_inventory()
+                    .into_iter()
+                    .find(|realm| realm.realm_id.as_deref() == Some(unique_id.as_str()))?
+                    .context_id
+            }
         };
         if self.runtime_observable_default_execution_context_id() == Some(execution_context_id) {
             return Some(InspectorWindowDispatchScope {
