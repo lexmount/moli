@@ -136,6 +136,7 @@ FETCH_REDIRECT_RESOURCE_PATHS = {
     "/fetch/api/resources/redirect.py",
     "/fetch/api/resources/redirect-empty-location.py",
 }
+FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
@@ -1921,7 +1922,9 @@ def _make_handler(
                     return self._serve_fetch_resource_method
                 if path in XHR_RESOURCE_PATHS:
                     return self._serve_xhr_method
-                if path in FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_REDIRECT_RESOURCE_PATHS:
+                if path in FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_REDIRECT_RESOURCE_PATHS | {
+                    FETCH_INSPECT_HEADERS_PATH
+                }:
                     return self._serve_fetch_resource_method
             raise AttributeError(name)
 
@@ -1948,7 +1951,8 @@ def _make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -1980,7 +1984,8 @@ def _make_handler(
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2058,6 +2063,9 @@ def _make_handler(
             if unquote(parsed.path) in FETCH_REDIRECT_RESOURCE_PATHS:
                 self._serve_fetch_redirect_resource(parsed.query, emit_body=self.command != "HEAD")
                 return
+            if unquote(parsed.path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(parsed.query, emit_body=self.command != "HEAD")
+                return
             if unquote(parsed.path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
                 self._serve_fetch_preflight_resource(
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD"
@@ -2093,7 +2101,8 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py", *FETCH_REDIRECT_RESOURCE_PATHS
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2315,17 +2324,8 @@ def _make_handler(
             if path in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
                 return
-            if path == "/fetch/api/resources/inspect-headers.py":
-                self._send_bytes(
-                    "text/plain",
-                    b"",
-                    emit_body=emit_body,
-                    extra_headers=_inspect_headers_response_headers(
-                        parsed.query,
-                        list(self.headers.items()),
-                    ),
-                    status_code=pipe_status_code or 200,
-                )
+            if path == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(parsed.query, emit_body=emit_body)
                 return
             if path == "/fetch/nosniff/resources/js.py":
                 self._serve_nosniff_javascript(parsed.query, emit_body=emit_body)
@@ -3269,6 +3269,19 @@ def _make_handler(
                         break
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
+
+        def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
+            headers = _inspect_headers_response_headers(query, list(self.headers.items()))
+            # The upstream handler only reads headers. Return immediately and
+            # close connections with unread uploads, as for redirect fixtures.
+            if (self.headers.get("Transfer-Encoding") is not None
+                    or self.headers.get("Content-Length", "0").strip() not in {"", "0"}):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                "text/plain", b"", emit_body=emit_body, extra_headers=headers,
+                status_code=_pipe_response_status(query) or 200,
+            )
 
         def _serve_fetch_redirect_resource(self, query: str, *, emit_body: bool) -> None:
             connection_headers = []
