@@ -289,6 +289,7 @@ mod tests {
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "worker".to_owned(),
+            true,
         );
         target.attach_session(session_id.to_owned());
         target.record_console_message(RendererSharedWorkerConsoleMessage {

@@ -40,22 +40,6 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
 ) -> Result<Response, String> {
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata(
-        loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-    )
-    .await
-    .map(NetworkFetchResult::into_response)
-}
-
-pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network_metadata(
-    loader: ResourceRequestClient,
-    request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
-) -> Result<NetworkFetchResult<Response>, String> {
     fetch_browser_subresource_with_preflight_headers_and_observer(
         loader,
         request,
@@ -64,9 +48,10 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network
         None,
     )
     .await
+    .map(NetworkFetchResult::into_response)
 }
 
-async fn fetch_browser_subresource_with_preflight_headers_and_observer(
+pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
@@ -339,23 +324,7 @@ fn next_redirect_url(
         })
 }
 
-pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
-    loader: &ResourceRequestClient,
-    request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
-    fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-        loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-        None,
-    )
-    .await
-}
-
-async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
@@ -414,7 +383,6 @@ async fn run_cors_preflight_if_needed(
             preflight_request_headers,
         )
     {
-        let observable_preflight_headers = preflight_headers.clone();
         let mut preflight_request = Request::new_browser_bytes(
             "OPTIONS",
             request.url.as_str(),
@@ -439,36 +407,14 @@ async fn run_cors_preflight_if_needed(
                 preflight_request.with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         }
 
-        let preflight_response = match fetch_response_head_once(
-            loader,
-            preflight_request,
-            cancel_handle.clone(),
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                if let Some(observer) = preflight_observer {
-                    observer.send_preflight_failure(
-                        request.url.clone(),
-                        moli_fetch::RequestHeaders::from_byte_strings(
-                            &observable_preflight_headers,
-                        )
-                        .expect("observed request headers are ByteStrings"),
-                        error.clone(),
-                    );
-                }
-                return Err(error);
+        let preflight_response = match preflight_observer {
+            Some(observer) => {
+                observer
+                    .fetch(loader, preflight_request, cancel_handle)
+                    .await?
             }
+            None => fetch_response_head_once(loader, preflight_request, cancel_handle).await?,
         };
-        if let Some(observer) = preflight_observer {
-            observer.send_preflight_success(
-                request.url.clone(),
-                moli_fetch::RequestHeaders::from_byte_strings(&observable_preflight_headers)
-                    .expect("observed request headers are ByteStrings"),
-                &preflight_response,
-            );
-        }
         validate_cors_preflight_response(
             &request.serialized_origin(),
             request.credentials_mode,
@@ -792,7 +738,7 @@ async fn fetch_once_with_network_metadata_unvalidated(
     Ok(result)
 }
 
-async fn fetch_response_head_once(
+pub(super) async fn fetch_response_head_once(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,

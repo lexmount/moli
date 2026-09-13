@@ -101,6 +101,7 @@ pub(super) fn push_shared_worker_target(
             None,
             url.to_owned(),
             name.to_owned(),
+            true,
         );
         if let Some(session_id) = session_id {
             target.attach_session(session_id.to_owned());

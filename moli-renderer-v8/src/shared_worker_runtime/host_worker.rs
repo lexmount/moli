@@ -33,9 +33,7 @@ impl RendererSharedWorkerHost {
             script_url.clone(),
             launch_context.request_client,
             WorkerGlobalKind::Shared {
-                network: execution_policy.worker_context_runtime.network_for_worker(
-                    crate::runtime::RendererWorkerIdentity::Shared(self.instance_id()),
-                ),
+                network: self.network.clone(),
                 name: name.clone(),
                 storage_key: params.key.storage_key().clone(),
             },

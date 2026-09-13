@@ -1128,6 +1128,7 @@ pub struct SubresourceRequestStarted {
     request_body: Option<String>,
     request_body_bytes: Option<Vec<u8>>,
     keepalive: bool,
+    worker_main_script: bool,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1230,6 +1231,7 @@ impl SubresourceRequestStarted {
             request_body,
             request_body_bytes,
             keepalive: false,
+            worker_main_script: false,
             resource_type,
             request_initiator_type,
             request_cookie_report,
@@ -1238,6 +1240,17 @@ impl SubresourceRequestStarted {
 
     pub fn handle(&self) -> SubresourceNetworkRequestHandle {
         self.handle
+    }
+
+    /// A Worker constructor's outside-settings request, whose protocol
+    /// notifications span the creator and the newly created Worker target.
+    pub fn with_worker_main_script(mut self) -> Self {
+        self.worker_main_script = true;
+        self
+    }
+
+    pub fn is_worker_main_script(&self) -> bool {
+        self.worker_main_script
     }
 
     pub fn with_request_body_bytes(mut self, request_body_bytes: Option<Vec<u8>>) -> Self {

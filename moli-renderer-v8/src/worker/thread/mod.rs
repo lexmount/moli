@@ -202,13 +202,6 @@ impl WorkerGlobalKind {
             Self::UnobservedDedicated { network, .. } => network,
         }
     }
-
-    pub(in crate::worker) fn network_message(
-        &self,
-        record: moli_page_types::SubresourceNetworkRecord,
-    ) -> WorkerToParentMessage {
-        WorkerToParentMessage::Network(self.network().report(record))
-    }
 }
 
 pub(crate) struct WorkerSpawnOptions {
@@ -649,20 +642,11 @@ fn start_worker_module_graph_fetch(
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let Some(network) = WorkerResourceTransfer::start(
+    let Some(network) = WorkerResourceTransfer::start_script(
         state.global_kind.network(),
         state.parent_tx.network_observer(),
-        |network| {
-            super::global_scope::worker_request_started(
-                network,
-                request.initiator_url(),
-                request.url(),
-                "GET",
-                &moli_fetch::RequestHeaders::default(),
-                &None,
-                crate::types::SubresourceResourceType::Script,
-            )
-        },
+        request.url(),
+        request.initiator_url(),
     ) else {
         let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
             fetch_id,

@@ -58,12 +58,13 @@ mod tests {
                 message_port_registry,
             ),
         );
-        let cancel_handle = host.begin_loading_task();
+        let (cancel_handle, mut cancelled) = host.begin_loading_task();
         test_support::store_loading_host(&service, instance_id, host.clone());
 
         service.terminate_all_for_context_shutdown();
 
         assert!(cancel_handle.is_cancelled());
+        assert_eq!(cancelled.try_recv(), Ok(()));
         assert!(host.is_closed());
         assert!(test_support::matching_is_empty(&service));
         assert!(test_support::loading_hosts_empty(&service));

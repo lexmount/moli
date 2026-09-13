@@ -81,6 +81,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         item: &moli_core::page::ScriptNetworkOutputItem,
     ) -> Vec<BackgroundProtocolEvent> {
+        if let Some(events) = self.project_dedicated_worker_main_script_network_item(owner, item) {
+            return events;
+        }
         let Some((_, Some(target_id))) = self.network_owner_identity_for_owner(owner) else {
             return Vec::new();
         };

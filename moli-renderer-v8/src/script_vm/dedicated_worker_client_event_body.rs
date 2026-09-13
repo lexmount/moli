@@ -62,7 +62,6 @@ impl ScriptVm {
             RendererDedicatedWorkerClientEvent::ScriptLoaded {
                 script_url,
                 script_source,
-                network_response,
                 script_kind,
                 secure_context,
                 response_referrer_policy,
@@ -76,7 +75,6 @@ impl ScriptVm {
                     worker_id,
                     script_url,
                     script_source,
-                    network_response,
                     script_kind,
                     secure_context,
                     response_referrer_policy,
@@ -108,7 +106,6 @@ impl ScriptVm {
                 if let RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                     script_url,
                     error_message,
-                    network_response,
                     ..
                 } = &event
                 {
@@ -119,7 +116,6 @@ impl ScriptVm {
                             worker_id,
                             script_url.clone(),
                             error_message.clone(),
-                            network_response.clone(),
                         );
                     if !recorded {
                         return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);

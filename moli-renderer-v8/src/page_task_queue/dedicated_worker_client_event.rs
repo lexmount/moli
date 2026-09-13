@@ -84,7 +84,6 @@ pub(crate) enum RendererDedicatedWorkerClientEvent {
     ScriptLoaded {
         script_url: String,
         script_source: WorkerScriptSource,
-        network_response: Box<crate::protocol_types::NavigationResponse>,
         script_kind: WorkerScriptKind,
         secure_context: bool,
         response_referrer_policy: Option<String>,
@@ -98,7 +97,6 @@ pub(crate) enum RendererDedicatedWorkerClientEvent {
     ScriptLoadFailed {
         script_url: String,
         error_message: String,
-        network_response: Option<Box<crate::protocol_types::NavigationResponse>>,
     },
     Message(RendererDedicatedWorkerMessageEvent),
     /// Relay terminal ordered behind all client-source records.

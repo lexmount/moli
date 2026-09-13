@@ -1258,6 +1258,7 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
         Some("TID-pending-await-active".to_owned()),
         "https://example.test/sw.js".to_owned(),
         "diagnostics-sw".to_owned(),
+        true,
     );
     shared_worker_target.attach_session("SID-pending-await-sw".to_owned());
     shared_worker_target.register_pending_inspector_await(

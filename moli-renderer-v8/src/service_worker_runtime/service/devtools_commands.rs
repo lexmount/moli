@@ -122,7 +122,7 @@ impl ServiceWorkerRuntimeService {
             else {
                 return false;
             };
-            state
+            let start = state
                 .pending_main_script_update_checks
                 .get_mut(&registration_id)
                 .filter(|pending_check| pending_check.new_version_id == version_id)
@@ -130,7 +130,13 @@ impl ServiceWorkerRuntimeService {
                     pending_check
                         .take_deferred_load_params()
                         .map(|load_params| (registration_id, load_params))
-                })
+                });
+            if start.is_some() {
+                state
+                    .pending_devtools_evaluation_releases
+                    .insert(version_id);
+            }
+            start
         };
         let Some((registration_id, load_params)) = start else {
             return self.devtools_pre_release_evaluation_if_worker_is_starting(version_id);
@@ -195,7 +201,9 @@ impl ServiceWorkerRuntimeService {
                 .drain()
                 .map(|(_, launch)| launch)
                 .collect::<Vec<_>>();
-            state.pending_devtools_evaluation_releases.clear();
+            state
+                .pending_devtools_evaluation_releases
+                .extend(starts.iter().map(|(_, params)| params.owner.version_id()));
             (starts, launches)
         };
         let released_count = starts.len() + launches.len();
@@ -320,7 +328,10 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerVersionRunningState::Stopped => {
                     let owner = version.replace_run_owner();
                     version.last_start_error = None;
-                    let host = RendererServiceWorkerHost::new_loading(&owner);
+                    let host = RendererServiceWorkerHost::new_loading(
+                        &owner,
+                        &version.launch_config.worker_context_runtime,
+                    );
                     let params = version.launch_config.to_launch_params(
                         registration_id,
                         &owner,

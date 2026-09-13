@@ -497,6 +497,7 @@ pub struct RendererSharedWorkerTargetInfo {
     pub instance_id: SharedWorkerInstanceId,
     pub url: String,
     pub name: String,
+    pub execution_ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -552,69 +553,17 @@ pub enum RendererDedicatedWorkerObservation {
 }
 
 /// One immutable native main-script fact, shared by Browser snapshots and
-/// protocol replay. Session delivery progress is not part of this fact.
+/// runtime readiness. Response phases and bodies belong to native Network.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDedicatedWorkerMainScript {
     pub script_url: String,
     pub outcome: RendererDedicatedWorkerMainScriptOutcome,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RendererDedicatedWorkerMainScriptOutcome {
-    Loaded(Box<crate::protocol_types::NavigationResponse>),
-    Failed {
-        error_message: String,
-        response: Option<Box<crate::protocol_types::NavigationResponse>>,
-    },
-}
-
-impl PartialEq for RendererDedicatedWorkerMainScriptOutcome {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Loaded(left), Self::Loaded(right)) => {
-                dedicated_worker_navigation_response_eq(left, right)
-            }
-            (
-                Self::Failed {
-                    error_message: left_error,
-                    response: left,
-                },
-                Self::Failed {
-                    error_message: right_error,
-                    response: right,
-                },
-            ) => {
-                left_error == right_error
-                    && match (left, right) {
-                        (Some(left), Some(right)) => {
-                            dedicated_worker_navigation_response_eq(left, right)
-                        }
-                        (None, None) => true,
-                        _ => false,
-                    }
-            }
-            _ => false,
-        }
-    }
-}
-
-impl Eq for RendererDedicatedWorkerMainScriptOutcome {}
-
-fn dedicated_worker_navigation_response_eq(
-    left: &crate::protocol_types::NavigationResponse,
-    right: &crate::protocol_types::NavigationResponse,
-) -> bool {
-    left.final_url == right.final_url
-        && left.status == right.status
-        && left.headers == right.headers
-        && left.body_bytes() == right.body_bytes()
-        && left.request_cookie_report == right.request_cookie_report
-        && left.cookie_set_reports == right.cookie_set_reports
-        && left.redirected == right.redirected
-        && left.redirect_chain == right.redirect_chain
-        && left.from_cache == right.from_cache
-        && left.negotiated_http_version == right.negotiated_http_version
-        && left.network_request_headers() == right.network_request_headers()
+    Loaded,
+    Failed { error_message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

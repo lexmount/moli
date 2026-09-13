@@ -11,7 +11,7 @@ use super::{
     client::RendererSharedWorkerClient,
     host::{RendererSharedWorkerHost, SharedRendererSharedWorkerHost},
     loading::{
-        SharedWorkerLaunchParams, SharedWorkerScriptLoadKind, load_shared_worker_blob_script_source,
+        SharedWorkerLaunchParams, SharedWorkerScriptLoadKind, load_shared_worker_local_script,
     },
     service::SharedWorkerRuntimeService,
 };
@@ -131,7 +131,11 @@ impl SharedWorkerRuntimeService {
         params.reserve_service_worker_worker_client_for_main_script();
         let target_output = self.open_target_output_stream(instance_id);
         let host = Arc::new(RendererSharedWorkerHost::new_loading(
-            instance_id,
+            params
+                .launch_context
+                .execution_policy
+                .worker_context_runtime
+                .network_for_worker(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
             self.required_owner_local_host_id(),
             self.downgrade(),
             params.key.script_url().to_owned(),
@@ -141,23 +145,37 @@ impl SharedWorkerRuntimeService {
         ));
         host.add_client(client_id, client);
         self.store_loading_host_for_connect(instance_id, host.clone());
-        match params.script_load.clone().into_kind() {
-            SharedWorkerScriptLoadKind::Ready(script) => {
-                host.enqueue_loading_completion(params, Ok(script))
+        host.publish_created_target_event();
+        let script_url = url::Url::parse(params.key.script_url())
+            .expect("SharedWorker key has a resolved script URL");
+        let Some(network) = crate::worker::WorkerResourceTransfer::start_main_script(
+            &host.network,
+            host.network_observer(),
+            &script_url,
+            &params
+                .launch_context
+                .execution_policy
+                .module_static_import_initiator_url,
+        ) else {
+            params.unregister_reserved_service_worker_client();
+            return;
+        };
+        let result = match params.script_load.clone().into_kind() {
+            SharedWorkerScriptLoadKind::Local { script_url } => {
+                load_shared_worker_local_script(&script_url, &network)
             }
-            SharedWorkerScriptLoadKind::Blob { script_url } => host.enqueue_loading_completion(
-                params,
-                load_shared_worker_blob_script_source(&script_url),
-            ),
-            SharedWorkerScriptLoadKind::Failure { message } => {
-                host.enqueue_loading_completion(params, Err(message))
-            }
+            SharedWorkerScriptLoadKind::Failure { message } => Err(message),
             SharedWorkerScriptLoadKind::Fetch(fetch) => {
-                if let Err(message) = host.start_script_fetch(params.clone(), *fetch) {
-                    host.enqueue_loading_completion(params, Err(message));
-                }
+                host.start_script_fetch(params, *fetch, network);
+                return;
             }
+        };
+        if let Err(message) = &result {
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                message.clone(),
+            ));
         }
+        host.enqueue_loading_completion(params, result);
     }
 }
 

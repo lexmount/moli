@@ -119,6 +119,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::activity::ProtocolOutputSlot::ServiceWorkerTargetLifecycle
             }
             moli_core::page::RendererWorkerLifecycle::SharedCreated(_)
+            | moli_core::page::RendererWorkerLifecycle::SharedStarted(_)
             | moli_core::page::RendererWorkerLifecycle::SharedDestroyed(_) => {
                 crate::domains::activity::ProtocolOutputSlot::SharedWorkerTargetLifecycle
             }

@@ -22,16 +22,16 @@ impl RendererSharedWorkerHost {
         }
     }
 
-    pub(super) fn publish_destroyed_target_event(self: &Arc<Self>) {
-        self.begin_runtime_response_retirement();
-        self.finish_output_retirement(Some(RendererWorkerLifecycle::SharedDestroyed(
-            self.instance_id(),
-        )));
+    pub(super) fn publish_started_target_event(&self) {
+        let state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Active) {
+            self.publish_lifecycle(RendererWorkerLifecycle::SharedStarted(self.target_info()));
+        }
     }
 
-    pub(super) fn retire_unstarted_output(&self) {
+    pub(super) fn publish_destroyed_target_event(&self) {
         self.begin_runtime_response_retirement();
-        self.finish_output_retirement(None);
+        self.finish_output_retirement();
     }
 
     /// Stops direct response publication before target retirement begins.
@@ -74,7 +74,7 @@ impl RendererSharedWorkerHost {
         }
     }
 
-    fn finish_output_retirement(&self, lifecycle: Option<RendererWorkerLifecycle>) {
+    fn finish_output_retirement(&self) {
         // One lock orders ordinary receipts, terminal facts and Inspector replies.
         // A queued parent message may outlive the VM, but cannot append after
         // Destroyed or race the journal's closure.
@@ -82,9 +82,8 @@ impl RendererSharedWorkerHost {
         if matches!(*state, SharedWorkerOutputPublicationState::Retired { .. }) {
             return;
         }
-        if let Some(lifecycle) = lifecycle {
-            self.publish_lifecycle(lifecycle);
-        }
+        self.publish_lifecycle(RendererWorkerLifecycle::SharedDestroyed(self.instance_id()));
+        self.network.close_source();
         let target_output = self.target_output();
         let predecessor = target_output
             .last_published_cursor()
@@ -197,6 +196,10 @@ impl RendererSharedWorkerHost {
             instance_id: self.instance_id(),
             url: self.current_script_url(),
             name: self.worker_name(),
+            execution_ready: matches!(
+                *self.state.lock(),
+                super::host::RendererSharedWorkerHostState::Running { .. }
+            ),
         }
     }
 

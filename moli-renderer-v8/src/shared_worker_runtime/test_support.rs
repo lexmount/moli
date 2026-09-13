@@ -162,7 +162,7 @@ pub(super) fn loading_host(
         ),
     );
     Arc::new(RendererSharedWorkerHost::new_loading(
-        instance_id,
+        network_source(instance_id),
         crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
         WeakSharedWorkerRuntimeService::default(),
         key.script_url().to_owned(),
@@ -181,7 +181,7 @@ pub(super) fn loading_host_with_runtime_service(
 ) -> Arc<RendererSharedWorkerHost> {
     runtime_service.ensure_target_output_streams_for_test();
     Arc::new(RendererSharedWorkerHost::new_loading(
-        instance_id,
+        network_source(instance_id),
         runtime_service
             .owner_local_host_id()
             .unwrap_or_else(|| crate::runtime::RendererOwnerLocalHostId::new_for_testing(0)),
@@ -258,4 +258,15 @@ pub(super) fn install_owner_wake_sender(
     let (sender, receiver) = shared_worker_owner_wake_channel();
     runtime_service.add_owner_wake_sender(sender);
     receiver
+}
+
+pub(super) fn network_source(
+    instance_id: SharedWorkerInstanceId,
+) -> crate::runtime::RendererWorkerNetworkReporter {
+    crate::runtime::RendererWorkerNetworkReporter::new(
+        crate::runtime::RendererNetworkReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+        ),
+        crate::runtime::RendererWorkerIdentity::Shared(instance_id),
+    )
 }

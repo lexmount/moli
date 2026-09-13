@@ -22,6 +22,8 @@ pub(crate) enum WorkerParentSender {
 #[derive(Clone, Debug)]
 pub(crate) enum WorkerNetworkObserver {
     Dedicated(crate::runtime::RendererDedicatedWorkerNetworkObserver),
+    Shared(crate::shared_worker_runtime::RendererSharedWorkerNetworkObserver),
+    Service(crate::service_worker_runtime::RendererServiceWorkerNetworkObserver),
     Channel(mpsc::WeakUnboundedSender<WorkerToParentMessage>),
 }
 
@@ -29,6 +31,8 @@ impl WorkerNetworkObserver {
     pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
         match self {
             Self::Dedicated(observer) => observer.publish(observation),
+            Self::Shared(observer) => observer.publish(observation),
+            Self::Service(observer) => observer.publish(observation),
             Self::Channel(sender) => {
                 if let Some(sender) = sender.upgrade() {
                     let _ = sender.send(WorkerToParentMessage::Network(observation));

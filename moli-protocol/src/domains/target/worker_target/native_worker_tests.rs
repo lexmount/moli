@@ -193,8 +193,8 @@ impl NativeWorkers {
             let mut created = std::collections::BTreeSet::new();
             while created.len() < names.len() {
                 let name = match events.recv().await.unwrap().event {
-                    BrowserEvent::WorkerCreated(WorkerSnapshot::Shared { context: id, info })
-                        if !dedicated && id == context.id() =>
+                    BrowserEvent::WorkerUpdated(WorkerSnapshot::Shared { context: id, info })
+                        if !dedicated && id == context.id() && info.execution_ready =>
                     {
                         info.name
                     }
@@ -522,6 +522,11 @@ async fn native_shared_worker_snapshots_recover_lag_without_replaying_old_fifo_r
     use tokio::sync::broadcast::error::TryRecvError;
     let mut fixture = NativeWorkers::start(&["snapshot-worker"]).await;
     let (_, created) = fixture.next_occurrence().await;
+    let (_, started) = fixture.next_occurrence().await;
+    assert!(
+        matches!(started.lifecycle(), RendererWorkerLifecycle::SharedStarted(info) if info.execution_ready)
+    );
+    assert!(started.browser_sequence() > created.browser_sequence());
     let browser = fixture.service.handle();
     let (snapshot, mut slow) = browser.subscribe().unwrap();
     let worker = snapshot.workers[0].clone();
@@ -532,6 +537,7 @@ async fn native_shared_worker_snapshots_recover_lag_without_replaying_old_fifo_r
         1
     );
     assert!(worker_lifecycle_prepared_outputs(&mut conn, created.clone()).is_empty());
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, started).is_empty());
     let moli_core::browser::WorkerHandle::Shared { instance, .. } = worker.handle() else {
         unreachable!()
     };
@@ -748,9 +754,18 @@ async fn native_dedicated_worker_old_document_receipts_cannot_create_on_replacem
 #[tokio::test]
 async fn native_shared_worker_interleaved_sources_do_not_share_a_fifo_progress_cursor() {
     let mut fixture = NativeWorkers::start(&["first-source", "second-source"]).await;
-    let (_, first) = fixture.next_occurrence().await;
-    let (_, second) = fixture.next_occurrence().await;
-    let mut occurrences = [first, second];
+    let mut occurrences = Vec::new();
+    while occurrences.len() < 2 {
+        let (_, occurrence) = fixture.next_occurrence().await;
+        match occurrence.lifecycle() {
+            RendererWorkerLifecycle::SharedCreated(info) => {
+                assert!(!info.execution_ready);
+                occurrences.push(occurrence);
+            }
+            RendererWorkerLifecycle::SharedStarted(info) => assert!(info.execution_ready),
+            other => panic!("unexpected lifecycle before both creations: {other:?}"),
+        }
+    }
     occurrences.sort_by_key(|occurrence| occurrence.browser_sequence());
     let mut conn = fixture.connection();
     conn.project_created_browser_context(fixture.context.id());

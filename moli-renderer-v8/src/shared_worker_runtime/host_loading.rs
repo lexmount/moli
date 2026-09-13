@@ -9,38 +9,38 @@ use super::{
 };
 
 impl RendererSharedWorkerHost {
-    pub(super) fn begin_loading_task(&self) -> FetchCancelHandle {
+    pub(super) fn begin_loading_task(
+        &self,
+    ) -> (FetchCancelHandle, tokio::sync::oneshot::Receiver<()>) {
         let cancel_handle = FetchCancelHandle::new();
+        let (cancel_wait, cancelled) = tokio::sync::oneshot::channel();
         let mut state = self.state.lock();
         if let RendererSharedWorkerHostState::Loading { task } = &mut *state {
-            *task = Some(SharedWorkerLoadingTask::pending(cancel_handle.clone()));
+            *task = Some(SharedWorkerLoadingTask::pending(
+                cancel_handle.clone(),
+                cancel_wait,
+            ));
+        } else {
+            cancel_handle.cancel();
         }
-        cancel_handle
-    }
-
-    pub(super) fn record_loading_task_handle(&self, handle: tokio::task::JoinHandle<()>) {
-        let mut handle = Some(handle);
-        {
-            let mut state = self.state.lock();
-            if let RendererSharedWorkerHostState::Loading { task: Some(task) } = &mut *state {
-                task.set_join_handle(handle.take().expect("handle not moved"));
-            }
-        }
-        if let Some(handle) = handle {
-            handle.abort();
-        }
+        (cancel_handle, cancelled)
     }
 
     pub(super) fn start_script_fetch(
         self: &Arc<Self>,
         params: SharedWorkerLaunchParams,
         fetch: SharedWorkerScriptFetch,
-    ) -> Result<(), String> {
-        let cancel_handle = self.begin_loading_task();
-        let handle =
-            spawn_shared_worker_loading_task(Arc::clone(self), params, fetch, cancel_handle);
-        self.record_loading_task_handle(handle);
-        Ok(())
+        network: Arc<crate::worker::WorkerResourceTransfer>,
+    ) {
+        let (cancel_handle, cancel_wait) = self.begin_loading_task();
+        spawn_shared_worker_loading_task(
+            Arc::clone(self),
+            params,
+            fetch,
+            cancel_handle,
+            cancel_wait,
+            network,
+        );
     }
 
     pub(super) fn enqueue_loading_completion(
@@ -77,15 +77,14 @@ impl RendererSharedWorkerHost {
             task.cancel();
         }
         if retired_loading {
-            self.retire_unstarted_output();
+            self.publish_destroyed_target_event();
         }
     }
 
     pub(super) fn close_completed_loading(&self) {
         let mut state = self.state.lock();
         let retired_loading = if matches!(*state, RendererSharedWorkerHostState::Loading { .. }) {
-            // The loader already produced this completion; do not
-            // abort/join the loading task from its own completion path.
+            // The loader has already settled its request before this completion.
             *state = RendererSharedWorkerHostState::Closed;
             true
         } else {
@@ -93,7 +92,7 @@ impl RendererSharedWorkerHost {
         };
         drop(state);
         if retired_loading {
-            self.retire_unstarted_output();
+            self.publish_destroyed_target_event();
         }
     }
 }

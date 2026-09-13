@@ -20,7 +20,7 @@ use crate::{
 /// One resource consumer's publication and completion permission. Work retains
 /// this request, never its VM or parent pump. The last consumer settles the
 /// request; its Context load or shared cache owns transport cancellation.
-pub(super) struct WorkerResourceTransfer {
+pub(crate) struct WorkerResourceTransfer {
     state: Mutex<WorkerResourceTransferState>,
     observer: WorkerNetworkObserver,
 }
@@ -38,15 +38,53 @@ impl WorkerResourceTransfer {
         request: impl FnOnce(&RendererWorkerNetworkRequest) -> SubresourceRequestStarted,
     ) -> Option<Arc<Self>> {
         let network = source.start_request()?;
+        Some(Self::from_request(network, observer, request))
+    }
+
+    fn from_request(
+        network: RendererWorkerNetworkRequest,
+        observer: WorkerNetworkObserver,
+        request: impl FnOnce(&RendererWorkerNetworkRequest) -> SubresourceRequestStarted,
+    ) -> Arc<Self> {
         publish_worker_network_item(
             &observer,
             &network,
             ScriptNetworkOutputItem::SubresourceRequestStarted(Arc::new(request(&network))),
         );
-        Some(Arc::new(Self {
+        Arc::new(Self {
             state: Mutex::new(WorkerResourceTransferState::Requested(network)),
             observer,
-        }))
+        })
+    }
+
+    pub(crate) fn preflight(
+        parent: &RendererWorkerNetworkRequest,
+        observer: WorkerNetworkObserver,
+        request: &moli_fetch::Request,
+        keepalive: bool,
+    ) -> Arc<Self> {
+        let resource_type = match request.browser_request_metadata() {
+            Some(moli_fetch::BrowserRequestMetadata::Xhr) => {
+                moli_page_types::SubresourceResourceType::Xhr
+            }
+            _ => moli_page_types::SubresourceResourceType::Fetch,
+        };
+        Self::from_request(parent.preflight(), observer, |network| {
+            super::global_scope::worker_request_started(
+                network,
+                request
+                    .cookie_context
+                    .initiator_url
+                    .as_ref()
+                    .expect("a CORS preflight has an initiator"),
+                &request.url,
+                &request.method,
+                &request.request_headers,
+                &None,
+                resource_type,
+            )
+            .with_keepalive(keepalive)
+        })
     }
 
     pub(super) fn handle(&self) -> SubresourceNetworkRequestHandle {
@@ -73,32 +111,43 @@ impl WorkerResourceTransfer {
         }
     }
 
-    pub(super) fn complete(&self, result: &ResourceResponseResult) {
+    pub(crate) fn complete(&self, result: &ResourceResponseResult) {
         match result {
             Ok(response) => self.response_completed(response),
             Err(error) => self.failed(error),
         }
     }
 
-    pub(super) fn response_completed(&self, response: &moli_fetch::Response) {
+    pub(crate) fn response_completed(&self, response: &moli_fetch::Response) {
+        self.body_completed(
+            ResourceResponseHead {
+                head: response.head(),
+                network_request_headers: response
+                    .network_request_extra_info()
+                    .map(|info| info.headers.clone()),
+            },
+            SubresourceResponseBody::from_fetch_response(response),
+        );
+    }
+
+    pub(crate) fn body_completed(&self, head: ResourceResponseHead, body: SubresourceResponseBody) {
         let previous = std::mem::replace(
             &mut *self.state.lock(),
             WorkerResourceTransferState::Finished,
         );
         let (network, body) = match previous {
             WorkerResourceTransferState::Requested(network) => {
-                record_worker_fetch_response(&self.observer, &network, response.head(), None);
-                let body = SubresourceBodyFinished::ready(
-                    network.handle(),
-                    SubresourceResponseBody::from_fetch_response(response),
+                record_worker_fetch_response(
+                    &self.observer,
+                    &network,
+                    head.head,
+                    head.network_request_headers,
                 );
+                let body = SubresourceBodyFinished::ready(network.handle(), body);
                 (network, body)
             }
             WorkerResourceTransferState::Responding(network) => {
-                let body = SubresourceBodyFinished::ready_after_streaming(
-                    network.handle(),
-                    SubresourceResponseBody::from_fetch_response(response),
-                );
+                let body = SubresourceBodyFinished::ready_after_streaming(network.handle(), body);
                 (network, body)
             }
             WorkerResourceTransferState::Finished => return,
@@ -110,7 +159,7 @@ impl WorkerResourceTransfer {
         );
     }
 
-    pub(super) fn failed(&self, error: &ResourceResponseFailure) {
+    pub(crate) fn failed(&self, error: &ResourceResponseFailure) {
         let previous = std::mem::replace(
             &mut *self.state.lock(),
             WorkerResourceTransferState::Finished,

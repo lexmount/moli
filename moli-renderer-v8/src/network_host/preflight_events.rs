@@ -1,17 +1,27 @@
-use moli_fetch::ResponseHead;
+use moli_fetch::{FetchCancelHandle, Request, ResponseHead};
 
 use crate::{
+    network::ResourceRequestClient,
     page_task_queue::RendererResourceCompletionSender,
+    runtime::RendererWorkerNetworkRequest,
     types::{
         AsyncSubresourceFetchEvent, AsyncSubresourceNetworkContext, SubresourceNetworkRecord,
         SubresourceResponseBody,
     },
+    worker::{WorkerNetworkObserver, WorkerResourceTransfer},
 };
 
 #[derive(Clone)]
-pub(in crate::network_host) struct CorsPreflightNetworkObserver {
-    completion_tx: RendererResourceCompletionSender,
-    context: AsyncSubresourceNetworkContext,
+pub(crate) enum CorsPreflightNetworkObserver {
+    Page {
+        completion_tx: RendererResourceCompletionSender,
+        context: AsyncSubresourceNetworkContext,
+    },
+    Worker {
+        request: RendererWorkerNetworkRequest,
+        observer: WorkerNetworkObserver,
+        keepalive: bool,
+    },
 }
 
 impl CorsPreflightNetworkObserver {
@@ -19,66 +29,90 @@ impl CorsPreflightNetworkObserver {
         completion_tx: RendererResourceCompletionSender,
         context: AsyncSubresourceNetworkContext,
     ) -> Self {
-        Self {
+        Self::Page {
             completion_tx,
             context,
         }
     }
 
-    pub(in crate::network_host) fn send_preflight_success(
+    pub(in crate::network_host) async fn fetch(
         &self,
-        request_url: url::Url,
-        request_headers: moli_fetch::RequestHeaders,
-        response: &ResponseHead,
-    ) {
-        self.send_record(
-            SubresourceNetworkRecord::success_with_body(
-                self.context.frame_id.clone(),
-                self.context.document_url.clone(),
-                request_url,
-                "OPTIONS".to_owned(),
-                request_headers,
-                None,
-                self.context.resource_type,
-                response.request_cookie_report.clone(),
-                response
-                    .redirect_chain
-                    .clone()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                response.final_url.clone(),
-                response.status,
-                response.headers.clone(),
-                SubresourceResponseBody::from_bytes(Vec::new()),
-                response.cookie_set_reports.clone(),
-            )
-            .with_from_cache(response.from_cache)
-            .with_negotiated_http_version(response.negotiated_http_version),
-        );
-    }
-
-    pub(in crate::network_host) fn send_preflight_failure(
-        &self,
-        request_url: url::Url,
-        request_headers: moli_fetch::RequestHeaders,
-        error_text: String,
-    ) {
-        self.send_record(SubresourceNetworkRecord::failure(
-            self.context.frame_id.clone(),
-            self.context.document_url.clone(),
-            request_url,
-            "OPTIONS".to_owned(),
-            request_headers,
-            None,
-            self.context.resource_type,
-            error_text,
-        ));
-    }
-
-    fn send_record(&self, record: SubresourceNetworkRecord) {
-        let _ = self.completion_tx.send_async_subresource_event(
-            AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
-        );
+        loader: &ResourceRequestClient,
+        request: Request,
+        cancel: Option<FetchCancelHandle>,
+    ) -> Result<ResponseHead, String> {
+        match self {
+            Self::Worker {
+                request: parent,
+                observer,
+                keepalive,
+            } => {
+                let network = WorkerResourceTransfer::preflight(
+                    parent,
+                    observer.clone(),
+                    &request,
+                    *keepalive,
+                );
+                let result = loader
+                    .fetch_observed_script_text_with_cancel(
+                        request,
+                        cancel.unwrap_or_default(),
+                        network.as_ref(),
+                    )
+                    .await;
+                network.complete(&result);
+                result
+                    .map(|response| response.head())
+                    .map_err(|error| error.to_string())
+            }
+            Self::Page {
+                completion_tx,
+                context,
+            } => {
+                let request_url = request.url.clone();
+                let request_headers = request.request_headers.clone();
+                let result =
+                    super::async_fetch::fetch_response_head_once(loader, request, cancel).await;
+                let record = match &result {
+                    Ok(response) => SubresourceNetworkRecord::success_with_body(
+                        context.frame_id.clone(),
+                        context.document_url.clone(),
+                        request_url,
+                        "OPTIONS".to_owned(),
+                        request_headers,
+                        None,
+                        context.resource_type,
+                        response.request_cookie_report.clone(),
+                        response
+                            .redirect_chain
+                            .clone()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        response.final_url.clone(),
+                        response.status,
+                        response.headers.clone(),
+                        SubresourceResponseBody::from_bytes(Vec::new()),
+                        response.cookie_set_reports.clone(),
+                    )
+                    .with_from_cache(response.from_cache)
+                    .with_negotiated_http_version(response.negotiated_http_version),
+                    Err(error) => SubresourceNetworkRecord::failure(
+                        context.frame_id.clone(),
+                        context.document_url.clone(),
+                        request_url,
+                        "OPTIONS".to_owned(),
+                        request_headers,
+                        None,
+                        context.resource_type,
+                        error.clone(),
+                    ),
+                };
+                let _ = completion_tx.send_async_subresource_event(
+                    AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
+                );
+                result
+            }
+        }
     }
 }

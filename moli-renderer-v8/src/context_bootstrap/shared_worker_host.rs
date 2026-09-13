@@ -13,9 +13,9 @@ use super::{
     simple_object_event_remove_listener_value_for_type, simple_object_event_set_ordered_handler,
     worker_host::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
-        materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
+        resolve_worker_script_url, throw_worker_dom_exception,
         trusted_worker_script_url_string_or_throw, worker_constructor_base_url,
-        worker_script_resource_url, worker_script_scheme_can_load,
+        worker_script_scheme_can_load,
     },
 };
 use crate::web_api_interfaces;
@@ -133,7 +133,6 @@ struct SharedWorkerConstructorContext {
     base_url: Url,
     query_encoding: Option<&'static encoding_rs::Encoding>,
     request_client: ResourceRequestClient,
-    resource_task_runner: crate::network::RendererResourceTaskRunner,
     network_policy: WorkerNetworkPolicy,
     policy_context: SubresourcePolicyContext,
     storage_key: MoliStorageKey,
@@ -291,19 +290,12 @@ fn shared_worker_constructor_callback_inner<'s>(
         context.document_content_security_policies.clone(),
     );
     let module_credentials_mode = script_request_policy.credentials_mode();
-    let script_load = match prepare_shared_worker_script_load(
+    let script_load = prepare_shared_worker_script_load(
         context.request_client.clone(),
-        context.resource_task_runner.clone(),
         &context.base_url,
         &resolved_url,
         script_request_policy,
-    ) {
-        Ok(source) => source,
-        Err(message) => {
-            throw_type_error(scope, &message);
-            return;
-        }
-    };
+    );
     let message_port_registry = context.browser_context_runtime.message_port_registry();
     let Some(message_port_realm) = MessagePortRealmBinding::current(scope) else {
         throw_type_error(
@@ -479,7 +471,6 @@ fn shared_worker_constructor_context(
             base_url,
             query_encoding: document_query_encoding_override(host),
             request_client: resource_loader.request_client().clone(),
-            resource_task_runner: resource_loader.task_runner(),
             network_policy: WorkerNetworkPolicy {
                 secure_context: creator_secure_context,
                 permission_overrides: host.permission_overrides().to_vec(),
@@ -675,53 +666,33 @@ fn optional_string_property(
 
 fn prepare_shared_worker_script_load(
     request_client: ResourceRequestClient,
-    resource_task_runner: crate::network::RendererResourceTaskRunner,
     base_url: &Url,
     script_url: &Url,
     request_policy: SharedWorkerScriptRequestPolicy,
-) -> Result<SharedWorkerScriptLoad, String> {
+) -> SharedWorkerScriptLoad {
     if let Err(message) = request_policy.ensure_allows_script_url(base_url, script_url) {
-        return Ok(SharedWorkerScriptLoad::failure(message));
+        return SharedWorkerScriptLoad::failure(message);
     }
-    if script_url.scheme() == "data" {
-        let resource_url = worker_script_resource_url(script_url);
-        return Ok(
-            match crate::worker::decode_data_url_script_source(
-                &resource_url,
-                "Failed to load shared worker script",
-            ) {
-                Ok(source) => SharedWorkerScriptLoad::ready(script_url.to_string(), source),
-                Err(message) => SharedWorkerScriptLoad::failure(message),
-            },
-        );
-    }
-    if script_url.scheme() == "blob" {
-        return Ok(SharedWorkerScriptLoad::blob(script_url.clone()));
+    if matches!(script_url.scheme(), "data" | "blob") {
+        return SharedWorkerScriptLoad::local(script_url.clone());
     }
     if !worker_script_scheme_can_load(script_url) {
-        return Ok(SharedWorkerScriptLoad::failure(format!(
+        return SharedWorkerScriptLoad::failure(format!(
             "Failed to load shared worker script `{script_url}`: URL scheme `{}` is not allowed.",
             script_url.scheme()
-        )));
-    }
-    if let Some(source) = materialize_worker_script_source(script_url)? {
-        return Ok(SharedWorkerScriptLoad::ready(
-            script_url.to_string(),
-            source,
         ));
     }
     if is_cross_origin_http_worker_script(base_url, script_url) {
-        return Ok(SharedWorkerScriptLoad::failure(format!(
+        return SharedWorkerScriptLoad::failure(format!(
             "Failed to load shared worker script `{script_url}`: cross-origin worker script blocked."
-        )));
+        ));
     }
-    Ok(SharedWorkerScriptLoad::fetch(
+    SharedWorkerScriptLoad::fetch(
         request_client,
-        resource_task_runner,
         script_url.clone(),
         base_url.clone(),
         request_policy,
-    ))
+    )
 }
 
 pub(crate) fn dispatch_shared_worker_client_error<'s>(

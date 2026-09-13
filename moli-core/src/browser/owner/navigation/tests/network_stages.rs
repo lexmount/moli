@@ -25,6 +25,8 @@ enum RequestKind {
     ImportScript,
     StaticModule,
     DynamicModule,
+    MainScript,
+    MainModule,
     CspReport,
     ModuleCspReport,
 }
@@ -44,7 +46,11 @@ impl RequestKind {
     fn is_script(self) -> bool {
         matches!(
             self,
-            Self::ImportScript | Self::StaticModule | Self::DynamicModule
+            Self::ImportScript
+                | Self::StaticModule
+                | Self::DynamicModule
+                | Self::MainScript
+                | Self::MainModule
         )
     }
 }
@@ -58,6 +64,7 @@ enum Finish {
     DetachedKeepalive,
     DetachedBeforeHeadersFailure,
     RetiredCancellation,
+    RetiredAfterChunk,
 }
 
 impl Finish {
@@ -251,6 +258,23 @@ macro_rules! worker_stage_tests {
 }
 
 worker_stage_tests! {
+    native_worker_main_stages_service: Service, MainScript, Complete;
+    native_worker_main_stages_service_module: Service, MainModule, Complete;
+    native_worker_main_stages_service_partial_body: Service, MainScript, PartialFailure;
+    native_worker_main_stages_service_retirement: Service, MainScript, RetiredCancellation;
+    native_worker_main_stages_service_retirement_retains_partial_body: Service, MainScript, RetiredAfterChunk;
+    native_worker_main_stages_shared: Shared, MainScript, Complete;
+    native_worker_main_stages_shared_module: Shared, MainModule, Complete;
+    native_worker_main_stages_shared_partial_body: Shared, MainScript, PartialFailure;
+    native_worker_main_stages_shared_retirement: Shared, MainScript, RetiredCancellation;
+    native_worker_main_stages_shared_retirement_retains_partial_body: Shared, MainScript, RetiredAfterChunk;
+    native_worker_main_stages_dedicated: Dedicated, MainScript, Complete;
+    native_worker_main_stages_dedicated_module: Dedicated, MainModule, Complete;
+    native_worker_main_stages_nested: Nested, MainScript, Complete;
+    native_worker_main_stages_partial_body: Dedicated, MainScript, PartialFailure;
+    native_worker_main_stages_nested_partial_body: Nested, MainScript, PartialFailure;
+    native_worker_main_stages_retirement: Dedicated, MainScript, RetiredCancellation;
+    native_worker_main_stages_nested_retirement: Nested, MainScript, RetiredCancellation;
     native_worker_filtered_stages_no_cors: Dedicated, NoCorsFetch, Complete;
     native_worker_filtered_stages_shared_no_cors: Shared, NoCorsFetch, Complete;
     native_worker_filtered_stages_service_no_cors: Service, NoCorsFetch, Complete;
@@ -316,10 +340,85 @@ async fn worker_network_stages_with_request(
     finish: Finish,
     request_kind: RequestKind,
 ) {
+    worker_network_stages_observing_preflight(kind, finish, request_kind, false).await;
+}
+
+macro_rules! preflight_stage_tests {
+    ($($name:ident: $worker:ident, $request:ident, $finish:ident;)*) => {
+        $(
+            #[tokio::test]
+            async fn $name() {
+                worker_network_stages_observing_preflight(
+                    WorkerKind::$worker, Finish::$finish, RequestKind::$request, true,
+                ).await;
+            }
+        )*
+    };
+}
+
+preflight_stage_tests! {
+    native_worker_preflight_stages_dedicated: Dedicated, PreflightFetch, Complete;
+    native_worker_preflight_stages_nested: Nested, PreflightFetch, Complete;
+    native_worker_preflight_stages_shared: Shared, PreflightFetch, Complete;
+    native_worker_preflight_stages_service: Service, PreflightFetch, Complete;
+    native_worker_preflight_stages_xhr: Dedicated, PreflightXhr, Complete;
+    native_worker_preflight_stages_sync_xhr: Dedicated, PreflightSyncXhr, Complete;
+    native_worker_preflight_stages_partial: Dedicated, PreflightFetch, PartialFailure;
+    native_worker_preflight_stages_retirement: Dedicated, PreflightFetch, RetiredCancellation;
+    native_worker_preflight_stages_sync_retirement: Dedicated, PreflightSyncXhr, RetiredCancellation;
+    native_worker_preflight_stages_partial_retirement: Dedicated, PreflightFetch, RetiredAfterChunk;
+    native_worker_preflight_stages_detached: Dedicated, PreflightFetch, DetachedKeepalive;
+    native_worker_preflight_stages_shared_detached: Shared, PreflightFetch, DetachedKeepalive;
+}
+
+async fn worker_network_stages_observing_preflight(
+    kind: WorkerKind,
+    finish: Finish,
+    request_kind: RequestKind,
+    observe_preflight: bool,
+) {
+    worker_network_stages_with_preflight_retirement(
+        kind,
+        finish,
+        request_kind,
+        observe_preflight,
+        false,
+    )
+    .await;
+}
+
+macro_rules! retired_preflight_stage_tests {
+    ($($name:ident: $worker:ident;)*) => {
+        $(
+            #[tokio::test]
+            async fn $name() {
+                worker_network_stages_with_preflight_retirement(
+                    WorkerKind::$worker, Finish::DetachedKeepalive,
+                    RequestKind::PreflightFetch, true, true,
+                ).await;
+            }
+        )*
+    };
+}
+
+retired_preflight_stage_tests! {
+    native_worker_preflight_after_retirement_dedicated: Dedicated;
+    native_worker_preflight_after_retirement_nested: Nested;
+    native_worker_preflight_after_retirement_shared: Shared;
+    native_worker_preflight_after_retirement_service: Service;
+}
+
+async fn worker_network_stages_with_preflight_retirement(
+    kind: WorkerKind,
+    finish: Finish,
+    request_kind: RequestKind,
+    observe_preflight: bool,
+    retire_before_preflight: bool,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let cross_origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let request_path = if matches!(finish, Finish::FollowedRedirect) {
+    let request_path = if matches!(finish, Finish::FollowedRedirect) || retire_before_preflight {
         "/redirect"
     } else {
         "/probe"
@@ -334,6 +433,15 @@ async fn worker_network_stages_with_request(
         format!("{origin}{request_path}")
     };
     let request_url = url.clone();
+    let parent_url = url.clone();
+    let url = if retire_before_preflight {
+        format!(
+            "http://{}/probe",
+            cross_origin_listener.local_addr().unwrap()
+        )
+    } else {
+        url
+    };
     let page_origin = origin.clone();
     let response_body = if request_kind.is_script() {
         "//ok"
@@ -344,6 +452,8 @@ async fn worker_network_stages_with_request(
     let (headers, release_headers) = oneshot::channel();
     let (chunk, release_chunk) = oneshot::channel();
     let (tail, release_tail) = oneshot::channel();
+    let (redirected, redirect_arrived) = oneshot::channel();
+    let (redirect, release_redirect) = oneshot::channel();
     let server = tokio::spawn(async move {
         let request_script = match request_kind {
             RequestKind::Fetch => format!(
@@ -377,16 +487,27 @@ async fn worker_network_stages_with_request(
             RequestKind::ImportScript => "try{importScripts('/probe')}catch(_){}".into(),
             RequestKind::StaticModule => "import '/probe';".into(),
             RequestKind::DynamicModule => "import('/probe').catch(()=>{})".into(),
+            RequestKind::MainScript | RequestKind::MainModule => String::new(),
             RequestKind::CspReport => "fetch('/blocked').catch(()=>{})".into(),
             RequestKind::ModuleCspReport => "import('/blocked').catch(()=>{})".into(),
         };
-        let options = if matches!(request_kind, RequestKind::StaticModule) {
+        let options = if matches!(
+            request_kind,
+            RequestKind::StaticModule | RequestKind::MainModule
+        ) {
             "{type:'module'}"
         } else {
             "{}"
         };
+        let main_script = matches!(
+            request_kind,
+            RequestKind::MainScript | RequestKind::MainModule
+        );
         let worker_script = match kind {
             WorkerKind::Dedicated => request_script.clone(),
+            WorkerKind::Nested if main_script => {
+                format!("globalThis.child = new Worker('/probe',{options})")
+            }
             WorkerKind::Nested => format!("globalThis.child = new Worker('/nested.js',{options})"),
             WorkerKind::Shared if request_kind.is_script() => {
                 format!("{request_script};onconnect=()=>{{}}")
@@ -395,7 +516,10 @@ async fn worker_network_stages_with_request(
             WorkerKind::Service
                 if matches!(
                     request_kind,
-                    RequestKind::ImportScript | RequestKind::StaticModule
+                    RequestKind::ImportScript
+                        | RequestKind::StaticModule
+                        | RequestKind::MainScript
+                        | RequestKind::MainModule
                 ) =>
             {
                 request_script.clone()
@@ -403,20 +527,34 @@ async fn worker_network_stages_with_request(
             WorkerKind::Service => {
                 assert!(matches!(
                     request_kind,
-                    RequestKind::Fetch | RequestKind::NoCorsFetch | RequestKind::CspReport
+                    RequestKind::Fetch
+                        | RequestKind::NoCorsFetch
+                        | RequestKind::PreflightFetch
+                        | RequestKind::CspReport
                 ));
                 format!("addEventListener('install',event=>event.waitUntil({request_script}))")
             }
         };
         let bootstrap = match kind {
+            WorkerKind::Dedicated if main_script => {
+                format!("globalThis.worker = new Worker('/probe',{options})")
+            }
             WorkerKind::Dedicated => {
                 format!("globalThis.worker = new Worker('/worker.js',{options})")
             }
             WorkerKind::Nested => "globalThis.worker = new Worker('/worker.js')".into(),
+            WorkerKind::Shared if main_script => {
+                format!(
+                    "globalThis.worker = new SharedWorker('/probe',{options});worker.port.start()"
+                )
+            }
             WorkerKind::Shared => {
                 format!(
                     "globalThis.worker = new SharedWorker('/worker.js',{options});worker.port.start()"
                 )
+            }
+            WorkerKind::Service if main_script => {
+                format!("navigator.serviceWorker.register('/probe',{options})")
             }
             WorkerKind::Service => {
                 format!("navigator.serviceWorker.register('/worker.js',{options})")
@@ -424,6 +562,7 @@ async fn worker_network_stages_with_request(
         };
         let html = format!("<!doctype html><script>{bootstrap}</script>");
         let mut preflight_count = 0;
+        let mut redirect_gate = Some((redirected, release_redirect));
         loop {
             let (mut stream, _) = tokio::select! {
                 accepted = listener.accept() => accepted,
@@ -452,13 +591,20 @@ async fn worker_network_stages_with_request(
                         .contains("access-control-request-headers: x-native-probe\r\n")
                 );
                 preflight_count += 1;
-                stream.write_all(format!("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {page_origin}\r\nAccess-Control-Allow-Methods: PUT\r\nAccess-Control-Allow-Headers: x-native-probe\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-                continue;
+                if !observe_preflight || (retire_before_preflight && path == "/redirect") {
+                    stream.write_all(format!("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {page_origin}\r\nAccess-Control-Allow-Methods: PUT\r\nAccess-Control-Allow-Headers: x-native-probe\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                    continue;
+                }
             }
             if path == "/redirect" {
-                assert!(matches!(finish, Finish::FollowedRedirect));
+                assert!(matches!(finish, Finish::FollowedRedirect) || retire_before_preflight);
                 assert_eq!(preflight_count, 1);
                 assert!(request.starts_with("PUT /redirect HTTP/1.1"));
+                if retire_before_preflight {
+                    let (redirected, release_redirect) = redirect_gate.take().unwrap();
+                    redirected.send(()).unwrap();
+                    release_redirect.await.unwrap();
+                }
                 stream.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: /probe\r\nAccess-Control-Allow-Origin: {page_origin}\r\nContent-Length: 8\r\nConnection: close\r\n\r\nredirect").as_bytes()).await.unwrap();
                 continue;
             }
@@ -466,15 +612,21 @@ async fn worker_network_stages_with_request(
                 assert_eq!(
                     preflight_count,
                     usize::from(request_kind.needs_preflight())
-                        + usize::from(matches!(finish, Finish::FollowedRedirect))
+                        + usize::from(
+                            matches!(finish, Finish::FollowedRedirect) || retire_before_preflight
+                        )
                 );
                 if request_kind.needs_preflight() {
-                    assert!(request.starts_with("PUT /probe HTTP/1.1"));
-                    assert!(
-                        request
-                            .to_ascii_lowercase()
-                            .contains("x-native-probe: yes\r\n")
-                    );
+                    if observe_preflight {
+                        assert!(request.starts_with("OPTIONS /probe HTTP/1.1"));
+                    } else {
+                        assert!(request.starts_with("PUT /probe HTTP/1.1"));
+                        assert!(
+                            request
+                                .to_ascii_lowercase()
+                                .contains("x-native-probe: yes\r\n")
+                        );
+                    }
                 }
                 if request_kind.is_report() {
                     assert!(request.starts_with("POST /probe HTTP/1.1"));
@@ -524,18 +676,38 @@ async fn worker_network_stages_with_request(
                 } else {
                     "200 OK"
                 };
-                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nAccess-Control-Allow-Origin: {page_origin}\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                let preflight_headers = if observe_preflight {
+                    "Access-Control-Allow-Methods: PUT\r\nAccess-Control-Allow-Headers: x-native-probe\r\n"
+                } else {
+                    ""
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nAccess-Control-Allow-Origin: {page_origin}\r\n{preflight_headers}Content-Length: 4\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
                 release_chunk.await.unwrap();
                 stream
                     .write_all(&response_body.as_bytes()[..2])
                     .await
                     .unwrap();
                 release_tail.await.unwrap();
-                if !matches!(finish, Finish::PartialFailure) {
+                if !matches!(finish, Finish::PartialFailure | Finish::RetiredAfterChunk) {
                     stream
                         .write_all(&response_body.as_bytes()[2..])
                         .await
                         .unwrap();
+                }
+                if observe_preflight
+                    && matches!(finish, Finish::Complete | Finish::DetachedKeepalive)
+                {
+                    drop(stream);
+                    // OPTIONS and the actual request have independent physical
+                    // responses. A successful preflight must admit the PUT.
+                    let (mut actual, _) = cross_origin_listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        actual.read_exact(&mut byte).await.unwrap();
+                        request.push(byte[0]);
+                    }
+                    assert!(request.starts_with(b"PUT /probe HTTP/1.1\r\n"));
+                    actual.write_all(format!("HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: {page_origin}\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody").as_bytes()).await.unwrap();
                 }
                 break;
             }
@@ -562,6 +734,52 @@ async fn worker_network_stages_with_request(
     let (context, contents) = context_with_contents(&service);
     let (_, mut events) = browser.subscribe().unwrap();
     navigate(&context, contents, &format!("{origin}/")).await;
+    let mut buffered = std::collections::VecDeque::new();
+    let preflight_parent = if retire_before_preflight {
+        tokio::time::timeout(std::time::Duration::from_secs(5), redirect_arrived)
+            .await
+            .expect("the actual PUT must reach its held redirect")
+            .unwrap();
+        let (owner, source, handle, sequence) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let event = events.recv().await.unwrap();
+                    if let BrowserEvent::NetworkRequestStarted(occurrence) = event.event
+                        && let NetworkOwner::Worker(owner) = occurrence.owner
+                        && let RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
+                        && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) =
+                            item.as_ref()
+                        && request.url().as_str() == parent_url
+                        && request.method() == "PUT"
+                    {
+                        assert!(request.keepalive());
+                        break (
+                            owner,
+                            occurrence.renderer.source.clone(),
+                            request.handle(),
+                            event.sequence,
+                        );
+                    }
+                }
+            })
+            .await
+            .expect("the parent request must be admitted before Worker retirement");
+        buffered.extend(
+            retire_worker_with_response_held(
+                &browser,
+                &context,
+                contents,
+                owner,
+                sequence,
+                &mut events,
+            )
+            .await,
+        );
+        redirect.send(()).unwrap();
+        Some((owner, source, handle))
+    } else {
+        None
+    };
     tokio::time::timeout(std::time::Duration::from_secs(5), request_arrived)
         .await
         .expect("the real Worker must dispatch its request before any response is released")
@@ -577,7 +795,15 @@ async fn worker_network_stages_with_request(
                     && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) =
                         item.as_ref()
                     && request.url().as_str() == url
+                    && (request.method() == "OPTIONS") == observe_preflight
                 {
+                    assert_eq!(
+                        request.is_worker_main_script(),
+                        matches!(
+                            request_kind,
+                            RequestKind::MainScript | RequestKind::MainModule
+                        )
+                    );
                     assert_eq!(
                         request.keepalive(),
                         finish.keepalive() || request_kind.is_report()
@@ -599,7 +825,9 @@ async fn worker_network_stages_with_request(
                                 crate::page::SubresourceResourceType::Xhr,
                             RequestKind::ImportScript
                             | RequestKind::StaticModule
-                            | RequestKind::DynamicModule =>
+                            | RequestKind::DynamicModule
+                            | RequestKind::MainScript
+                            | RequestKind::MainModule =>
                                 crate::page::SubresourceResourceType::Script,
                         }
                     );
@@ -617,6 +845,14 @@ async fn worker_network_stages_with_request(
     .expect(
         "native Worker Started must precede the held response headers without a DevTools consumer",
     );
+    if let Some((parent_owner, parent_source, parent_handle)) = preflight_parent {
+        assert_eq!(owner, parent_owner);
+        assert_eq!(source, parent_source);
+        assert_ne!(
+            handle, parent_handle,
+            "OPTIONS owns a distinct physical request"
+        );
+    }
     assert!(matches!(
         (kind, owner),
         (
@@ -628,8 +864,7 @@ async fn worker_network_stages_with_request(
     assert!(browser.subscribe().unwrap().0.network_requests.iter().any(|request|
         request.owner == NetworkOwner::Worker(owner) && request.renderer_source == source
         && matches!(&request.state, NetworkRequestState::Started(start) if start.handle() == handle)));
-    let mut buffered = std::collections::VecDeque::new();
-    if finish.retires_before_headers() {
+    if finish.retires_before_headers() && !retire_before_preflight {
         if let crate::page::RendererNetworkSource::Worker(
             crate::page::RendererWorkerIdentity::Service { run, .. },
         ) = &source
@@ -637,48 +872,16 @@ async fn worker_network_stages_with_request(
             assert!(browser.subscribe().unwrap().0.workers.iter().any(|worker|
                 worker.handle() == owner && matches!(worker, crate::browser::WorkerSnapshot::Service { worker, .. } if worker.execution.active_run() == Some(run))));
         }
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            context.close_web_contents(contents).unwrap().close_async(),
-        )
-        .await
-        .expect("Worker retirement must finish with the response headers held");
-        if let WorkerHandle::Service { version, .. } = owner {
-            context
-                .execute_service_worker_command(crate::browser::ServiceWorkerCommand::StopVersion {
-                    version_id: version,
-                })
-                .unwrap();
-        }
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let event = events.recv().await.unwrap();
-                let retired = match &event.event {
-                    BrowserEvent::WorkerDestroyed(closed) => *closed == owner,
-                    BrowserEvent::WorkerUpdated(worker) if worker.handle() == owner => matches!(worker,
-                        crate::browser::WorkerSnapshot::Service { worker, .. } if worker.execution == crate::browser::ServiceWorkerExecution::Stopped),
-                    _ => false,
-                };
-                if retired {
-                    assert!(event.sequence > sequence);
-                    break;
-                }
-                // Cancellation can finish before the WorkerDestroyed fact.
-                // Preserve the real FIFO instead of discarding that completion.
-                buffered.push_back(event);
-            }
-        })
-        .await
-        .expect("the original Worker must retire while its response is held");
-        assert!(
-            browser
-                .subscribe()
-                .unwrap()
-                .0
-                .workers
-                .iter()
-                .all(|worker| worker.handle() != owner || matches!(worker,
-                    crate::browser::WorkerSnapshot::Service { worker, .. } if worker.execution == crate::browser::ServiceWorkerExecution::Stopped))
+        buffered.extend(
+            retire_worker_with_response_held(
+                &browser,
+                &context,
+                contents,
+                owner,
+                sequence,
+                &mut events,
+            )
+            .await,
         );
     }
     let mut headers = Some(headers);
@@ -693,6 +896,7 @@ async fn worker_network_stages_with_request(
     } else {
         vec![(0, Some(chunk)), (1, Some(tail)), (2, None)]
     };
+    let mut held_tail = None;
     for (stage, release) in stages {
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -749,7 +953,7 @@ async fn worker_network_stages_with_request(
                         SubresourceBodyFinishedResult::Ready(body),
                     ) => assert_eq!(body.clone_body_bytes(), response_body.as_bytes()),
                     (
-                        Finish::PartialFailure,
+                        Finish::PartialFailure | Finish::RetiredAfterChunk,
                         SubresourceBodyFinishedResult::FailedWithPartialBody {
                             error_text,
                             partial_body,
@@ -768,7 +972,39 @@ async fn worker_network_stages_with_request(
             }
             _ => unreachable!(),
         }
-        if let Some(release) = release {
+        if stage == 1 && matches!(finish, Finish::RetiredAfterChunk) {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                context.close_web_contents(contents).unwrap().close_async(),
+            )
+            .await
+            .expect("the Worker client closes with the partial body held");
+            if let WorkerHandle::Service { version, .. } = owner {
+                context
+                    .execute_service_worker_command(
+                        crate::browser::ServiceWorkerCommand::StopVersion {
+                            version_id: version,
+                        },
+                    )
+                    .unwrap();
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if browser.subscribe().unwrap().0.workers.iter().all(|worker| {
+                        worker.handle() != owner
+                            || matches!(worker,
+                            crate::browser::WorkerSnapshot::Service { worker, .. }
+                            if worker.execution == crate::browser::ServiceWorkerExecution::Stopped)
+                    }) {
+                        break;
+                    }
+                    buffered.push_back(events.recv().await.unwrap());
+                }
+            })
+            .await
+            .expect("the exact Worker run retires with its partial body held");
+            held_tail = release;
+        } else if let Some(release) = release {
             release.send(()).unwrap();
         }
     }
@@ -777,9 +1013,13 @@ async fn worker_network_stages_with_request(
     if let Some(headers) = headers {
         headers.send(()).unwrap();
     }
+    if let Some(tail) = held_tail {
+        tail.send(()).unwrap();
+    }
     server.await.unwrap();
     if let WorkerHandle::Service { version, .. } = owner
         && !finish.retires_before_headers()
+        && !matches!(finish, Finish::RetiredAfterChunk)
     {
         context
             .execute_service_worker_command(crate::browser::ServiceWorkerCommand::StopVersion {
@@ -787,7 +1027,7 @@ async fn worker_network_stages_with_request(
             })
             .unwrap();
     }
-    if !finish.retires_before_headers() {
+    if !finish.retires_before_headers() && !matches!(finish, Finish::RetiredAfterChunk) {
         context
             .close_web_contents(contents)
             .unwrap()
@@ -814,4 +1054,59 @@ async fn worker_network_stages_with_request(
         "retired physical source and its completed keepalive tail must release native retention",
     );
     service.shutdown();
+}
+
+async fn retire_worker_with_response_held(
+    browser: &BrowserHandle,
+    context: &BrowserContextHandle,
+    contents: WebContentsHandle,
+    owner: WorkerHandle,
+    sequence: crate::browser::BrowserSequence,
+    events: &mut crate::browser::BrowserEventReceiver,
+) -> std::collections::VecDeque<crate::browser::BrowserEventRecord> {
+    let mut buffered = std::collections::VecDeque::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        context.close_web_contents(contents).unwrap().close_async(),
+    )
+    .await
+    .expect("Worker retirement must finish with the response headers held");
+    if let WorkerHandle::Service { version, .. } = owner {
+        context
+            .execute_service_worker_command(crate::browser::ServiceWorkerCommand::StopVersion {
+                version_id: version,
+            })
+            .unwrap();
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            let retired = match &event.event {
+                BrowserEvent::WorkerDestroyed(closed) => *closed == owner,
+                BrowserEvent::WorkerUpdated(worker) if worker.handle() == owner => matches!(worker,
+                    crate::browser::WorkerSnapshot::Service { worker, .. } if worker.execution == crate::browser::ServiceWorkerExecution::Stopped),
+                _ => false,
+            };
+            if retired {
+                assert!(event.sequence > sequence);
+                break;
+            }
+            // Cancellation can finish before the WorkerDestroyed fact.
+            // Preserve the real FIFO instead of discarding that completion.
+            buffered.push_back(event);
+        }
+    })
+    .await
+    .expect("the original Worker must retire while its response is held");
+    assert!(
+        browser
+            .subscribe()
+            .unwrap()
+            .0
+            .workers
+            .iter()
+            .all(|worker| worker.handle() != owner || matches!(worker,
+                crate::browser::WorkerSnapshot::Service { worker, .. } if worker.execution == crate::browser::ServiceWorkerExecution::Stopped))
+    );
+    buffered
 }

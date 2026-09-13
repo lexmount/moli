@@ -629,6 +629,17 @@ async fn network_enable_on_service_worker_session_toggles_target_local_cursor() 
 
 async fn real_service_worker_session() -> (TestContext, String, String, tokio::task::JoinHandle<()>)
 {
+    real_service_worker_session_with_startup_pause(false, false).await
+}
+
+async fn real_service_worker_session_with_startup_pause(
+    pause: bool,
+    release_update_all: bool,
+) -> (TestContext, String, String, tokio::task::JoinHandle<()>) {
+    struct ScriptFixture {
+        gate: tokio::sync::Semaphore,
+        updated: std::sync::atomic::AtomicBool,
+    }
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -636,7 +647,10 @@ async fn real_service_worker_session() -> (TestContext, String, String, tokio::t
         )
     }
 
-    async fn service_worker() -> impl IntoResponse {
+    async fn service_worker(
+        axum::extract::State(fixture): axum::extract::State<std::sync::Arc<ScriptFixture>>,
+    ) -> impl IntoResponse {
+        let _permit = fixture.gate.acquire().await.unwrap();
         (
             [(CONTENT_TYPE.as_str(), "text/javascript")],
             r#"
@@ -650,18 +664,31 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil(clients.claim());
 });
-"#,
+"#
+            .to_owned()
+                + if fixture.updated.load(std::sync::atomic::Ordering::SeqCst) {
+                    "// changed update"
+                } else {
+                    ""
+                },
         )
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let fixture = std::sync::Arc::new(ScriptFixture {
+        gate: tokio::sync::Semaphore::new(usize::from(!pause)),
+        updated: std::sync::atomic::AtomicBool::new(false),
+    });
+    let gate = &fixture.gate;
+    let server_fixture = fixture.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
             Router::new()
                 .route("/page", get(page))
-                .route("/service-worker.js", get(service_worker)),
+                .route("/service-worker.js", get(service_worker))
+                .with_state(server_fixture),
         )
         .await
         .unwrap();
@@ -675,7 +702,7 @@ self.addEventListener("activate", event => {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": pause
         }
     }))
     .await;
@@ -698,12 +725,6 @@ self.addEventListener("activate", event => {
         }
     }))
     .await;
-    let register_response = wait_for_response_by_id_async(&mut ctx, "SID-page", 85).await;
-    assert_eq!(
-        register_response["result"]["result"]["value"],
-        json!(format!("http://{addr}/service-worker.js"))
-    );
-
     wait_until_message(
         &mut ctx,
         None,
@@ -718,10 +739,114 @@ self.addEventListener("activate", event => {
         message["method"] == json!("Target.attachedToTarget")
             && message["params"]["targetInfo"]["type"] == json!("service_worker")
     });
-    let service_worker_session_id = attached["params"]["sessionId"]
+    let mut service_worker_session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("service worker session id")
         .to_owned();
+
+    if pause {
+        assert_eq!(attached["params"]["waitingForDebugger"], true);
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(&service_worker_session_id))
+                .is_err()
+        );
+        ctx.process_async(json!({
+            "id": 86, "method": "Runtime.runIfWaitingForDebugger",
+            "sessionId": service_worker_session_id
+        }))
+        .await;
+        ctx.expect_result(86, json!({}), Some(&service_worker_session_id));
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(&service_worker_session_id))
+                .is_err(),
+            "the response gate must keep the VM unavailable until release completes"
+        );
+        gate.add_permits(1);
+    }
+    let register_response = wait_for_response_by_id_async(&mut ctx, "SID-page", 85).await;
+    assert_eq!(
+        register_response["result"]["result"]["value"],
+        json!(format!("http://{addr}/service-worker.js"))
+    );
+
+    if pause {
+        ctx.process_async(
+            json!({"id": 88, "method": "ServiceWorker.enable", "sessionId": "SID-page"}),
+        )
+        .await;
+        ctx.expect_result(88, json!({}), Some("SID-page"));
+        let held_response = gate.acquire().await.unwrap();
+        fixture
+            .updated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        ctx.process_async(json!({
+            "id": 89, "method": "ServiceWorker.updateRegistration", "sessionId": "SID-page",
+            "params": {"scopeURL": format!("http://{addr}/")}
+        }))
+        .await;
+        ctx.expect_result(89, json!({}), Some("SID-page"));
+        let is_update = |message: &serde_json::Value| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["type"] == "service_worker"
+                && message["params"]["targetInfo"]["targetId"]
+                    != attached["params"]["targetInfo"]["targetId"]
+        };
+        wait_until_message(&mut ctx, None, "paused updated Service Worker", is_update).await;
+        let updated = ctx.take_first_matching("updated Service Worker", is_update);
+        assert_eq!(updated["params"]["waitingForDebugger"], true);
+        let updated_target = updated["params"]["targetInfo"]["targetId"]
+            .as_str()
+            .unwrap();
+        let updated_session = updated["params"]["sessionId"].as_str().unwrap();
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(updated_session))
+                .is_err()
+        );
+        if release_update_all {
+            ctx.process_async(
+                json!({"id": 90, "method": "Target.setAutoAttach", "params": {
+                    "autoAttach": false, "waitForDebuggerOnStart": false
+                }}),
+            )
+            .await;
+            ctx.expect_result(90, json!({}), None);
+        } else {
+            ctx.process_async(json!({"id": 90, "method": "Runtime.runIfWaitingForDebugger", "sessionId": updated_session})).await;
+            ctx.expect_result(90, json!({}), Some(updated_session));
+            assert!(
+                ctx.conn
+                    .worker_inspection_endpoint_for_session(Some(updated_session))
+                    .is_err()
+            );
+        }
+        drop(held_response);
+        wait_until_message(
+            &mut ctx,
+            Some("SID-page"),
+            "released update activates without another debugger command",
+            |message| {
+                message["method"] == "ServiceWorker.workerVersionUpdated"
+                    && message["params"]["versions"]
+                        .as_array()
+                        .is_some_and(|versions| {
+                            versions.iter().any(|version| {
+                                version["targetId"] == updated_target
+                                    && version["runningStatus"] == "running"
+                                    && version["status"] == "activated"
+                            })
+                        })
+            },
+        )
+        .await;
+        ctx.process_async(json!({"id": 91, "method": "Target.attachToTarget", "params": {"targetId": updated_target, "flatten": true}})).await;
+        service_worker_session_id = take_response_by_id(&mut ctx, 91)["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    }
 
     (
         ctx,
@@ -729,6 +854,22 @@ self.addEventListener("activate", event => {
         format!("http://{addr}/"),
         server,
     )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_debugger_resume_completes_before_main_response_and_vm_creation() {
+    for release_update_all in [false, true] {
+        let (mut ctx, session_id, _, server) =
+            real_service_worker_session_with_startup_pause(true, release_update_all).await;
+        ctx.process_async(json!({
+        "id": 87, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "self instanceof ServiceWorkerGlobalScope", "returnByValue": true}
+    }))
+        .await;
+        let response = wait_for_response_by_id_async(&mut ctx, session_id.as_str(), 87).await;
+        assert_eq!(response["result"]["result"]["value"], true);
+        server.abort();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

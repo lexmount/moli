@@ -72,6 +72,7 @@ enum ServiceWorkerRuntimeCompletionKind {
     },
     MainScriptUpdateCheckCompleted {
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     },
     LifecycleEventCompleted {
@@ -247,12 +248,14 @@ impl ServiceWorkerRuntimeCompletion {
     pub(super) fn main_script_update_check_completed(
         runtime_service: WeakServiceWorkerRuntimeService,
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     ) -> Self {
         Self {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             },
         }
@@ -673,10 +676,11 @@ impl ServiceWorkerRuntimeCompletion {
             }
             ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             } => self
                 .runtime_service
-                .finish_main_script_update_check_completed(registration_id, result),
+                .finish_main_script_update_check_completed(registration_id, owner, result),
             ServiceWorkerRuntimeCompletionKind::LifecycleEventCompleted { completion } => {
                 self.runtime_service
                     .finish_lifecycle_event_completed(completion);
@@ -890,10 +894,12 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::MainScriptUpdateCheckCompleted")
                 .field("registration_id", registration_id)
+                .field("owner", owner)
                 .field("result_is_ok", &result.is_ok())
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::LifecycleEventCompleted { completion } => f

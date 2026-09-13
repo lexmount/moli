@@ -40,6 +40,7 @@ fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
         None,
         "https://example.test/shared-worker.js".to_owned(),
         "worker".to_owned(),
+        true,
     );
     target.attach_session(session_id.to_owned());
     bc.insert_shared_worker_target(target);

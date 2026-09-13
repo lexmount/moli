@@ -1821,7 +1821,7 @@ mod tests {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(&ServiceWorkerRunOwner::new(
+                host: RendererServiceWorkerHost::new_loading_for_test(&ServiceWorkerRunOwner::new(
                     version_id,
                     run.clone(),
                 )),

@@ -502,11 +502,12 @@ async fn set_auto_attach_inner_async(
                     bc.shared_worker_targets
                         .values()
                         .filter(|target| {
-                            !owner_already_auto_attached_to_exact_target(
-                                conn,
-                                owner_session_id,
-                                &target.target_id,
-                            )
+                            target.execution_ready
+                                && !owner_already_auto_attached_to_exact_target(
+                                    conn,
+                                    owner_session_id,
+                                    &target.target_id,
+                                )
                         })
                         .map(|target| target.target_id.clone())
                         .collect::<Vec<_>>()

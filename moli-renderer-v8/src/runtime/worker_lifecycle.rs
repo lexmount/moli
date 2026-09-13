@@ -10,6 +10,7 @@ use super::{RendererBrowserContextRuntimeId, RendererSharedWorkerTargetInfo};
 pub enum RendererWorkerLifecycle {
     Service(super::RendererServiceWorkerLifecycle),
     SharedCreated(RendererSharedWorkerTargetInfo),
+    SharedStarted(RendererSharedWorkerTargetInfo),
     SharedDestroyed(moli_shared_worker::SharedWorkerInstanceId),
     DedicatedCreated(super::RendererDedicatedWorkerTargetInfo),
     DedicatedScriptCompleted {

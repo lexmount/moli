@@ -24,6 +24,7 @@ const INSTANCE_ID: u64 = 701;
 
 fn renderer_info(instance_id: u64) -> RendererSharedWorkerTargetInfo {
     RendererSharedWorkerTargetInfo {
+        execution_ready: true,
         owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(17),
         instance_id: SharedWorkerInstanceId::from_u64(instance_id),
         url: "https://worker.test/shared.js".to_owned(),
@@ -38,6 +39,7 @@ fn install_collision_target(conn: &mut CdpConnection) {
         Some("TID-owner".to_owned()),
         "https://worker.test/shared.js".to_owned(),
         "exact-worker".to_owned(),
+        true,
     );
     target.attach_session(SESSION_ID.to_owned());
     conn.browser_context

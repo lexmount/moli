@@ -559,6 +559,7 @@ mod tests {
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
+            true,
         );
         target.attach_session("SID-shared-worker".to_owned());
         browser_context.insert_shared_worker_target(target);
@@ -861,6 +862,7 @@ mod tests {
             None,
             "https://example.test/worker.js".to_owned(),
             "worker".to_owned(),
+            true,
         );
         target.attach_session("SID-shared-worker".to_owned());
         browser_context.insert_shared_worker_target(target);

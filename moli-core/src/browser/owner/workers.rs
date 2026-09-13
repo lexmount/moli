@@ -157,6 +157,19 @@ impl Browser {
                     info: info.clone(),
                 })
             }
+            RendererWorkerLifecycle::SharedStarted(info) => {
+                let Some(worker) = context.shared_workers.get_mut(&info.instance_id) else {
+                    return;
+                };
+                if worker.execution_ready {
+                    return;
+                }
+                *worker = info.clone();
+                BrowserEvent::WorkerUpdated(WorkerSnapshot::Shared {
+                    context: id,
+                    info: info.clone(),
+                })
+            }
             RendererWorkerLifecycle::SharedDestroyed(instance) => {
                 if context.shared_workers.shift_remove(instance).is_none() {
                     return;

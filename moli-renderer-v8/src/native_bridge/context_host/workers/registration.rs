@@ -22,7 +22,6 @@ use url::Url;
 struct LoadedWorkerScript {
     final_url: Url,
     source: WorkerScriptSource,
-    network_response: crate::protocol_types::NavigationResponse,
     response_referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     policy_context: SubresourcePolicyContext,
@@ -30,30 +29,6 @@ struct LoadedWorkerScript {
     content_security_report_only_policies: Vec<String>,
     content_security_reporting_endpoints:
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
-}
-
-struct WorkerScriptLoadFailure {
-    error_message: String,
-    network_response: Option<Box<crate::protocol_types::NavigationResponse>>,
-}
-
-impl WorkerScriptLoadFailure {
-    fn without_response(error: impl std::fmt::Display) -> Self {
-        Self {
-            error_message: error.to_string(),
-            network_response: None,
-        }
-    }
-
-    fn with_response(
-        error: impl std::fmt::Display,
-        response: crate::protocol_types::NavigationResponse,
-    ) -> Self {
-        Self {
-            error_message: error.to_string(),
-            network_response: Some(Box::new(response)),
-        }
-    }
 }
 
 impl JsContextHost {
@@ -254,7 +229,7 @@ impl JsContextHost {
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     ) -> bool {
         let browser_context_runtime = self.browser_context_runtime();
-        let Some((outside_settings_load, client_event_producer)) =
+        let Some((outside_settings_load, client_event_producer, native_host)) =
             self.workers.get(&worker_id).map(|state| {
                 let outside_settings_load = match &state.execution {
                     WorkerExecutionState::Loading {
@@ -263,12 +238,20 @@ impl JsContextHost {
                     } => Some(outside_settings_load.clone()),
                     WorkerExecutionState::Running { .. } => None,
                 };
-                (outside_settings_load, state.client_event_producer.clone())
+                (
+                    outside_settings_load,
+                    state.client_event_producer.clone(),
+                    state.host.clone(),
+                )
             })
         else {
             return false;
         };
         let Some(outside_settings_load) = outside_settings_load else {
+            return false;
+        };
+        let Some(network) = native_host.start_main_script_request(&script_url, &initiator_url)
+        else {
             return false;
         };
         let request_client = outside_settings_load.request_client();
@@ -284,6 +267,7 @@ impl JsContextHost {
         let load_task = task_runner.spawn_abortable(async move {
             let result = fetch_worker_script_source(
                 &request_client,
+                &network,
                 fetch_task_runner,
                 cancel_handle,
                 &script_url,
@@ -312,7 +296,6 @@ impl JsContextHost {
                         RendererDedicatedWorkerClientEvent::ScriptLoaded {
                             script_url: final_url.to_string(),
                             script_source: loaded.source,
-                            network_response: Box::new(loaded.network_response),
                             script_kind,
                             secure_context,
                             response_referrer_policy: loaded.response_referrer_policy,
@@ -327,11 +310,13 @@ impl JsContextHost {
                     );
                 }
                 Err(error) => {
+                    network.failed(&crate::network::ResourceResponseFailure::Request(
+                        error.clone(),
+                    ));
                     let _ = client_event_producer.send(
                         RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                             script_url: script_url.to_string(),
-                            error_message: error.error_message,
-                            network_response: error.network_response,
+                            error_message: error,
                         },
                     );
                 }
@@ -369,9 +354,10 @@ impl JsContextHost {
         &mut self,
         worker_id: DedicatedWorkerId,
         script_url: Url,
+        initiator_url: &Url,
         error_message: &'static str,
     ) -> bool {
-        let Some((client_event_producer, outside_settings_load)) = self
+        let Some((client_event_producer, outside_settings_load, network)) = self
             .workers
             .get(&worker_id)
             .and_then(|state| match &state.execution {
@@ -381,6 +367,9 @@ impl JsContextHost {
                 } => Some((
                     state.client_event_producer.clone(),
                     outside_settings_load.clone(),
+                    state
+                        .host
+                        .start_main_script_request(&script_url, initiator_url)?,
                 )),
                 WorkerExecutionState::Running { .. } => None,
             })
@@ -389,12 +378,14 @@ impl JsContextHost {
         };
         let task_runner = outside_settings_load.task_runner();
         let load_task = task_runner.spawn_abortable(async move {
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                error_message.to_owned(),
+            ));
             outside_settings_load.finish();
             let _ =
                 client_event_producer.send(RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                     script_url: script_url.to_string(),
                     error_message: error_message.to_owned(),
-                    network_response: None,
                 });
         });
         match self.workers.get_mut(&worker_id) {
@@ -428,7 +419,6 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         script_url: String,
         script_source: WorkerScriptSource,
-        network_response: Box<crate::protocol_types::NavigationResponse>,
         script_kind: WorkerScriptKind,
         secure_context: bool,
         response_referrer_policy: Option<String>,
@@ -482,9 +472,7 @@ impl JsContextHost {
         };
         let script = crate::runtime::RendererDedicatedWorkerMainScript {
             script_url: script_url.clone(),
-            outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(
-                network_response,
-            ),
+            outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded,
         };
         let mut spawn_options = WorkerSpawnOptions::for_worker_source(
             script_source,
@@ -548,7 +536,6 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         script_url: String,
         error_message: String,
-        response: Option<Box<crate::protocol_types::NavigationResponse>>,
     ) -> bool {
         let Some(state) = self.workers.get(&worker_id) else {
             return false;
@@ -559,7 +546,6 @@ impl JsContextHost {
                 script_url,
                 outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
                     error_message,
-                    response,
                 },
             });
         true
@@ -879,6 +865,7 @@ impl JsContextHost {
 
 async fn fetch_worker_script_source(
     request_client: &crate::network::ResourceRequestClient,
+    network: &std::sync::Arc<crate::worker::WorkerResourceTransfer>,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
     cancel_handle: moli_fetch::FetchCancelHandle,
     script_url: &Url,
@@ -890,11 +877,11 @@ async fn fetch_worker_script_source(
     document_referrer_policy: Option<String>,
     browser_context_runtime: RendererBrowserContextRuntime,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
-) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
+) -> Result<LoadedWorkerScript, String> {
     let mut request_url = script_url.clone();
     request_url.set_fragment(None);
     let mut request = moli_fetch::Request::new("GET", request_url.as_str(), None, vec![])
-        .map_err(WorkerScriptLoadFailure::without_response)?
+        .map_err(|error| error.to_string())?
         .with_page_network_policy()
         .with_network_partition_key(network_partition_key.clone())
         .with_initiator_url(initiator_url)
@@ -920,34 +907,29 @@ async fn fetch_worker_script_source(
             )
             .await
             .map_err(|error| {
-                WorkerScriptLoadFailure::without_response(format!(
+                format!(
                     "failed to fetch worker script `{script_url}` through service worker: {error}"
-                ))
+                )
             })?
     {
         return loaded_worker_script_from_navigation_response(
             response,
+            network,
             initiator_url,
             network_partition_key,
             creator_policy_context,
             script_kind,
         );
     }
-    let observed = request_client
-        .fetch_text_stream_with_cancel_and_network_metadata(request, cancel_handle)
+    let response = request_client
+        .fetch_observed_script_text_with_cancel(request, cancel_handle, network.as_ref())
         .await
-        .map_err(|error| {
-            WorkerScriptLoadFailure::without_response(format!(
-                "failed to fetch worker script `{script_url}`: {error}"
-            ))
-        })?;
-    let (response, request_observation) = observed.into_parts();
-    let network_request_headers =
-        request_observation.map(moli_fetch::NetworkRequestObservation::into_headers);
+        .inspect_err(|error| network.failed(error))
+        .map_err(|error| format!("failed to fetch worker script `{script_url}`: {error}"))?;
 
     loaded_worker_script_from_navigation_response(
-        crate::protocol_types::NavigationResponse::from(response)
-            .with_network_request_headers(network_request_headers),
+        crate::protocol_types::NavigationResponse::from(response),
+        network,
         initiator_url,
         network_partition_key,
         creator_policy_context,
@@ -957,73 +939,77 @@ async fn fetch_worker_script_source(
 
 fn loaded_worker_script_from_navigation_response(
     response: crate::protocol_types::NavigationResponse,
+    network: &crate::worker::WorkerResourceTransfer,
     initiator_url: &Url,
     network_partition_key: Option<String>,
     creator_policy_context: SubresourcePolicyContext,
     script_kind: WorkerScriptKind,
-) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
-    let response_head = response.head();
-    if let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        initiator_url,
-        &response_head.redirect_chain,
-        &response.final_url,
-    ) {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-    if let Err(error) =
-        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-    {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-    let content_security_policies =
-        crate::content_security_policy::content_security_policy_headers(&response.headers);
-    let content_security_report_only_policies =
-        crate::content_security_policy::content_security_policy_report_only_headers(
-            &response.headers,
-        );
-    let content_security_reporting_endpoints =
+) -> Result<LoadedWorkerScript, String> {
+    let result = (|| {
+        let response_head = response.head();
+        if let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            initiator_url,
+            &response_head.redirect_chain,
+            &response.final_url,
+        ) {
+            return Err(error.to_string());
+        }
+        if let Err(error) = moli_fetch::ensure_http_status_success(
+            response.final_url.as_str(),
+            response.status,
+            false,
+        ) {
+            return Err(error.to_string());
+        }
+        let content_security_policies =
+            crate::content_security_policy::content_security_policy_headers(&response.headers);
+        let content_security_report_only_policies =
+            crate::content_security_policy::content_security_policy_report_only_headers(
+                &response.headers,
+            );
+        let content_security_reporting_endpoints =
         crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
             &response.headers,
             &response.final_url,
         );
-    let response_referrer_policy =
-        crate::referrer_policy::response_referrer_policy_from_headers(&response.headers);
-    let policy_context =
-        dedicated_worker_policy_context_from_headers(&response.headers, creator_policy_context);
-    if script_kind == WorkerScriptKind::Module
-        && crate::worker::worker_response_has_webassembly_mime(&response.headers)
-    {
-        return Ok(LoadedWorkerScript {
+        let response_referrer_policy =
+            crate::referrer_policy::response_referrer_policy_from_headers(&response.headers);
+        let policy_context =
+            dedicated_worker_policy_context_from_headers(&response.headers, creator_policy_context);
+        if script_kind == WorkerScriptKind::Module
+            && crate::worker::worker_response_has_webassembly_mime(&response.headers)
+        {
+            return Ok(LoadedWorkerScript {
+                final_url: response.final_url.clone(),
+                source: WorkerScriptSource::binary(response.clone_body_bytes()),
+                response_referrer_policy,
+                network_partition_key,
+                policy_context,
+                content_security_policies,
+                content_security_report_only_policies,
+                content_security_reporting_endpoints,
+            });
+        }
+        if let Err(error) = crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        ) {
+            return Err(error.to_string());
+        }
+
+        Ok(LoadedWorkerScript {
             final_url: response.final_url.clone(),
-            source: WorkerScriptSource::binary(response.clone_body_bytes()),
+            source: WorkerScriptSource::text(response.body_text().to_owned()),
             response_referrer_policy,
             network_partition_key,
             policy_context,
             content_security_policies,
             content_security_report_only_policies,
             content_security_reporting_endpoints,
-            network_response: response,
-        });
-    }
-    if let Err(error) = crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    ) {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-
-    Ok(LoadedWorkerScript {
-        final_url: response.final_url.clone(),
-        source: WorkerScriptSource::text(response.body_text().to_owned()),
-        response_referrer_policy,
-        network_partition_key,
-        policy_context,
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        network_response: response,
-    })
+        })
+    })();
+    network.main_script_response(&response, result)
 }
 
 fn dedicated_worker_policy_context_from_headers(

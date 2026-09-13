@@ -85,10 +85,15 @@ async fn assert_worker_network_fifo(recover: bool, dedicated: bool) {
                 .and_then(|targets| {
                     targets.iter().find(|target| {
                         target["type"] == if dedicated { "worker" } else { "shared_worker" }
-                            // Created exposes a loading Dedicated target. Its URL is
-                            // published by ScriptCompleted, after execution binding;
-                            // Runtime.enable alone can acknowledge only projection.
-                            && (!dedicated || target["url"] == "data:text/javascript,onmessage=()=>{}")
+                            // Membership precedes physical execution. This test
+                            // exercises a running VM's network/console FIFO.
+                            && if dedicated {
+                                target["url"] == "data:text/javascript,onmessage=()=>{}"
+                            } else {
+                                browser.subscribe().unwrap().0.workers.iter().any(|worker|
+                                    matches!(worker, moli_core::browser::WorkerSnapshot::Shared { info, .. }
+                                        if info.name == "network-fifo" && info.execution_ready))
+                            }
                     })
                 })
             {

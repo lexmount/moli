@@ -11,26 +11,25 @@ use super::{
 
 pub(super) struct SharedWorkerLoadingTask {
     cancel_handle: FetchCancelHandle,
-    join_handle: Option<tokio::task::JoinHandle<()>>,
+    cancel_wait: tokio::sync::oneshot::Sender<()>,
 }
 
 impl SharedWorkerLoadingTask {
-    pub(super) fn pending(cancel_handle: FetchCancelHandle) -> Self {
+    pub(super) fn pending(
+        cancel_handle: FetchCancelHandle,
+        cancel_wait: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
         Self {
             cancel_handle,
-            join_handle: None,
+            cancel_wait,
         }
-    }
-
-    pub(super) fn set_join_handle(&mut self, join_handle: tokio::task::JoinHandle<()>) {
-        self.join_handle = Some(join_handle);
     }
 
     pub(super) fn cancel(self) {
+        // Let the physical collector settle with its exact received prefix.
+        // Only the controller's pending response needs a separate wake.
         self.cancel_handle.cancel();
-        if let Some(join_handle) = self.join_handle {
-            join_handle.abort();
-        }
+        let _ = self.cancel_wait.send(());
     }
 }
 
@@ -39,9 +38,16 @@ pub(super) fn spawn_shared_worker_loading_task(
     params: SharedWorkerLaunchParams,
     fetch: SharedWorkerScriptFetch,
     cancel_handle: FetchCancelHandle,
-) -> tokio::task::JoinHandle<()> {
-    let task_runner = fetch.task_runner.clone();
-    fetch.task_runner.spawn_abortable(async move {
+    cancel_wait: tokio::sync::oneshot::Receiver<()>,
+    network: Arc<crate::worker::WorkerResourceTransfer>,
+) {
+    let task_runner = params
+        .launch_context
+        .execution_policy
+        .worker_context_runtime
+        .resource_task_runner()
+        .expect("BrowserContext must select a resource executor before loading a SharedWorker");
+    task_runner.clone().spawn(async move {
         let result = fetch_shared_worker_script_source_async(
             &fetch.request_client,
             task_runner,
@@ -55,8 +61,15 @@ pub(super) fn spawn_shared_worker_loading_task(
                 .clone(),
             params.reserved_service_worker_client_id,
             cancel_handle,
+            cancel_wait,
+            network.as_ref(),
         )
         .await;
+        if let Err(message) = &result {
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                message.clone(),
+            ));
+        }
         host.enqueue_loading_completion(params, result);
     })
 }

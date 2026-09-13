@@ -62,6 +62,7 @@ pub(crate) use events::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerWorkerMessage,
     service_worker_fetch_request_metadata, service_worker_opaque_response_rejection,
 };
+pub(crate) use host::RendererServiceWorkerNetworkObserver;
 pub(crate) use ids::{
     ServiceWorkerClientId, ServiceWorkerClientIdAllocator, ServiceWorkerEventId,
     ServiceWorkerRegistrationId, ServiceWorkerVersionId,

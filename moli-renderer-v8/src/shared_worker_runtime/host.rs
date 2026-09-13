@@ -29,6 +29,7 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
     pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
+    pub(super) network: crate::runtime::RendererWorkerNetworkReporter,
     pub(super) output_publications: Mutex<SharedWorkerOutputPublicationState>,
 }
 
@@ -48,7 +49,7 @@ pub(super) type SharedRendererSharedWorkerHost = Arc<RendererSharedWorkerHost>;
 
 impl RendererSharedWorkerHost {
     pub(super) fn new_loading(
-        instance_id: SharedWorkerInstanceId,
+        network: crate::runtime::RendererWorkerNetworkReporter,
         owner_local_host_id: crate::runtime::RendererOwnerLocalHostId,
         runtime_service: WeakSharedWorkerRuntimeService,
         initial_script_url: String,
@@ -56,6 +57,10 @@ impl RendererSharedWorkerHost {
         target_output: crate::runtime::RendererTurnOutputJournal,
         worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     ) -> Self {
+        let crate::runtime::RendererWorkerIdentity::Shared(instance_id) = *network.identity()
+        else {
+            panic!("SharedWorker host requires its exact network source")
+        };
         Self {
             instance_id,
             owner_local_host_id,
@@ -66,6 +71,7 @@ impl RendererSharedWorkerHost {
             clients: Mutex::new(HashMap::new()),
             target_output,
             worker_lifecycle,
+            network,
             output_publications: Mutex::new(SharedWorkerOutputPublicationState::Active),
         }
     }
@@ -104,5 +110,33 @@ impl RendererSharedWorkerHost {
             *self.output_publications.lock(),
             SharedWorkerOutputPublicationState::Retired { .. }
         )
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RendererSharedWorkerNetworkObserver(std::sync::Weak<RendererSharedWorkerHost>);
+
+impl std::fmt::Debug for RendererSharedWorkerNetworkObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RendererSharedWorkerNetworkObserver")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RendererSharedWorkerNetworkObserver {
+    pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
+        if let Some(host) = self.0.upgrade() {
+            host.publish_observation(crate::runtime::RendererProtocolObservation::Network(
+                observation,
+            ));
+        }
+    }
+}
+
+impl RendererSharedWorkerHost {
+    pub(super) fn network_observer(self: &Arc<Self>) -> crate::worker::WorkerNetworkObserver {
+        crate::worker::WorkerNetworkObserver::Shared(RendererSharedWorkerNetworkObserver(
+            Arc::downgrade(self),
+        ))
     }
 }

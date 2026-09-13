@@ -11,6 +11,7 @@ use moli_core::page::{
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::{BrowserContext, SharedWorkerTargetState, TargetPageResidenceIdentity};
+use crate::conn::BackgroundProtocolEvent;
 
 /// The creator is an exact Document or Worker execution, never an inferred
 /// active Page. Nested workers can also be created by Shared/Service workers.
@@ -69,6 +70,10 @@ pub(crate) struct DedicatedWorkerTargetState {
     pub(crate) owner: DedicatedWorkerOwner,
     pub(crate) owner_network_sessions: Vec<Option<String>>,
     pub(crate) inner: SharedWorkerTargetState,
+    pub(crate) main_script_request: Option<moli_core::page::SubresourceNetworkRequestHandle>,
+    // At most one header and terminal projection; no body or chunk history.
+    pub(crate) main_script_response_event: Option<BackgroundProtocolEvent>,
+    pub(crate) main_script_terminal_event: Option<BackgroundProtocolEvent>,
     main_script: Option<Arc<RendererDedicatedWorkerMainScript>>,
     delivered_main_script_sessions: BTreeSet<String>,
     replayable_main_script_sessions: BTreeSet<String>,
@@ -94,8 +99,12 @@ impl DedicatedWorkerTargetState {
                 None,
                 String::new(),
                 name,
+                true,
             ),
             main_script: None,
+            main_script_request: None,
+            main_script_response_event: None,
+            main_script_terminal_event: None,
             delivered_main_script_sessions: BTreeSet::new(),
             replayable_main_script_sessions: BTreeSet::new(),
             defer_failed_load_destroy_until_debugger_resume: false,
@@ -122,6 +131,21 @@ impl DedicatedWorkerTargetState {
 
     pub(crate) fn main_script(&self) -> Option<&RendererDedicatedWorkerMainScript> {
         self.main_script.as_deref()
+    }
+
+    pub(crate) fn main_script_network_events(
+        &self,
+        session_id: &str,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.main_script_response_event
+            .iter()
+            .chain(self.main_script_terminal_event.iter())
+            .cloned()
+            .map(|mut event| {
+                event.ensure_protocol_session_id(Some(session_id));
+                event
+            })
+            .collect()
     }
 
     pub(crate) fn main_script_was_delivered_to(&self, session_id: &str) -> bool {

@@ -45,20 +45,11 @@ pub(super) fn materialize_worker_import_source(
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
     let network = {
         let state = state.borrow();
-        WorkerResourceTransfer::start(
+        WorkerResourceTransfer::start_script(
             state.global_kind.network(),
             state.parent_tx.network_observer(),
-            |network| {
-                super::worker_request_started(
-                    network,
-                    state.current_script_url.as_ref().unwrap_or(script_url),
-                    script_url,
-                    "GET",
-                    &moli_fetch::RequestHeaders::default(),
-                    &None,
-                    crate::types::SubresourceResourceType::Script,
-                )
-            },
+            script_url,
+            state.current_script_url.as_ref().unwrap_or(script_url),
         )
         .ok_or_else(|| WorkerImportScriptError::network("worker is shutting down"))?
     };

@@ -43,6 +43,7 @@ pub(crate) struct SharedWorkerTargetState {
     sessions: BTreeMap<String, SharedWorkerTargetSessionState>,
     pub(crate) url: String,
     pub(crate) name: String,
+    pub(crate) execution_ready: bool,
     runtime_execution_context: Option<RuntimeExecutionContextEvent>,
     console_messages: WorkerOutputHistory<RuntimeConsoleMessageSnapshot>,
 }
@@ -69,6 +70,7 @@ impl SharedWorkerTargetState {
         owner_target_id: Option<String>,
         url: String,
         name: String,
+        execution_ready: bool,
     ) -> Self {
         Self {
             network: Default::default(),
@@ -78,6 +80,7 @@ impl SharedWorkerTargetState {
             sessions: BTreeMap::new(),
             url,
             name,
+            execution_ready,
             runtime_execution_context: None,
             console_messages: WorkerOutputHistory::default(),
         }
@@ -837,6 +840,7 @@ mod tests {
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
+            true,
         )
     }
 

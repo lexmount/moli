@@ -488,6 +488,7 @@ mod tests {
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
+            true,
         ));
         conn.install_browser_context_fixture_for_test(browser_context);
 

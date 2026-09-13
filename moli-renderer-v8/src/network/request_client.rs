@@ -628,6 +628,17 @@ impl ResourceRequestClient {
         });
     }
 
+    pub(crate) async fn fetch_observed_script_text_with_cancel(
+        &self,
+        request: Request,
+        cancel: FetchCancelHandle,
+        observer: &dyn ResourceResponseObserver,
+    ) -> ResourceResponseResult {
+        let request = self.apply_network_policy(request)?;
+        self.fetch_observed_script_text_after_policy(request, cancel, Some(observer))
+            .await
+    }
+
     async fn fetch_observed_script_text_after_policy(
         &self,
         request: Request,
@@ -891,45 +902,6 @@ impl ResourceRequestClient {
             FetchCancelHandle::new(),
             callback,
         )
-    }
-
-    pub(crate) fn fetch_text_for_worker_blocking_boundary(
-        &self,
-        request: Request,
-    ) -> Result<Response> {
-        self.fetch_text_for_worker_blocking_boundary_with_cancel(request, FetchCancelHandle::new())
-    }
-
-    pub(crate) fn fetch_text_for_worker_blocking_boundary_with_cancel(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<Response> {
-        let request_client = self.clone();
-        let (response_tx, response_rx) = mpsc::sync_channel(1);
-        let helper = thread::Builder::new()
-            .name("lm-worker-script-fetch".to_owned())
-            .spawn(move || {
-                // Outside-settings Worker startup and service-script update
-                // callers still require this blocking boundary. Inside-settings
-                // imports use their registered Context resource executor.
-                let result = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("failed to build worker script fetch runtime")
-                    .and_then(|runtime| {
-                        runtime.block_on(
-                            request_client.fetch_text_stream_with_cancel(request, cancel_handle),
-                        )
-                    });
-                let _ = response_tx.send(result);
-            })
-            .context("failed to spawn worker script fetch thread")?;
-        let result = response_rx
-            .recv()
-            .context("worker script fetch thread dropped response channel");
-        let _ = helper.join();
-        result?
     }
 
     pub(crate) fn fetch_raw_for_blocking_boundary(&self, request: Request) -> Result<RawResponse> {

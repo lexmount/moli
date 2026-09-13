@@ -386,7 +386,10 @@ impl ServiceWorkerRuntimeService {
                         let owner = version.replace_run_owner();
                         version.last_start_error = None;
                         fetch_job.bind_to_owner(owner.clone());
-                        let host = RendererServiceWorkerHost::new_loading(&owner);
+                        let host = RendererServiceWorkerHost::new_loading(
+                            &owner,
+                            &version.launch_config.worker_context_runtime,
+                        );
                         version.launch_config.document_url = document_url.clone();
                         let params = version.launch_config.to_launch_params(
                             registration_id,

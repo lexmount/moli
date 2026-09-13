@@ -69,7 +69,7 @@ fn finish_loading_with_runtime_service(
                         );
                         return;
                     }
-                    host.publish_created_target_event();
+                    host.publish_started_target_event();
                     host.start_parent_message_pump();
                     for client_id in host.connect_pending_clients(clients) {
                         runtime_service.remove_client(client_id);
@@ -371,7 +371,8 @@ mod tests {
             _ => panic!("expected StartLoading"),
         };
         let host = Arc::new(RendererSharedWorkerHost::new_loading(
-            instance_id,
+            worker_context_runtime
+                .network_for_worker(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
             runtime_service.required_owner_local_host_id(),
             runtime_service.downgrade(),
             key.script_url().to_owned(),
@@ -472,9 +473,8 @@ mod tests {
 
         let params = SharedWorkerLaunchParams {
             key: key.clone(),
-            script_load: SharedWorkerScriptLoad::ready(
-                key.script_url().to_owned(),
-                "self.close();".to_owned(),
+            script_load: SharedWorkerScriptLoad::local(
+                "data:text/javascript,self.close();".parse().unwrap(),
             ),
             launch_context: test_launch_context(&browser_context_runtime, worker_context_runtime),
             client_port_id,
@@ -550,7 +550,7 @@ mod tests {
 
         let params = SharedWorkerLaunchParams {
             key: key.clone(),
-            script_load: SharedWorkerScriptLoad::ready(key.script_url().to_owned(), String::new()),
+            script_load: SharedWorkerScriptLoad::local("data:text/javascript,".parse().unwrap()),
             launch_context: test_launch_context(&browser_context_runtime, worker_context_runtime),
             client_port_id,
             worker_port_id,
@@ -629,7 +629,7 @@ mod tests {
                 message_port_registry.clone(),
             ),
         );
-        let _cancel_handle = host.begin_loading_task();
+        let (_cancel_handle, _cancelled) = host.begin_loading_task();
         test_support::store_loading_host(&runtime_service, instance_id, host);
 
         let params = SharedWorkerLaunchParams {
@@ -758,7 +758,7 @@ mod tests {
                 message_port_registry.clone(),
             ),
         );
-        let _cancel_handle = host.begin_loading_task();
+        let (_cancel_handle, _cancelled) = host.begin_loading_task();
         test_support::store_loading_host(&runtime_service, instance_id, host.clone());
 
         let params = SharedWorkerLaunchParams {

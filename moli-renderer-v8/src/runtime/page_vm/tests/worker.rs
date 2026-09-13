@@ -1997,7 +1997,7 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
         let readiness = native_script_readiness.clone();
         runtime.install_worker_lifecycle_handler(move |input| {
             if let crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted { instance_id, script } = input.lifecycle.as_ref()
-                && matches!(script.outcome, crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(_))
+                && matches!(script.outcome, crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded)
             {
                 let ready = weak_runtime.upgrade().unwrap()
                     .worker_inspection_endpoint(crate::runtime::RendererWorkerIdentity::Dedicated(*instance_id))
@@ -2017,7 +2017,7 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
             .bind_renderer_output_journal_for_test(output_journal.clone());
         let local_executor = page_vm.local_executor.clone();
 
-        let target_events = local_executor
+        let (target_events, network_events) = local_executor
             .run(async move {
                 page_vm.vm_mut().eval(&format!(
                     r#"
@@ -2031,7 +2031,7 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
   globalThis.__externalMainScriptWorker = new Worker("/worker.js#runtime-fragment");
   __externalMainScriptWorker.onmessage = onmessage;
   const blobUrl = URL.createObjectURL(new Blob(
-    [{blob_source:?}],
+    [new Uint8Array([47,47,255,10]), {blob_source:?}],
     {{ type: "text/javascript" }}
   ));
   globalThis.__blobMainScriptWorker = new Worker(blobUrl);
@@ -2056,17 +2056,27 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                     "DedicatedWorker main scripts are not complete Page subresources"
                 );
                 let mut events = Vec::new();
+                let mut network_events = Vec::new();
                 while let Ok(message) = output_rx.try_recv() {
                     let crate::runtime::RendererOutputTransportMessage::Publication(publication) = message else { continue; };
                     let residence = publication.cursor().stream().residence();
                     for record in publication.into_records() {
-                        if let RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::WorkerLifecycle(event)) = record.into_parts().1 {
-                            assert!(matches!(residence, crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { .. }));
-                            events.push(event);
+                        match record.into_parts().1 {
+                            RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::WorkerLifecycle(event)) => {
+                                assert!(matches!(residence, crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { .. }));
+                                events.push(event);
+                            }
+                            RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::Network(event)) => {
+                                let crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { instance_id, .. } = residence else { panic!("main script belongs to its Worker source") };
+                                if let crate::runtime::RendererNetworkOutputItem::Resource(item) = event.item() {
+                                    network_events.push((instance_id, item.clone()));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                anyhow::Ok(events)
+                anyhow::Ok((events, network_events))
             })
             .await
             .expect("worker main-script Network test should run on owner lane");
@@ -2113,8 +2123,8 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                     instance_id,
                     script,
                 } => match &script.outcome {
-                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(response) => {
-                        Some((*instance_id, &script.script_url, response.as_ref()))
+                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded => {
+                        Some((*instance_id, &script.script_url))
                     }
                     _ => None,
                 },
@@ -2122,33 +2132,45 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
             })
             .collect::<Vec<_>>();
         assert_eq!(loaded.len(), 2, "events: {target_events:#?}");
-        let (_, external_script_url, external_response) = loaded
+        let response_for = |instance| {
+            let records = network_events.iter().filter(|(id, _)| *id == instance).map(|(_, item)| item.as_ref()).collect::<Vec<_>>();
+            let heads = records.iter().filter_map(|item| match item { moli_page_types::ScriptNetworkOutputItem::SubresourceResponseStarted(head) => Some(head), _ => None }).collect::<Vec<_>>();
+            let bodies = records.iter().filter_map(|item| match item { moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(body) => Some(body), _ => None }).collect::<Vec<_>>();
+            assert_eq!(heads.len(), 1);
+            assert_eq!(bodies.len(), 1);
+            let moli_page_types::SubresourceBodyFinishedResult::Ready(body) = bodies[0].result() else { panic!("main body must complete") };
+            (heads[0], body)
+        };
+        let (external_response, external_body) = response_for(external_created.instance_id);
+        let (blob_response, blob_body) = response_for(blob_created.instance_id);
+
+        let (_, external_script_url) = loaded
             .iter()
             .copied()
-            .find(|(instance_id, _, _)| *instance_id == external_created.instance_id)
+            .find(|(instance_id, _)| *instance_id == external_created.instance_id)
             .expect("external Worker main-script completion");
         assert_eq!(
             external_script_url,
             &format!("{external_url}#runtime-fragment")
         );
-        assert_eq!(external_response.status, 200);
-        assert_eq!(external_response.body_text(), external_source);
+        assert_eq!(external_response.status(), 200);
+        assert_eq!(external_body.bytes().as_ref(), external_source.as_bytes());
         assert!(external_response.network_request_headers().is_some());
         assert_eq!(
-            external_response.negotiated_http_version,
+            external_response.negotiated_http_version(),
             Some(moli_fetch::NegotiatedHttpVersion::Http11)
         );
 
-        let (_, blob_script_url, blob_response) = loaded
+        let (_, blob_script_url) = loaded
             .iter()
             .copied()
-            .find(|(instance_id, _, _)| *instance_id == blob_created.instance_id)
+            .find(|(instance_id, _)| *instance_id == blob_created.instance_id)
             .expect("blob Worker main-script completion");
         assert_eq!(blob_script_url, &blob_created.request_url);
-        assert_eq!(blob_response.status, 200);
-        assert_eq!(blob_response.body_text(), blob_source);
+        assert_eq!(blob_response.status(), 200);
+        assert_eq!(blob_body.bytes().as_ref(), [b"//\xff\n".as_slice(), blob_source.as_bytes()].concat());
         assert_eq!(blob_response.network_request_headers(), None);
-        assert_eq!(blob_response.negotiated_http_version, None);
+        assert_eq!(blob_response.negotiated_http_version(), None);
     })
     .await;
 }

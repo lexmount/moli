@@ -9201,7 +9201,14 @@ fn try_start_service_worker_runtime_command_dispatch(
             },
         ),
         WorkerRuntimeCommandKind::RunIfWaitingForDebugger => {
-            release_service_worker_if_waiting_for_debugger(conn, cmd.session_id);
+            if release_service_worker_if_waiting_for_debugger(conn, cmd.session_id) {
+                // Loading can resume before a VM exists. Its accepted release
+                // already completes this command; do not dispatch it a second time.
+                conn.release_waiting_for_debugger_session(cmd.session_id);
+                return Some(RuntimeCommandTaskStep::Complete(
+                    CommandOutputPlan::success(),
+                ));
+            }
             let dispatch =
                 start_pending_service_worker_runtime_inspector_command(conn, cmd, command);
             Some(match dispatch {
@@ -11598,6 +11605,7 @@ mod protocol_neutral_tests {
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
+            true,
         );
         target.attach_session("SID-shared-worker".to_owned());
         target.set_runtime_frontend_enabled("SID-shared-worker", true);

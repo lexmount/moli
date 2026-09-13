@@ -444,7 +444,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url,
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             message,
         );
@@ -459,7 +459,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url,
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             error.to_string(),
         );
@@ -474,7 +474,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url.clone(),
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             format!("xhr: blocked bad port for `{}`", prepared.resolved_url),
         );
@@ -489,7 +489,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url,
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
         );
@@ -504,7 +504,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url,
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             "Network emulation offline".to_owned(),
         );
@@ -562,7 +562,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             prepared.resolved_url,
             prepared.method,
             prepared.request_headers,
-            request_body_text(&prepared.send_body),
+            prepared.send_body,
             SubresourceResourceType::Xhr,
             "Synchronous XMLHttpRequest interception is not supported".to_owned(),
         );

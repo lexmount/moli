@@ -24,7 +24,8 @@ use super::{
     jobs::ServiceWorkerLaunchParams,
     run_owner::ServiceWorkerRunOwner,
     script_loading::{
-        LoadedServiceWorkerScript, ServiceWorkerScriptResource, load_service_worker_script_source,
+        LoadedServiceWorkerScript, ServiceWorkerScriptLoadParams, ServiceWorkerScriptLoader,
+        ServiceWorkerScriptResource,
     },
     service::ServiceWorkerRuntimeService,
     start_completion::ServiceWorkerTargetOutput,
@@ -35,7 +36,42 @@ pub(super) type SharedRendererServiceWorkerHost = Arc<RendererServiceWorkerHost>
 
 pub(super) struct RendererServiceWorkerHost {
     run_owner: ServiceWorkerRunOwner,
+    network: crate::runtime::RendererWorkerNetworkReporter,
+    load_cancel: moli_fetch::FetchCancelHandle,
     state: Mutex<RendererServiceWorkerHostState>,
+}
+
+impl Drop for RendererServiceWorkerHost {
+    fn drop(&mut self) {
+        self.load_cancel.cancel();
+        self.network.close_source();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RendererServiceWorkerNetworkObserver {
+    service: super::state::WeakServiceWorkerRuntimeService,
+    owner: ServiceWorkerRunOwner,
+}
+
+impl std::fmt::Debug for RendererServiceWorkerNetworkObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RendererServiceWorkerNetworkObserver")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RendererServiceWorkerNetworkObserver {
+    pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
+        if let Some(service) = self.service.upgrade() {
+            // Main-script receipts precede execution readiness in the version FIFO.
+            service.finish_target_output(
+                self.owner.clone(),
+                ServiceWorkerTargetOutput::Network(observation),
+            );
+        }
+    }
 }
 
 enum RendererServiceWorkerHostState {
@@ -48,21 +84,39 @@ enum RendererServiceWorkerHostState {
 impl RendererServiceWorkerHost {
     pub(super) fn new_loading(
         run_owner: &ServiceWorkerRunOwner,
+        context: &crate::runtime::RendererWorkerContextRuntime,
     ) -> SharedRendererServiceWorkerHost {
         Arc::new(Self {
             run_owner: run_owner.clone(),
+            network: context.network_for_worker(crate::runtime::RendererWorkerIdentity::Service {
+                version: run_owner.version_id().as_u64(),
+                run: run_owner.cloned_run_identity(),
+            }),
+            load_cancel: moli_fetch::FetchCancelHandle::new(),
             state: Mutex::new(RendererServiceWorkerHostState::Loading),
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_loading_for_test(
+        run_owner: &ServiceWorkerRunOwner,
+    ) -> SharedRendererServiceWorkerHost {
+        Self::new_loading(
+            run_owner,
+            &crate::runtime::RendererWorkerContextRuntime::new(
+                crate::message_port_runtime::new_message_port_registry(),
+                crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
+            ),
+        )
     }
 
     #[cfg(test)]
     pub(super) fn new_running_without_handle_for_test(
         run_owner: &ServiceWorkerRunOwner,
     ) -> SharedRendererServiceWorkerHost {
-        Arc::new(Self {
-            run_owner: run_owner.clone(),
-            state: Mutex::new(RendererServiceWorkerHostState::Running { handle: None }),
-        })
+        let host = Self::new_loading_for_test(run_owner);
+        *host.state.lock() = RendererServiceWorkerHostState::Running { handle: None };
+        host
     }
 
     #[cfg(test)]
@@ -70,12 +124,11 @@ impl RendererServiceWorkerHost {
         run_owner: &ServiceWorkerRunOwner,
         handle: WorkerHandle,
     ) -> SharedRendererServiceWorkerHost {
-        Arc::new(Self {
-            run_owner: run_owner.clone(),
-            state: Mutex::new(RendererServiceWorkerHostState::Running {
-                handle: Some(handle),
-            }),
-        })
+        let host = Self::new_loading_for_test(run_owner);
+        *host.state.lock() = RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        };
+        host
     }
 
     pub(super) fn start_loading(
@@ -88,30 +141,38 @@ impl RendererServiceWorkerHost {
             self.run_owner, params.run_owner,
             "a ServiceWorker host must start only its bound run owner"
         );
-        let run_owner = params.run_owner.clone();
+        let task_runner = params.worker_context_runtime.resource_task_runner().expect(
+            "BrowserContext must select a resource executor before loading a ServiceWorker",
+        );
         let host_for_task = Arc::clone(self);
-        let service_for_task = service.clone();
-        let _ = std::thread::Builder::new()
-            .name(format!(
-                "service-worker-load-{}",
-                params.run_owner.version_id().as_u64()
-            ))
-            .spawn(move || {
-                let result = match preloaded_script {
-                    Some(script) => Ok(script),
-                    None => load_service_worker_script_source(&params),
-                };
-                host_for_task.finish_loading(service_for_task, params, result);
-            })
-            .map_err(|error| {
-                self.mark_failed();
-                service.enqueue_worker_start_failed(
-                    run_owner,
-                    ServiceWorkerVersionStartFailure::HostThreadSpawn {
-                        message: error.to_string(),
-                    },
-                );
-            });
+        let loader = self.script_loader(&service);
+        task_runner.spawn(async move {
+            let result = match preloaded_script {
+                Some(script) => Ok(script),
+                None => {
+                    loader
+                        .load_main_script(&ServiceWorkerScriptLoadParams::from_launch_params(
+                            &params,
+                        ))
+                        .await
+                }
+            };
+            host_for_task.finish_loading(service, params, result);
+        });
+    }
+
+    pub(super) fn script_loader(
+        &self,
+        service: &ServiceWorkerRuntimeService,
+    ) -> ServiceWorkerScriptLoader {
+        ServiceWorkerScriptLoader::new(
+            self.network.clone(),
+            crate::worker::WorkerNetworkObserver::Service(RendererServiceWorkerNetworkObserver {
+                service: service.downgrade(),
+                owner: self.run_owner.clone(),
+            }),
+            self.load_cancel.clone(),
+        )
     }
 
     pub(super) fn version_id(&self) -> ServiceWorkerVersionId {
@@ -534,6 +595,8 @@ impl RendererServiceWorkerHost {
     }
 
     pub(super) fn terminate(&self) {
+        self.load_cancel.cancel();
+        self.network.close_source();
         let handle = {
             let mut state = self.state.lock();
             match &mut *state {
@@ -559,6 +622,7 @@ impl RendererServiceWorkerHost {
         let mut state = self.state.lock();
         if matches!(*state, RendererServiceWorkerHostState::Loading) {
             *state = RendererServiceWorkerHostState::Failed;
+            self.network.close_source();
         }
     }
 
@@ -594,7 +658,12 @@ impl RendererServiceWorkerHost {
             self.mark_failed();
             return;
         }
-        let mut handle = spawn_service_worker(service.clone(), params.clone(), script);
+        let mut handle = spawn_service_worker(
+            service.clone(),
+            params.clone(),
+            script,
+            self.network.clone(),
+        );
         let receiver = handle
             .take_receiver()
             .expect("new ServiceWorker owns its parent FIFO");
@@ -872,6 +941,7 @@ fn spawn_service_worker(
     service: ServiceWorkerRuntimeService,
     params: ServiceWorkerLaunchParams,
     script: LoadedServiceWorkerScript,
+    network: crate::runtime::RendererWorkerNetworkReporter,
 ) -> WorkerHandle {
     let storage_key = moli_storage_key::deserialize_serialized_storage_key(&params.storage_key)
         .unwrap_or_else(|| MoliStorageKey::first_party_from_url(&params.scope_url, None));
@@ -883,12 +953,7 @@ fn spawn_service_worker(
             script.resource.final_url.to_string(),
             params.request_client.clone(),
             crate::worker::WorkerGlobalKind::Service {
-                network: params.worker_context_runtime.network_for_worker(
-                    crate::runtime::RendererWorkerIdentity::Service {
-                        version: params.run_owner.version_id().as_u64(),
-                        run: params.run_owner.cloned_run_identity(),
-                    },
-                ),
+                network,
                 registration_id: params.registration_id,
                 version_id: params.run_owner.version_id(),
                 scope_url: params.scope_url.clone(),
@@ -943,7 +1008,7 @@ mod tests {
         let (wake_tx, mut wake_rx) = super::super::owner_wake::service_worker_owner_wake_channel();
         service.add_owner_wake_sender(wake_tx);
         let owner = ServiceWorkerRunOwner::fresh(ServiceWorkerVersionId(7));
-        let host = RendererServiceWorkerHost::new_loading(&owner);
+        let host = RendererServiceWorkerHost::new_loading_for_test(&owner);
         let script_url = url::Url::parse("https://example.test/app/sw.js").unwrap();
         let resource = ServiceWorkerScriptResource {
             request_url: script_url.clone(),
@@ -977,8 +1042,8 @@ mod tests {
         let second_run = RendererServiceWorkerRunIdentity::fresh();
         let first_owner = ServiceWorkerRunOwner::new(version_id, first_run.clone());
         let second_owner = ServiceWorkerRunOwner::new(version_id, second_run.clone());
-        let first = RendererServiceWorkerHost::new_loading(&first_owner);
-        let second = RendererServiceWorkerHost::new_loading(&second_owner);
+        let first = RendererServiceWorkerHost::new_loading_for_test(&first_owner);
+        let second = RendererServiceWorkerHost::new_loading_for_test(&second_owner);
 
         assert_eq!(first.run_identity(), first_run);
         assert_eq!(second.run_identity(), second_run);

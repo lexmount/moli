@@ -60,12 +60,6 @@ fn loading_worker_terminate_blocks_late_script_loaded_transition() {
                 crate::worker::WorkerScriptSource::text(
                     "postMessage('late'); self.close();".to_owned(),
                 ),
-                Box::new(crate::types::NavigationResponse::from_text_body(
-                    "https://example.com/worker.js".parse().unwrap(),
-                    200,
-                    Vec::new(),
-                    "postMessage('late'); self.close();".to_owned(),
-                )),
                 crate::worker::WorkerScriptKind::Classic,
                 true,
                 None,

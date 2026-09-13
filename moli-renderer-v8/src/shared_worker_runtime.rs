@@ -12,6 +12,7 @@ mod connection;
 mod diagnostics;
 mod events;
 mod host;
+pub(crate) use host::RendererSharedWorkerNetworkObserver;
 mod host_clients;
 mod host_loading;
 mod host_loading_task;

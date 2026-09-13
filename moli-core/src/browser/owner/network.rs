@@ -31,6 +31,27 @@ impl Browser {
         let admitted = crate::browser::network::request_key(occurrence)
             .as_ref()
             .and_then(|key| context.network_requests.get(key));
+        let admitted = match (admitted, input.parent_request()) {
+            (None, Some(parent)) => {
+                let key = (
+                    occurrence.source.identity(),
+                    crate::browser::network::NetworkRequestIdentity::Resource(parent.get()),
+                );
+                let Some(parent) = context.network_requests.get(&key).filter(|parent| {
+                    parent.renderer_source == occurrence.source
+                        && matches!(
+                            &parent.state,
+                            crate::browser::NetworkRequestState::Started(_)
+                                | crate::browser::NetworkRequestState::Responding { .. }
+                        )
+                }) else {
+                    // An invalid parent cannot admit a fresh Worker request.
+                    return;
+                };
+                Some(parent)
+            }
+            (admitted, _) => admitted,
+        };
         let renderer_source = admitted.map_or_else(
             || occurrence.source.clone(),
             |entry| entry.renderer_source.clone(),

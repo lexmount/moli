@@ -132,7 +132,7 @@ impl LoadingObserver {
                 {
                     assert!(matches!(
                         script.outcome,
-                        RendererDedicatedWorkerMainScriptOutcome::Loaded(_)
+                        RendererDedicatedWorkerMainScriptOutcome::Loaded
                     ));
                     break script;
                 }

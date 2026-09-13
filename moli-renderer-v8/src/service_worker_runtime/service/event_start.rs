@@ -337,7 +337,10 @@ impl ServiceWorkerRuntimeService {
                 LifecycleRunningAction::StartStopped => {
                     let owner = version.replace_run_owner();
                     version.last_start_error = None;
-                    let host = RendererServiceWorkerHost::new_loading(&owner);
+                    let host = RendererServiceWorkerHost::new_loading(
+                        &owner,
+                        &version.launch_config.worker_context_runtime,
+                    );
                     let params = version.launch_config.to_launch_params(
                         registration_id,
                         &owner,
@@ -412,7 +415,10 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Stopped => {
                 let owner = version.replace_run_owner();
                 version.last_start_error = None;
-                let host = RendererServiceWorkerHost::new_loading(&owner);
+                let host = RendererServiceWorkerHost::new_loading(
+                    &owner,
+                    &version.launch_config.worker_context_runtime,
+                );
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     &owner,
@@ -475,7 +481,10 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Stopped => {
                 let owner = version.replace_run_owner();
                 version.last_start_error = None;
-                let host = RendererServiceWorkerHost::new_loading(&owner);
+                let host = RendererServiceWorkerHost::new_loading(
+                    &owner,
+                    &version.launch_config.worker_context_runtime,
+                );
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     &owner,
@@ -540,7 +549,10 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Stopped => {
                 let owner = version.replace_run_owner();
                 version.last_start_error = None;
-                let host = RendererServiceWorkerHost::new_loading(&owner);
+                let host = RendererServiceWorkerHost::new_loading(
+                    &owner,
+                    &version.launch_config.worker_context_runtime,
+                );
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     &owner,
@@ -603,7 +615,10 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Stopped => {
                 let owner = version.replace_run_owner();
                 version.last_start_error = None;
-                let host = RendererServiceWorkerHost::new_loading(&owner);
+                let host = RendererServiceWorkerHost::new_loading(
+                    &owner,
+                    &version.launch_config.worker_context_runtime,
+                );
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     &owner,
@@ -666,7 +681,10 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Stopped => {
                 let owner = version.replace_run_owner();
                 version.last_start_error = None;
-                let host = RendererServiceWorkerHost::new_loading(&owner);
+                let host = RendererServiceWorkerHost::new_loading(
+                    &owner,
+                    &version.launch_config.worker_context_runtime,
+                );
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     &owner,

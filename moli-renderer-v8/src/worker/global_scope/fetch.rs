@@ -179,51 +179,30 @@ pub(in crate::worker) fn record_worker_subresource_failure(
     url: Url,
     method: String,
     request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
-    resource_type: SubresourceResourceType,
-    error_text: String,
-) {
-    record_worker_subresource_failure_with_handle(
-        state,
-        None,
-        document_url,
-        url,
-        method,
-        request_headers,
-        request_body.map(String::into_bytes),
-        resource_type,
-        error_text,
-    );
-}
-
-pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
-    state: &WorkerGlobalState,
-    request_handle: Option<SubresourceNetworkRequestHandle>,
-    document_url: Url,
-    url: Url,
-    method: String,
-    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<Vec<u8>>,
     resource_type: SubresourceResourceType,
     error_text: String,
 ) {
-    let mut record = SubresourceNetworkRecord::failure(
-        None,
-        document_url,
-        url,
-        method,
-        request_headers,
-        request_body_text(&request_body),
-        resource_type,
+    let Some(transfer) = crate::worker::WorkerResourceTransfer::start(
+        state.global_kind.network(),
+        state.parent_tx.network_observer(),
+        |network| {
+            worker_request_started(
+                network,
+                &document_url,
+                &url,
+                &method,
+                &request_headers,
+                &request_body,
+                resource_type,
+            )
+        },
+    ) else {
+        return;
+    };
+    transfer.failed(&crate::network::ResourceResponseFailure::Request(
         error_text,
-    )
-    .with_request_body_bytes(request_body);
-    if let Some(handle) = request_handle {
-        record = record.with_request_handle(handle);
-    }
-    let _ = state
-        .parent_tx
-        .send(state.global_kind.network_message(record));
+    ));
 }
 
 fn worker_network_result_parts<R>(
@@ -315,6 +294,11 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     load.task_runner().spawn(async move {
         let loader = load.request_client();
+        let preflight = crate::network_host::CorsPreflightNetworkObserver::Worker {
+            request: network.clone(),
+            observer: observer.clone(),
+            keepalive: request_metadata.keepalive,
+        };
         let (result, network_request_headers) = if let Err(message) =
             moli_fetch::FetchUrlList::new(&resolved_url, &[])
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
@@ -360,11 +344,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         request = request.with_auth(auth.into());
                     }
                     if request.auth_requires_buffered_transport() {
-                        match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_with_preflight_headers_and_observer(
                             loader.clone(),
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            Some(&preflight),
                         )
                         .await
                         {
@@ -384,11 +369,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     {
                         // Body security checks and filtered JS responses still wait for
                         // completion. Native observation follows the physical transfer.
-                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
                             &loader,
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            Some(&preflight),
                         )
                         .await
                         {
@@ -399,11 +385,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                             Err(error) => (Err(WorkerRequestError::from(format!("fetch: {error}"))), None),
                         }
                     } else {
-                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                        match fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
                             &loader,
                             request,
                             Some(cancel_handle),
                             cors_preflight_request_headers,
+                            Some(&preflight),
                         )
                         .await
                         {
@@ -646,17 +633,24 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
 ) {
     load.task_runner().spawn(async move {
         let loader = load.request_client();
-        let cors_preflight_request_headers = request.as_ref()
-            .map(|request| request.request_headers.to_byte_strings()).unwrap_or_default();
+        let preflight = crate::network_host::CorsPreflightNetworkObserver::Worker {
+            request: network.clone(),
+            observer: observer.clone(),
+            keepalive: false,
+        };
+        let cors_preflight_request_headers = request
+            .as_ref()
+            .map(|request| request.request_headers.to_byte_strings())
+            .unwrap_or_default();
 
         let (result, network_request_headers) = match request {
-            Ok(request) if request.auth_requires_buffered_transport() =>
-            {
-                match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
+            Ok(request) if request.auth_requires_buffered_transport() => {
+                match fetch_browser_subresource_with_preflight_headers_and_observer(
                     loader.clone(),
                     request,
                     Some(cancel_handle),
                     cors_preflight_request_headers,
+                    Some(&preflight),
                 )
                 .await
                 {
@@ -673,19 +667,27 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             }
             Ok(request) => {
                 // Ordinary worker XHR can keep the network/cache path streaming
-                // and pool large bodies until the XHR DONE boundary.
-                match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                // and spool large bodies until the XHR DONE boundary.
+                match fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
                     &loader,
                     request,
                     Some(cancel_handle),
                     cors_preflight_request_headers,
+                    Some(&preflight),
                 )
                 .await
                 {
-                    Ok(observed) => collect_worker_resource_response(
-                        observed, &network, &observer, observe_response, "xhr",
-                        SubresourceResponseBodyWriter::with_disk_pool(loader.disk_pool()),
-                    ).await,
+                    Ok(observed) => {
+                        collect_worker_resource_response(
+                            observed,
+                            &network,
+                            &observer,
+                            observe_response,
+                            "xhr",
+                            SubresourceResponseBodyWriter::with_disk_pool(loader.disk_pool()),
+                        )
+                        .await
+                    }
                     Err(error) => (Err(WorkerRequestError::from(format!("xhr: {error}"))), None),
                 }
             }
@@ -2193,7 +2195,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url,
             method,
             headers,
-            request_body_text(&body),
+            body,
             SubresourceResourceType::Fetch,
             message.clone(),
         );
@@ -2209,7 +2211,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url,
             method,
             headers,
-            request_body_text(&body),
+            body,
             SubresourceResourceType::Fetch,
             message.clone(),
         );
@@ -2225,7 +2227,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url,
             method,
             headers,
-            request_body_text(&body),
+            body,
             SubresourceResourceType::Fetch,
             message.clone(),
         );
@@ -2248,7 +2250,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url,
             method,
             headers,
-            request_body_text(&body),
+            body,
             SubresourceResourceType::Fetch,
             message.clone(),
         );
@@ -2375,7 +2377,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url,
             method,
             headers,
-            request_body_text(&body),
+            body,
             SubresourceResourceType::Fetch,
             message.clone(),
         );

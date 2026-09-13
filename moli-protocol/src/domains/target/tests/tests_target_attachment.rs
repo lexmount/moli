@@ -1310,6 +1310,7 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         None,
         "https://inactive.example.test/shared-worker.js".to_owned(),
         "shared-inactive".to_owned(),
+        true,
     );
     inactive_shared_worker.attach_session("SID-shared-inactive".to_owned());
     inactive.insert_shared_worker_target(inactive_shared_worker);

@@ -4679,23 +4679,16 @@ async fn worker_fetch_bad_port_rejects_before_transport() {
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
-            assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text.contains("blocked bad port")
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
+    assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text.contains("blocked bad port")
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -4789,26 +4782,19 @@ async fn worker_network_offline_fetch_rejects_and_reports_subresource_failure() 
         },
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(
-                record.url().as_str(),
-                "http://example.test/offline/worker-fetch"
-            );
-            assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text == "Network emulation offline"
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(
+        record.url().as_str(),
+        "http://example.test/offline/worker-fetch"
+    );
+    assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text == "Network emulation offline"
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -4841,26 +4827,19 @@ async fn worker_fetch_blocked_url_rejects_and_reports_subresource_failure() {
         vec!["http://example.test/blocked/*".to_owned()],
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(
-                record.url().as_str(),
-                "http://example.test/blocked/worker-fetch"
-            );
-            assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text == "net::ERR_BLOCKED_BY_CLIENT"
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(
+        record.url().as_str(),
+        "http://example.test/blocked/worker-fetch"
+    );
+    assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text == "net::ERR_BLOCKED_BY_CLIENT"
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -5850,26 +5829,19 @@ async fn worker_blocked_url_pattern_update_reaches_running_worker() {
     handle.set_blocked_url_patterns(&["http://example.test/blocked/*".to_owned()]);
     handle.post_message(serialize_test_string("go"));
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(
-                record.url().as_str(),
-                "http://example.test/blocked/live-worker-fetch"
-            );
-            assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text == "net::ERR_BLOCKED_BY_CLIENT"
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(
+        record.url().as_str(),
+        "http://example.test/blocked/live-worker-fetch"
+    );
+    assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text == "net::ERR_BLOCKED_BY_CLIENT"
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -6327,23 +6299,16 @@ async fn worker_xmlhttprequest_bad_port_errors_before_transport() {
         "http://127.0.0.1/worker/main.js".into(),
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
-            assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text.contains("blocked bad port")
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
+    assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text.contains("blocked bad port")
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -6390,26 +6355,19 @@ async fn worker_xmlhttprequest_blocked_url_reports_error_after_loadstart() {
         vec!["http://example.test/blocked/*".to_owned()],
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(
-                record.url().as_str(),
-                "http://example.test/blocked/worker-xhr"
-            );
-            assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text == "net::ERR_BLOCKED_BY_CLIENT"
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(
+        record.url().as_str(),
+        "http://example.test/blocked/worker-xhr"
+    );
+    assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text == "net::ERR_BLOCKED_BY_CLIENT"
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
@@ -6459,26 +6417,19 @@ async fn worker_xmlhttprequest_offline_reports_error_after_loadstart() {
         },
     );
 
-    let network = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    match network {
-        WorkerToParentMessage::Network(observation) => {
-            let record = observation.worker_record_for_test().clone();
-            assert_eq!(
-                record.url().as_str(),
-                "http://example.test/offline/worker-xhr"
-            );
-            assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
-            assert!(matches!(
-                record.outcome(),
-                SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text == "Network emulation offline"
-            ));
-        }
-        other => panic!("expected worker subresource network record, got {other:?}"),
-    }
+    let record = WorkerNetworkRecords::default()
+        .recv_record(&mut handle)
+        .await;
+    assert_eq!(
+        record.url().as_str(),
+        "http://example.test/offline/worker-xhr"
+    );
+    assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
+    assert!(matches!(
+        record.outcome(),
+        SubresourceNetworkOutcome::Failure { error_text }
+            if error_text == "Network emulation offline"
+    ));
 
     let msg = timeout(TIMEOUT, handle.recv())
         .await
