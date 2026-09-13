@@ -31,6 +31,9 @@ fn navigator_storage_diagnostics(vm: &mut ScriptVm) -> (bool, bool) {
 #[test]
 fn blank_window_only_materializes_bootstrap_required_interface_objects() {
     const BOOTSTRAP_REQUIRED_INTERFACES: &[(&str, usize)] = &[
+        // Keep the associated object available when navigator.userActivation
+        // is first read after the Window's realm retires.
+        ("UserActivation", 1),
         ("History", 1),
         ("Location", 1),
         ("Navigation", 1),
