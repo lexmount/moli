@@ -12,6 +12,7 @@ mod install;
 
 pub(super) use data_transfer::data_transfer_constructor_callback;
 pub(crate) use data_transfer::{
+    build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer,
     DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
     create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
     is_branded_data_transfer_object, native_data_transfer_drop_effect,

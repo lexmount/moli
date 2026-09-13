@@ -11,6 +11,7 @@ mod basic_event_init;
 mod broadcast_channel;
 mod cache_query_init;
 mod chrome;
+mod clipboard_input;
 mod clipboard_storage;
 mod console;
 mod crypto_misc;

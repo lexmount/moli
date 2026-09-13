@@ -195,6 +195,7 @@ use super::document::{
     node_shadow_root_elements_from_point_callback,
 };
 use activation::navigate_form_target_browsing_context;
+pub(crate) use activation::perform_clipboard_key_default_action;
 pub(crate) use activation::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
@@ -278,6 +279,7 @@ pub(crate) use event_handlers::{
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
+    construct_clipboard_event, construct_editing_input_event,
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
     construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
     construct_input_event, construct_interest_event, construct_keyboard_event,

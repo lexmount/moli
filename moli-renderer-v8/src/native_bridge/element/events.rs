@@ -5,6 +5,7 @@ mod dispatch;
 
 pub(crate) use self::constructors::construct_focus_event;
 pub(crate) use self::constructors::{
+    construct_clipboard_event, construct_editing_input_event,
     InputEventCoordinates, TextEditInputType, TouchEventPoint, construct_command_event,
     construct_drag_event_with_related_target, construct_drop_input_event, construct_input_event,
     construct_interest_event, construct_keyboard_event,

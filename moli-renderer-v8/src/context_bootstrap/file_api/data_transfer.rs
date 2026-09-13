@@ -17,6 +17,9 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(crate) use moli_file_api::data_transfer::DragDataStoreMode;
 
+mod clipboard;
+pub(crate) use clipboard::{build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer};
+
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
@@ -24,6 +27,7 @@ const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
 const DATA_TRANSFER_STORE_SLOT: &str = "__lmDataTransferStore";
 const DATA_TRANSFER_STORE_ITEMS_SLOT: &str = "__lmDragDataStoreItems";
+const DATA_TRANSFER_CLIPBOARD_SLOT: &str = "__lmDataTransferClipboard";
 const DATA_TRANSFER_MODE_SLOT: &str = "__lmDataTransferMode";
 const DATA_TRANSFER_ITEM_OWNER_SLOT: &str = "__lmDataTransferItemOwner";
 const DATA_TRANSFER_ITEM_RECORD_SLOT: &str = "__lmDataTransferItemRecord";
@@ -73,6 +77,8 @@ struct DataTransferObjectDeclaration<'s> {
     effect_allowed: &'static str,
     #[webapi(slot = DATA_TRANSFER_MODE_SLOT, constructor_default = 0.0)]
     mode: f64,
+    #[webapi(slot = DATA_TRANSFER_CLIPBOARD_SLOT, init = false)]
+    clipboard: (),
 }
 
 /// Native drag-session data. Its private backing is never a JavaScript
@@ -1605,7 +1611,11 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    native_set_drag_drop_effect(scope, args.this(), &value);
+    if data_transfer_mode(scope, args.this()) != DragDataStoreMode::Disabled
+        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
+    {
+        native_set_drag_drop_effect(scope, args.this(), &value);
+    }
 }
 
 fn data_transfer_effect_allowed_getter<'s>(
@@ -1635,7 +1645,10 @@ fn data_transfer_effect_allowed_setter<'s>(
             return;
         }
     };
-    if valid_effect_allowed(&value) && data_transfer_mode(scope, args.this()).can_write_data() {
+    if valid_effect_allowed(&value)
+        && data_transfer_mode(scope, args.this()).can_write_data()
+        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
+    {
         set_private_string(
             scope,
             args.this(),
