@@ -1,25 +1,9 @@
 use base64::Engine;
 use moli_crypto::DigestAlgorithm;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum SubresourceIntegrityAlgorithm {
-    Sha256,
-    Sha384,
-    Sha512,
-}
-
-impl SubresourceIntegrityAlgorithm {
-    fn output_len_bytes(self) -> usize {
-        self.digest_algorithm().output_len_bytes()
-    }
-
-    fn digest_algorithm(self) -> DigestAlgorithm {
-        match self {
-            Self::Sha256 => DigestAlgorithm::Sha256,
-            Self::Sha384 => DigestAlgorithm::Sha384,
-            Self::Sha512 => DigestAlgorithm::Sha512,
-        }
-    }
+pub(crate) struct IntegrityMetadataHash<'a> {
+    pub(crate) algorithm: DigestAlgorithm,
+    pub(crate) digest: &'a str,
 }
 
 struct ParsedIntegrityMetadata {
@@ -27,7 +11,7 @@ struct ParsedIntegrityMetadata {
 }
 
 struct ParsedIntegrityToken {
-    algorithm: SubresourceIntegrityAlgorithm,
+    algorithm: DigestAlgorithm,
     expected_digest: Option<Vec<u8>>,
 }
 
@@ -57,7 +41,7 @@ pub(crate) fn response_matches_subresource_integrity_metadata(
     if !response_is_eligible {
         return false;
     }
-    let actual_digest = strongest_algorithm.digest_algorithm().digest_bytes(body);
+    let actual_digest = strongest_algorithm.digest_bytes(body);
     metadata.tokens.iter().any(|token| {
         token.algorithm == strongest_algorithm
             && token
@@ -68,24 +52,32 @@ pub(crate) fn response_matches_subresource_integrity_metadata(
 }
 
 fn parse_integrity_metadata(integrity: &str) -> ParsedIntegrityMetadata {
-    let tokens = integrity
-        .split_ascii_whitespace()
-        .filter_map(parse_integrity_token)
+    let tokens = integrity_metadata_hashes(integrity)
+        .map(|hash| ParsedIntegrityToken {
+            algorithm: hash.algorithm,
+            expected_digest: decode_integrity_digest(hash.digest),
+        })
         .collect();
     ParsedIntegrityMetadata { tokens }
 }
 
-fn parse_integrity_token(token: &str) -> Option<ParsedIntegrityToken> {
+/// Keep the encoded digest for CSP's literal hash-source comparison. Response
+/// integrity verification separately decodes it and selects the strongest hash.
+pub(crate) fn integrity_metadata_hashes(
+    integrity: &str,
+) -> impl Iterator<Item = IntegrityMetadataHash<'_>> {
+    integrity
+        .split_ascii_whitespace()
+        .filter_map(parse_integrity_hash)
+}
+
+fn parse_integrity_hash(token: &str) -> Option<IntegrityMetadataHash<'_>> {
     let (algorithm, digest) = parse_integrity_algorithm_and_digest(token)?;
     let digest = digest.split_once('?').map_or(digest, |(digest, _)| digest);
     if !is_integrity_digest_syntax(digest) {
         return None;
     }
-    let expected_digest = decode_integrity_digest(digest);
-    Some(ParsedIntegrityToken {
-        algorithm,
-        expected_digest,
-    })
+    Some(IntegrityMetadataHash { algorithm, digest })
 }
 
 fn is_integrity_digest_syntax(digest: &str) -> bool {
@@ -112,16 +104,14 @@ fn is_integrity_digest_syntax(digest: &str) -> bool {
     data_characters != 0
 }
 
-fn parse_integrity_algorithm_and_digest(
-    token: &str,
-) -> Option<(SubresourceIntegrityAlgorithm, &str)> {
-    const PREFIXES: &[(&str, SubresourceIntegrityAlgorithm)] = &[
-        ("sha256", SubresourceIntegrityAlgorithm::Sha256),
-        ("sha-256", SubresourceIntegrityAlgorithm::Sha256),
-        ("sha384", SubresourceIntegrityAlgorithm::Sha384),
-        ("sha-384", SubresourceIntegrityAlgorithm::Sha384),
-        ("sha512", SubresourceIntegrityAlgorithm::Sha512),
-        ("sha-512", SubresourceIntegrityAlgorithm::Sha512),
+fn parse_integrity_algorithm_and_digest(token: &str) -> Option<(DigestAlgorithm, &str)> {
+    const PREFIXES: &[(&str, DigestAlgorithm)] = &[
+        ("sha256", DigestAlgorithm::Sha256),
+        ("sha-256", DigestAlgorithm::Sha256),
+        ("sha384", DigestAlgorithm::Sha384),
+        ("sha-384", DigestAlgorithm::Sha384),
+        ("sha512", DigestAlgorithm::Sha512),
+        ("sha-512", DigestAlgorithm::Sha512),
     ];
     for (prefix, algorithm) in PREFIXES {
         let Some(rest) = token.strip_prefix(prefix) else {
@@ -203,10 +193,7 @@ mod tests {
 
         let metadata = parse_integrity_metadata(&integrity);
         assert_eq!(metadata.tokens.len(), 1);
-        assert_eq!(
-            metadata.tokens[0].algorithm,
-            SubresourceIntegrityAlgorithm::Sha384
-        );
+        assert_eq!(metadata.tokens[0].algorithm, DigestAlgorithm::Sha384);
         assert_eq!(
             metadata.tokens[0].expected_digest.as_ref().map(Vec::len),
             Some(48)
@@ -293,7 +280,7 @@ mod tests {
             .iter()
             .map(|token| token.algorithm)
             .max_by_key(|algorithm| algorithm.output_len_bytes());
-        assert_eq!(strongest, Some(SubresourceIntegrityAlgorithm::Sha384));
+        assert_eq!(strongest, Some(DigestAlgorithm::Sha384));
         assert!(response_body_matches_subresource_integrity_metadata(
             body,
             Some(&integrity)

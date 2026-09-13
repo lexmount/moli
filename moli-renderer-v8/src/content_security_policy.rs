@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;
+use crate::subresource_integrity::integrity_metadata_hashes;
 use crate::util::v8_string;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_crypto::DigestAlgorithm;
@@ -1603,16 +1604,19 @@ fn script_integrity_matches_hash_source(integrity: Option<&str>, sources: &[&str
     let Some(integrity) = integrity else {
         return false;
     };
-    integrity.split_whitespace().any(|metadata| {
-        let metadata = metadata.split_once('?').map_or(metadata, |(hash, _)| hash);
-        let Some(metadata) = hash_source_value(metadata) else {
-            return false;
-        };
-        sources
-            .iter()
-            .filter_map(|source| csp_hash_source_value(source))
-            .any(|source| source == metadata)
-    })
+    // CSP requires a nonempty subset of its hash sources, including weaker
+    // algorithms. SRI checks the strongest hashes against the response later.
+    let mut hashes = integrity_metadata_hashes(integrity).peekable();
+    hashes.peek().is_some()
+        && hashes.all(|hash| {
+            sources
+                .iter()
+                .filter_map(|source| csp_hash_source_value(source))
+                .any(|source| {
+                    source.algorithm.digest_algorithm() == hash.algorithm
+                        && source.digest == hash.digest
+                })
+        })
 }
 
 fn source_expression_matches(
@@ -2105,6 +2109,22 @@ mod tests {
             &request_url(request),
             kind,
         )
+    }
+
+    fn script_element_request_allowed(
+        policy: &str,
+        request: ContentSecurityPolicyScriptElementRequest<'_>,
+    ) -> bool {
+        content_security_policy_script_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request(
+            &[policy.to_owned()],
+            &protected_url(),
+            &request_url("https://cdn.test/script.js"),
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+            request,
+        )
+        .is_none()
     }
 
     fn frame_ancestors_violation(
@@ -2993,6 +3013,110 @@ mod tests {
             violation.is_none(),
             "matching integrity metadata should satisfy a CSP hash source regardless of algorithm case"
         );
+    }
+
+    #[test]
+    fn script_element_integrity_requires_every_supported_hash_in_the_source_list() {
+        for directive in ["script-src-elem", "script-src", "default-src"] {
+            let policy = format!("{directive} 'ShA256-testdigest' 'sha384-strong' 'sha512-other'");
+            for (integrity, expected) in [
+                ("sha256-testdigest sha384-strong", true),
+                ("sha256-testdigest sha256-testdigest", true),
+                ("sha512-other sha384-strong sha256-testdigest", true),
+                ("sha256-testdigest sha256-unknown", false),
+                ("sha256-unknown sha256-testdigest", false),
+                ("sha256-testdigest sha512-unknown", false),
+                ("sha256-unknown sha384-strong", false),
+            ] {
+                assert_eq!(
+                    script_element_request_allowed(
+                        &policy,
+                        ContentSecurityPolicyScriptElementRequest {
+                            nonce: None,
+                            integrity: Some(integrity),
+                            parser_inserted: true,
+                        },
+                    ),
+                    expected,
+                    "{policy}: {integrity}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn script_element_integrity_uses_nonempty_parsed_sri_metadata() {
+        for (integrity, expected) in [
+            (None, false),
+            (Some(" \t\r\n\x0c"), false),
+            (Some("sha1-ignored sha512-***"), false),
+            (Some("sha256-***"), false),
+            (Some("SHA256-testdigest"), false),
+            (Some("sha256-testdigest\u{a0}"), false),
+            (Some("sha256-testdigest sha1-ignored"), true),
+            (Some("sha256-testdigest sha512-*** sha512-abc==="), true),
+            (Some("sha256-testdigest?ignored sha-256-testdigest"), true),
+            (Some(" \tsha256-testdigest\r\n\x0csha256-testdigest "), true),
+        ] {
+            assert_eq!(
+                script_element_request_allowed(
+                    "script-src 'sha256-testdigest' 'sha256-***'",
+                    ContentSecurityPolicyScriptElementRequest {
+                        nonce: None,
+                        integrity,
+                        parser_inserted: true,
+                    },
+                ),
+                expected,
+                "{integrity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_element_integrity_compares_encoded_digests_literally() {
+        for (source, integrity, expected) in [
+            ("'sha256-YQ=='", "sha256-YQ==", true),
+            ("'sha256-YQ=='", "sha256-YQ", false),
+            ("'sha256-+w=='", "sha256--w==", false),
+            ("'sha256-YR=='", "sha256-YR==", true),
+        ] {
+            assert_eq!(
+                script_element_request_allowed(
+                    &format!("script-src {source}"),
+                    ContentSecurityPolicyScriptElementRequest {
+                        nonce: None,
+                        integrity: Some(integrity),
+                        parser_inserted: true,
+                    },
+                ),
+                expected,
+                "{source}: {integrity}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_integrity_match_preserves_other_script_authorizations() {
+        for (other_sources, nonce, parser_inserted, expected) in [
+            ("'nonce-allowed'", Some("allowed"), true, true),
+            ("https://cdn.test", None, true, true),
+            ("'strict-dynamic'", None, false, true),
+            ("'strict-dynamic' https://cdn.test", None, true, false),
+        ] {
+            assert_eq!(
+                script_element_request_allowed(
+                    &format!("script-src 'sha256-testdigest' {other_sources}"),
+                    ContentSecurityPolicyScriptElementRequest {
+                        nonce,
+                        integrity: Some("sha256-testdigest sha256-unknown"),
+                        parser_inserted,
+                    },
+                ),
+                expected,
+                "{other_sources}: nonce={nonce:?}, parser_inserted={parser_inserted}"
+            );
+        }
     }
 
     #[test]
