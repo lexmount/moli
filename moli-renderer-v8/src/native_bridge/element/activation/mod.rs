@@ -1,5 +1,7 @@
 mod click;
 mod clipboard;
+mod clipboard_copy;
+pub(crate) use clipboard_copy::{document_copy_command_supported, run_document_copy_command};
 mod default_action;
 mod targets;
 
