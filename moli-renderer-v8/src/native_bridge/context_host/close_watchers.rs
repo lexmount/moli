@@ -2,6 +2,8 @@ use super::{
     DomHandle, JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity,
     WindowExecutionContextOwner,
 };
+use crate::native_bridge::WindowUserActivationState;
+use std::rc::Rc;
 
 struct RegisteredCloseWatcher {
     object: v8::Global<v8::Object>,
@@ -15,6 +17,7 @@ pub(super) struct CloseWatcherManager {
     allowed_groups: usize,
     next_interaction_allows_group: bool,
     history_action_activation: bool,
+    user_activation: Rc<WindowUserActivationState>,
 }
 
 impl Default for CloseWatcherManager {
@@ -24,6 +27,7 @@ impl Default for CloseWatcherManager {
             allowed_groups: 1,
             next_interaction_allows_group: true,
             history_action_activation: false,
+            user_activation: Rc::default(),
         }
     }
 }
@@ -152,8 +156,23 @@ impl JsContextHost {
                 }
                 manager.next_interaction_allows_group = false;
                 manager.history_action_activation = true;
+                manager.user_activation.notify();
             }
         }
+    }
+
+    pub(crate) fn retain_window_user_activation_state(
+        &mut self,
+        source: OwnerDispatchScope,
+    ) -> Option<Rc<WindowUserActivationState>> {
+        let owner = self.current_window_execution_context_owner(source)?;
+        Some(
+            self.close_watcher_managers
+                .entry(owner)
+                .or_default()
+                .user_activation
+                .clone(),
+        )
     }
 
     pub(crate) fn consume_close_watcher_history_activation(&mut self, source: OwnerDispatchScope) {

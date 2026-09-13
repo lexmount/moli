@@ -575,7 +575,7 @@ async fn websocket_bidi_script_result_ownership_applies_to_exception_remote_valu
     protocol_server.abort();
 }
 #[tokio::test]
-async fn websocket_bidi_call_function_user_activation_controls_navigator_and_copy() {
+async fn websocket_bidi_user_activation_retains_window_state_and_scopes_copy() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
         .await
@@ -596,7 +596,29 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
         .expect("created context id")
         .to_owned();
 
-    for (id, user_activation, expected) in [(3_u64, false, false), (4, true, true)] {
+    let spoofed_global = send_bidi_command(
+        &mut socket,
+        3,
+        "script.evaluate",
+        json!({
+            "expression": "globalThis.__moliWebDriverBidiUserActivation = true; navigator.userActivation.isActive || navigator.userActivation.hasBeenActive",
+            "awaitPromise": true,
+            "target": {
+                "context": context_id.clone()
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        spoofed_global["result"]["result"],
+        json!({
+            "type": "boolean",
+            "value": false
+        }),
+        "page globals must not spoof BiDi userActivation: {spoofed_global:?}"
+    );
+
+    for (id, user_activation, expected) in [(4_u64, false, false), (5, true, true)] {
         let response = send_bidi_command(
             &mut socket,
             id,
@@ -622,34 +644,12 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
         );
     }
 
-    let restored = send_bidi_command(
-        &mut socket,
-        5,
-        "script.callFunction",
-        json!({
-            "functionDeclaration": "() => navigator.userActivation.isActive || navigator.userActivation.hasBeenActive",
-            "awaitPromise": true,
-            "target": {
-                "context": context_id.clone()
-            }
-        }),
-    )
-    .await;
-    assert_eq!(
-        restored["result"]["result"],
-        json!({
-            "type": "boolean",
-            "value": false
-        }),
-        "BiDi userActivation should be scoped to the wrapped call: {restored:?}"
-    );
-
-    let spoofed_global = send_bidi_command(
+    let retained_activation = send_bidi_command(
         &mut socket,
         6,
-        "script.evaluate",
+        "script.callFunction",
         json!({
-            "expression": "globalThis.__moliWebDriverBidiUserActivation = true; navigator.userActivation.isActive || navigator.userActivation.hasBeenActive",
+            "functionDeclaration": "() => navigator.userActivation.isActive && navigator.userActivation.hasBeenActive",
             "awaitPromise": true,
             "target": {
                 "context": context_id.clone()
@@ -658,12 +658,12 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
     )
     .await;
     assert_eq!(
-        spoofed_global["result"]["result"],
+        retained_activation["result"]["result"],
         json!({
             "type": "boolean",
-            "value": false
+            "value": true
         }),
-        "page globals must not spoof BiDi userActivation: {spoofed_global:?}"
+        "Window activation should persist after the BiDi call completes: {retained_activation:?}"
     );
 
     for (id, user_activation, expected) in [(7_u64, false, false), (8, true, true)] {
