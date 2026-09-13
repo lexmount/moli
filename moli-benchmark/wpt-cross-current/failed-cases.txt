@@ -2900,9 +2900,6 @@ html/semantics/embedded-content/the-object-element/object-in-display-none-load-e
 html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.html
 html/semantics/embedded-content/the-object-element/usemap-casing.html
 html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html
-html/semantics/forms/form-submission-target/rel-button-target.html
-html/semantics/forms/form-submission-target/rel-form-target.html
-html/semantics/forms/form-submission-target/rel-input-target.html
 html/semantics/forms/the-select-element/customizable-select/base-appearance-inheritance.html
 html/semantics/forms/the-select-element/customizable-select/picker-icon-animation.html
 html/semantics/forms/the-select-element/customizable-select/select-base-appearance-computed-style.html
