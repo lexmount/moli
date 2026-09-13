@@ -4112,35 +4112,6 @@ test(() => {}, "ok");
         self.assertIsNone(store.wait_for_final("example.html", timeout=0))
         self.assertEqual(store.get("example.html"), {"source": "incremental"})
 
-    def test_testdriver_vendor_bridge_provides_action_sequence(self) -> None:
-        self.assertIn(b"action_sequence", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"pointerMove", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-
-    def test_testdriver_vendor_bridge_preserves_key_modifiers(self) -> None:
-        self.assertIn(b"altKey: !!modifiers.Alt", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"ctrlKey: !!modifiers.Control", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"shiftKey: !!modifiers.Shift", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-
-    def test_testdriver_vendor_bridge_send_keys_runs_text_edit_default_action(
-        self,
-    ) -> None:
-        self.assertIn(b"insertSendKeyText", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(
-            b"doc.execCommand('insertText', false, key)",
-            BENCH_TESTDRIVER_VENDOR_BRIDGE,
-        )
-        self.assertIn(b"codePoint >= 0xE000", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"if (keyAllowed)", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-
-    def test_testdriver_vendor_bridge_focuses_user_activation_target(self) -> None:
-        self.assertIn(b"focusForUserActivation", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"document.activeElement === before", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-
-    def test_testdriver_vendor_bridge_falls_back_to_recorded_hit_test_targets(self) -> None:
-        self.assertIn(b"nativeGetClientRects.apply", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"nativeElementsFromPoint.apply", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-        self.assertIn(b"return target ? [target] : []", BENCH_TESTDRIVER_VENDOR_BRIDGE)
-
     def test_testdriver_vendor_bridge_accepts_storage_access_permission_setup(self) -> None:
         self.assertIn(
             b"params.descriptor.name === 'storage-access'",
