@@ -16,7 +16,7 @@ async fn wait_for_request_paused(ctx: &mut TestContext, url: &str, description: 
     wait_for_request_paused_on_session(ctx, "SID-1", url, None, description).await
 }
 
-async fn wait_for_request_paused_on_session(
+pub(super) async fn wait_for_request_paused_on_session(
     ctx: &mut TestContext,
     session_id: &str,
     url: &str,
