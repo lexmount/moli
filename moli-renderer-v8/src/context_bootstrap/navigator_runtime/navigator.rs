@@ -457,10 +457,13 @@ struct ServiceWorkerContainerDeclaration {
     oncontrollerchange: (),
 }
 
-#[derive(Default, WebApiObject)]
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::UserActivation)]
-struct UserActivationObjectDeclaration {
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
+struct UserActivationObjectDeclaration<'s> {
+    #[webapi(slot = "__moliUserActivationDocument")]
+    owner_document: v8::Local<'s, v8::Value>,
+
+    #[webapi(accessor_property, getter = navigator_user_activation_active_getter_callback, enumerable)]
     is_active: (),
 
     #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
@@ -707,12 +710,46 @@ fn navigator_user_activation_state_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !web_api_interfaces::UserActivation::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
+    if let Some((_, sticky)) = navigator_user_activation_state(scope, args.this()) {
+        rv.set(v8::Boolean::new(scope, sticky).into());
     }
-    let active = current_protocol_user_gesture_activation(scope);
-    rv.set(v8::Boolean::new(scope, active).into());
+}
+
+fn navigator_user_activation_active_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some((active, _)) = navigator_user_activation_state(scope, args.this()) {
+        rv.set(v8::Boolean::new(scope, active).into());
+    }
+}
+
+fn navigator_user_activation_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    activation: v8::Local<'s, v8::Object>,
+) -> Option<(bool, bool)> {
+    if !web_api_interfaces::UserActivation::is_instance(scope, activation) {
+        throw_type_error(scope, "Illegal invocation");
+        return None;
+    }
+    let owner = get_private_value(scope, activation, "__moliUserActivationDocument")
+        .filter(|value| value.is_number())
+        .and_then(|value| value.number_value(scope))
+        .map(|value| DomHandle::new(value as usize));
+    let host = activation
+        .get_creation_context(scope)
+        .and_then(crate::util::context_host_ptr_from_context_slot);
+    Some(
+        owner
+            .zip(host)
+            .and_then(|(document, host)| {
+                let host = unsafe { &*host };
+                host.owner_dispatch_scope_for_node(document)
+                    .map(|owner| host.window_user_activation_state(owner))
+            })
+            .unwrap_or((false, false)),
+    )
 }
 
 fn navigator_connection_event_target_noop_callback<'s>(
@@ -916,8 +953,23 @@ pub(in crate::context_bootstrap) fn service_worker_owner_token_value<'s>(
 
 fn build_user_activation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    owner_child: Option<DomHandle>,
+    owner_popup: Option<u64>,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    UserActivationObjectDeclaration::default()
+    let document = context_host_ptr_from_global_bridge(scope).and_then(|host| {
+        let host = unsafe { &*host };
+        if let Some(child) = owner_child {
+            host.child_browsing_context_document_handle(child)
+        } else if let Some(popup) = owner_popup {
+            host.lightweight_popup_document_handle(popup)
+        } else {
+            Some(host.document_handle())
+        }
+    });
+    let document = document
+        .map(|document| v8::Number::new(scope, document.index() as f64).into())
+        .unwrap_or_else(|| v8::null(scope).into());
+    UserActivationObjectDeclaration::new(document)
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind UserActivation object: {error}"))
 }
@@ -982,7 +1034,9 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             build_service_worker_container(scope, owner_child, owner_popup)?.into()
         }
         NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
-        NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
+        NavigatorSubobject::UserActivation => {
+            build_user_activation(scope, owner_child, owner_popup)?.into()
+        }
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()
         }
