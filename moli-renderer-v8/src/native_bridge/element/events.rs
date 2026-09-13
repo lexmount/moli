@@ -1,6 +1,5 @@
 mod constructors;
 mod dispatch;
-#[cfg(feature = "devtools")]
 pub(crate) use self::constructors::construct_clipboard_event;
 
 pub(crate) use self::constructors::construct_focus_event;

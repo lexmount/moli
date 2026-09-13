@@ -1,6 +1,7 @@
 mod click;
-#[cfg(feature = "devtools")]
 mod clipboard;
+mod clipboard_copy;
+pub(crate) use clipboard_copy::{document_copy_command_supported, run_document_copy_command};
 mod default_action;
 #[cfg(feature = "molio")]
 pub(crate) use default_action::replace_contenteditable_selection_after_beforeinput;

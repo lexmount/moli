@@ -64,6 +64,9 @@ impl SelectionDirection {
 pub(super) struct SelectionRecordRegistry {
     next_id: u64,
     records: HashMap<SelectionRecordHandle, SelectionRecord>,
+    // A text control's selection survives focus moving to another document.
+    // Explicit DOM Selection changes supersede it in its own document.
+    text_controls: HashMap<DomHandle, DomHandle>,
 }
 
 struct SelectionRecord {
@@ -180,6 +183,7 @@ impl SelectionRecordRegistry {
         Self {
             next_id: 1,
             records: HashMap::new(),
+            text_controls: HashMap::new(),
         }
     }
 
@@ -212,8 +216,12 @@ impl SelectionRecordRegistry {
 
     fn clear_record(&mut self, handle: SelectionRecordHandle) -> bool {
         let record = self.record_mut(handle);
-        let had_selection = record.owner_document.is_some() && record.has_range();
-        *record = SelectionRecord::empty_with_owner(record.owner_document);
+        let owner_document = record.owner_document;
+        let had_selection = owner_document.is_some() && record.has_range();
+        *record = SelectionRecord::empty_with_owner(owner_document);
+        if let Some(document) = owner_document {
+            self.text_controls.remove(&document);
+        }
         had_selection
     }
 
@@ -261,6 +269,9 @@ impl SelectionRecordRegistry {
         record.direction = SelectionDirection::from_str(direction);
         record.composed_start = Some(composed_start);
         record.composed_end = Some(composed_end);
+        if let Some(document) = record.owner_document {
+            self.text_controls.remove(&document);
+        }
         true
     }
 
@@ -400,6 +411,21 @@ impl SelectionRecord {
 }
 
 impl PageScriptHost {
+    pub(crate) fn note_text_control_selection(&mut self, control: DomHandle) {
+        if let Some(document) = self.dom_host().owner_document_handle(control) {
+            self.selection_record_registry
+                .text_controls
+                .insert(document, control);
+        }
+    }
+
+    pub(crate) fn document_selected_text_control(&self, document: DomHandle) -> Option<DomHandle> {
+        self.selection_record_registry
+            .text_controls
+            .get(&document)
+            .copied()
+    }
+
     pub(crate) fn create_selection_record(&mut self) -> Option<SelectionRecordHandle> {
         self.selection_record_registry.create_record()
     }
