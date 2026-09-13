@@ -5,7 +5,8 @@ use super::super::{
     JsContextHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
 };
 use super::forms::{
-    dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
+    dispatch_text_control_event, form_control_is_effectively_disabled, is_text_control,
+    text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
 use super::styles::{StyleMode, style_property_value};
@@ -636,6 +637,9 @@ fn update_focus_from_previous_with_previous_focus_within(
     let next_value = wrap_handle_value(scope, runtime_ptr, next);
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.set_active_element_handle(next);
+    if let Some(handle) = next.filter(|handle| is_text_control(runtime, *handle)) {
+        runtime.note_text_control_selection(handle);
+    }
     runtime.mark_focus_changed();
     if let Some(previous_focus_within) = previous_focus_within {
         runtime.note_focus_style_activity_with_previous_focus_within(
