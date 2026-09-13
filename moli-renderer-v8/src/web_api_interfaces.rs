@@ -107,6 +107,7 @@ interfaces! {
     Client;
     Clients;
     Clipboard: EventTarget;
+    CloseWatcher: EventTarget;
     ClipboardEvent: Event;
     ClipboardChangeEvent: Event;
     ClipboardItem;
