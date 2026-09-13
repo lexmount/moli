@@ -225,6 +225,7 @@ impl JsContextHost {
             bridge_ref_count: std::rc::Rc::new(std::cell::Cell::new(0)),
             range_record_registry: range_records::RangeRecordRegistry::new(),
             selection_record_registry: selection_records::SelectionRecordRegistry::new(),
+            executing_editing_commands: Default::default(),
             custom_elements: CustomElementStore::default(),
             custom_element_reactions: CustomElementReactionCoordinator::default(),
             child_custom_elements: HashMap::new(),
