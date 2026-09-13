@@ -817,16 +817,17 @@ pub(crate) fn webgl_get_context_attributes_callback(
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct WebGlContextAttributes {
+    // WebIDL dictionary members become own properties in lexicographic order.
     alpha: bool,
     antialias: bool,
     depth: bool,
     desynchronized: bool,
     fail_if_major_performance_caveat: bool,
+    power_preference: &'static str,
     premultiplied_alpha: bool,
     preserve_drawing_buffer: bool,
     stencil: bool,
     xr_compatible: bool,
-    power_preference: &'static str,
 }
 
 impl Default for WebGlContextAttributes {
@@ -837,11 +838,11 @@ impl Default for WebGlContextAttributes {
             depth: true,
             desynchronized: false,
             fail_if_major_performance_caveat: false,
+            power_preference: "default",
             premultiplied_alpha: true,
             preserve_drawing_buffer: false,
             stencil: false,
             xr_compatible: false,
-            power_preference: "default",
         }
     }
 }
