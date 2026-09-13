@@ -8,5 +8,6 @@ mod focus;
 mod form_data_brands;
 mod live_document;
 mod text_controls;
+mod viewport_input;
 mod wrapper_identity;
 mod zhihu_probe;

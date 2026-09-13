@@ -1,5 +1,6 @@
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
 
+use super::super::styles::ComputedStyleRead;
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
 use super::provider::{read_element_metrics, read_scroll_into_view_geometry};
 
@@ -186,7 +187,8 @@ fn consume_wheel_axis(
 ///
 /// Each axis starts at the innermost scroll container under the pointer. Any
 /// delta left at that container's boundary continues along the layout ancestor
-/// chain, matching the scroll chaining users expect from a trackpad or wheel.
+/// chain. Axes the document cannot consume continue through embedding frames,
+/// without redispatching the event.
 pub(crate) fn perform_wheel_scroll_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -200,10 +202,62 @@ pub(crate) fn perform_wheel_scroll_default_action(
         return Ok(false);
     }
 
+    let mut current = Some(handle);
+    let mut changed = false;
+    for _ in 0..=super::hit_test::CHILD_FRAME_DEPTH_LIMIT {
+        let Some(handle) = current else {
+            break;
+        };
+        let runtime = unsafe { &*runtime_ptr };
+        let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+            break;
+        };
+        let target = if handle == document {
+            runtime
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(document)
+        } else {
+            resolve_scroll_target(runtime, handle)
+        };
+        if let Some(target) = target {
+            let requested_x = remaining_x;
+            let requested_y = remaining_y;
+            changed |= scroll_wheel_in_document(
+                scope,
+                runtime_ptr,
+                target,
+                &mut remaining_x,
+                &mut remaining_y,
+            )?;
+            // Once this document scrolls an axis, keep the current wheel
+            // action there even if it reaches the boundary partway through.
+            if remaining_x != requested_x {
+                remaining_x = 0.0;
+            }
+            if remaining_y != requested_y {
+                remaining_y = 0.0;
+            }
+        }
+        if remaining_x == 0.0 && remaining_y == 0.0 {
+            break;
+        }
+        // The frame's owner starts the next document's scroll chain. Keep
+        // the original event in the child and transfer only unused deltas.
+        current =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(document);
+    }
+    Ok(changed)
+}
+
+fn scroll_wheel_in_document(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    remaining_x: &mut f64,
+    remaining_y: &mut f64,
+) -> Result<bool, moli_layout::LayoutError> {
     let runtime = unsafe { &*runtime_ptr };
-    let Some(target) = resolve_scroll_target(runtime, handle) else {
-        return Ok(false);
-    };
     let Some(mut geometry) = read_scroll_into_view_geometry(runtime, target)? else {
         return Ok(false);
     };
@@ -229,7 +283,7 @@ pub(crate) fn perform_wheel_scroll_default_action(
 
     let mut changed = false;
     for container in geometry.scroll_containers {
-        if remaining_x == 0.0 && remaining_y == 0.0 {
+        if *remaining_x == 0.0 && *remaining_y == 0.0 {
             break;
         }
         let (current_x, current_y) =
@@ -238,18 +292,37 @@ pub(crate) fn perform_wheel_scroll_default_action(
             current_x,
             f64::from(container.metrics.minimum_scroll_offset.x),
             f64::from(container.metrics.maximum_scroll_offset.x),
-            remaining_x,
+            *remaining_x,
             container.metrics.allows_user_scroll_x,
         );
         let (target_y, next_remaining_y) = consume_wheel_axis(
             current_y,
             f64::from(container.metrics.minimum_scroll_offset.y),
             f64::from(container.metrics.maximum_scroll_offset.y),
-            remaining_y,
+            *remaining_y,
             container.metrics.allows_user_scroll_y,
         );
-        remaining_x = next_remaining_x;
-        remaining_y = next_remaining_y;
+        *remaining_x = next_remaining_x;
+        *remaining_y = next_remaining_y;
+        if *remaining_x != 0.0 || *remaining_y != 0.0 {
+            let style = ComputedStyleRead::new(unsafe { &*runtime_ptr }, container.source);
+            if *remaining_x != 0.0
+                && matches!(
+                    style.property("overscroll-behavior-x").trim(),
+                    "contain" | "none"
+                )
+            {
+                *remaining_x = 0.0;
+            }
+            if *remaining_y != 0.0
+                && matches!(
+                    style.property("overscroll-behavior-y").trim(),
+                    "contain" | "none"
+                )
+            {
+                *remaining_y = 0.0;
+            }
+        }
         if target_x == current_x && target_y == current_y {
             continue;
         }
