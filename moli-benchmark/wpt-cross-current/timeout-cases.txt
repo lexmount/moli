@@ -3,7 +3,6 @@ conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
 content-security-policy/embedded-enforcement/change-csp-attribute-and-history-navigation.html
 content-security-policy/form-action/form-action-self-allowed-target-blank.html
-content-security-policy/img-src/img-src-self-unique-origin.html
 content-security-policy/inheritance/auxiliary-blank-document.html
 content-security-policy/inheritance/frame-src-javascript-url.html
 content-security-policy/inheritance/iframe-srcdoc-history-inheritance.html
