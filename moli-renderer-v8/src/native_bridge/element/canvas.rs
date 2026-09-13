@@ -112,6 +112,16 @@ fn set_canvas_dimension_attribute<'s>(
     true
 }
 
+pub(crate) fn html_canvas_dimensions<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> (u32, u32) {
+    (
+        canvas_dimension_value(scope, canvas, "width", 300),
+        canvas_dimension_value(scope, canvas, "height", 150),
+    )
+}
+
 fn canvas_dimension_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

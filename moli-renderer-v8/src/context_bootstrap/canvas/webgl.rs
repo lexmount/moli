@@ -16,8 +16,16 @@ const WEBGL_EXTENSIONS_SLOT: &str = "__moliWebGlExtensions";
 const WEBGL_VIEWPORT: u32 = 0x0BA2;
 const WEBGL_INVALID_ENUM: u32 = 0x0500;
 const WEBGL_INVALID_VALUE: u32 = 0x0501;
+const WEBGL_INVALID_OPERATION: u32 = 0x0502;
 const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [32767, 32767];
+const WEBGL_MAX_TEXTURE_SIZE: u32 = 16384;
 const WEBGL_MAX_TEXTURE_IMAGE_UNITS: i32 = 16;
+const WEBGL_UNIFORM_CONTEXT_SLOT: &str = "__moliWebGlUniformContext";
+const WEBGL_MATRIX_METHODS: &[(&str, usize)] = &[
+    ("uniformMatrix2fv", 4),
+    ("uniformMatrix3fv", 9),
+    ("uniformMatrix4fv", 16),
+];
 const WEBGL_MASKED_VENDOR: &str = "WebKit";
 const WEBGL_MASKED_RENDERER: &str = "WebKit WebGL";
 // A declared Windows/ANGLE compatibility identity, not physical GPU discovery.
@@ -146,7 +154,10 @@ struct WebGlShaderHandleDeclaration {}
     interface = web_api_interfaces::WebGLUniformLocation,
     fallback_to_string_tag = "WebGLUniformLocation"
 )]
-struct WebGlUniformLocationHandleDeclaration {}
+struct WebGlUniformLocationHandleDeclaration<'s> {
+    #[webapi(slot = WEBGL_UNIFORM_CONTEXT_SLOT)]
+    context: v8::Local<'s, v8::Object>,
+}
 
 #[derive(WebApiObject)]
 #[webapi(
@@ -497,7 +508,9 @@ fn webgl_resource_limit<'s>(
     // ANGLE renderer11_utils.cpp: feature level 11 resource caps, shared by
     // WebGL1/2. Querying these compatibility limits does not allocate resources.
     Some(match pname {
-        0x0D33 | 0x84E8 | 0x851C => v8::Integer::new(scope, 16_384).into(),
+        0x0D33 | 0x84E8 | 0x851C => {
+            v8::Integer::new_from_unsigned(scope, WEBGL_MAX_TEXTURE_SIZE).into()
+        }
         0x0D3A => webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS),
         0x846D => webgl_float32_array(scope, &[1.0, 1024.0]),
         0x8872 | 0x8B4C => v8::Integer::new(scope, WEBGL_MAX_TEXTURE_IMAGE_UNITS).into(),
@@ -649,15 +662,135 @@ pub(crate) fn webgl_create_shader_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_uniform_location_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(crate) fn webgl_uniform_location_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = WebGlUniformLocationHandleDeclaration::new()
+    if webgl_extensions(scope, args.this()).is_none() {
+        return;
+    }
+    let value = WebGlUniformLocationHandleDeclaration::new(args.this())
         .bind(scope)
         .expect("WebGLUniformLocation handle declaration should bind");
     rv.set(value.into());
+}
+
+pub(crate) fn webgl_drawing_buffer_size_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if webgl_extensions(scope, args.this()).is_none() {
+        return;
+    }
+    let Some(axis) = callback_data_item(scope, &args, &[0usize, 1], "WebGL drawing buffer axis")
+    else {
+        return;
+    };
+    let dimensions = super::backing_store::canvas_owner_from_context(scope, args.this())
+        .and_then(|canvas| super::backing_store::canvas_like_dimensions(scope, canvas));
+    let Some((width, height)) = dimensions else {
+        rv.set_uint32(0);
+        return;
+    };
+    // A zero canvas dimension still has a one-pixel drawing buffer in Blink.
+    // This is the compatibility buffer extent, not a physical GPU allocation.
+    rv.set_uint32([width, height][axis].clamp(1, WEBGL_MAX_TEXTURE_SIZE));
+}
+
+pub(crate) fn webgl_uniform_matrix_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if webgl_extensions(scope, args.this()).is_none() {
+        return;
+    }
+    let Some((method, elements)) =
+        callback_data_item(scope, &args, WEBGL_MATRIX_METHODS, "WebGL matrix uniform")
+    else {
+        return;
+    };
+    if args.length() < 3 {
+        throw_type_error(scope, &format!("{method}: 3 arguments required"));
+        return;
+    }
+    let location = args.get(0);
+    if !location.is_null_or_undefined()
+        && !v8::Local::<v8::Object>::try_from(location).is_ok_and(|object| {
+            web_api_interfaces::WebGLUniformLocation::is_instance(scope, object)
+        })
+    {
+        throw_type_error(
+            scope,
+            &format!("{method}: location is not a WebGLUniformLocation"),
+        );
+        return;
+    }
+    let transpose = args.get(1).boolean_value(scope);
+    // Float32List's typed-array arm precedes sequence conversion: neither a
+    // custom iterator nor indexed accessors may run on a Float32Array.
+    let length = if let Ok(array) = v8::Local::<v8::Float32Array>::try_from(args.get(2)) {
+        array.length()
+    } else {
+        match webidl::argument::<webidl::Sequence<webidl::UnrestrictedDouble>>(
+            scope,
+            &args,
+            2,
+            webidl::Context::argument(method, 3),
+        ) {
+            Ok(values) => values.0.len(),
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                return;
+            }
+        }
+    };
+    let webgl2 = web_api_interfaces::WebGL2RenderingContext::is_instance(scope, args.this());
+    let mut range = [0u32; 2];
+    if webgl2 {
+        for (i, value) in range.iter_mut().enumerate() {
+            if let Err(error) = webidl::argument::<webidl::UnsignedLong>(
+                scope,
+                &args,
+                i as i32 + 3,
+                webidl::Context::argument(method, i + 4),
+            )
+            .map(|parsed| *value = parsed.0)
+            {
+                webidl::throw_error(scope, &error);
+                return;
+            }
+        }
+    }
+    if length == 0 {
+        record_webgl_error(scope, args.this(), WEBGL_INVALID_VALUE);
+        return;
+    }
+    if location.is_null_or_undefined() {
+        return;
+    }
+    let location = v8::Local::<v8::Object>::try_from(location).expect("validated uniform location");
+    if !get_private_value(scope, location, WEBGL_UNIFORM_CONTEXT_SLOT)
+        .is_some_and(|context| context.strict_equals(args.this().into()))
+    {
+        record_webgl_error(scope, args.this(), WEBGL_INVALID_OPERATION);
+        return;
+    }
+    let [offset, requested] = range.map(|value| value as usize);
+    let available = length.saturating_sub(offset);
+    let count = if requested == 0 { available } else { requested };
+    if (transpose && !webgl2)
+        || offset >= length
+        || count > available
+        || count < elements
+        || !count.is_multiple_of(elements)
+    {
+        record_webgl_error(scope, args.this(), WEBGL_INVALID_VALUE);
+    }
+    // Accept the validated capability call. Shader/program execution and GPU
+    // uniform uploads remain outside this shim, like the existing draw methods.
 }
 
 pub(crate) fn webgl_get_attrib_location_callback(
