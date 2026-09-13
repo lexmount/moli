@@ -26,11 +26,11 @@ use crate::native_bridge::element::{
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, is_text_control,
     observable_input_hit_test, observable_input_surface_hit_test,
-    perform_auxiliary_link_default_action, perform_drop_default_action,
-    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
-    replace_text_control_selection, select_contenteditable_contents,
-    text_control_set_selection_range_internal,
+    perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
+    perform_drop_default_action, perform_mouse_focus_default_action,
+    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    replace_contenteditable_selection, replace_text_control_selection,
+    select_contenteditable_contents, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -1884,6 +1884,12 @@ impl ScriptVm {
             // Combined keydown/text input includes a cancelable keypress before
             // editing. Keep both events in this input turn; an explicit char
             // command already dispatched keypress and must not emit it twice.
+            if event_name == "keydown"
+                && let Some(handled) =
+                    perform_clipboard_key_default_action(scope, runtime_ptr, &key_lower, modifiers)
+            {
+                return Ok(input_dispatch_outcome(handled));
+            }
             let handle = if event_name == "keydown" && should_insert_text && !text.is_empty() {
                 // Like Blink's KeyboardEventManager, resolve focus again after
                 // keydown listeners before targeting the character event.

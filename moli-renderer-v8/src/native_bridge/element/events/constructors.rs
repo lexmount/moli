@@ -1,8 +1,67 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
-use super::{construct_event, event_constructor};
+use super::{construct_event, construct_intrinsic_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct ClipboardEventInitDeclaration<'s> {
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    clipboard_data: v8::Local<'s, v8::Object>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct EditingInputEventInitDeclaration<'s> {
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    input_type: v8::Local<'s, v8::String>,
+    data: v8::Local<'s, v8::Value>,
+    data_transfer: v8::Local<'s, v8::Value>,
+}
+
+pub(crate) fn construct_clipboard_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ClipboardEventInitDeclaration::new(true, true, true, data)
+        .bind(scope)
+        .ok()?;
+    construct_intrinsic_event(scope, "ClipboardEvent", event_type, init)
+}
+
+pub(crate) fn construct_editing_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    input_type: &str,
+    data: Option<&str>,
+    transfer: Option<v8::Local<'s, v8::Object>>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let input_type = v8_string(scope, input_type)?;
+    let data = match data {
+        Some(data) => v8_string(scope, data)?.into(),
+        None => v8::null(scope).into(),
+    };
+    let transfer = transfer
+        .map(Into::into)
+        .unwrap_or_else(|| v8::null(scope).into());
+    let init = EditingInputEventInitDeclaration::new(
+        true,
+        event_type == "beforeinput",
+        true,
+        input_type,
+        data,
+        transfer,
+    )
+    .bind(scope)
+    .ok()?;
+    construct_intrinsic_event(scope, "InputEvent", event_type, init)
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]

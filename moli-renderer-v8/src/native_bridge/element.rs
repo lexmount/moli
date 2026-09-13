@@ -126,6 +126,7 @@ use super::document::{
     node_shadow_root_elements_from_point_callback,
 };
 use activation::navigate_form_target_browsing_context;
+pub(crate) use activation::perform_clipboard_key_default_action;
 pub(crate) use activation::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
@@ -205,7 +206,8 @@ pub(crate) use event_handlers::{
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::{
-    NodePublicEventDispatchOutcome, TouchEventPoint, construct_command_event, construct_drag_event,
+    NodePublicEventDispatchOutcome, TouchEventPoint, construct_clipboard_event,
+    construct_command_event, construct_drag_event, construct_editing_input_event,
     construct_interest_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
@@ -344,7 +346,7 @@ pub(crate) use forms::{
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
-    text_control_set_selection_range_internal,
+    replace_text_control_selection_with_input_type, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
