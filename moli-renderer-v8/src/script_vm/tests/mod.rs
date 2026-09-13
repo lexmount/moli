@@ -2255,6 +2255,7 @@ mod input_value_native_receivers;
 
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
+mod close_watchers;
 mod credential_interface_exposure_interfaces;
 mod credential_interfaces;
 
