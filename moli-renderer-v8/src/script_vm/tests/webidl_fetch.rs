@@ -6665,6 +6665,49 @@ fn intersection_observer_servo_aligned_options_surface() {
 }
 
 #[test]
+fn intersection_observer_margins_follow_css_token_syntax() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-tokens.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const value of [0, '0', '+0', '-0', '0.0', '0e0', '1e-50', '1px 0', '0% 0 1px',
+                         '\u00a0', '\u2003', '\u000b', '\u0085', '\u2028', '\u2029',
+                         '()', '[]', '{}', ')', ']', '}']) {
+      let caught;
+      try { new IntersectionObserver(() => {}, {[member]: value}); }
+      catch (error) { caught = error; }
+      check(caught instanceof DOMException && caught.name === 'SyntaxError',
+            member + ': ' + JSON.stringify(value) + ' must throw SyntaxError');
+    }
+    for (const value of ['', ' \t\r\n\f', '/**/', '/**/ /**/', '/* unclosed', ' /**/ \n /**/ ']) {
+      const observer = new IntersectionObserver(() => {}, {[member]: value});
+      check(observer[member] === '0px 0px 0px 0px',
+            member + ': ' + JSON.stringify(value) + ' must normalize to zero margins');
+      observer.disconnect();
+    }
+    for (const [value, expected] of [
+      ['1PX /* comment */ 2%', '1px 2% 1px 2%'],
+      ['1px/**/2%', '1px 2% 1px 2%'],
+      ['1\\70x', '1px 1px 1px 1px'],
+      ['1px 2% 3px 4%', '1px 2% 3px 4%']
+    ]) {
+      const observer = new IntersectionObserver(() => {}, {[member]: value});
+      check(observer[member] === expected, member + ': ' + JSON.stringify(value));
+      observer.disconnect();
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver margins should use CSS token syntax");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn intersection_observer_invalid_margins_throw_syntax_dom_exceptions() {
     let mut vm = new_storage_test_vm("https://intersection-observer-margin-errors.test/");
     let result = vm
