@@ -10,6 +10,7 @@ members = [
     "moli-canvas",
     "moli-charset-parser",
     "moli-cookie-cache",
+    "moli-cookie-import",
     "moli-protocol-cdp",
     "moli-cookie-store",
     "moli-content-type",

@@ -170,6 +170,19 @@ pub async fn run_cli_with_config<W: Write>(
             );
             server.serve().await.context("protocol server failed")?;
         }
+        Commands::Import(args) => {
+            let summary =
+                moli_cookie_import::import_session_state(&moli_cookie_import::ImportRequest {
+                    profile_dir: &args.profile_dir,
+                    includes: args.includes,
+                    chrome_profile_dir: args.chrome_profile_dir.as_deref(),
+                    chrome_crypto_key: args.chrome_crypto_key.as_ref(),
+                    firefox_profile_dir: args.firefox_profile_dir.as_deref(),
+                    cookie_jars: &args.cookie_jar,
+                })?;
+            writeln!(stdout, "Imported session state: {summary}")
+                .context("failed to write import summary")?;
+        }
     }
 
     Ok(())

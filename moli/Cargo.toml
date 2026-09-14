@@ -20,6 +20,7 @@ cidr = "0.3.2"
 clap = { version = "4.5.39", features = ["derive", "env"] }
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-cache = { path = "../moli-cookie-cache" }
+moli-cookie-import = { path = "../moli-cookie-import" }
 moli-protocol = { path = "../moli-protocol" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-fetch = { path = "../moli-fetch" }

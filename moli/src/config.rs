@@ -64,6 +64,7 @@ impl AppConfig {
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;
             }
+            Commands::Import(_) => {}
         }
 
         Ok(config)

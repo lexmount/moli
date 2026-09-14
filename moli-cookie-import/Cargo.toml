@@ -1,0 +1,22 @@
+[package]
+license.workspace = true
+name = "moli-cookie-import"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+base64 = "0.22.1"
+moli-browser-profile = { path = "../moli-browser-profile" }
+moli-cookie-cache = { path = "../moli-cookie-cache" }
+moli-cookie-jar = { path = "../moli-cookie-jar" }
+moli-crypto = { path = "../moli-crypto" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+rusty-leveldb = "4.0.1"
+serde_json = "1.0.145"
+snap = "1.1.1"
+tempfile = "3.23.0"
+time = "0.3.44"
+
+[lints]
+workspace = true

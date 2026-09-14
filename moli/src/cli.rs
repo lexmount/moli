@@ -1,6 +1,7 @@
 use std::{ffi::OsString, num::NonZeroU32, path::PathBuf, str::FromStr};
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+pub use moli_cookie_import::{ChromeCryptoKey, ImportIncludes};
 use regex::Regex;
 
 const DUMP_MODES: &[&str] = &[
@@ -77,6 +78,41 @@ pub struct Cli {
 pub enum Commands {
     Fetch(Box<FetchArgs>),
     Serve(Box<ServeArgs>),
+    /// Import browser session state into a Moli profile.
+    Import(Box<ImportArgs>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+#[command(group(
+    ArgGroup::new("import_sources")
+        .required(true)
+        .multiple(true)
+        .args(["chrome_profile_dir", "firefox_profile_dir", "cookie_jar"])
+))]
+pub struct ImportArgs {
+    /// Destination Moli profile directory.
+    #[arg(short = 'P', long, value_name = "PATH")]
+    pub profile_dir: PathBuf,
+
+    /// Comma-separated state to import: cookies,storage,indexeddb, or all.
+    #[arg(long, value_name = "KINDS", default_value = "all")]
+    pub includes: ImportIncludes,
+
+    /// Chrome profile directory (for example, `.../Chrome/Default`).
+    #[arg(long, value_name = "PATH")]
+    pub chrome_profile_dir: Option<PathBuf>,
+
+    /// Chrome cookie key source: system, or base64:<raw-key>.
+    #[arg(long, value_name = "SOURCE", requires = "chrome_profile_dir")]
+    pub chrome_crypto_key: Option<ChromeCryptoKey>,
+
+    /// Firefox profile directory (for example, `.../Profiles/name.default-release`).
+    #[arg(long, value_name = "PATH")]
+    pub firefox_profile_dir: Option<PathBuf>,
+
+    /// Netscape/curl cookie-jar file. May be specified more than once.
+    #[arg(long, value_name = "PATH")]
+    pub cookie_jar: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
@@ -816,6 +852,7 @@ mod tests {
             let common = match cli.command {
                 Commands::Fetch(args) => args.common,
                 Commands::Serve(args) => args.common,
+                Commands::Import(_) => unreachable!("test only parses fetch and serve"),
             };
             assert_eq!(common.ca_cert, Some(PathBuf::from("ca.pem")));
             let certificate = common.client_cert.expect("client certificate");
@@ -823,6 +860,51 @@ mod tests {
             assert_eq!(certificate.password(), Some("secret"));
             assert_eq!(common.client_key, Some(PathBuf::from("client-key.pem")));
         }
+    }
+
+    #[test]
+    fn parses_import_sources_includes_and_explicit_key() {
+        let cli = Cli::parse_from([
+            "moli",
+            "import",
+            "--chrome-profile-dir",
+            "/tmp/chrome/Default",
+            "--profile-dir",
+            "/tmp/moli",
+            "--includes",
+            "cookies,storage",
+            "--chrome-crypto-key",
+            "base64:YWJjZA==",
+        ]);
+        let Commands::Import(args) = cli.command else {
+            panic!("expected import command");
+        };
+        assert!(args.includes.contains(ImportIncludes::COOKIES));
+        assert!(args.includes.contains(ImportIncludes::STORAGE));
+        assert!(!args.includes.contains(ImportIncludes::INDEXED_DB));
+        assert_eq!(
+            args.chrome_crypto_key,
+            Some(ChromeCryptoKey::Base64("YWJjZA==".into()))
+        );
+    }
+
+    #[test]
+    fn import_defaults_to_all_and_requires_a_source() {
+        let cli = Cli::parse_from([
+            "moli",
+            "import",
+            "--profile-dir",
+            "/tmp/moli",
+            "--cookie-jar",
+            "/tmp/cookies.txt",
+        ]);
+        let Commands::Import(args) = cli.command else {
+            panic!("expected import command");
+        };
+        assert!(args.includes.contains(ImportIncludes::COOKIES));
+        assert!(args.includes.contains(ImportIncludes::STORAGE));
+
+        assert!(Cli::try_parse_from(["moli", "import", "--profile-dir", "/tmp/moli"]).is_err());
     }
 
     #[test]

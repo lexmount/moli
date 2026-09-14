@@ -134,6 +134,55 @@ Run `fetch --help` for the complete option list, including output formats,
 page-load/response waits, profiles, proxy settings, resource policies, and
 tracing options.
 
+### Import browser session state
+
+Import cookies and local storage from a Chrome profile into a Moli profile:
+
+```bash
+moli import \
+  --profile-dir ./moli-profile \
+  --chrome-profile-dir "$HOME/Library/Application Support/Google/Chrome/Default" \
+  --includes all \
+  --chrome-crypto-key system
+```
+
+On macOS, `system` asks Keychain for Chrome Safe Storage access when encrypted
+cookies are encountered. For automation or another platform, pass a raw AES
+key as `--chrome-crypto-key base64:<key>`. Omitting the option defaults to the
+system key source. The importer snapshots Chrome's SQLite and LevelDB files
+before reading them, so Chrome may remain open.
+
+`--includes` accepts `cookies`, `storage`, `indexeddb`, or a comma-separated
+combination and defaults to `all`. Here, `all` means every data type currently
+supported by the selected importer; for Chrome this is cookies and local
+storage. Chromium's IndexedDB LevelDB/V8 format is not yet compatible with
+Moli's JSON IndexedDB backend, so explicitly requesting `indexeddb` fails before
+changing the destination.
+
+Netscape-format cookie files, including curl cookie jars, can be imported
+independently or combined with a browser source. Repeat `--cookie-jar` to merge
+multiple files:
+
+```bash
+moli import \
+  --profile-dir ./moli-profile \
+  --cookie-jar ./cookies.txt
+```
+
+Firefox cookies and local storage use the same destination and selection flags:
+
+```bash
+moli import \
+  --profile-dir ./moli-profile \
+  --firefox-profile-dir "$HOME/Library/Application Support/Firefox/Profiles/example.default-release" \
+  --includes all
+```
+
+Firefox container, private-browsing, and partitioned cookies are intentionally
+not flattened into Moli's default partition because that would weaken their
+isolation semantics. Firefox local-storage values support both native UTF-16
+and UTF-8 representations, including Snappy-compressed values.
+
 ### Start the automation server
 
 ```bash
