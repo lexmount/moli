@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::network::ResourceRequestClient;
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerRequestDestination};
+use crate::subresource_integrity::response_matches_subresource_integrity_metadata;
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
 
 pub(crate) use moli_stylesheet_blocking::{
@@ -284,13 +285,18 @@ impl StylesheetResponseProvenance {
     fn is_cors_same_origin(
         &self,
         request_origin: &moli_url::WebOrigin,
-        request_url: &Url,
         head: &moli_fetch::ResponseHead,
     ) -> bool {
         match self {
-            Self::Network => {
-                stylesheet_response_url_chain_is_same_origin(request_origin, request_url, head)
-            }
+            // Fetch classifies data responses as basic despite their opaque URL
+            // origin, while retaining taint from cross-origin HTTP redirects.
+            Self::Network => crate::network_host::network_response_filter(
+                request_origin,
+                head,
+                moli_fetch::RequestMode::NoCors,
+                moli_fetch::RequestRedirectMode::Follow,
+            )
+            .is_none(),
             Self::ServiceWorker { filter } => !matches!(
                 filter,
                 Some(
@@ -342,22 +348,36 @@ fn stylesheet_terminal_from_response(
             }
         });
     let origin_clean = cors_usability.as_ref().map_or_else(
-        || response_provenance.is_cors_same_origin(request_origin, request_url, &head),
+        || response_provenance.is_cors_same_origin(request_origin, &head),
         Result::is_ok,
     );
-    let usability = if !(200..=299).contains(&response.status) {
+    let fetch_usability = if !(200..=299).contains(&response.status) {
         Err(format!(
             "failed to fetch stylesheet `{request_url}`: HTTP status {}",
             response.status
         ))
     } else {
         cors_usability.unwrap_or(Ok(()))
+    };
+    if let Err(reason) = fetch_usability {
+        return StylesheetFetchTerminal::unusable_response(response, origin_clean, reason);
     }
-    .and_then(|()| {
-        let allow_non_css_mime = options.quirks_mode_mime_compatibility()
-            && stylesheet_response_url_chain_is_same_origin(request_origin, request_url, &head);
-        validate_stylesheet_response_ref(request_url, &response, allow_non_css_mime)
-    });
+    if !response_matches_subresource_integrity_metadata(
+        response.body_bytes(),
+        options.integrity(),
+        origin_clean,
+    ) {
+        return StylesheetFetchTerminal::integrity_failure(
+            response,
+            origin_clean,
+            format!(
+                "failed to fetch stylesheet `{request_url}`: subresource integrity check failed"
+            ),
+        );
+    }
+    let allow_non_css_mime = options.quirks_mode_mime_compatibility()
+        && stylesheet_response_url_chain_is_same_origin(request_origin, request_url, &head);
+    let usability = validate_stylesheet_response_ref(request_url, &response, allow_non_css_mime);
 
     match usability {
         Ok(()) => StylesheetFetchTerminal::ready(response, origin_clean),
@@ -399,6 +419,26 @@ fn validate_stylesheet_response_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use moli_crypto::DigestAlgorithm;
+
+    fn sha384_integrity(body: &[u8]) -> String {
+        format!(
+            "sha384-{}",
+            STANDARD.encode(DigestAlgorithm::Sha384.digest_bytes(body))
+        )
+    }
+
+    fn integrity_options(cross_origin: Option<&str>, integrity: &str) -> StylesheetFetchOptions {
+        StylesheetFetchOptions::from_link_attributes(
+            cross_origin,
+            None,
+            Some(integrity),
+            None,
+            None,
+            None,
+        )
+    }
 
     fn stylesheet_response(
         url: &Url,
@@ -431,6 +471,228 @@ mod tests {
             cookie_set_reports: Vec::new(),
             from_cache: false,
             negotiated_http_version: None,
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_checks_raw_bytes_and_strongest_hash() {
+        let document_url = Url::parse("https://example.test/page").unwrap();
+        let stylesheet_url = document_url.join("/app.css").unwrap();
+        let raw_body = b"/*\xff*/ body { color: green; }";
+        let text = String::from_utf8_lossy(raw_body).into_owned();
+        let response = stylesheet_response(&stylesheet_url, Some("text/css"), &text);
+        let response = crate::protocol_types::NavigationResponse::from_head_and_body(
+            response.head(),
+            text.clone(),
+            raw_body.to_vec(),
+        );
+        let matching = sha384_integrity(raw_body);
+        let wrong = sha384_integrity(b"wrong");
+        let weaker = format!(
+            "sha256-{}",
+            STANDARD.encode(DigestAlgorithm::Sha256.digest_bytes(raw_body))
+        );
+
+        for (integrity, expected) in [
+            (matching.clone(), true),
+            (wrong.clone(), false),
+            (sha384_integrity(text.as_bytes()), false),
+            (format!("{weaker} {wrong}"), false),
+            (format!("{wrong} {matching}"), true),
+        ] {
+            let terminal = stylesheet_terminal_from_response(
+                &moli_url::WebOrigin::from_url(&document_url),
+                &stylesheet_url,
+                &integrity_options(None, &integrity),
+                response.clone(),
+                StylesheetResponseProvenance::Network,
+            );
+            assert_eq!(terminal.is_ready(), expected, "{integrity}");
+            assert_eq!(terminal.failed_integrity(), !expected, "{integrity}");
+            assert_eq!(terminal.ready_response().is_some(), expected);
+            assert_eq!(
+                terminal.physical().as_result().unwrap().body_bytes(),
+                raw_body,
+                "SRI rejection must retain the physical response for network bookkeeping"
+            );
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_requires_cors_for_cross_origin_network_responses() {
+        let document_url = Url::parse("https://page.example.test/").unwrap();
+        let stylesheet_url = Url::parse("https://cdn.example.test/app.css").unwrap();
+        let body = "body { color: green; }";
+        let integrity = sha384_integrity(body.as_bytes());
+
+        for (cross_origin, credentials_allowed, expected) in [
+            (None, false, false),
+            (Some("anonymous"), false, true),
+            (Some("use-credentials"), true, true),
+            (Some("use-credentials"), false, false),
+        ] {
+            let mut response = stylesheet_response(&stylesheet_url, Some("text/css"), body);
+            response.headers.push((
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://page.example.test".to_owned(),
+            ));
+            if credentials_allowed {
+                response.headers.push((
+                    "Access-Control-Allow-Credentials".to_owned(),
+                    "true".to_owned(),
+                ));
+            }
+            let terminal = stylesheet_terminal_from_response(
+                &moli_url::WebOrigin::from_url(&document_url),
+                &stylesheet_url,
+                &integrity_options(cross_origin, &integrity),
+                response,
+                StylesheetResponseProvenance::Network,
+            );
+            assert_eq!(
+                terminal.is_ready(),
+                expected,
+                "crossorigin={cross_origin:?}, ACAC={credentials_allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_uses_committed_request_origin() {
+        let stylesheet_url = Url::parse("https://page.example.test/app.css").unwrap();
+        let body = "body { color: green; }";
+        let integrity = sha384_integrity(body.as_bytes());
+
+        for (cross_origin, allow_origin, expected) in [
+            (None, None, false),
+            (Some("anonymous"), Some("https://page.example.test"), false),
+            (Some("anonymous"), Some("null"), true),
+        ] {
+            let mut response = stylesheet_response(&stylesheet_url, Some("text/css"), body);
+            if let Some(allow_origin) = allow_origin {
+                response.headers.push((
+                    "Access-Control-Allow-Origin".to_owned(),
+                    allow_origin.to_owned(),
+                ));
+            }
+            let terminal = stylesheet_terminal_from_response(
+                &moli_url::WebOrigin::Opaque,
+                &stylesheet_url,
+                &integrity_options(cross_origin, &integrity),
+                response,
+                StylesheetResponseProvenance::Network,
+            );
+            assert_eq!(
+                terminal.is_ready(),
+                expected,
+                "{cross_origin:?}, {allow_origin:?}"
+            );
+            assert_eq!(terminal.origin_clean(), Some(expected));
+            assert_eq!(terminal.failed_integrity(), cross_origin.is_none());
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_checks_service_worker_response_filter() {
+        let document_url = Url::parse("https://page.example.test/").unwrap();
+        let stylesheet_url = document_url.join("/app.css").unwrap();
+        let response_url = Url::parse("https://cdn.example.test/app.css").unwrap();
+        let body = "body { color: green; }";
+        let integrity = sha384_integrity(body.as_bytes());
+
+        for (filter, expected) in [
+            (None, true),
+            (Some(AsyncSubresourceFetchResponseFilter::Basic), true),
+            (
+                Some(AsyncSubresourceFetchResponseFilter::Cors(vec![])),
+                true,
+            ),
+            (Some(AsyncSubresourceFetchResponseFilter::Opaque), false),
+            (
+                Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
+                false,
+            ),
+        ] {
+            let terminal = stylesheet_terminal_from_response(
+                &moli_url::WebOrigin::from_url(&document_url),
+                &stylesheet_url,
+                &integrity_options(None, &integrity),
+                stylesheet_response(&response_url, Some("text/css"), body),
+                StylesheetResponseProvenance::ServiceWorker {
+                    filter: filter.clone(),
+                },
+            );
+            assert_eq!(terminal.is_ready(), expected, "{filter:?}");
+            assert_eq!(terminal.ready_response().is_some(), expected);
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_accepts_readable_data_responses() {
+        let document_url = Url::parse("https://page.example.test/").unwrap();
+        let body = "body { color: green; }";
+        let stylesheet_url = Url::parse(&format!(
+            "data:text/css;base64,{}",
+            STANDARD.encode(body.as_bytes())
+        ))
+        .unwrap();
+        let matching = sha384_integrity(body.as_bytes());
+        let wrong = sha384_integrity(b"wrong");
+
+        for cross_origin in [None, Some("anonymous"), Some("use-credentials")] {
+            for (integrity, expected) in [(&matching, true), (&wrong, false)] {
+                let terminal = stylesheet_terminal_from_response(
+                    &moli_url::WebOrigin::from_url(&document_url),
+                    &stylesheet_url,
+                    &integrity_options(cross_origin, integrity),
+                    stylesheet_response(&stylesheet_url, Some("text/css"), body),
+                    StylesheetResponseProvenance::Network,
+                );
+                assert_eq!(
+                    terminal.is_ready(),
+                    expected,
+                    "{cross_origin:?}: {integrity}"
+                );
+                assert_eq!(terminal.origin_clean(), Some(true));
+            }
+        }
+    }
+
+    #[test]
+    fn stylesheet_integrity_rejects_no_cors_redirect_taint() {
+        let document_url = Url::parse("https://page.example.test/").unwrap();
+        let stylesheet_url = document_url.join("/app.css").unwrap();
+        let cross_origin_url = Url::parse("https://cdn.example.test/app.css").unwrap();
+        let body = "body { color: green; }";
+        let integrity = sha384_integrity(body.as_bytes());
+
+        for (request_url, redirects, expected) in [
+            (&stylesheet_url, vec![], true),
+            (
+                &stylesheet_url,
+                vec![
+                    stylesheet_redirect(&stylesheet_url, &cross_origin_url),
+                    stylesheet_redirect(&cross_origin_url, &stylesheet_url),
+                ],
+                false,
+            ),
+            (
+                &cross_origin_url,
+                vec![stylesheet_redirect(&cross_origin_url, &stylesheet_url)],
+                false,
+            ),
+        ] {
+            let mut response = stylesheet_response(&stylesheet_url, Some("text/css"), body);
+            response.redirected = !redirects.is_empty();
+            response.redirect_chain = redirects;
+            let terminal = stylesheet_terminal_from_response(
+                &moli_url::WebOrigin::from_url(&document_url),
+                request_url,
+                &integrity_options(None, &integrity),
+                response,
+                StylesheetResponseProvenance::Network,
+            );
+            assert_eq!(terminal.is_ready(), expected, "{request_url}");
         }
     }
 

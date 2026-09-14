@@ -70,9 +70,9 @@ impl DocumentRuntime {
                 continue;
             }
             let terminal = client.terminal();
-            // Blink creates the owner's CSSStyleSheet even when the resource
-            // failed or was cancelled. An unusable terminal therefore installs
-            // an empty source; its existing link task still reports the error.
+            // Ordinary resource failures create an empty owner sheet. Integrity
+            // rejection stops before CSSStyleSheet creation; its link error and
+            // load-delay settlement still follow the normal terminal path.
             let ready_response = terminal.ready_response();
             let stylesheet_text = ready_response
                 .map(|response| response.body_text().to_owned())
@@ -86,13 +86,17 @@ impl DocumentRuntime {
                 }
             };
             let request_url = load.request_url().clone();
-            let prepared = host.prepare_linked_stylesheet_resource(
-                load.owner(),
-                &stylesheet_text,
-                stylesheet_base_url.clone(),
-                request_url.clone(),
-                terminal.origin_clean().unwrap_or(false),
-            );
+            let prepared = if terminal.failed_integrity() {
+                None
+            } else {
+                host.prepare_linked_stylesheet_resource(
+                    load.owner(),
+                    &stylesheet_text,
+                    stylesheet_base_url.clone(),
+                    request_url.clone(),
+                    terminal.origin_clean().unwrap_or(false),
+                )
+            };
             if let Some(prepared) = prepared.as_ref() {
                 host.install_linked_stylesheet(InstallLinkedStylesheet::from_prepared(
                     load.owner(),
