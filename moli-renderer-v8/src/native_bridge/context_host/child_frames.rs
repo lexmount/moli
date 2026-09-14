@@ -241,10 +241,6 @@ impl ChildBrowsingContextEntry {
         self.live_bootstrap.security_origin_inherited()
     }
 
-    pub(super) fn content_security_policy_inherited(&self) -> bool {
-        self.live_bootstrap.content_security_policy_inherited()
-    }
-
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
         self.document_policy_container.clone()
     }
@@ -349,10 +345,6 @@ impl ChildBrowsingContextEntry {
             .as_slice()
     }
 
-    pub(super) fn has_response_content_security_policies(&self) -> bool {
-        !self.response_content_security_policies().is_empty()
-    }
-
     pub(super) fn content_security_reporting_endpoints(
         &self,
     ) -> crate::content_security_policy::ContentSecurityPolicyReportingEndpoints {
@@ -378,6 +370,10 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container
             .document_content_security_policies =
             policy_container.document_content_security_policies.clone();
+        self.document_policy_container
+            .inherited_meta_content_security_policies = policy_container
+            .inherited_meta_content_security_policies
+            .clone();
         self.document_policy_container
             .response_content_security_policies =
             policy_container.response_content_security_policies.clone();
@@ -416,6 +412,11 @@ impl ChildBrowsingContextEntry {
             snapshot.policy_container.document_isolation_policy;
         self.document_policy_container.cross_origin_isolated =
             snapshot.policy_container.cross_origin_isolated;
+        self.document_policy_container
+            .inherited_meta_content_security_policies = snapshot
+            .policy_container
+            .inherited_meta_content_security_policies
+            .clone();
         self.document_policy_container
             .response_content_security_policies = snapshot
             .policy_container

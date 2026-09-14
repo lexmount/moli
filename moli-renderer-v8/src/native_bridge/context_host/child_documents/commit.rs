@@ -318,6 +318,10 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        unsafe { &*self.runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &document_policy_container.inherited_meta_content_security_policies,
+        );
         crate::context_bootstrap::web_mcp::commit_child_navigation(
             self,
             handle,

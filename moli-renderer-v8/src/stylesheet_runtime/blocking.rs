@@ -43,7 +43,7 @@ impl DocumentRuntime {
         request_resource_type: moli_fetch::RequestResourceType,
         link_preload: bool,
     ) -> Result<StylesheetFetch, OwnerlessStylesheetAdmissionError> {
-        let (_, enforced_violation) = self
+        let (_, enforced_violations) = self
             .response_style_element_request_csp_check(
                 &request_url,
                 crate::content_security_policy::ContentSecurityPolicyStyleElementRequest {
@@ -51,7 +51,7 @@ impl DocumentRuntime {
                 },
             )
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violations.is_empty() {
             // The eventual DOM client owns violation reporting and its
             // load/error event. Speculation only decides whether a physical
             // resource may start.

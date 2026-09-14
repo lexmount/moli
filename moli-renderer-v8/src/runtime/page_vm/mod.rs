@@ -4707,7 +4707,7 @@ impl PageVm {
             );
         }
 
-        let (_, enforced_violation) = self
+        let (_, enforced_violations) = self
             .vm()
             .document_runtime
             .style_element_request_csp_check(
@@ -4717,7 +4717,7 @@ impl PageVm {
                 },
             )
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violations.is_empty() {
             return ScannedStylesheetAdmission::DeferredToParser(
                 ScannedStylesheetDeferral::ContentSecurityPolicy,
             );
@@ -4754,7 +4754,7 @@ impl PageVm {
                 ScannedImageDeferral::FetchInterception,
             );
         }
-        let (_, enforced_violation) = self
+        let (_, enforced_violations) = self
             .vm()
             .document_runtime
             .document_subresource_csp_check(
@@ -4762,7 +4762,7 @@ impl PageVm {
                 crate::document_runtime::DocumentSubresourceCspKind::Image,
             )
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violations.is_empty() {
             return ScannedImageAdmission::DeferredToParser(
                 ScannedImageDeferral::ContentSecurityPolicy,
             );
