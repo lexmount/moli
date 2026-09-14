@@ -1,3 +1,4 @@
+use crate::native_bridge;
 use moli_file_api::{BlobData, BlobId, BlobStore};
 pub(super) use moli_v8_util::buffer_source_bytes_from_value;
 use moli_webapi::blob::{BlobReadMode, BlobRuntime};
@@ -10,7 +11,6 @@ pub(crate) use moli_webapi::blob::{blob_id_from_object, world_wrapper};
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    native_bridge,
     resource_owner::{ResourceOwnerId, current_resource_owner_id},
     runtime::RendererStoragePartitionIdentity,
 };

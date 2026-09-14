@@ -59,8 +59,7 @@ pub(crate) use file_entry_file::{
     file_system_file_entry_file_callback,
 };
 pub(crate) use file_list::{
-    build_file_list_object, file_list_files_from_object, is_file_list_object,
-    sync_file_list_contents,
+    build_file_list_object, file_list_files_from_object, sync_file_list_contents,
 };
 pub(crate) use file_reader::{FileReaderReadMode, finish_file_reader_read};
 pub(super) use file_reader::{

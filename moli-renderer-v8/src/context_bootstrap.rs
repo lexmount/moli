@@ -381,8 +381,8 @@ pub(crate) use self::file_api::{
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
-    finish_file_reader_read, flush_one_pending_file_reading_task, is_file_list_object,
-    queue_file_reading_task, selected_file_from_object, set_file_relative_path,
+    finish_file_reader_read, flush_one_pending_file_reading_task, queue_file_reading_task,
+    selected_file_from_object, set_file_relative_path,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{

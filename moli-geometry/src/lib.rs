@@ -38,6 +38,10 @@ mod tests {
                 matrix.dom_matrix_text().unwrap(),
                 format!("matrix(1, 0, 0, 1, 0, {expected})")
             );
+            assert_eq!(
+                matrix.dom_matrix_text_with_dimension(true).unwrap(),
+                format!("matrix(1, 0, 0, 1, 0, {expected})")
+            );
         }
     }
 
