@@ -367,6 +367,9 @@ Its current intentional boundaries include:
   forced overlay scrollbars, orientation-lock emulation and explicit viewport-meta
   processing are also rejected before changing existing metrics. Default scrollbar
   and viewport-meta settings, and disabling orientation-lock emulation, are accepted.
+- `Emulation.setUserAgentOverride` and `Network.setUserAgentOverride` support Page
+  targets. Worker targets return an unsupported error; these rejected commands do
+  not activate a Worker Emulation agent or affect its override precedence.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 

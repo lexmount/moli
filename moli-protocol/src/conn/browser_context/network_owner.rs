@@ -747,6 +747,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         browser_identity: Option<crate::conn::DevToolsBrowserIdentityOverride>,
     ) -> Result<Option<PendingPageCommand>, String> {
+        if matches!(
+            self.session_route(session_id),
+            Some(
+                CdpSessionRoute::DedicatedWorkerTarget { .. }
+                    | CdpSessionRoute::SharedWorkerTarget { .. }
+                    | CdpSessionRoute::ServiceWorkerTarget { .. }
+            )
+        ) {
+            return Err("User agent overrides are not supported for workers".to_owned());
+        }
         let non_page_identity = browser_identity
             .as_ref()
             .map(crate::conn::DevToolsBrowserIdentityOverride::to_browser_identity);

@@ -3723,3 +3723,162 @@ async fn worker_navigator_query_overrides_are_independent_of_the_page() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_worker_emulation_activation_ignores_rejected_user_agent_commands() {
+    async fn snapshot(ctx: &mut TestContext, session_id: Option<&str>) -> serde_json::Value {
+        ctx.process_and_wait_for_response_async(json!({
+            "id": 99190, "sessionId": session_id, "method": "Runtime.evaluate",
+            "params": {
+                "expression": "globalThis.heldNavigator ??= navigator; globalThis.heldConnection ??= navigator.connection; [heldNavigator.hardwareConcurrency, heldConnection.saveData, heldNavigator.userAgent]",
+                "returnByValue": true
+            }
+        })).await;
+        take_response_by_id(ctx, 99190)["result"]["result"]["value"].clone()
+    }
+
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
+    let page_baseline = snapshot(&mut ctx, None).await;
+    let first = start_attached_shared_worker_session(
+        &mut ctx,
+        99100,
+        "emulation-activation-order",
+        "onconnect = () => {};",
+    )
+    .await;
+    let baseline = snapshot(&mut ctx, Some(&first)).await;
+    let target_id = ctx
+        .conn
+        .shared_worker_target_for_session(Some(&first))
+        .unwrap()
+        .target_id
+        .clone();
+    ctx.process_async(json!({
+        "id": 99102, "method": "Target.attachToTarget",
+        "params": {"targetId": target_id, "flatten": true}
+    }))
+    .await;
+    let second = take_response_by_id(&mut ctx, 99102)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Unsupported UA commands must neither alter the Page nor reserve a place
+    // in the Worker's Emulation agent order. Both CDP spellings share the policy.
+    for method in [
+        "Emulation.setUserAgentOverride",
+        "Network.setUserAgentOverride",
+    ] {
+        ctx.process_and_wait_for_response_async(json!({
+            "id": 99103, "sessionId": first, "method": method,
+            "params": {"userAgent": "worker-emulation-order"}
+        }))
+        .await;
+        ctx.expect_error(
+            99103,
+            -32000,
+            "User agent overrides are not supported for workers",
+        );
+        assert_eq!(snapshot(&mut ctx, Some(&first)).await, baseline);
+        assert_eq!(snapshot(&mut ctx, None).await, page_baseline);
+    }
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 99104, "sessionId": first, "method": "Emulation.setHardwareConcurrencyOverride",
+        "params": {"hardwareConcurrency": 0}
+    }))
+    .await;
+    ctx.expect_error(
+        99104,
+        -32602,
+        "HardwareConcurrency must be a positive int32",
+    );
+
+    // Activate the second session first through Data Saver. Its later updates
+    // cannot overtake the first session, even when an individual value clears.
+    for (session, method, params, expected) in [
+        (
+            &second,
+            "Emulation.setDataSaverOverride",
+            json!({"dataSaverEnabled": true}),
+            json!([baseline[0], true]),
+        ),
+        (
+            &first,
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency": 2}),
+            json!([2, true]),
+        ),
+        (
+            &second,
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency": 8}),
+            json!([2, true]),
+        ),
+        (
+            &first,
+            "Emulation.setDataSaverOverride",
+            json!({"dataSaverEnabled": false}),
+            json!([2, false]),
+        ),
+        (
+            &second,
+            "Emulation.setDataSaverOverride",
+            json!({"dataSaverEnabled": true}),
+            json!([2, false]),
+        ),
+        (
+            &first,
+            "Emulation.setDataSaverOverride",
+            json!({}),
+            json!([2, true]),
+        ),
+        (
+            &second,
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency": 6}),
+            json!([2, true]),
+        ),
+        (
+            &first,
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency": 3}),
+            json!([3, true]),
+        ),
+    ] {
+        ctx.process_and_wait_for_response_async(json!({
+            "id": 99105, "sessionId": session, "method": method, "params": params
+        }))
+        .await;
+        ctx.expect_result(99105, json!({}), Some(session));
+        assert_eq!(
+            snapshot(&mut ctx, Some(session)).await,
+            json!([expected[0], expected[1], baseline[2]])
+        );
+    }
+    ctx.process_async(json!({
+        "id": 99106, "method": "Target.detachFromTarget", "params": {"sessionId": first}
+    }))
+    .await;
+    ctx.expect_result(99106, json!({}), None);
+    assert_eq!(
+        snapshot(&mut ctx, Some(&second)).await,
+        json!([6, true, baseline[2]])
+    );
+    ctx.process_async(json!({
+        "id": 99107, "method": "Target.detachFromTarget", "params": {"sessionId": second}
+    }))
+    .await;
+    ctx.expect_result(99107, json!({}), None);
+    ctx.process_async(json!({
+        "id": 99108, "method": "Target.attachToTarget",
+        "params": {"targetId": target_id, "flatten": true}
+    }))
+    .await;
+    let observer = take_response_by_id(&mut ctx, 99108)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(snapshot(&mut ctx, Some(&observer)).await, baseline);
+    assert_eq!(snapshot(&mut ctx, None).await, page_baseline);
+}
