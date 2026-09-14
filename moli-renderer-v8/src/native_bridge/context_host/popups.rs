@@ -509,6 +509,9 @@ impl LightweightPopupDocumentState {
         self.policy_container.cross_origin_isolated = response.cross_origin_isolated;
         self.policy_container.document_content_security_policies =
             response.document_content_security_policies;
+        self.policy_container
+            .inherited_meta_content_security_policies =
+            response.inherited_meta_content_security_policies;
         self.policy_container.response_content_security_policies =
             response.response_content_security_policies;
         self.policy_container

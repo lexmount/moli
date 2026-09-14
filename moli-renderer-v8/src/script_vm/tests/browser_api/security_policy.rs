@@ -37,6 +37,72 @@ fn inline_script_and_handler_csp_accept_base64url_hashes() {
 }
 
 #[test]
+fn inline_script_reports_every_policy_and_only_enforced_policies_block() {
+    let policies = [
+        "script-src 'nonce-allowed' 'report-sample'".to_owned(),
+        "script-src 'nonce-allowed'".to_owned(),
+    ];
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://multiple-inline-csp.test/page.html");
+        if enforce {
+            vm.set_response_content_security_policies(&policies);
+        }
+        vm.set_response_content_security_report_only_policies(&policies);
+        vm.eval(
+            r#"
+globalThis.multipleCspEvents = [];
+document.addEventListener('securitypolicyviolation', event => {
+  multipleCspEvents.push({
+    policy: event.originalPolicy,
+    disposition: event.disposition,
+    directive: event.effectiveDirective,
+    blockedURI: event.blockedURI,
+    sample: event.sample,
+    target: event.target.id,
+  });
+});
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const blocked = document.createElement('script');
+blocked.id = 'reported';
+blocked.text = 'globalThis.untrustedRan = true';
+root.appendChild(blocked);
+const allowed = document.createElement('script');
+allowed.nonce = 'allowed';
+allowed.text = 'globalThis.trustedRan = true';
+root.appendChild(allowed);
+"#,
+        )
+        .expect("inline script probe");
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("globalThis.untrustedRan === true").unwrap(),
+            (!enforce).to_string(),
+        );
+        assert_eq!(vm.eval("globalThis.trustedRan === true").unwrap(), "true");
+        let events: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(multipleCspEvents)").unwrap()).unwrap();
+        let mut expected = Vec::new();
+        for disposition in if enforce {
+            vec!["report", "enforce"]
+        } else {
+            vec!["report"]
+        } {
+            for (index, policy) in policies.iter().enumerate() {
+                expected.push(serde_json::json!({
+                    "policy": policy,
+                    "disposition": disposition,
+                    "directive": "script-src-elem",
+                    "blockedURI": "inline",
+                    "sample": if index == 0 { "globalThis.untrustedRan = true" } else { "" },
+                    "target": "reported",
+                }));
+            }
+        }
+        assert_eq!(events, serde_json::json!(expected));
+    }
+}
+
+#[test]
 fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
     let mut vm = new_storage_test_vm("https://module-csp-provenance.test/page.html");
     vm.set_response_content_security_policies(&[
