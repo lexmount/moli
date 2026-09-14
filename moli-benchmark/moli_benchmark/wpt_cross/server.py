@@ -1333,6 +1333,7 @@ def _substitute_wpt_template_variables(
             b"ws://" + primary_url_host_bytes + b":" + str(alternate_port).encode("ascii")
         ),
         b"{{host}}": primary_hostname_bytes,
+        b"{{domains[]}}": primary_hostname_bytes,
         b"{{location[scheme]}}": b"http",
         b"{{location[server]}}": current_origin,
         b"{{location[host]}}": request_host_bytes,
