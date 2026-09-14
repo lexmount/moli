@@ -832,7 +832,9 @@ fn build_trusted_script_code_like_carrier<'s>(
     TrustedTypeObjectDeclaration::new(value)
         .initialize(scope, object)
         .expect("TrustedScript code-like carrier declaration should initialize");
-    web_api_interfaces::TrustedScript::DESCRIPTOR.initialize(scope, object).ok()?;
+    web_api_interfaces::TrustedScript::DESCRIPTOR
+        .initialize(scope, object)
+        .ok()?;
     Some(object)
 }
 
@@ -905,7 +907,7 @@ fn trusted_types_factory_receiver_is_valid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if web_api_interfaces::TrustedTypePolicyFactory::is_instance(scope, receiver.into()) {
+    if web_api_interfaces::TrustedTypePolicyFactory::is_instance(scope, receiver) {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");
