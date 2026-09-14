@@ -3279,73 +3279,49 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
 #[tokio::test(flavor = "multi_thread")]
 async fn emulated_media_updates_existing_media_query_list_matches() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<body><script>globalThis.events = []; globalThis.darkMql = matchMedia('(prefers-color-scheme: dark)'); globalThis.lightMql = matchMedia('(prefers-color-scheme: light)'); darkMql.addEventListener('change', event => events.push(['dark', event.matches, event.media, event.target === darkMql])); lightMql.onchange = event => events.push(['light', event.matches, event.media, event.target === lightMql]);</script></body>",
-        Some("SID-1"),
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    let initial = evaluate(
+        &mut ctx,
+        r#"
+        globalThis.events = [];
+        globalThis.darkMql = matchMedia('(prefers-color-scheme: dark)');
+        globalThis.lightMql = matchMedia('(prefers-color-scheme: light)');
+        globalThis.mediaEvents = new Promise(resolve => {
+            const record = (name, list, event) => {
+                events.push([name, event.matches, event.media, event.target === list]);
+                if (events.length === 2) resolve();
+            };
+            darkMql.addEventListener('change', event => record('dark', darkMql, event));
+            lightMql.onchange = event => record('light', lightMql, event);
+        });
+        ({dark: darkMql.matches, light: lightMql.matches, events})
+    "#,
     )
     .await;
-    ctx.sent.clear();
+    assert_eq!(initial, json!({"dark": false, "light": true, "events": []}));
 
-    ctx.process_async(json!({
-        "id": 184,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": {
-            "expression": "JSON.stringify({ dark: darkMql.matches, light: lightMql.matches, events })"
-        }
-    }))
+    expect_session_command_result(
+        &mut ctx,
+        185,
+        "SID-1",
+        "Emulation.setEmulatedMedia",
+        json!({
+            "media": "screen", "features": [{"name": "prefers-color-scheme", "value": "dark"}]
+        }),
+    )
     .await;
-    let response = ctx.take_response_by_id(184);
-    let payload = response["result"]["result"]["value"]
-        .as_str()
-        .expect("runtime evaluate should return string");
-    let payload: serde_json::Value =
-        serde_json::from_str(payload).expect("runtime payload should be json");
-    assert_eq!(payload["dark"], json!(false));
-    assert_eq!(payload["light"], json!(true));
-    assert_eq!(payload["events"], json!([]));
-
-    ctx.process_async(json!({
-        "id": 185,
-        "method": "Emulation.setEmulatedMedia",
-        "sessionId": "SID-1",
-        "params": {
-            "media": "screen",
-            "features": [
-                { "name": "prefers-color-scheme", "value": "dark" }
-            ]
-        }
-    }))
+    // Configuration completion does not promise that the rendering task already ran.
+    let observed = evaluate(
+        &mut ctx,
+        "mediaEvents.then(() => ({dark: darkMql.matches, light: lightMql.matches, events}))",
+    )
     .await;
-    ctx.expect_result(185, json!({}), Some("SID-1"));
-
-    ctx.process_async(json!({
-        "id": 186,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": {
-            "expression": "JSON.stringify({ dark: darkMql.matches, light: lightMql.matches, events })"
-        }
-    }))
-    .await;
-    let response = ctx.take_response_by_id(186);
-    let payload = response["result"]["result"]["value"]
-        .as_str()
-        .expect("runtime evaluate should return string");
-    let payload: serde_json::Value =
-        serde_json::from_str(payload).expect("runtime payload should be json");
-    assert_eq!(payload["dark"], json!(true));
-    assert_eq!(payload["light"], json!(false));
     assert_eq!(
-        payload["events"],
-        json!([
+        observed,
+        json!({"dark": true, "light": false, "events": [
             ["dark", true, "(prefers-color-scheme: dark)", true],
             ["light", false, "(prefers-color-scheme: light)", true]
-        ])
+        ]})
     );
 }
 
