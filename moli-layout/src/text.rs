@@ -1230,6 +1230,29 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_woff2_returns_decode_error_and_preserves_existing_font() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(registration("woff2-slot", "Stable Alias", TEST_WOFF2))
+            .unwrap();
+        assert!(has_family(&mut services, "Stable Alias"));
+
+        let mut corrupt_font = TEST_WOFF2.to_vec();
+        // This fixture's Brotli stream occupies bytes 76..649. Preserve its
+        // header and table directory so the failure comes from decompression.
+        assert_eq!(&corrupt_font[20..24], &573_u32.to_be_bytes());
+        corrupt_font[76..649].fill(0);
+        assert_eq!(
+            services.register_web_font(registration("woff2-slot", "Broken Alias", &corrupt_font,)),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF2" })
+        );
+        assert!(has_family(&mut services, "Stable Alias"));
+        assert!(!has_family(&mut services, "Broken Alias"));
+        assert_eq!(services.web_font_count(), 1);
+    }
+
+    #[test]
     fn unchanged_registration_does_not_rebuild_and_remove_is_explicit() {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
