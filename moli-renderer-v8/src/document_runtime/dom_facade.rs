@@ -94,8 +94,21 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         effects: DomMutationEffects,
     ) {
+        self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+            scope, host_ptr, effects, RuntimeMutationOptions::parser_tree_sink(),
+        );
+    }
+
+    pub(super) fn apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        options: RuntimeMutationOptions,
+    ) {
         self.assert_active_parser_document_incarnation();
-        apply_parser_mutation_effects(scope, host_ptr, self, &effects);
+        let mut owner = RuntimeParserMutationEffects { runtime: self, options };
+        apply_parser_mutation_effects(scope, host_ptr, &mut owner, &effects);
     }
 
     pub(crate) fn parser_runtime_dom_node_exists(&mut self, node_id: DomHandle) -> bool {
@@ -818,20 +831,25 @@ impl DocumentRuntime {
     }
 }
 
-impl ParserMutationEffectsOwner for DocumentRuntime {
+struct RuntimeParserMutationEffects<'a> {
+    runtime: &'a mut DocumentRuntime,
+    options: RuntimeMutationOptions,
+}
+
+impl ParserMutationEffectsOwner for RuntimeParserMutationEffects<'_> {
     type Prepared = RuntimeMutationApplyResult;
 
     fn prepare_parser_mutation_effects(&mut self, effects: &DomMutationEffects) -> Self::Prepared {
         prepare_runtime_mutation_effects(
-            self.dom_host(),
-            self.document.url(),
+            self.runtime.dom_host(),
+            self.runtime.document.url(),
             effects,
-            RuntimeMutationOptions::parser_tree_sink(),
+            self.options,
         )
     }
 
     fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
-        self.ensure_parser_custom_element_reaction_queue(host_ptr);
+        self.runtime.ensure_parser_custom_element_reaction_queue(host_ptr);
     }
 
     fn finish_parser_mutation_effects(
@@ -840,7 +858,7 @@ impl ParserMutationEffectsOwner for DocumentRuntime {
         host_ptr: *mut JsContextHost,
         prepared: Self::Prepared,
     ) {
-        let _ = finish_runtime_mutation_effects(self, scope, host_ptr, prepared);
+        let _ = finish_runtime_mutation_effects(self.runtime, scope, host_ptr, prepared);
     }
 }
 

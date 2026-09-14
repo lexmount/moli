@@ -148,6 +148,7 @@ pub struct ElementControlState {
     indeterminate: bool,
     script: Option<Box<ScriptElementState>>,
     link_created_by_parser: bool,
+    style_parser_children_pending: bool,
     link_explicitly_enabled: bool,
     selection_start: Option<u32>,
     selection_end: Option<u32>,
@@ -652,6 +653,18 @@ impl ElementControlState {
         }
         self.link_created_by_parser = true;
         true
+    }
+
+    pub fn style_parser_children_pending(&self) -> bool {
+        self.style_parser_children_pending
+    }
+
+    pub fn note_parser_created_style(&mut self) {
+        self.style_parser_children_pending = true;
+    }
+
+    pub fn finish_parsing_style_children(&mut self) -> bool {
+        std::mem::take(&mut self.style_parser_children_pending)
     }
 
     pub fn finish_parsing_link_children(&mut self) -> bool {

@@ -1054,6 +1054,31 @@ impl DomHost {
         did_change
     }
 
+    pub fn finish_parsing_style_children(&mut self, handle: DomHandle) -> bool {
+        let did_change = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(|element| element.finish_parsing_style_children());
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
+    pub fn finish_parsing_style_children_effects(
+        &mut self,
+        handle: DomHandle,
+    ) -> DomMutationEffects {
+        let mut effects = DomMutationEffects::default();
+        if self.finish_parsing_style_children(handle) {
+            effects.mark_stylesheet_owner_contents_change(
+                handle,
+                self.dom.stylesheet_candidate_tree_scope_for_node(handle),
+            );
+        }
+        effects
+    }
+
     pub fn set_cryptographic_nonce(&mut self, handle: DomHandle, nonce: Option<String>) -> bool {
         let did_change = {
             let Some(element) = self

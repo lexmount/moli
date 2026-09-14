@@ -1272,7 +1272,7 @@ impl JsContextHost {
         let element = dom_host.node(owner).and_then(Node::as_element)?;
         if !dom_host.is_connected(owner)
             || dom_host.get_attribute(owner, "disabled").is_some()
-            || !crate::style_engine::stylesheet_owner_type_is_supported(element)
+            || !crate::style_engine::stylesheet_owner_can_have_sheet(element)
         {
             return None;
         }
