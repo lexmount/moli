@@ -2002,6 +2002,12 @@ def _make_handler(
             ):
                 self._serve_delayed_module_script(parsed.query, emit_body=emit_body)
                 return
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/"
+                "resources/load-error-events.py"
+            ):
+                self._serve_script_load_error_events(parsed.query, emit_body=emit_body)
+                return
             if path in {"/wasm/webapi/status.py", "/wasm/webapi/webapi/status.py"}:
                 status_code = _wasm_webapi_status_code(parsed.query)
                 if status_code is None:
@@ -2740,6 +2746,26 @@ def _make_handler(
                 "text/javascript",
                 b"export let delayedLoaded = true;",
                 emit_body=emit_body,
+            )
+
+        def _serve_script_load_error_events(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            test = params.get("test", [""])[0]
+            if re.fullmatch(r"[a-zA-Z0-9_]+", test) is None:
+                self.send_error(400)
+                return
+            if "_load" in test:
+                status = 200
+                body = f'"use strict"; {test}.executed = true;'
+            else:
+                status = 404
+                body = (
+                    f'"use strict"; {test}.test.step(function() {{ '
+                    'assert_unreached("404 script should not be executed"); });'
+                )
+            self._send_bytes(
+                "text/javascript", body.encode("ascii"),
+                emit_body=emit_body, status_code=status,
             )
 
         def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
