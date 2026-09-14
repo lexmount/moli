@@ -27,6 +27,7 @@ members = [
     "moli-indexeddb",
     "moli-local-executor",
     "moli-layout",
+    "moli-leveldb-parser",
     "moli-message-port",
     "moli-multipart",
     "moli-xpath",

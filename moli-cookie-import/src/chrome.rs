@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{fs, path::Path};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -13,23 +13,12 @@ use moli_cookie_jar::{
 use moli_crypto::derive_pbkdf2_hmac_sha1;
 use moli_crypto::{aes_128_cbc_pkcs7_decrypt, aes_256_gcm_decrypt, sha256_digest};
 use rusqlite::Connection;
-use rusty_leveldb::{DB, LdbIterator, Options};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 
-use crate::ChromeCryptoKey;
+use crate::{ChromeCryptoKey, sqlite::SqliteSnapshot, storage::LocalStorage};
 
 const CHROME_EPOCH_OFFSET_MICROS: i64 = 11_644_473_600_000_000;
-
-pub(crate) fn validate_source(path: &Path) -> Result<()> {
-    if !path.is_dir() {
-        bail!(
-            "Chrome profile directory `{}` does not exist",
-            path.display()
-        );
-    }
-    Ok(())
-}
 
 pub(crate) fn import_cookies(
     profile: &Path,
@@ -44,15 +33,8 @@ pub(crate) fn import_cookies(
                 profile.display()
             )
         })?;
-    let temp = tempfile::NamedTempFile::new().context("failed to create Cookies snapshot")?;
-    fs::copy(&source, temp.path()).with_context(|| {
-        format!(
-            "failed to snapshot Chrome Cookies database `{}`",
-            source.display()
-        )
-    })?;
-    let connection =
-        Connection::open(temp.path()).context("failed to open Chrome Cookies snapshot")?;
+    let snapshot = SqliteSnapshot::open(&source, "Chrome Cookies")?;
+    let connection = &snapshot.connection;
     let schema_version = connection
         .query_row("SELECT value FROM meta WHERE key = 'version'", [], |row| {
             row.get::<_, String>(0)
@@ -60,18 +42,7 @@ pub(crate) fn import_cookies(
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
-    let has_partition_key = cookie_column_exists(&connection, "top_frame_site_key")?;
-    let has_cross_site_ancestor = cookie_column_exists(&connection, "has_cross_site_ancestor")?;
-    let partition_key_column = if has_partition_key {
-        "top_frame_site_key"
-    } else {
-        "NULL"
-    };
-    let cross_site_column = if has_cross_site_ancestor {
-        "has_cross_site_ancestor"
-    } else {
-        "0"
-    };
+    let (partition_key_column, cross_site_column) = cookie_partition_columns(connection)?;
     let sql = format!(
         "SELECT host_key,name,value,encrypted_value,path,expires_utc,is_secure,is_httponly,samesite,priority,source_scheme,source_port,{partition_key_column},{cross_site_column} FROM cookies"
     );
@@ -179,15 +150,19 @@ impl ChromeCookieRow {
     }
 }
 
-fn cookie_column_exists(connection: &Connection, name: &str) -> Result<bool> {
+fn cookie_partition_columns(connection: &Connection) -> Result<(&'static str, &'static str)> {
     let mut statement = connection.prepare("PRAGMA table_info(cookies)")?;
     let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let mut partition_key = "NULL";
+    let mut cross_site_ancestor = "0";
     for column in columns {
-        if column? == name {
-            return Ok(true);
+        match column?.as_str() {
+            "top_frame_site_key" => partition_key = "top_frame_site_key",
+            "has_cross_site_ancestor" => cross_site_ancestor = "has_cross_site_ancestor",
+            _ => {}
         }
     }
-    Ok(false)
+    Ok((partition_key, cross_site_ancestor))
 }
 
 fn chrome_expiry(micros: i64) -> Option<OffsetDateTime> {
@@ -265,26 +240,17 @@ fn decrypt_cookie_value(
     String::from_utf8(plaintext.to_vec()).context("decrypted cookie value is not UTF-8")
 }
 
-pub(crate) fn import_local_storage(profile: &Path, destination: &Path) -> Result<usize> {
+pub(crate) fn read_local_storage(profile: &Path) -> Result<LocalStorage> {
     let source = profile.join("Local Storage/leveldb");
     if !source.is_dir() {
-        return Ok(0);
+        return Ok(LocalStorage::new());
     }
     let snapshot = TempDir::new().context("failed to create localStorage snapshot directory")?;
     copy_dir(&source, snapshot.path())?;
-    let options = Options {
-        create_if_missing: false,
-        ..Options::default()
-    };
-    let mut database = DB::open(snapshot.path(), options)
-        .map_err(|error| anyhow!("failed to open Chrome localStorage LevelDB snapshot: {error}"))?;
-    let mut origins = BTreeMap::<String, BTreeMap<Vec<u16>, Vec<u16>>>::new();
-    let mut iterator = database
-        .new_iter()
-        .map_err(|error| anyhow!("failed to iterate Chrome localStorage: {error}"))?;
-    iterator.seek_to_first();
-    let mut imported = 0;
-    while let Some((key, value)) = iterator.next() {
+    let entries = moli_leveldb_parser::read_snapshot(snapshot.path())
+        .context("failed to read Chrome localStorage LevelDB snapshot")?;
+    let mut origins = LocalStorage::new();
+    for (key, value) in entries {
         let Some((origin, item_key)) = decode_local_storage_key(&key) else {
             continue;
         };
@@ -294,37 +260,9 @@ pub(crate) fn import_local_storage(profile: &Path, destination: &Path) -> Result
         origins
             .entry(origin)
             .or_default()
-            .insert(item_key, item_value);
-        imported += 1;
+            .insert(item_key, item_value.into());
     }
-    let origins = origins
-        .into_iter()
-        .map(|(origin, entries)| {
-            let entries = entries
-                .into_iter()
-                .map(|(key, value)| {
-                    serde_json::json!({
-                        "key": json_dom_string(key),
-                        "value": json_dom_string(value),
-                    })
-                })
-                .collect::<Vec<_>>();
-            (origin, serde_json::json!({ "entries": entries }))
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-        "version": 1,
-        "origins": origins,
-    }))?;
-    moli_browser_profile::write_file_atomically(destination, &bytes, "Chrome localStorage import")?;
-    Ok(imported)
-}
-
-fn json_dom_string(units: Vec<u16>) -> serde_json::Value {
-    match String::from_utf16(&units) {
-        Ok(text) => serde_json::Value::String(text),
-        Err(_) => serde_json::json!({ "utf16": units }),
-    }
+    Ok(origins)
 }
 
 fn decode_local_storage_key(key: &[u8]) -> Option<(String, Vec<u16>)> {
@@ -375,12 +313,87 @@ mod tests {
     use super::*;
 
     #[test]
+    fn imports_chrome_local_storage_from_tables_and_wal_without_resurrecting_deleted_keys()
+    -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let source = profile.path().join("Local Storage/leveldb");
+        fs::create_dir_all(&source)?;
+        let mut database = rusty_leveldb::DB::open(
+            &source,
+            rusty_leveldb::Options {
+                compressor: 1,
+                ..rusty_leveldb::Options::default()
+            },
+        )?;
+        let token = b"_https://example.com\0\x01token";
+        let deleted = b"_https://example.com\0\x01deleted";
+        let surrogate = b"_https://example.com\0\x00\x00\xd8";
+        database.put(b"VERSION", b"1")?;
+        database.put(token, b"\x01old")?;
+        database.put(deleted, b"\x01removed")?;
+        database.put(surrogate, b"\x00\x00\xdc")?;
+        database.compact_range(b"", b"\xff")?;
+        database.put(token, b"\x01v\xff")?;
+        database.delete(deleted)?;
+        database.flush()?;
+
+        let destination = profile.path().join("moli-profile");
+        let request = crate::ImportRequest {
+            profile_dir: &destination,
+            includes: "storage".parse().unwrap(),
+            chrome_profile_dir: Some(profile.path()),
+            chrome_crypto_key: None,
+            firefox_profile_dir: None,
+            cookie_jars: &[],
+        };
+        assert_eq!(crate::import_session_state(&request)?.storage, 2);
+        let storage_path = destination.join("partitions/default/localstorage.json");
+        let bytes = fs::read(&storage_path)?;
+        let json: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(
+            json["origins"]["https://example.com"]["entries"],
+            serde_json::json!([
+                { "key": "token", "value": "vÿ" },
+                { "key": { "utf16": [0xd800] }, "value": { "utf16": [0xdc00] } },
+            ])
+        );
+
+        // An unreadable live SST must fail the import before replacing a
+        // previously imported profile with partial data.
+        let table = fs::read_dir(&source)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .find(|path| path.extension().is_some_and(|extension| extension == "ldb"))
+            .unwrap();
+        let mut corrupt = fs::read(&table)?;
+        corrupt[0] ^= 1;
+        fs::write(table, corrupt)?;
+        assert!(crate::import_session_state(&request).is_err());
+        assert_eq!(fs::read(storage_path)?, bytes);
+        Ok(())
+    }
+
+    #[test]
     fn imports_chrome_cookies_with_and_without_partition_columns() -> Result<()> {
-        for partitioned in [false, true] {
+        check_chrome_cookie_imports("DELETE")
+    }
+
+    #[test]
+    fn imports_chrome_cookies_from_wal() -> Result<()> {
+        check_chrome_cookie_imports("WAL")
+    }
+
+    fn check_chrome_cookie_imports(journal_mode: &str) -> Result<()> {
+        for (partitioned, cross_site) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let profile = tempfile::tempdir()?;
             let network = profile.path().join("Network");
             fs::create_dir(&network)?;
             let connection = Connection::open(network.join("Cookies"))?;
+            connection.pragma_update(None, "journal_mode", journal_mode)?;
+            connection.pragma_update(None, "wal_autocheckpoint", 0)?;
             connection.execute_batch(
                 "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
                  INSERT INTO meta VALUES ('version', '24');
@@ -398,12 +411,19 @@ mod tests {
             if partitioned {
                 connection.execute_batch(
                     "ALTER TABLE cookies ADD COLUMN top_frame_site_key TEXT;
-                     ALTER TABLE cookies ADD COLUMN has_cross_site_ancestor INTEGER;
-                     UPDATE cookies SET top_frame_site_key = 'https://example.org',
-                        has_cross_site_ancestor = 1;",
+                     UPDATE cookies SET top_frame_site_key = 'https://example.org';",
                 )?;
             }
-            drop(connection);
+            if cross_site {
+                connection.execute_batch(
+                    "ALTER TABLE cookies ADD COLUMN has_cross_site_ancestor INTEGER;
+                     UPDATE cookies SET has_cross_site_ancestor = 1;",
+                )?;
+            }
+            // Keep the writer open so uncheckpointed data remains in the WAL.
+            if journal_mode == "WAL" {
+                assert!(network.join("Cookies-wal").is_file());
+            }
 
             let cookies = import_cookies(profile.path(), &ChromeCryptoKey::System)?;
             assert_eq!(cookies.len(), 1);
@@ -423,7 +443,7 @@ mod tests {
                 cookie.partition_key,
                 partitioned.then(|| StoredCookiePartitionKey::site(
                     "https://example.org".to_owned(),
-                    true,
+                    cross_site,
                 )),
             );
         }

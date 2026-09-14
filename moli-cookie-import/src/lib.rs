@@ -2,6 +2,8 @@
 
 mod chrome;
 mod firefox;
+mod sqlite;
+mod storage;
 
 use std::{
     fmt,
@@ -109,11 +111,10 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
         )
     })?;
     let partition = profile.default_partition();
-    let mut summary = ImportSummary::default();
     let mut imported_cookies = Vec::new();
+    let mut imported_storage = storage::LocalStorage::new();
 
     if let Some(source) = request.chrome_profile_dir {
-        chrome::validate_source(source)?;
         if request.includes.contains(ImportIncludes::COOKIES) {
             imported_cookies.extend(chrome::import_cookies(
                 source,
@@ -123,19 +124,16 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
             )?);
         }
         if request.includes.contains(ImportIncludes::STORAGE) {
-            summary.storage +=
-                chrome::import_local_storage(source, partition.local_storage_path())?;
+            storage::merge(&mut imported_storage, chrome::read_local_storage(source)?);
         }
     }
 
     if let Some(source) = request.firefox_profile_dir {
-        firefox::validate_source(source)?;
         if request.includes.contains(ImportIncludes::COOKIES) {
             imported_cookies.extend(firefox::import_cookies(source)?);
         }
         if request.includes.contains(ImportIncludes::STORAGE) {
-            summary.storage +=
-                firefox::import_local_storage(source, partition.local_storage_path())?;
+            storage::merge(&mut imported_storage, firefox::read_local_storage(source)?);
         }
     }
 
@@ -146,12 +144,31 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
                     .with_context(|| format!("failed to import cookie jar `{}`", jar.display()))?,
             );
         }
-        summary.cookies = imported_cookies.len();
-        if summary.cookies > 0 {
-            let mut cookies = moli_cookie_cache::load_cookie_cache(partition.cookies_path())?;
-            cookies.extend(imported_cookies);
-            moli_cookie_cache::save_cookie_cache(partition.cookies_path(), cookies)?;
-        }
+    }
+
+    let summary = ImportSummary {
+        cookies: imported_cookies.len(),
+        storage: imported_storage.values().map(|entries| entries.len()).sum(),
+    };
+    // Read and merge every source and existing destination before writing.
+    // Each file is replaced atomically; the two files are not a transaction.
+    let cookies = if imported_cookies.is_empty() {
+        None
+    } else {
+        let mut cookies = moli_cookie_cache::load_cookie_cache(partition.cookies_path())?;
+        cookies.extend(imported_cookies);
+        Some(cookies)
+    };
+    let storage = storage::prepare(partition.local_storage_path(), imported_storage)?;
+    if let Some(bytes) = storage {
+        moli_browser_profile::write_file_atomically(
+            partition.local_storage_path(),
+            &bytes,
+            "localStorage import",
+        )?;
+    }
+    if let Some(cookies) = cookies {
+        moli_cookie_cache::save_cookie_cache(partition.cookies_path(), cookies)?;
     }
 
     Ok(summary)
@@ -166,72 +183,21 @@ fn validate_request(request: &ImportRequest<'_>) -> Result<()> {
     if !request.cookie_jars.is_empty() && !request.includes.contains(ImportIncludes::COOKIES) {
         bail!("cookie jars can only import cookies; include `cookies` in the import selection");
     }
+    for (browser, source) in [
+        ("Chrome", request.chrome_profile_dir),
+        ("Firefox", request.firefox_profile_dir),
+    ] {
+        if let Some(source) = source
+            && !source.is_dir()
+        {
+            bail!(
+                "{browser} profile directory `{}` does not exist",
+                source.display()
+            );
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use anyhow::Result;
-
-    use super::*;
-
-    #[test]
-    fn bundled_sqlite_omits_unused_extensions() -> Result<()> {
-        // Inspect the linked engine so dependency upgrades cannot silently
-        // reintroduce extensions excluded by .cargo/config.toml.
-        let connection = rusqlite::Connection::open_in_memory()?;
-        for option in [
-            "ENABLE_FTS3",
-            "ENABLE_FTS3_PARENTHESIS",
-            "ENABLE_FTS4",
-            "ENABLE_FTS5",
-            "ENABLE_RTREE",
-            "ENABLE_DBSTAT_VTAB",
-            "ENABLE_STAT4",
-            "ENABLE_LOAD_EXTENSION",
-        ] {
-            let enabled: bool =
-                connection.query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
-                    row.get(0)
-                })?;
-            assert!(!enabled, "bundled SQLite unexpectedly enables {option}");
-        }
-        let omits_extension_loading: bool = connection.query_row(
-            "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION')",
-            [],
-            |row| row.get(0),
-        )?;
-        assert!(omits_extension_loading);
-        Ok(())
-    }
-
-    #[test]
-    fn imports_a_netscape_cookie_jar() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let jar = temp.path().join("cookies.txt");
-        let destination = temp.path().join("moli-profile");
-        fs::write(
-            &jar,
-            "# Netscape HTTP Cookie File\nexample.com\tFALSE\t/\tFALSE\t0\tsession\tvalue\n",
-        )?;
-
-        let summary = import_session_state(&ImportRequest {
-            profile_dir: &destination,
-            includes: "all".parse().expect("valid import selection"),
-            chrome_profile_dir: None,
-            chrome_crypto_key: None,
-            firefox_profile_dir: None,
-            cookie_jars: &[jar],
-        })?;
-
-        let profile = BrowserProfile::open(&destination)?;
-        let cookies =
-            moli_cookie_cache::load_cookie_cache(profile.default_partition().cookies_path())?;
-        assert_eq!(summary.cookies, 1);
-        assert_eq!(cookies.len(), 1);
-        assert_eq!(cookies[0].name, "session");
-        Ok(())
-    }
-}
+mod tests;

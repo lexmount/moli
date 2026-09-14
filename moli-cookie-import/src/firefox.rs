@@ -1,31 +1,20 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use moli_cookie_jar::{
     CookiePriority, StoredCookie, StoredCookieSameSite, StoredCookieSourceScheme,
 };
-use rusqlite::Connection;
 use time::OffsetDateTime;
 
-pub(crate) fn validate_source(path: &Path) -> Result<()> {
-    if !path.is_dir() {
-        bail!(
-            "Firefox profile directory `{}` does not exist",
-            path.display()
-        );
-    }
-    Ok(())
-}
+use crate::{sqlite::SqliteSnapshot, storage::LocalStorage};
 
 pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
     let source = profile.join("cookies.sqlite");
     if !source.is_file() {
         return Ok(Vec::new());
     }
-    let snapshot = snapshot_sqlite(&source, "Firefox cookies")?;
-    let connection = Connection::open(snapshot.path().join("database.sqlite"))
-        .context("failed to open Firefox cookies snapshot")?;
-    let mut statement = connection
+    let snapshot = SqliteSnapshot::open(&source, "Firefox cookies")?;
+    let mut statement = snapshot.connection
         .prepare("SELECT name,value,host,path,expiry,isSecure,isHttpOnly,sameSite,schemeMap,originAttributes FROM moz_cookies")
         .context("Firefox cookies database has an unsupported schema")?;
     let rows = statement.query_map([], |row| {
@@ -90,18 +79,18 @@ pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
     Ok(cookies)
 }
 
-pub(crate) fn import_local_storage(profile: &Path, destination: &Path) -> Result<usize> {
+pub(crate) fn read_local_storage(profile: &Path) -> Result<LocalStorage> {
     let root = profile.join("storage/default");
     if !root.is_dir() {
-        return Ok(0);
+        return Ok(LocalStorage::new());
     }
     let mut databases = Vec::new();
     collect_local_storage_databases(&root, &mut databases)?;
-    let mut origins = BTreeMap::<String, BTreeMap<String, String>>::new();
-    let mut imported = 0;
+    databases.sort();
+    let mut origins = LocalStorage::new();
     for source in databases {
-        let snapshot = snapshot_sqlite(&source, "Firefox localStorage")?;
-        let connection = Connection::open(snapshot.path().join("database.sqlite"))?;
+        let snapshot = SqliteSnapshot::open(&source, "Firefox localStorage")?;
+        let connection = &snapshot.connection;
         let origin: String = connection
             .query_row("SELECT origin FROM database LIMIT 1", [], |row| row.get(0))
             .with_context(|| format!("failed to read origin from `{}`", source.display()))?;
@@ -115,19 +104,15 @@ pub(crate) fn import_local_storage(profile: &Path, destination: &Path) -> Result
                 row.get::<_, Vec<u8>>(3)?,
             ))
         })?;
+        let entries = origins.entry(origin).or_default();
         for row in rows {
             let (key, conversion, compression, value) = row?;
-            let value = decode_local_storage_value(&value, conversion, compression)
+            let value = decode_local_storage_value(value, conversion, compression)
                 .with_context(|| format!("failed to decode Firefox localStorage `{key}`"))?;
-            origins
-                .entry(origin.clone())
-                .or_default()
-                .insert(key, value);
-            imported += 1;
+            entries.insert(key.encode_utf16().collect(), value.into());
         }
     }
-    write_local_storage(destination, origins)?;
-    Ok(imported)
+    Ok(origins)
 }
 
 struct FirefoxCookieRow {
@@ -169,11 +154,11 @@ fn collect_local_storage_databases(
     Ok(())
 }
 
-fn decode_local_storage_value(value: &[u8], conversion: i64, compression: i64) -> Result<String> {
+fn decode_local_storage_value(value: Vec<u8>, conversion: i64, compression: i64) -> Result<String> {
     let value = match compression {
-        0 => value.to_vec(),
+        0 => value,
         1 => snap::raw::Decoder::new()
-            .decompress_vec(value)
+            .decompress_vec(&value)
             .context("invalid Snappy payload")?,
         other => bail!("unsupported Firefox localStorage compression type {other}"),
     };
@@ -193,67 +178,19 @@ fn decode_local_storage_value(value: &[u8], conversion: i64, compression: i64) -
     }
 }
 
-fn write_local_storage(
-    destination: &Path,
-    origins: BTreeMap<String, BTreeMap<String, String>>,
-) -> Result<()> {
-    let mut persisted_origins = if destination.is_file() {
-        let existing: serde_json::Value = serde_json::from_slice(&fs::read(destination)?)
-            .with_context(|| {
-                format!(
-                    "failed to parse existing Moli localStorage `{}`",
-                    destination.display()
-                )
-            })?;
-        existing
-            .get("origins")
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        serde_json::Map::new()
-    };
-    for (origin, entries) in origins {
-        let entries = entries
-            .into_iter()
-            .map(|(key, value)| serde_json::json!({ "key": key, "value": value }))
-            .collect::<Vec<_>>();
-        persisted_origins.insert(origin, serde_json::json!({ "entries": entries }));
-    }
-    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-        "version": 1,
-        "origins": persisted_origins,
-    }))?;
-    moli_browser_profile::write_file_atomically(destination, &bytes, "Firefox localStorage import")
-}
-
-fn snapshot_sqlite(source: &Path, label: &str) -> Result<tempfile::TempDir> {
-    let snapshot =
-        tempfile::tempdir().with_context(|| format!("failed to create {label} snapshot"))?;
-    fs::copy(source, snapshot.path().join("database.sqlite"))
-        .with_context(|| format!("failed to snapshot {label} `{}`", source.display()))?;
-    for suffix in ["-wal", "-shm"] {
-        let companion = std::path::PathBuf::from(format!("{}{suffix}", source.display()));
-        if companion.is_file() {
-            fs::copy(
-                &companion,
-                snapshot.path().join(format!("database.sqlite{suffix}")),
-            )?;
-        }
-    }
-    Ok(snapshot)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::params;
+    use rusqlite::{Connection, params};
 
     #[test]
     fn decodes_utf8_and_snappy_values() -> Result<()> {
-        assert_eq!(decode_local_storage_value(b"hello", 1, 0)?, "hello");
+        assert_eq!(
+            decode_local_storage_value(b"hello".to_vec(), 1, 0)?,
+            "hello"
+        );
         let compressed = snap::raw::Encoder::new().compress_vec("世界".as_bytes())?;
-        assert_eq!(decode_local_storage_value(&compressed, 1, 1)?, "世界");
+        assert_eq!(decode_local_storage_value(compressed, 1, 1)?, "世界");
         Ok(())
     }
 
@@ -263,7 +200,7 @@ mod tests {
             .encode_utf16()
             .flat_map(u16::to_ne_bytes)
             .collect::<Vec<_>>();
-        assert_eq!(decode_local_storage_value(&bytes, 0, 0)?, "hello");
+        assert_eq!(decode_local_storage_value(bytes, 0, 0)?, "hello");
         Ok(())
     }
 
@@ -338,8 +275,10 @@ mod tests {
         assert_eq!(cookies[0].value, "value");
         assert_eq!(cookies[0].same_site, StoredCookieSameSite::Lax);
         let destination = temp.path().join("localstorage.json");
-        assert_eq!(import_local_storage(&profile, &destination)?, 1);
-        let json: serde_json::Value = serde_json::from_slice(&fs::read(destination)?)?;
+        let origins = read_local_storage(&profile)?;
+        assert_eq!(origins["https://example.com"].len(), 1);
+        let bytes = crate::storage::prepare(&destination, origins)?.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes)?;
         assert_eq!(
             json["origins"]["https://example.com"]["entries"][0]["value"],
             "stored-value"
