@@ -129,7 +129,7 @@ fn input_files_setter_on_object<'s>(
     };
     // Web IDL checks the interface identity, independent of the object's realm
     // or mutable prototype. This conversion also precedes input-type checks.
-    if !crate::context_bootstrap::is_file_list_object(scope, object) {
+    if !crate::web_api_interfaces::FileList::is_instance(scope, object) {
         throw_type_error(
             scope,
             "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.",
