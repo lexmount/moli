@@ -874,6 +874,9 @@ impl ScriptVm {
                 let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
+                if has_wasm_entry {
+                    document_modulator.register_wasm_evaluation_graph(&mut scope, graph);
+                }
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator_ptr);
                 match root_module.instantiate_module2(
                     &scope,
