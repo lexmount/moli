@@ -18,7 +18,7 @@ pub(super) fn build_node_wrapper_template<'s, 'i>(
     let template = v8::ObjectTemplate::new(scope);
     let _ = template.set_internal_field_count(1);
 
-    if descriptor.prototype_name == "HTMLDocument" {
+    if descriptor.interface.name() == "HTMLDocument" {
         named_access::install_document_named_property_handler(template);
     }
 

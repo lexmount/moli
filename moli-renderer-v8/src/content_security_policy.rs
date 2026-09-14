@@ -3375,7 +3375,7 @@ mod tests {
             let policy = format!("trusted-types {name}");
             let expected = byte.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&byte);
             assert_eq!(
-                policy_allows_trusted_type_policy_name(&policy, &name),
+                policy_allows_trusted_type_policy_name(&policy, &name, false),
                 expected,
                 "invalid tt-policy-name byte {byte:#04x} must not match literally",
             );
@@ -3383,21 +3383,25 @@ mod tests {
         for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
             assert!(policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {name}"),
-                name
+                name,
+                false
             ));
         }
         assert!(policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "valid"
+            "valid",
+            false
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "policy*name"
+            "policy*name",
+            false
         ));
         for wildcard in ["\u{000b}*", "*\u{000b}", "policy*"] {
             assert!(!policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {wildcard}"),
-                "valid"
+                "valid",
+                false
             ));
         }
     }
@@ -3413,7 +3417,7 @@ mod tests {
             "\0",
         ] {
             for policy in ["", "trusted-types *"] {
-                assert!(policy_allows_trusted_type_policy_name(policy, name));
+                assert!(policy_allows_trusted_type_policy_name(policy, name, false));
             }
         }
     }
