@@ -501,6 +501,9 @@ pub enum ParserDomMutation {
         parent: NativeNodeId,
         child: NativeNodeId,
     },
+    FinishParsingStyleChildren {
+        node: NativeNodeId,
+    },
 }
 
 impl ParserDomMutation {
@@ -513,6 +516,9 @@ impl ParserDomMutation {
                 reference_child,
             } => host.insert_before_effects(parent, child, reference_child),
             Self::RemoveChild { parent, child } => host.remove_child_effects(parent, child),
+            Self::FinishParsingStyleChildren { node } => {
+                host.finish_parsing_style_children_effects(node)
+            }
         }
     }
 
@@ -534,6 +540,7 @@ impl ParserDomMutation {
             Self::RemoveChild { parent, child } => {
                 host.remove_child_without_mutation_effects(parent, child)
             }
+            Self::FinishParsingStyleChildren { node } => host.finish_parsing_style_children(node),
         }
     }
 }
@@ -2585,7 +2592,18 @@ impl ParserStreamHtmlTreeSinkTarget {
             .iter()
             .rposition(|candidate| candidate.node_id == node_id)
         {
-            self.open_parser_elements.remove(index);
+            let element = self.open_parser_elements.remove(index);
+            if element.name.local.as_ref() == "style"
+                && matches!(
+                    element.name.ns.as_ref(),
+                    "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+                )
+            {
+                self.record_parser_dom_mutation(ParserDomMutation::FinishParsingStyleChildren {
+                    node: node_id,
+                })
+                .consume();
+            }
         }
         if self.read_is_html_element_named(node_id, "link") {
             let _ = self.capture_parser_blocking_stylesheet(node_id);
@@ -3512,10 +3530,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         if self.read_is_html_element_named(node_id, "template") {
             self.open_template_element_depth = self.open_template_element_depth.saturating_sub(1);
         }
+        self.note_parser_element_popped(node_id);
         if self.read_is_html_element_named(node_id, "style") {
             self.note_blocking_stylesheet_pause_if_needed(node_id);
         }
-        self.note_parser_element_popped(node_id);
     }
 
     pub(super) fn restore_parser_stream_dom_host(&mut self, dom_host: DomHost) {
