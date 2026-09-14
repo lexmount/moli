@@ -566,7 +566,11 @@ impl ScriptVm {
                 }
             };
         }
-        let hit = surface_hit.input;
+        let hit = if event_name == "wheel" {
+            surface_hit.document_or_element()
+        } else {
+            surface_hit.input
+        };
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
@@ -611,15 +615,7 @@ impl ScriptVm {
             let mut context_host = self._context_host.borrow_mut();
             context_host.set_hovered_element_for_input(hit_handle);
         }
-        let wheel_fallback_handle = (event_name == "wheel")
-            .then(|| {
-                self._context_host
-                    .borrow()
-                    .dom_host()
-                    .document_element_handle()
-            })
-            .flatten();
-        let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
+        let Some(handle) = capture_handle.or(hit_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
         let root_to_frame = hit
