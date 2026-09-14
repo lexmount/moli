@@ -1,5 +1,6 @@
 mod driver;
 mod dynamic_resolver;
+mod evaluation;
 mod frame_document_parser_tree;
 mod graph;
 mod graph_fetch_store;
@@ -45,6 +46,7 @@ pub(crate) use self::dynamic_resolver::{
     DynamicModuleJoinedFetch, DynamicModuleScheduledFetch, PendingDynamicModuleEvaluationReaction,
     PendingDynamicModuleImport,
 };
+pub(crate) use self::evaluation::ModuleEvaluationRecord;
 pub(crate) use self::import_attributes::{import_attributes_key, module_request_attributes};
 pub(crate) use self::import_map::ImportMapRegistryState;
 pub(crate) use self::json::{json_module_exception_source_url, parse_json_module};
@@ -54,7 +56,8 @@ pub(crate) use self::modulator::{
 pub(crate) use self::parser_tree_registry::NativeParserModuleTreeJobResume;
 pub(crate) use self::record::{ModuleRecordEntry, WasmImportRecord, WasmModuleRecord};
 pub(crate) use self::resolver::{
-    ResolverScopeGuard, resolve_static_module_callback, resolve_static_source_callback,
+    ResolverScopeGuard, resolve_evaluation_module_callback, resolve_evaluation_source_callback,
+    resolve_static_module_callback, resolve_static_source_callback,
 };
 pub(crate) use self::response_mime::{
     validate_css_module_response_mime, validate_json_module_response_mime,
@@ -501,13 +504,6 @@ impl ModuleOwnerState {
         self.document_modulator.entry(entry_id).source().cloned()
     }
 
-    pub(crate) fn native_module_wasm_record_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<WasmModuleRecord> {
-        self.document_modulator.module_wasm_record_for(module)
-    }
-
     pub(crate) fn native_module_wasm_record(
         &self,
         entry_id: ModuleEntryId,
@@ -522,16 +518,6 @@ impl ModuleOwnerState {
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.document_modulator
             .wasm_instance_for_namespace(scope, namespace)
-    }
-
-    pub(crate) fn native_resolved_dependency_module_for(
-        &self,
-        referrer: v8::Local<'_, v8::Module>,
-        specifier: &str,
-        attributes: &ModuleAttributesKey,
-    ) -> Option<v8::Global<v8::Module>> {
-        self.document_modulator
-            .resolved_dependency_module_for(referrer, specifier, attributes)
     }
 
     pub(crate) fn native_module_entry_url(&self, entry_id: ModuleEntryId) -> Url {
