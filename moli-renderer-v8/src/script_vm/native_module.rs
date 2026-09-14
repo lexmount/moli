@@ -5118,8 +5118,8 @@ mod tests {
         DynamicModuleFetchFailure, DynamicModuleFetchOwnerAdvance, DynamicModuleImportOwner,
         ModuleAttributesKey, ModuleEntryId, ModuleFetchMetadata, ModuleGraphFetchedSource,
         ModuleGraphHandle, ModuleImportPhase, ModuleKind, ModuleLoadError, ModuleLoadStage,
-        ModuleMapKey, ModuleSource, NativeModuleGraphFetchRequest, NativeModuleGraphJob,
-        NativeModuleGraphJobAdvance, PendingDynamicModuleImport,
+        ModuleMapEntryState, ModuleMapKey, ModuleSource, NativeModuleGraphFetchRequest,
+        NativeModuleGraphJob, NativeModuleGraphJobAdvance, PendingDynamicModuleImport,
     };
     use crate::module_script_continuation::NativeDynamicModuleTerminalFanout;
     use crate::network::ResourceRequestClient;
@@ -5581,6 +5581,97 @@ mod tests {
             !vm.has_inflight_dynamic_module_fetch(),
             "owner facade should consume dynamic import fetch state"
         );
+    }
+
+    #[test]
+    fn dynamic_import_fetch_failures_reject_joined_and_cached_imports() {
+        for shared_dependency in [false, true] {
+            let mut vm = new_test_vm("https://app.example.test/page.html");
+            let second_specifier = if shared_dependency {
+                "./second.mjs"
+            } else {
+                "./first.mjs"
+            };
+            vm.eval(&format!(
+                r#"
+globalThis.__fetchErrors = [];
+globalThis.__failedImport = specifier => import(specifier).then(
+  () => __fetchErrors.push(null),
+  error => __fetchErrors.push(error)
+);
+__failedImport('./first.mjs');
+__failedImport({second_specifier:?});
+"queued"
+"#
+            ))
+            .expect("both imports should enqueue their graph jobs");
+            for _ in 0..2 {
+                assert!(matches!(
+                    vm.run_next_native_dynamic_module_owner_action_selected_task_body(),
+                    MainNativeModuleSelectedTaskApplication::Applied(_)
+                ));
+            }
+
+            let (failed_load_id, failed_url) = if shared_dependency {
+                for (load_id, root) in [(0, "first"), (1, "second")] {
+                    let target = vm
+                        .current_main_dynamic_import_graph_fetch_target(load_id)
+                        .expect("each root should have its own fetch");
+                    let completion = dynamic_import_completion_with_source(
+                        load_id,
+                        &format!("https://app.example.test/{root}.mjs"),
+                        "import './shared.mjs';",
+                    );
+                    vm.complete_current_main_dynamic_import_graph_fetch_result(
+                        target,
+                        completion.result,
+                    )
+                    .expect("the roots should start or join the shared dependency fetch");
+                }
+                (2, "https://app.example.test/shared.mjs")
+            } else {
+                (0, "https://app.example.test/first.mjs")
+            };
+            assert_eq!(vm.eval("String(__fetchErrors.length)").unwrap(), "0");
+            let target = vm
+                .current_main_dynamic_import_graph_fetch_target(failed_load_id)
+                .expect("the shared request should retain its fetch owner");
+            vm.complete_current_main_dynamic_import_graph_fetch_result(
+                target,
+                Err("HTTP 404".to_owned()),
+            )
+            .expect("fetch failure should reject both graph clients");
+
+            let key = ModuleMapKey::java_script(url::Url::parse(failed_url).unwrap());
+            let entry = vm.document_runtime.native_module_entry_id(&key).unwrap();
+            assert_eq!(
+                vm.document_runtime.native_module_entry_state(entry),
+                ModuleMapEntryState::Failed,
+                "a failed request must settle the shared module map entry"
+            );
+            assert_eq!(
+                vm.eval("JSON.stringify([__fetchErrors.length, __fetchErrors.every(e => e instanceof TypeError), new Set(__fetchErrors).size])")
+                    .unwrap(),
+                "[2,true,2]",
+                "both concurrent imports must reject with distinct TypeErrors"
+            );
+
+            vm.eval("__failedImport('./first.mjs'); 'queued'").unwrap();
+            assert!(matches!(
+                vm.run_next_native_dynamic_module_owner_action_selected_task_body(),
+                MainNativeModuleSelectedTaskApplication::Applied(_)
+            ));
+            // The selected body leaves Promise reactions to its task-end checkpoint.
+            vm.perform_script_task_checkpoint(None)
+                .expect("the cached import task should dispatch its rejection reaction");
+            assert_eq!(
+                vm.eval("JSON.stringify([__fetchErrors.length, __fetchErrors.every(e => e instanceof TypeError), new Set(__fetchErrors).size])")
+                    .unwrap(),
+                "[3,true,3]",
+                "a cached fetch failure must reject a later import with a fresh TypeError"
+            );
+            assert!(!vm.has_inflight_dynamic_module_fetch());
+        }
     }
 
     #[test]
