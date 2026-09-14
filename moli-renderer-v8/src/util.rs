@@ -1069,6 +1069,81 @@ mod tests {
     }
 
     #[test]
+    fn callable_realm_follows_mixed_bound_and_proxy_targets_without_traps() {
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let target_context = v8::Context::new(scope, Default::default());
+        let target = {
+            let scope = &mut v8::ContextScope::new(scope, target_context);
+            let code = super::v8str(scope, "(function Target() { throw 'called'; })");
+            v8::Script::compile(scope, code, None)
+                .unwrap()
+                .run(scope)
+                .unwrap()
+        };
+        let wrapper_context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, wrapper_context);
+        let global = wrapper_context.global(scope);
+        global
+            .set(scope, super::v8str(scope, "target").into(), target)
+            .unwrap();
+        let code = super::v8str(
+            scope,
+            r#"
+(() => {
+  let armed = false;
+  const handler = {
+    get(target, key, receiver) {
+      if (armed) throw new Error('unexpected property read');
+      return Reflect.get(target, key, receiver);
+    },
+    getPrototypeOf(target) {
+      if (armed) throw new Error('unexpected prototype read');
+      return Reflect.getPrototypeOf(target);
+    }
+  };
+  const proxy = new Proxy(target, handler);
+  const bound = Function.prototype.bind.call(proxy);
+  const mixed = Function.prototype.bind.call(new Proxy(bound, handler));
+  Object.setPrototypeOf(bound, null);
+  const revocable = Proxy.revocable(target, {});
+  const revokedBound = Function.prototype.bind.call(revocable.proxy);
+  revocable.revoke();
+  armed = true;
+  return [target, proxy, bound, mixed, new Proxy(mixed, handler), revokedBound];
+})()
+"#,
+        );
+        let values = v8::Script::compile(scope, code, None)
+            .unwrap()
+            .run(scope)
+            .unwrap();
+        let values = v8::Local::<v8::Array>::try_from(values).unwrap();
+        for index in 0..5 {
+            let value = values.get_index(scope, index).unwrap();
+            assert_eq!(
+                super::callable_relevant_context(scope, value),
+                Some(target_context)
+            );
+        }
+        let revoked = values.get_index(scope, 5).unwrap();
+        let scope = pin!(v8::TryCatch::new(scope));
+        let scope = &mut scope.init();
+        assert!(super::callable_relevant_context(scope, revoked).is_none());
+        let exception = scope.exception().unwrap();
+        let exception = v8::Local::<v8::Object>::try_from(exception).unwrap();
+        let expected = super::global_constructor_prototype(scope, "TypeError").unwrap();
+        assert!(
+            exception
+                .get_prototype(scope)
+                .unwrap()
+                .strict_equals(expected.into())
+        );
+    }
+
+    #[test]
     fn utf16_string_helpers_use_code_unit_offsets() {
         let value = "a\u{1f306}b";
         assert_eq!(utf16_slice_lossy(value, 1, 3), "\u{1f306}");
