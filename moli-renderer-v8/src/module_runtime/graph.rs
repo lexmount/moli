@@ -1900,15 +1900,19 @@ fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     }
     if let Some(constructor) = error.error_constructor() {
         let constructor = match constructor {
+            ScriptErrorConstructorKind::Error => module_tree::ModuleErrorConstructorKind::Error,
             ScriptErrorConstructorKind::SyntaxError => {
                 module_tree::ModuleErrorConstructorKind::SyntaxError
             }
             ScriptErrorConstructorKind::TypeError => {
                 module_tree::ModuleErrorConstructorKind::TypeError
             }
-            ScriptErrorConstructorKind::Error
-            | ScriptErrorConstructorKind::WebAssemblyCompileError
-            | ScriptErrorConstructorKind::WebAssemblyLinkError => return converted,
+            ScriptErrorConstructorKind::WebAssemblyCompileError => {
+                module_tree::ModuleErrorConstructorKind::WebAssemblyCompileError
+            }
+            ScriptErrorConstructorKind::WebAssemblyLinkError => {
+                module_tree::ModuleErrorConstructorKind::WebAssemblyLinkError
+            }
         };
         converted = converted.with_error_constructor(constructor);
     }
@@ -1930,10 +1934,17 @@ fn local_error_constructor(
     constructor: module_tree::ModuleErrorConstructorKind,
 ) -> ScriptErrorConstructorKind {
     match constructor {
+        module_tree::ModuleErrorConstructorKind::Error => ScriptErrorConstructorKind::Error,
         module_tree::ModuleErrorConstructorKind::SyntaxError => {
             ScriptErrorConstructorKind::SyntaxError
         }
         module_tree::ModuleErrorConstructorKind::TypeError => ScriptErrorConstructorKind::TypeError,
+        module_tree::ModuleErrorConstructorKind::WebAssemblyCompileError => {
+            ScriptErrorConstructorKind::WebAssemblyCompileError
+        }
+        module_tree::ModuleErrorConstructorKind::WebAssemblyLinkError => {
+            ScriptErrorConstructorKind::WebAssemblyLinkError
+        }
     }
 }
 
