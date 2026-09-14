@@ -580,6 +580,26 @@ impl MoliStyleEngine {
                 continue;
             }
             let previous_documents = self.linked_stylesheet_owner_documents(owner);
+            if matches!(
+                change.kind(),
+                DomStylesheetOwnerChangeKind::Attribute { .. }
+            ) && crate::stylesheet_blocking::stylesheet_link_disposition(
+                host,
+                moli_dom::NodeId::new(owner.index()),
+            )
+            .is_some()
+            {
+                // Reprocessing a valid link starts its successor load. Keep the
+                // installed sheet, including CSSOM edits, until that response
+                // installs a replacement; integrity rejection installs nothing.
+                self.invalidate_linked_stylesheet_owner_lifecycle_change(
+                    host,
+                    owner,
+                    previous_documents,
+                    owner_document_for_source_owner(host, owner),
+                );
+                continue;
+            }
             self.remove_linked_stylesheet_owner_from_documents(host, owner, previous_documents);
         }
     }
