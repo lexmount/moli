@@ -467,6 +467,7 @@ impl StylesheetResponseProvenance {
                 request_origin,
                 head,
                 moli_fetch::RequestMode::NoCors,
+                moli_fetch::RequestRedirectMode::Follow,
                 web_security_disabled,
             )
             .is_none(),
