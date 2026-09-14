@@ -41,10 +41,16 @@ impl JsContextHost {
             .dom_host()
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
-            && let Some(permissions_policy) =
-                self.document_permissions_policy_for_document_handle(parent_document)
         {
-            policy_container.permissions_policy = permissions_policy;
+            if let Some(permissions_policy) =
+                self.document_permissions_policy_for_document_handle(parent_document)
+            {
+                policy_container.permissions_policy = permissions_policy;
+            }
+            // Inheritance clones the creator's policy list at navigation time.
+            // Later parent meta mutations must not alter the child's policies.
+            policy_container.inherited_meta_content_security_policies = unsafe { &*self.runtime }
+                .meta_content_security_policy_strings_for_document(parent_document);
         }
         policy_container.document_referrer =
             self.document_url_for_child_context(handle).to_string();
@@ -101,6 +107,12 @@ impl JsContextHost {
         let document_url = init.document_url.clone();
         let document_handle =
             self.create_empty_live_child_html_document(document_url.clone(), Some("text/html"));
+        unsafe { &*self.runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &init
+                .policy_container
+                .inherited_meta_content_security_policies,
+        );
         self.dom_host_mut()
             .set_document_fallback_base_url_for_handle(
                 document_handle,
