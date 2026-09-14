@@ -5519,6 +5519,34 @@ test(() => {}, "ok");
                 ],
             )
 
+    def test_fixture_server_substitutes_primary_domain_in_cors_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Path(root) / "style.css"
+            fixture.write_text("body {}", encoding="utf-8")
+            fixture.with_name("style.css.sub.headers").write_text(
+                "Access-Control-Allow-Origin: {{location[scheme]}}://{{domains[]}}{{GET[acao_port]}}\n"
+                "Access-Control-Allow-Credentials: true\n",
+                encoding="utf-8",
+            )
+
+            for port in (80, 12345):
+                with self.subTest(port=port):
+                    suffix = "" if port == 80 else f":{port}"
+                    query = "" if port == 80 else f"acao_port=%3A{port}"
+                    self.assertEqual(
+                        _static_response_headers(
+                            fixture,
+                            query,
+                            port=port,
+                            request_hostname="www.example.test",
+                            primary_hostname="example.test",
+                        ),
+                        [
+                            ("Access-Control-Allow-Origin", f"http://example.test{suffix}"),
+                            ("Access-Control-Allow-Credentials", "true"),
+                        ],
+                    )
+
     def test_fixture_server_substitution_preserves_non_utf8_bytes(self) -> None:
         body = b"\xff{{host}}\xfe{{ports[http][0]}}"
 
@@ -5531,7 +5559,7 @@ test(() => {}, "ok");
         self,
     ) -> None:
         body = (
-            b"host={{host}} "
+            b"host={{host}} domain={{domains[]}} "
             b"location={{location[hostname]}} "
             b"HTTP_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT_ELIDED,"
         )
@@ -5543,7 +5571,7 @@ test(() => {}, "ok");
                 request_hostname="www1.localhost",
                 primary_hostname="localhost",
             ),
-            b"host=localhost location=www1.localhost "
+            b"host=localhost domain=localhost location=www1.localhost "
             b"HTTP_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT_ELIDED,",
         )
 

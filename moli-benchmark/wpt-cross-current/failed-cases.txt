@@ -3195,7 +3195,6 @@ streams/readable-streams/owning-type-video-frame.any.js?moli-wpt-any=window
 streams/readable-streams/owning-type.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/owning-type.any.js?moli-wpt-any=window
 subresource-integrity/signatures/tentative/inline.html
-subresource-integrity/subresource-integrity.html
 svg/coordinate-systems/outer-svg-intrinsic-size-001.html
 svg/extensibility/foreignObject/containing-block.html
 svg/extensibility/foreignObject/getboundingclientrect.html
