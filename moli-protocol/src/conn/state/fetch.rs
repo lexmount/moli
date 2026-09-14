@@ -2247,7 +2247,7 @@ impl TargetFetchOwner {
 mod tests {
     use super::*;
     use crate::conn::{
-        CapturedBody, FetchAuthChallenge, NavigationDispatchState, NavigationResultProjection,
+        FetchAuthChallenge, NavigationDispatchState, NavigationResultProjection,
         PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
         PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
     };
@@ -2416,7 +2416,7 @@ mod tests {
             response_headers: Vec::new(),
             response_head_overridden: false,
             response_body_taken_as_stream: false,
-            response_body: CapturedBody::from_bytes(Vec::new()),
+            response_body: moli_page_types::SubresourceResponseBody::from_bytes(Vec::new()).into(),
             response_stage_chain: None,
         }
     }

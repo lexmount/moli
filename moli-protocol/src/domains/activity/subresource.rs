@@ -597,9 +597,7 @@ fn pending_response_request(
         response_headers: response_info.response_headers.clone(),
         response_head_overridden: false,
         response_body_taken_as_stream: false,
-        response_body: crate::conn::CapturedBody::from_subresource_response_body(
-            &response_info.response_body,
-        ),
+        response_body: response_info.response_body.clone(),
         response_stage_chain: None,
     }
 }

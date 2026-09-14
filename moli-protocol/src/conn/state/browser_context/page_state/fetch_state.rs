@@ -497,8 +497,11 @@ mod tests {
         let read = bc
             .read_io_stream(&stream, None, None)
             .expect("buffered bytes must remain a target-local IO stream");
-        assert_eq!(read.bytes, b"buffered response");
-        assert!(read.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = read else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"buffered response");
+        assert!(eof);
         server.abort();
     }
 

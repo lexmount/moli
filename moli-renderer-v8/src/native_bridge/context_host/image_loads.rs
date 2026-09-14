@@ -343,9 +343,6 @@ impl JsContextHost {
         queue_lifecycle_followup: bool,
     ) -> bool {
         if let Some(internal_id) = pending.network_request_id() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             let aborted = self.abort_subresource_fetch(internal_id);
             tracing::debug!(
                 sequence = pending.id().get(),

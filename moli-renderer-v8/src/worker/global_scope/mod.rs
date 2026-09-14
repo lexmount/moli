@@ -64,9 +64,7 @@ use crate::context_bootstrap::{
     simple_object_event_set_ordered_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
-use crate::network::{
-    ResourceResponseFailure, ResourceResponseHead, ResourceResponseObserver, ResourceTransfer,
-};
+use crate::network::{ResourceResponseFailure, ResourceResponseStream, ResourceTransfer};
 use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
@@ -95,8 +93,7 @@ use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
     PendingSubresourceAuthInfo, PendingSubresourceFetchInfo, PendingSubresourceResponseInfo,
     SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
-    SubresourceResponseBody, SubresourceResponseBodyWriter, WebSocketFrameDirection,
-    WebSocketFrameOpcode,
+    SubresourceResponseBody, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
@@ -1071,15 +1068,19 @@ pub(super) struct PendingWorkerFetch {
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) network: Arc<ResourceTransfer>,
-    pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
-    pub(super) paused_response: Option<ResourceBodyResponse>,
+    pub(super) response: Arc<ResourceResponseStream>,
+    pub(super) request_override: Option<WorkerRequestOverride>,
+    pub(super) paused_response: Option<crate::network::PausedResourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
 }
 
 pub(super) enum WorkerFetchEvent {
     Completion(Box<WorkerRequestCompletion>),
     TransportCompletion(WorkerRequestDelivery),
+    ResponsePaused {
+        fetch_id: u32,
+        response: Box<crate::network::PausedResourceResponse>,
+    },
     StreamingStarted(Box<WorkerFetchStreamingStarted>),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
@@ -1092,10 +1093,13 @@ pub(super) struct WorkerRequestCompletion {
 }
 
 impl WorkerRequestCompletion {
-    fn publish(&self, network: &ResourceTransfer) {
+    fn publish(&self, resource: &ResourceResponseStream) {
         match &self.result {
-            Ok(response) => response.publish(network, self.network_request_headers.clone()),
-            Err(error) => fetch::publish_worker_request_failure(network, error.clone()),
+            Ok(response) => response.publish(
+                &resource.network,
+                resource.record_request_headers(self.network_request_headers.clone()),
+            ),
+            Err(error) => fetch::publish_worker_request_failure(resource, error.clone()),
         }
     }
 }
@@ -1103,17 +1107,26 @@ impl WorkerRequestCompletion {
 /// The VM claims delivery before applying policy/interception. If it is gone,
 /// dropping the packet still settles the original native transport request.
 pub(super) struct WorkerRequestDelivery {
-    network: Arc<ResourceTransfer>,
+    response: Arc<ResourceResponseStream>,
     completion: Option<Box<WorkerRequestCompletion>>,
 }
 
 impl WorkerRequestDelivery {
+    fn new(response: Arc<ResourceResponseStream>, mut completion: WorkerRequestCompletion) -> Self {
+        completion.network_request_headers =
+            response.record_request_headers(completion.network_request_headers.take());
+        Self {
+            response,
+            completion: Some(Box::new(completion)),
+        }
+    }
+
     fn request_id(&self) -> u32 {
         self.completion.as_ref().expect("unclaimed delivery").id
     }
 
-    fn claim(mut self, request: &Arc<ResourceTransfer>) -> Option<WorkerRequestCompletion> {
-        if !Arc::ptr_eq(request, &self.network) {
+    fn claim(mut self, response: &Arc<ResourceResponseStream>) -> Option<WorkerRequestCompletion> {
+        if !Arc::ptr_eq(response, &self.response) {
             return None;
         }
         Some(*self.completion.take().expect("VM delivery is claimed once"))
@@ -1124,7 +1137,6 @@ pub(super) struct WorkerFetchStreamingStarted {
     fetch_id: u32,
     body_source_id: NetworkBodySourceId,
     head: ResponseHead,
-    network_request_headers: Option<Vec<(String, String)>>,
 }
 
 pub(super) struct WorkerFetchStreamingChunk {
@@ -1137,20 +1149,17 @@ pub(super) struct WorkerFetchStreamingFinished {
     delivery: WorkerRequestDelivery,
 }
 
+/// Interception may replace the wire request; policy still uses the original JS request.
 #[derive(Clone)]
-pub(super) struct PendingWorkerFetchNetworkRecord {
+pub(super) struct WorkerRequestOverride {
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
-    pub(super) internal_id: u64,
     pub(super) url: Url,
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
-    pub(super) intercept_response: bool,
-    pub(super) handle_auth_requests: bool,
 }
 
-impl PendingWorkerFetchNetworkRecord {
+impl WorkerRequestOverride {
     fn follow_redirects(&mut self, head: &ResponseHead) {
         if head.redirect_chain.is_empty() {
             return;
@@ -1181,9 +1190,9 @@ pub(super) struct PendingWorkerXhr {
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<Vec<u8>>,
-    pub(super) network: Arc<ResourceTransfer>,
-    pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
-    pub(super) paused_response: Option<ResourceBodyResponse>,
+    pub(super) response: Arc<ResourceResponseStream>,
+    pub(super) request_override: Option<WorkerRequestOverride>,
+    pub(super) paused_response: Option<crate::network::PausedResourceResponse>,
 }
 
 pub(super) struct WorkerCspReport {
@@ -1201,6 +1210,10 @@ pub(super) struct WorkerCspReport {
 pub(super) enum WorkerXhrCompletion {
     Completion(Box<WorkerRequestCompletion>),
     TransportCompletion(WorkerRequestDelivery),
+    ResponsePaused {
+        xhr_id: u32,
+        response: Box<crate::network::PausedResourceResponse>,
+    },
 }
 
 impl WorkerXhrCompletion {
@@ -1221,7 +1234,7 @@ pub(super) struct WorkerWebSocketState {
     pub(super) loader: crate::network::context::WorkerResourceLoader,
     pub(super) load: Option<ResourceLoadLease>,
     pub(super) opened: bool,
-    pub(super) network_recorded: bool,
+    pub(super) request_overrideed: bool,
 }
 
 pub(super) struct PendingServiceWorkerLifecycleEvent {

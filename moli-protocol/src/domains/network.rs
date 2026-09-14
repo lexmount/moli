@@ -73,11 +73,11 @@ pub(in crate::domains) use activity::{
     project_subresource_fetch_interception_async,
 };
 pub use agent::IoStreamState;
-pub(crate) use agent::TargetIoStreamRead;
 pub(crate) use agent::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, RetiringTargetNetworkAgentState, TargetNetworkAgentState,
 };
+pub(crate) use agent::{IoResponseBody, IoStreamBody, TargetIoStreamRead};
 pub(crate) use backlog::{
     NetworkBacklogProjectionContext, emit_pending_network_backlog_activity_background_events,
     emit_prepared_renderer_network_live_background_events,

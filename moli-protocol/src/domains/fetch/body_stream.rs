@@ -44,41 +44,34 @@ pub(super) fn start_get_response_body_command(
             },
         ));
     }
-    FetchCommandTaskStep::Complete(get_response_body_without_transfer_command_output_plan(
+    if let Some(pending) = pending_subresource_response_request_for_action_session(
+        conn,
+        &owner,
+        owner.session_id(),
+        &params.request_id,
+    ) {
+        if pending.response_body_taken_as_stream {
+            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                RESPONSE_BODY_NOT_AVAILABLE_AFTER_STREAM_TAKEN,
+            ));
+        }
+        return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
+            cmd.id,
+            owner,
+            PendingFetchCommandKind::GetResponseBody,
+            PendingFetchCommandOperation::SubresourceResponseBody {
+                request_id: params.request_id,
+                body: pending.response_body,
+                limit: conn.response_body_materialize_limit(),
+            },
+        ));
+    }
+    FetchCommandTaskStep::Complete(pending_request_action_output_plan(
         conn,
         &owner,
         &params.request_id,
     ))
-}
-
-fn get_response_body_without_transfer_command_output_plan(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    request_id: &str,
-) -> CommandOutputPlan {
-    if let Some(pending) = pending_subresource_response_request_for_action_session(
-        conn,
-        owner,
-        owner.session_id(),
-        request_id,
-    ) {
-        if pending.response_body_taken_as_stream {
-            return CommandOutputPlan::error(
-                -32000,
-                RESPONSE_BODY_NOT_AVAILABLE_AFTER_STREAM_TAKEN,
-            );
-        }
-        let body = pending.response_body;
-        let limit = conn.response_body_materialize_limit();
-        let bytes = match body.materialize_bytes_limited(limit) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return CommandOutputPlan::error(-32000, error.to_string());
-            }
-        };
-        return response_body_command_output_plan(bytes);
-    }
-    pending_request_action_output_plan(conn, owner, request_id)
 }
 
 fn encode_response_body(bytes: Vec<u8>) -> (String, bool) {
@@ -102,6 +95,32 @@ pub(super) fn complete_get_response_body_from_transfer(
     completed: CompletedFetchCommandOperation,
     out: &mut super::FetchCommandOutput,
 ) {
+    if let CompletedFetchCommandOperation::SubresourceResponseBody {
+        request_id,
+        body,
+        result,
+    } = completed
+    {
+        let current = pending_subresource_response_request_for_action_session(
+            conn,
+            owner,
+            owner.session_id(),
+            &request_id,
+        )
+        .is_some_and(|pending| {
+            pending.response_body == body && !pending.response_body_taken_as_stream
+        });
+        let plan = if !current {
+            CommandOutputPlan::error(-32000, "RequestNotFound")
+        } else {
+            match result {
+                Ok(bytes) => response_body_command_output_plan(bytes),
+                Err(message) => CommandOutputPlan::error(-32000, message),
+            }
+        };
+        out.extend_plan_as_command_response(plan);
+        return;
+    }
     let CompletedFetchCommandOperation::MaterializeResponseBody { request_id, result } = completed
     else {
         out.extend_plan_as_command_response(CommandOutputPlan::error(
@@ -125,7 +144,7 @@ pub(super) fn complete_get_response_body_from_transfer(
                 &request_id,
                 transfer,
             );
-            get_response_body_without_transfer_command_output_plan(conn, owner, &request_id)
+            pending_request_action_output_plan(conn, owner, &request_id)
         }
         Err((message, transfer)) => {
             conn.restore_pending_fetch_response_transfer_for_body_read_for_owner(

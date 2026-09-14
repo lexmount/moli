@@ -245,12 +245,6 @@ impl PendingSubresourceAuthInfo {
             .saturating_add(string_charge(&self.challenge.source))
             .saturating_add(string_charge(&self.challenge.scheme))
             .saturating_add(string_charge(&self.challenge.realm))
-            .saturating_add(url_charge(&self.response_final_url))
-            .saturating_add(headers_charge(&self.response_headers))
-            .saturating_add(
-                self.response_body
-                    .renderer_transport_retained_memory_bytes(),
-            )
     }
 }
 

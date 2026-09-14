@@ -30,6 +30,11 @@ pub(crate) struct CompletedIoCommandDispatch {
 }
 
 enum PendingIoCommandKind {
+    SubresourceResponseBodyRead {
+        body: std::sync::Arc<crate::domains::network::IoResponseBody>,
+        handle: String,
+        size: usize,
+    },
     FetchResponseBodyRead(Box<PendingFetchResponseBodyStreamReadDispatch>),
     ResolveBlob {
         owner: CommandOwnerScope,
@@ -44,6 +49,11 @@ enum PendingIoCommandKind {
 }
 
 enum CompletedIoCommandKind {
+    SubresourceResponseBodyRead {
+        body: std::sync::Arc<crate::domains::network::IoResponseBody>,
+        handle: String,
+        result: Result<(Vec<u8>, bool), String>,
+    },
     FetchResponseBodyRead(Box<CompletedFetchResponseBodyStreamReadDispatch>),
     ResolveBlob {
         owner: CommandOwnerScope,
@@ -65,6 +75,13 @@ pub(crate) enum IoCommandTaskStep {
 impl PendingIoCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedIoCommandDispatch {
         let kind = match self.kind {
+            PendingIoCommandKind::SubresourceResponseBodyRead { body, handle, size } => {
+                CompletedIoCommandKind::SubresourceResponseBodyRead {
+                    result: body.read(size).await,
+                    body,
+                    handle,
+                }
+            }
             PendingIoCommandKind::FetchResponseBodyRead(pending) => {
                 CompletedIoCommandKind::FetchResponseBodyRead(Box::new(pending.wait().await))
             }
@@ -122,6 +139,20 @@ pub(crate) fn complete_pending_io_command(
 ) -> CommandOutputPlan {
     let session_id = completed.session_id.as_deref();
     match completed.kind {
+        CompletedIoCommandKind::SubresourceResponseBodyRead {
+            body,
+            handle,
+            result,
+        } => {
+            if !matches!(read_buffered_stream(conn, session_id, &handle, None, Some(0)), Some(TargetIoStreamRead::Pending(current)) if std::sync::Arc::ptr_eq(&body, &current))
+            {
+                return CommandOutputPlan::error(-32000, "StreamHandleNotFound");
+            }
+            match result {
+                Ok((bytes, eof)) => read_output_plan(&bytes, eof),
+                Err(message) => CommandOutputPlan::error(-32000, message),
+            }
+        }
         CompletedIoCommandKind::FetchResponseBodyRead(completed) => {
             let read = conn.finish_pending_fetch_response_body_stream_read_for_stream_owner(
                 session_id, *completed,
@@ -172,7 +203,25 @@ fn start_read_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoCommandTaskS
         ),
         PendingFetchResponseBodyStreamReadStart::NotFound => {
             if let Some(read) = read_buffered_stream(conn, cmd.session_id, handle, offset, size) {
-                return IoCommandTaskStep::Complete(read_output_plan(&read.bytes, read.eof));
+                return match read {
+                    TargetIoStreamRead::Ready { bytes, eof } => {
+                        IoCommandTaskStep::Complete(read_output_plan(&bytes, eof))
+                    }
+                    TargetIoStreamRead::OffsetNotSupported => IoCommandTaskStep::Complete(
+                        CommandOutputPlan::error(-32000, "OffsetNotSupportedForStream"),
+                    ),
+                    TargetIoStreamRead::Pending(body) => {
+                        IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
+                            command_id: cmd.id,
+                            session_id: cmd.session_id.map(str::to_owned),
+                            kind: PendingIoCommandKind::SubresourceResponseBodyRead {
+                                body,
+                                handle: handle.to_owned(),
+                                size: size.unwrap_or(DEFAULT_IO_READ_SIZE),
+                            },
+                        }))
+                    }
+                };
             }
             if let Some(uuid) = handle.strip_prefix("blob:") {
                 return start_read_blob_command(conn, cmd, uuid, offset, size);
@@ -267,10 +316,12 @@ fn complete_read_blob_command(
         return CommandOutputPlan::error(-32000, "Read failed");
     };
     slot.insert_io_stream_body_source(handle.clone(), CapturedBody::from_shared_bytes(bytes), 0);
-    let Some(read) = read_buffered_stream(conn, session_id, &handle, offset, size) else {
+    let Some(TargetIoStreamRead::Ready { bytes, eof }) =
+        read_buffered_stream(conn, session_id, &handle, offset, size)
+    else {
         return CommandOutputPlan::error(-32000, "Read failed");
     };
-    read_output_plan(&read.bytes, read.eof)
+    read_output_plan(&bytes, eof)
 }
 
 fn read_fetch_response_body_stream_output_plan(
@@ -343,17 +394,7 @@ fn read_io_stream_state(
     offset: Option<usize>,
     size: Option<usize>,
 ) -> TargetIoStreamRead {
-    let stream_len = stream.len();
-    let start = offset.unwrap_or(stream.offset).min(stream_len);
-    stream.offset = start;
-    let requested_len = size.unwrap_or(DEFAULT_IO_READ_SIZE);
-    let bytes = stream.read_range(start, requested_len);
-    let end = start.saturating_add(bytes.len()).min(stream_len);
-    stream.offset = end;
-    TargetIoStreamRead {
-        bytes,
-        eof: end >= stream_len,
-    }
+    stream.read(offset, Some(size.unwrap_or(DEFAULT_IO_READ_SIZE)))
 }
 
 fn remove_stream(conn: &mut CdpConnection, session_id: Option<&str>, handle: &str) -> bool {
@@ -500,12 +541,18 @@ mod tests {
         let mut stream = IoStreamState::from_bytes(vec![b'x'; DEFAULT_IO_READ_SIZE + 3], 0);
 
         let first = read_io_stream_state(&mut stream, None, None);
-        assert_eq!(first.bytes.len(), DEFAULT_IO_READ_SIZE);
-        assert!(!first.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = first else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes.len(), DEFAULT_IO_READ_SIZE);
+        assert!(!eof);
 
         let second = read_io_stream_state(&mut stream, None, None);
-        assert_eq!(second.bytes, b"xxx");
-        assert!(second.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = second else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"xxx");
+        assert!(eof);
     }
 
     #[tokio::test]

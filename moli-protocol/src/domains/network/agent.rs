@@ -741,7 +741,7 @@ impl TargetNetworkAgentState {
     pub(crate) fn insert_io_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.artifacts
@@ -1771,7 +1771,7 @@ impl TargetNetworkBodyArtifacts {
     pub(crate) fn insert_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.io_stream_artifacts
@@ -2413,14 +2413,20 @@ mod tests {
         let first = agent
             .read_io_stream("STREAM-1", None, Some(2))
             .expect("stream should exist");
-        assert_eq!(first.bytes, b"ab");
-        assert!(!first.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = first else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"ab");
+        assert!(!eof);
 
         let second = agent
             .read_io_stream("STREAM-1", Some(4), None)
             .expect("stream should exist");
-        assert_eq!(second.bytes, b"ef");
-        assert!(second.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = second else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"ef");
+        assert!(eof);
 
         assert!(agent.close_io_stream("STREAM-1"));
         assert!(agent.read_io_stream("STREAM-1", None, None).is_none());
@@ -2443,14 +2449,20 @@ mod tests {
         let first = agent
             .read_io_stream("STREAM-source", None, Some(8))
             .expect("source-backed stream should exist");
-        assert_eq!(first.bytes, b"captured");
-        assert!(!first.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = first else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"captured");
+        assert!(!eof);
 
         let second = agent
             .read_io_stream("STREAM-source", None, None)
             .expect("source-backed stream should remain readable");
-        assert_eq!(second.bytes, b" body source");
-        assert!(second.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = second else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b" body source");
+        assert!(eof);
     }
 
     #[test]
@@ -3475,35 +3487,95 @@ impl WebSocketRequestIdState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IoStreamState {
-    body: CapturedBody,
+    body: IoStreamBody,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IoStreamBody {
+    Captured(CapturedBody),
+    Response(std::sync::Arc<IoResponseBody>),
+}
+
+#[derive(Debug)]
+pub(crate) struct IoResponseBody {
+    body: moli_page_types::SubresourceResponseBodySource,
+    offset: tokio::sync::Mutex<usize>,
+}
+
+impl PartialEq for IoResponseBody {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for IoResponseBody {}
+
+impl IoResponseBody {
+    pub(crate) async fn read(&self, size: usize) -> Result<(Vec<u8>, bool), String> {
+        let mut offset = self.offset.lock().await;
+        let (bytes, eof) = self.body.read(*offset, size).await?;
+        *offset += bytes.len();
+        Ok((bytes, eof))
+    }
+}
+
+impl From<CapturedBody> for IoStreamBody {
+    fn from(body: CapturedBody) -> Self {
+        Self::Captured(body)
+    }
+}
+impl From<moli_page_types::SubresourceResponseBodySource> for IoStreamBody {
+    fn from(body: moli_page_types::SubresourceResponseBodySource) -> Self {
+        Self::Response(std::sync::Arc::new(IoResponseBody {
+            body,
+            offset: tokio::sync::Mutex::new(0),
+        }))
+    }
 }
 
 impl IoStreamState {
     pub(crate) fn from_bytes(bytes: Vec<u8>, offset: usize) -> Self {
+        Self::from_body_source(CapturedBody::from_bytes_spooled(bytes), offset)
+    }
+
+    pub(crate) fn from_body_source(body: impl Into<IoStreamBody>, offset: usize) -> Self {
         Self {
-            body: CapturedBody::from_bytes_spooled(bytes),
+            body: body.into(),
             offset,
         }
     }
 
-    pub(crate) fn from_body_source(body: CapturedBody, offset: usize) -> Self {
-        Self { body, offset }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.body.len()
-    }
-
-    pub(crate) fn read_range(&self, offset: usize, len: usize) -> Vec<u8> {
-        self.body.read_range(offset, len).unwrap_or_default()
+    pub(crate) fn read(
+        &mut self,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> TargetIoStreamRead {
+        let body = match &self.body {
+            IoStreamBody::Captured(body) => body,
+            IoStreamBody::Response(body) => {
+                return if offset.is_some() {
+                    TargetIoStreamRead::OffsetNotSupported
+                } else {
+                    TargetIoStreamRead::Pending(body.clone())
+                };
+            }
+        };
+        let start = offset.unwrap_or(self.offset).min(body.len());
+        let size = size.unwrap_or_else(|| body.len().saturating_sub(start));
+        let bytes = body.read_range(start, size).unwrap_or_default();
+        self.offset = start.saturating_add(bytes.len()).min(body.len());
+        TargetIoStreamRead::Ready {
+            bytes,
+            eof: self.offset >= body.len(),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TargetIoStreamRead {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) eof: bool,
+pub(crate) enum TargetIoStreamRead {
+    Ready { bytes: Vec<u8>, eof: bool },
+    Pending(std::sync::Arc<IoResponseBody>),
+    OffsetNotSupported,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3529,7 +3601,7 @@ impl TargetIoStreamArtifacts {
     pub(crate) fn insert_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.streams
@@ -3546,18 +3618,7 @@ impl TargetIoStreamArtifacts {
         offset: Option<usize>,
         size: Option<usize>,
     ) -> Option<TargetIoStreamRead> {
-        let stream = self.streams.get_mut(handle)?;
-        let stream_len = stream.len();
-        let start = offset.unwrap_or(stream.offset).min(stream_len);
-        stream.offset = start;
-        let requested_len = size.unwrap_or_else(|| stream_len.saturating_sub(start));
-        let bytes = stream.read_range(start, requested_len);
-        let end = start.saturating_add(bytes.len()).min(stream_len);
-        stream.offset = end;
-        Some(TargetIoStreamRead {
-            bytes,
-            eof: end >= stream_len,
-        })
+        Some(self.streams.get_mut(handle)?.read(offset, size))
     }
 
     pub(crate) fn clear_streams(&mut self) {

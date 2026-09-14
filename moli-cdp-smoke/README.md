@@ -6,6 +6,17 @@ The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent brows
 
 ## Chromium Behavior Evidence
 
+The Fetch response-stream offset contract was checked on 2026-09-15 with
+Debian `/usr/bin/chromium` 145.0.7632.116. After
+`Fetch.takeResponseBodyAsStream`, both `IO.read(offset=9)` and
+`IO.read(offset=0)` failed because the stream does not support random access.
+The following sequential reads returned `response` and `-stage body`, proving
+that rejected reads did not advance the cursor. Moli uses its existing
+`OffsetNotSupportedForStream` error for the same rejection. The network group
+retains its byte, fulfillment, terminal-event and closed-handle assertions;
+ordinary buffered IO artifacts still support offsets. The one-run raw trace is
+in `target/smoke/request-decision-audit.c94lfw9e/stream-offset-chromium.json`.
+
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
 specification, Chromium source code, an existing Moli test, or intuition.

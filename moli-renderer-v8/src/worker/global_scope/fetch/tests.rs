@@ -22,9 +22,10 @@ fn cancelled_worker_request_rejects_late_transport_delivery() {
             )
         })
         .unwrap();
-        let delivery = WorkerRequestDelivery {
-            network: network.clone(),
-            completion: Some(Box::new(WorkerRequestCompletion {
+        let response = ResourceResponseStream::new(network);
+        let delivery = WorkerRequestDelivery::new(
+            response.clone(),
+            WorkerRequestCompletion {
                 id: 1,
                 network_request_headers: None,
                 result: if transport_failed {
@@ -34,11 +35,11 @@ fn cancelled_worker_request_rejects_late_transport_delivery() {
                         crate::network_host::local_url_response(&url).unwrap(),
                     ))
                 },
-            })),
-        };
+            },
+        );
         // A timeout consumes the pending request before the transport packet
         // reaches its closed completion route. Its Drop must not finish twice.
-        publish_worker_request_failure(&network, "timeout".to_owned().into());
+        publish_worker_request_failure(&response, "timeout".to_owned().into());
         drop(delivery);
         let mut items = Vec::new();
         while let Ok(WorkerToParentMessage::Network(observation)) = receive.try_recv() {

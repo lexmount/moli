@@ -622,18 +622,10 @@ async fn navigate(
                             credentials,
                             response,
                         } => {
-                            let (_, challenge) = response
-                                .finish_body_stream_async()
-                                .await
-                                .map_err(|(_, error)| format!("{error:#}"))?;
-                            if let DocumentBodySource::StreamingRaw { mut response, .. } = challenge
-                            {
-                                while response.next_chunk().await.is_some() {}
-                                response
-                                    .finish()
-                                    .await
-                                    .map_err(|error| format!("{error:#}"))?;
-                            }
+                            // The decision claim was consumed by the Browser owner.
+                            // Drop cancels this exact challenge transport; a retry
+                            // must not wait for a server withholding the 401 body.
+                            drop(response);
                             let mut retry = moli_fetch::Request::get_with_url(requested_url);
                             retry.method = method;
                             retry.body = request_body;

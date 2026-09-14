@@ -1,6 +1,6 @@
 use super::*;
 use crate::conn::{
-    CapturedBody, CdpCommandTaskStep, ClaimedSubresourceContinueRequest, DocumentFetchCommand,
+    CdpCommandTaskStep, ClaimedSubresourceContinueRequest, DocumentFetchCommand,
     FetchAuthChallenge, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
 };
@@ -267,7 +267,7 @@ fn pending_response(
         response_headers: Vec::new(),
         response_head_overridden: false,
         response_body_taken_as_stream: false,
-        response_body: CapturedBody::from_bytes(Vec::new()),
+        response_body: moli_page_types::SubresourceResponseBody::from_bytes(Vec::new()).into(),
         response_stage_chain: None,
     }
 }

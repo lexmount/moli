@@ -19,9 +19,8 @@ use crate::network::ResourceTransfer;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind};
 use crate::protocol_types::{PendingSubresourceFetchInfo, SubresourceRequestStarted};
 use crate::service_worker_runtime::{
-    ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest,
-    ServiceWorkerFetchResultSender, ServiceWorkerRequestDestination,
-    service_worker_fetch_request_metadata,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest, ServiceWorkerFetchResultSender,
+    ServiceWorkerRequestDestination, service_worker_fetch_request_metadata,
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
 use crate::worker::WorkerPendingFetchContinue;
@@ -258,11 +257,14 @@ impl WorkerCspReport {
         runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     ) {
-        let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let cancel_handle = FetchCancelHandle::new();
         self.load.attach_cancel_handle(cancel_handle.clone());
+        let request_client = self.load.request_client();
+        let resource_task_runner = self.load.task_runner();
+        let internal_id = self.load.id_for_diagnostics();
+        let resource = crate::network_host::KeepaliveResource::new(self.network, self.load);
         let dispatch = ServiceWorkerFetchDispatch {
-            internal_id: self.load.id_for_diagnostics(),
+            internal_id,
             request: ServiceWorkerFetchRequest {
                 client_id,
                 resulting_client_id: None,
@@ -287,29 +289,17 @@ impl WorkerCspReport {
                 resource_type: SubresourceResourceType::CspReport,
                 policy_context: self.policy_context,
             },
-            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
-            request_client: self.load.request_client(),
-            resource_task_runner: self.load.task_runner(),
+            result_tx: ServiceWorkerFetchResultSender::CspReport {
+                resource: resource.clone(),
+                request: Box::new(self.request),
+            },
+            request_client,
+            resource_task_runner,
             cancel_handle,
         };
         if !runtime.dispatch_controlled_fetch(dispatch) {
-            self.fail("service worker csp report fetch dispatch failed".into());
-            return;
+            resource.fail("service worker csp report fetch dispatch failed".into());
         }
-        self.load.task_runner().spawn(async move {
-            match direct_completion_rx.await {
-                Ok(ServiceWorkerDirectFetchResult::Fallback) => self.spawn_network(),
-                Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
-                    self.network
-                        .response_completed(&(*response.response).into());
-                    self.load.finish();
-                }
-                Ok(ServiceWorkerDirectFetchResult::Failure(message)) => self.fail(message),
-                Err(_) => {
-                    self.fail("service worker csp report fetch completion channel closed".into())
-                }
-            }
-        });
     }
 
     fn spawn_network(self) {
@@ -321,26 +311,8 @@ impl WorkerCspReport {
         } = self;
         let cancel = FetchCancelHandle::new();
         load.attach_cancel_handle(cancel.clone());
-        load.task_runner().spawn(async move {
-            let result = match load
-                .request_client()
-                .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel)
-                .await
-            {
-                Ok(response) => {
-                    crate::network::resource_response::collect_observed_response(
-                        response,
-                        Some(network.as_ref()),
-                    )
-                    .await
-                }
-                Err(error) => Err(ResourceResponseFailure::Request(format!(
-                    "csp report: {error:#}"
-                ))),
-            };
-            network.complete(&result);
-            load.finish();
-        });
+        let loader = load.request_client();
+        crate::network_host::KeepaliveResource::new(network, load).fetch(loader, request, cancel);
     }
 }
 

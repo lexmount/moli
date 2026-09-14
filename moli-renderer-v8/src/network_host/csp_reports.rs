@@ -397,7 +397,10 @@ fn send_content_security_policy_report_request(
                 resource_type: SubresourceResourceType::CspReport,
                 policy_context: request_context.policy_context,
             },
-            result_tx: ServiceWorkerFetchResultSender::CspReport(resource.clone()),
+            result_tx: ServiceWorkerFetchResultSender::CspReport {
+                resource: resource.clone(),
+                request: Box::new(request),
+            },
             request_client: request_context.request_client.clone(),
             resource_task_runner: request_context.resource_loader.task_runner(),
             cancel_handle,

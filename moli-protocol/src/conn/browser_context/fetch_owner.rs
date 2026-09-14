@@ -6,7 +6,7 @@ use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
 use crate::conn::{
-    CapturedBody, ClaimedFetchNavigation, ClaimedFetchResponseNavigation, CommandOwnerScope,
+    ClaimedFetchNavigation, ClaimedFetchResponseNavigation, CommandOwnerScope,
     CompletedFetchResponseBodyStreamReadDispatch, FetchInterceptionPattern, FetchRequestStage,
     InFlightSubresourceFetchRequest, PausedDocumentTransfer, PendingDocumentFetchCommand,
     PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
@@ -118,7 +118,10 @@ fn restore_response_transfer_for_target(
 }
 
 impl TargetSessionOwnerMut<'_> {
-    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
+    fn open_scoped_io_stream_body_source(
+        &mut self,
+        body: impl Into<crate::domains::network::IoStreamBody>,
+    ) -> Result<String, String> {
         let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
         let Some(target) = self.browser_context.page_target_mut(&self.target_id) else {
             return Err("NoDocumentLoaded".to_owned());
@@ -351,14 +354,14 @@ impl CdpConnection {
     ) -> Result<String, String> {
         self.open_io_stream_body_source_for_session_owner(
             session_id,
-            CapturedBody::from_bytes_spooled(bytes),
+            crate::conn::CapturedBody::from_bytes_spooled(bytes),
         )
     }
 
     pub(crate) fn open_io_stream_body_source_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-        body: CapturedBody,
+        body: impl Into<crate::domains::network::IoStreamBody>,
     ) -> Result<String, String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.open_io_stream_body_source_for_owner(&owner, body)
@@ -367,7 +370,7 @@ impl CdpConnection {
     pub(crate) fn open_io_stream_body_source_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        body: CapturedBody,
+        body: impl Into<crate::domains::network::IoStreamBody>,
     ) -> Result<String, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) else {
             return Err("NoDocumentLoaded".to_owned());

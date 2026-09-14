@@ -2806,6 +2806,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
             referrer_policy: "origin".to_owned(),
             integrity: "sha256-test".to_owned(),
             keepalive: true,
+            ..Default::default()
         },
     };
     let completion =

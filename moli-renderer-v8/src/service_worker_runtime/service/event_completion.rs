@@ -1,13 +1,57 @@
 use super::*;
+use crate::service_worker_runtime::ServiceWorkerFetchResultSender;
 
 impl ServiceWorkerRuntimeService {
-    pub(crate) fn abort_controlled_fetch(&self, internal_id: u64) -> bool {
-        self.abort_controlled_fetch_with_reason(internal_id, None)
+    pub(crate) fn attach_fetch_cancellation(
+        &self,
+        load: &crate::network::loads::ResourceLoadLease,
+        response: &Arc<crate::network::ResourceResponseStream>,
+    ) {
+        let service = self.downgrade();
+        let response = Arc::downgrade(response);
+        let runner = load.task_runner();
+        load.attach_consumer_cancel(move || {
+            // Producer Drop can run under the service lock. Return cancellation
+            // through the resource executor without retaining either owner.
+            runner.spawn(async move {
+                if let (Some(service), Some(response)) = (service.upgrade(), response.upgrade()) {
+                    service.abort_controlled_fetch(&response);
+                }
+            });
+        });
+    }
+
+    pub(crate) fn abort_controlled_fetch(
+        &self,
+        response: &Arc<crate::network::ResourceResponseStream>,
+    ) -> bool {
+        self.abort_controlled_fetch_with_reason(response, None)
     }
 
     pub(crate) fn abort_controlled_fetch_with_reason(
         &self,
-        internal_id: u64,
+        response: &Arc<crate::network::ResourceResponseStream>,
+        reason: Option<crate::structured_clone::V8StructuredClonePayload>,
+    ) -> bool {
+        self.abort_fetch_matching(
+            |_, job| match &job.result_tx {
+                ServiceWorkerFetchResultSender::Page { network, .. } => {
+                    Arc::ptr_eq(network, response)
+                }
+                ServiceWorkerFetchResultSender::Worker { sender, .. } => {
+                    Arc::ptr_eq(&sender.response, response)
+                }
+                ServiceWorkerFetchResultSender::Body(body) => Arc::ptr_eq(&body.resource, response),
+                ServiceWorkerFetchResultSender::CspReport { .. }
+                | ServiceWorkerFetchResultSender::Direct(_) => false,
+            },
+            reason,
+        )
+    }
+
+    pub(super) fn abort_fetch_matching(
+        &self,
+        matches: impl Fn(ServiceWorkerEventId, &ServiceWorkerFetchJob) -> bool,
         reason: Option<crate::structured_clone::V8StructuredClonePayload>,
     ) -> bool {
         let aborted = {
@@ -15,7 +59,7 @@ impl ServiceWorkerRuntimeService {
             let Some(event_id) = state
                 .pending_fetch_jobs
                 .iter()
-                .find_map(|(event_id, job)| (job.internal_id == internal_id).then_some(*event_id))
+                .find_map(|(event_id, job)| matches(*event_id, job).then_some(*event_id))
             else {
                 return false;
             };

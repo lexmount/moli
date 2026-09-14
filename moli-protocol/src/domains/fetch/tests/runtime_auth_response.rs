@@ -54,6 +54,21 @@ fn network_events_for_request<'a>(
         .collect()
 }
 
+// Continuing now releases a live body. Audit the same complete response after
+// its own terminal arrives rather than treating the command reply as body EOF.
+async fn wait_for_network_finish(ctx: &mut TestContext, request: &serde_json::Value) {
+    wait_until_message(
+        ctx,
+        "SID-1",
+        "continued response body terminal",
+        |message| {
+            message["method"] == "Network.loadingFinished"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        },
+    )
+    .await;
+}
+
 fn assert_chromium_successful_http_extra_info(
     ctx: &TestContext,
     request_id: &str,
@@ -240,6 +255,7 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
     }))
     .await;
     ctx.expect_result(387, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
     assert!(
         !ctx.sent.iter().any(|message| {
@@ -917,6 +933,7 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
     }))
     .await;
     ctx.expect_result(394, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
     assert!(
         !ctx.sent.iter().any(|message| {
@@ -1087,6 +1104,7 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
     }))
     .await;
     ctx.expect_result(400, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
     let fetch_requests = std::iter::once(&request)
         .chain(ctx.sent.iter())
@@ -1272,6 +1290,7 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
     }))
     .await;
     ctx.expect_result(406, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
     let xhr_requests = std::iter::once(&request)
         .chain(ctx.sent.iter())
@@ -4205,6 +4224,7 @@ async fn runtime_fetch_subresource_continue_response_can_override_status_and_hea
     }))
     .await;
     ctx.expect_result(416, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
     assert!(
         !ctx.sent.iter().any(|message| {

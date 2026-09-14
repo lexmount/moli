@@ -208,11 +208,21 @@ enum PendingFetchCommandOperation {
         transfer: Box<crate::conn::PausedDocumentTransfer>,
         limit: usize,
     },
+    SubresourceResponseBody {
+        request_id: String,
+        body: moli_page_types::SubresourceResponseBodySource,
+        limit: usize,
+    },
 }
 
 enum CompletedFetchCommandOperation {
     Ready,
     Fetch(Result<CompletedFetchExecution, String>),
+    SubresourceResponseBody {
+        request_id: String,
+        body: moli_page_types::SubresourceResponseBodySource,
+        result: Result<Vec<u8>, String>,
+    },
     MaterializeResponseBody {
         request_id: String,
         result: Box<
@@ -409,6 +419,15 @@ impl PendingFetchCommandDispatch {
                 request_id,
                 result: Box::new(transfer.materialize_body_limited_async(limit).await),
             },
+            PendingFetchCommandOperation::SubresourceResponseBody {
+                request_id,
+                body,
+                limit,
+            } => CompletedFetchCommandOperation::SubresourceResponseBody {
+                request_id,
+                result: body.materialize_bytes_limited(limit).await,
+                body,
+            },
         };
         CompletedFetchCommandDispatch {
             command_id: self.command_id,
@@ -436,14 +455,18 @@ impl CompletedFetchCommandOperation {
                 .as_ref()
                 .ok()
                 .and_then(CompletedFetchExecution::renderer_output_predecessor),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
+            Self::Ready
+            | Self::MaterializeResponseBody { .. }
+            | Self::SubresourceResponseBody { .. } => None,
         }
     }
 
     fn into_document_fetch_completion(self) -> Option<Result<CompletedFetchExecution, String>> {
         match self {
             Self::Fetch(completed) => Some(completed),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
+            Self::Ready
+            | Self::MaterializeResponseBody { .. }
+            | Self::SubresourceResponseBody { .. } => None,
         }
     }
 }

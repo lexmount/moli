@@ -2,7 +2,7 @@ use std::str::FromStr;
 use url::Url;
 
 use super::{
-    CapturedBody, CdpConnection, ClaimedNavigationRequest, CommandOwnerScope, DocumentFetchCommand,
+    CdpConnection, ClaimedNavigationRequest, CommandOwnerScope, DocumentFetchCommand,
     DocumentFetchCommandOutcome, NavigationDispatchState,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
@@ -980,7 +980,7 @@ pub struct PendingSubresourceFetchResponseRequest {
     pub response_head_overridden: bool,
     pub response_body_taken_as_stream: bool,
     /// Exact paused response body for `Fetch.getResponseBody` and IO streams.
-    pub response_body: CapturedBody,
+    pub response_body: moli_page_types::SubresourceResponseBodySource,
     pub response_stage_chain: Option<Box<PendingSubresourceFetchResponseStageChain>>,
 }
 

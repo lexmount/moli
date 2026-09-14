@@ -702,17 +702,8 @@ pub(super) enum ServiceWorkerPeriodicSyncStart {
     Dropped,
 }
 
-/// A received body has one source id even when policy requires buffered JS
-/// delivery. Only a recipient that received a JS stream head can consume chunks.
 pub(super) struct ServiceWorkerFetchBodyStream {
     pub(super) body_source_id: crate::types::NetworkBodySourceId,
-    pub(super) js_consumer: Option<crate::page_task_queue::RendererResourceCompletionSender>,
-}
-
-impl ServiceWorkerFetchBodyStream {
-    pub(super) fn js_body_source_id(&self) -> Option<crate::types::NetworkBodySourceId> {
-        self.js_consumer.as_ref().map(|_| self.body_source_id)
-    }
 }
 
 pub(super) struct ServiceWorkerFetchJob {

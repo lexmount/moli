@@ -613,18 +613,13 @@ impl RendererBrowserContextRuntime {
             .is_some_and(|runtime| runtime.dispatch_controlled_fetch(dispatch))
     }
 
-    pub(crate) fn abort_service_worker_fetch(&self, internal_id: u64) -> bool {
-        self.service_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.abort_controlled_fetch(internal_id))
-    }
-
     pub(crate) fn abort_service_worker_fetch_with_reason(
         &self,
-        internal_id: u64,
+        response: &std::sync::Arc<crate::network::ResourceResponseStream>,
         reason: Option<V8StructuredClonePayload>,
     ) -> bool {
         self.service_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.abort_controlled_fetch_with_reason(internal_id, reason))
+            .is_some_and(|runtime| runtime.abort_controlled_fetch_with_reason(response, reason))
     }
 
     pub(crate) fn dispatch_service_worker_message(

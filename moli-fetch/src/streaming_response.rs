@@ -1,4 +1,10 @@
-use std::{any::Any, fmt};
+use std::{
+    any::Any,
+    fmt,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -284,23 +290,32 @@ impl StreamingRawResponse {
         self.body_chunks.is_closed() && self.body_chunks.is_empty()
     }
 
-    pub async fn finish(&mut self) -> Result<()> {
-        while self.body_chunks.recv().await.is_some() {}
-        let completion = self
-            .completion
-            .as_mut()
-            .expect("streaming raw completion should only be awaited once")
-            .await;
-        // See StreamingHtmlResponse::finish: taking the receiver before the
-        // await would make a cancelled finish future look completed to Drop.
+    /// Poll without retaining a mutable borrow across suspension. Response
+    /// owners can then service body reads while keeping synchronous cancellation
+    /// and queued-prefix draining available to their lifecycle boundary.
+    pub fn poll_next_chunk(&mut self, cx: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
+        self.body_chunks.poll_recv(cx)
+    }
+
+    pub fn poll_finish(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        while std::task::ready!(self.body_chunks.poll_recv(cx)).is_some() {}
+        let completion = std::task::ready!(
+            Pin::new(
+                self.completion
+                    .as_mut()
+                    .expect("streaming raw completion should only be awaited once"),
+            )
+            .poll(cx)
+        );
         self.completion = None;
-        // The exact transport runtime only has to remain alive until its
-        // terminal result is known. Releasing it here lets an outer owner reap
-        // a replaced runtime even when the caller retains this response value.
-        // A cancelled finish future never reaches this point, so Drop remains
-        // responsible for cancellation and lease release in that case.
         self.lifetime_lease = None;
-        completion.map_err(|_| anyhow!("streaming raw completion channel closed"))?
+        Poll::Ready(completion.map_err(|_| anyhow!("streaming raw completion channel closed"))?)
+    }
+
+    pub async fn finish(&mut self) -> Result<()> {
+        // poll_finish keeps the completion receiver and transport lease armed
+        // until Ready, including when this future is dropped while pending.
+        std::future::poll_fn(|cx| self.poll_finish(cx)).await
     }
 
     pub fn head(&self) -> ResponseHead {

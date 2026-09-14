@@ -701,7 +701,7 @@ impl TargetRuntimeSlot {
     pub(crate) fn insert_io_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<crate::domains::network::IoStreamBody>,
         offset: usize,
     ) {
         self.network_agent

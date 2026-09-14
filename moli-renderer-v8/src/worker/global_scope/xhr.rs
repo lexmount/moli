@@ -1,6 +1,7 @@
 use super::fetch::{publish_worker_request_failure, worker_request_started};
 use super::*;
 use crate::network_host::ResolveContextUrlError;
+use crate::network::{PausedResourceResponse, ResourceResponseBody};
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,7 +42,7 @@ impl PreparedWorkerXhrSendRequest {
 fn start_worker_xhr_request(
     state: &WorkerGlobalState,
     prepared: &PreparedWorkerXhrSendRequest,
-) -> Option<Arc<ResourceTransfer>> {
+) -> Option<Arc<ResourceResponseStream>> {
     ResourceTransfer::for_worker(
         state.global_kind.network(),
         state.parent_tx.network_observer(),
@@ -57,13 +58,16 @@ fn start_worker_xhr_request(
             )
         },
     )
+    .map(|network| {
+        ResourceResponseStream::with_disk_pool(network, state.loader.request_client().disk_pool())
+    })
 }
 
 pub(super) fn update_worker_xhr_request(
     pending: &mut PendingWorkerXhr,
-    record: PendingWorkerFetchNetworkRecord,
+    record: WorkerRequestOverride,
 ) {
-    let previous = pending.network_record.as_ref();
+    let previous = pending.request_override.as_ref();
     let changed = previous.map_or(&pending.request_url, |previous| &previous.url) != &record.url
         || previous.map_or(&pending.request_method, |previous| &previous.method) != &record.method
         || previous.map_or(&pending.request_headers, |previous| {
@@ -72,7 +76,7 @@ pub(super) fn update_worker_xhr_request(
         || previous.map_or(&pending.request_body, |previous| &previous.request_body)
             != &record.request_body;
     if changed {
-        pending.network.update_request(|network| {
+        pending.response.network.update_request(|network| {
             worker_request_started(
                 network,
                 &pending.document_url,
@@ -84,7 +88,7 @@ pub(super) fn update_worker_xhr_request(
             )
         });
     }
-    pending.network_record = Some(record);
+    pending.request_override = Some(record);
 }
 
 #[derive(Debug)]
@@ -297,8 +301,11 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
     }
 
     let pending = state.borrow_mut().pending_xhrs.remove(&scheduled_xhr_id);
-    if let Some(pending) = pending {
+    if let Some(mut pending) = pending {
         pending.load.cancel();
+        if let Some(response) = pending.paused_response.take() {
+            response.discard();
+        }
         record_worker_xhr_failure(&pending, WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned());
     }
     apply_xhr_timeout(scope, xhr);
@@ -492,11 +499,13 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         };
         match result {
             Ok(response) => {
-                network.response_completed(&response);
+                network.network.response_completed(&response);
                 apply_xhr_response(scope, xhr, response);
             }
             Err(error) => {
-                network.failed(&crate::network::ResourceResponseFailure::Request(error.to_string()));
+                network
+                    .network
+                    .failed(&crate::network::ResourceResponseFailure::Request(error.to_string()));
                 throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
             }
         }
@@ -540,12 +549,12 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     };
 
-    let Some(network) = start_worker_xhr_request(&state.borrow(), &prepared) else {
+    let Some(resource) = start_worker_xhr_request(&state.borrow(), &prepared) else {
         load.cancel();
         apply_xhr_failure(scope, xhr);
         return true;
     };
-    let network_request_handle = network.handle();
+    let network_request_handle = resource.network.handle();
     let xhr_id = {
         let mut state = state.borrow_mut();
         let xhr_id = next_xhr_id(&mut state);
@@ -561,8 +570,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 request_method: prepared.method.clone(),
                 request_headers: prepared.request_headers.clone(),
                 request_body,
-                network: network.clone(),
-                network_record: None,
+                response: resource.clone(),
+                request_override: None,
                 paused_response: None,
             },
         );
@@ -612,15 +621,14 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let completion_tx = state.borrow().xhr_completion_tx.clone();
     spawn_worker_xhr_network(
         load,
-        network,
+        resource,
         state.borrow().parent_tx.network_observer(),
-        move |delivery| {
-            let _ = completion_tx.send(WorkerXhrCompletion::TransportCompletion(delivery));
+        move |completion| {
+            let _ = completion_tx.send(completion);
         },
         xhr_id,
         cancel_handle,
         prepared.network_request(&state.borrow()),
-        true,
     );
 
     true
@@ -644,7 +652,7 @@ fn send_synchronous_worker_xhr(
         throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
         return;
     };
-    let Some(network) = start_worker_xhr_request(&state.borrow(), &prepared) else {
+    let Some(resource) = start_worker_xhr_request(&state.borrow(), &prepared) else {
         load.cancel();
         throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
         return;
@@ -658,9 +666,12 @@ fn send_synchronous_worker_xhr(
         .unwrap_or_else(never);
     spawn_worker_xhr_network(
         load.clone(),
-        network.clone(),
+        resource.clone(),
         observer.clone(),
-        move |delivery| {
+        move |completion| {
+            let WorkerXhrCompletion::TransportCompletion(delivery) = completion else {
+                panic!("synchronous Worker XHR rejects interception before dispatch")
+            };
             let _ = response_tx.send(delivery);
         },
         0,
@@ -668,11 +679,10 @@ fn send_synchronous_worker_xhr(
         prepared
             .network_request(&state.borrow())
             .map(Request::with_page_network_policy),
-        true,
     );
     let completion = select! {
         recv(response_rx) -> result => match result {
-            Ok(delivery) => delivery.claim(&network).expect("synchronous XHR owns its exact network request"),
+            Ok(delivery) => delivery.claim(&resource).expect("synchronous XHR owns its exact resource request"),
             Err(_) => WorkerRequestCompletion {
                 id: 0,
                 network_request_headers: None,
@@ -682,7 +692,7 @@ fn send_synchronous_worker_xhr(
         recv(timeout_rx) -> _ => {
             load.cancel();
             let timeout = xhr_timeout.as_ref().expect("timeout channel requires a configured deadline");
-            publish_worker_request_failure(&network,
+            publish_worker_request_failure(&resource,
                 format!("Synchronous XMLHttpRequest timed out after {} ms", timeout.configured_timeout.as_millis()).into());
             throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "TimeoutError");
             return;
@@ -731,7 +741,7 @@ fn send_synchronous_worker_xhr(
                 );
                 let message = worker_content_security_policy_error_message(&violation, "xhr");
                 publish_worker_request_failure(
-                    &network,
+                    &resource,
                     response.failure(message, completion.network_request_headers.clone()),
                 );
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
@@ -743,7 +753,7 @@ fn send_synchronous_worker_xhr(
                 prepared.credentials_mode,
             ) {
                 publish_worker_request_failure(
-                    &network,
+                    &resource,
                     response.failure(message, completion.network_request_headers.clone()),
                 );
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
@@ -751,12 +761,12 @@ fn send_synchronous_worker_xhr(
             }
             match response.body_source() {
                 Ok(body) => {
-                    response.publish(&network, completion.network_request_headers);
+                    response.publish(&resource.network, completion.network_request_headers);
                     apply_xhr_response_body_source(scope, xhr, response_head, body);
                 }
                 Err(message) => {
                     publish_worker_request_failure(
-                        &network,
+                        &resource,
                         response.failure(message, completion.network_request_headers),
                     );
                     throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
@@ -764,7 +774,7 @@ fn send_synchronous_worker_xhr(
             }
         }
         Err(error) => {
-            publish_worker_request_failure(&network, error);
+            publish_worker_request_failure(&resource, error);
             throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
         }
     }
@@ -834,8 +844,11 @@ pub(crate) fn try_worker_xhr_abort_callback(
     } else {
         None
     };
-    if let Some(pending) = pending {
+    if let Some(mut pending) = pending {
         pending.load.cancel();
+        if let Some(response) = pending.paused_response.take() {
+            response.discard();
+        }
         record_worker_xhr_failure(&pending, ABORTED_ERROR_TEXT.to_owned());
     }
 
@@ -855,7 +868,117 @@ pub(in crate::worker) fn record_worker_xhr_failure(
     pending: &PendingWorkerXhr,
     error: impl Into<ResourceResponseFailure>,
 ) {
-    publish_worker_request_failure(&pending.network, error.into());
+    publish_worker_request_failure(&pending.response, error.into());
+}
+
+fn pause_worker_xhr_response(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    xhr_id: u32,
+    response: PausedResourceResponse,
+) {
+    if !state
+        .borrow()
+        .pending_xhrs
+        .get(&xhr_id)
+        .is_some_and(|pending| {
+            Arc::ptr_eq(&pending.response, &response.body.resource) && !pending.load.is_cancelled()
+        })
+    {
+        return;
+    }
+    let head = response.body.head();
+    if let Some(message) = worker_response_csp_error(
+        scope,
+        state,
+        crate::runtime::WorkerFetchTarget::Xhr(xhr_id),
+        &head,
+    ) {
+        let resource = response.body.resource.clone();
+        response.discard();
+        drain_worker_xhr_completion(
+            scope,
+            state,
+            WorkerXhrCompletion::decision(xhr_id, Err(resource.failure(message))),
+        );
+        return;
+    }
+    let mut state = state.borrow_mut();
+    let pending = state
+        .pending_xhrs
+        .get_mut(&xhr_id)
+        .expect("originating XHR");
+    let (url, method, headers, body) = match &pending.request_override {
+        Some(record) => (
+            &record.url,
+            &record.method,
+            &record.request_headers,
+            &record.request_body,
+        ),
+        None => (
+            &pending.request_url,
+            &pending.request_method,
+            &pending.request_headers,
+            &pending.request_body,
+        ),
+    };
+    let auth = (pending.response.handle_auth_requests() && matches!(head.status, 401 | 407))
+        .then(|| extract_subresource_auth_challenge(&head.headers))
+        .flatten();
+    let handle = pending.response.network.handle();
+    let load = pending.load.clone();
+    let stage = if let Some(challenge) = auth {
+        let mut challenged =
+            pending
+                .request_override
+                .clone()
+                .unwrap_or_else(|| WorkerRequestOverride {
+                    redirect_headers: None,
+                    url: url.clone(),
+                    method: method.clone(),
+                    request_headers: headers.clone(),
+                    request_body: body.clone(),
+                });
+        challenged.follow_redirects(&head);
+        crate::runtime::RendererWorkerFetchStage::Auth(Box::new(PendingSubresourceAuthInfo {
+            internal_id: handle.get(),
+            url: challenged.url,
+            method: challenged.method,
+            request_headers: challenged.request_headers,
+            request_body: request_body_text(&challenged.request_body),
+            resource_type: SubresourceResourceType::Xhr,
+            request_cookie_report: head.request_cookie_report,
+            network_request_headers: pending.response.record_request_headers(None),
+            challenge,
+            intercept_response: pending.response.intercept_response(),
+        }))
+    } else {
+        crate::runtime::RendererWorkerFetchStage::Response(Box::new(
+            PendingSubresourceResponseInfo {
+                internal_id: handle.get(),
+                url: url.clone(),
+                final_url: head.final_url,
+                method: method.clone(),
+                request_headers: headers.clone(),
+                request_body: request_body_text(body),
+                resource_type: SubresourceResourceType::Xhr,
+                request_cookie_report: head.request_cookie_report,
+                network_request_headers: pending.response.record_request_headers(None),
+                response_status: head.status,
+                response_headers: head.headers,
+                response_body: response.body.body_source(),
+                from_cache: head.from_cache,
+            },
+        ))
+    };
+    pending.paused_response = Some(response);
+    publish_worker_fetch_pause(
+        &state,
+        crate::runtime::WorkerFetchTarget::Xhr(xhr_id),
+        handle,
+        load,
+        stage,
+    );
 }
 
 pub(in crate::worker) fn drain_worker_xhr_completion(
@@ -864,78 +987,29 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     completion: WorkerXhrCompletion,
 ) {
     let completion = match completion {
+        WorkerXhrCompletion::ResponsePaused { xhr_id, response } => {
+            pause_worker_xhr_response(scope, state, xhr_id, *response);
+            return;
+        }
         WorkerXhrCompletion::Completion(completion) => *completion,
         WorkerXhrCompletion::TransportCompletion(delivery) => {
             let completion = state
                 .borrow()
                 .pending_xhrs
                 .get(&delivery.request_id())
-                .and_then(|pending| delivery.claim(&pending.network));
+                .and_then(|pending| delivery.claim(&pending.response));
             let Some(completion) = completion else { return };
             completion
         }
     };
-    if let Some(network_request_headers) = completion.network_request_headers.as_ref()
-        && let Some(record) = state
-            .borrow_mut()
-            .pending_xhrs
-            .get_mut(&completion.id)
-            .and_then(|pending| pending.network_record.as_mut())
-    {
-        record
-            .initial_network_request_headers
-            .get_or_insert_with(|| network_request_headers.clone());
-    }
     if let Ok(response) = &completion.result {
         let response_head = response.head();
-        let redirect_status = if response_head.redirect_chain.is_empty() {
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
-        } else {
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        };
-        if redirect_status
-            == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        {
-            let (document_url, request_url) = {
-                let state_ref = state.borrow();
-                let Some(pending) = state_ref.pending_xhrs.get(&completion.id) else {
-                    return;
-                };
-                (pending.document_url.clone(), pending.request_url.clone())
-            };
-            dispatch_worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status_for_state(
-                scope,
-                state,
-                &document_url,
-                &response_head.final_url,
-                &request_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-                redirect_status,
-            );
-        }
-        let csp_failure = {
-            let state_ref = state.borrow();
-            let Some(pending) = state_ref.pending_xhrs.get(&completion.id) else {
-                return;
-            };
-            worker_content_security_policy_violation_for_checked_url_with_redirect_status(
-                &state_ref,
-                &pending.document_url,
-                &response_head.final_url,
-                &pending.request_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-                if response_head.redirect_chain.is_empty() {
-                    crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
-                } else {
-                    crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                },
-            )
-        };
-        if let Some(violation) = csp_failure {
-            dispatch_worker_content_security_policy_violation_event_for_state(
-                scope, state, &violation,
-            );
-            let message = worker_content_security_policy_error_message(&violation, "xhr");
+        if let Some(message) = worker_response_csp_error(
+            scope,
+            state,
+            crate::runtime::WorkerFetchTarget::Xhr(completion.id),
+            &response_head,
+        ) {
             let Some(pending) = state.borrow_mut().pending_xhrs.remove(&completion.id) else {
                 return;
             };
@@ -949,101 +1023,35 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
             apply_xhr_failure(scope, xhr);
             return;
         }
-        let auth_required = {
-            let mut state_ref = state.borrow_mut();
-            let Some(pending) = state_ref.pending_xhrs.get_mut(&completion.id) else {
+        let paused = {
+            let state_ref = state.borrow();
+            let Some(pending) = state_ref.pending_xhrs.get(&completion.id) else {
                 return;
             };
-            let response_head = response.head();
-            pending.network_record.clone().and_then(|mut record| {
-                if record.handle_auth_requests
-                    && matches!(response_head.status, 401 | 407)
-                    && let Some(challenge) =
-                        extract_subresource_auth_challenge(&response_head.headers)
-                {
-                    record.follow_redirects(&response_head);
-                    let response_body = response.subresource_response_body();
-                    pending.paused_response = Some(ResourceBodyResponse {
-                        head: response_head.clone(),
-                        body: response_body.clone(),
-                    });
-                    Some(PendingSubresourceAuthInfo {
-                        internal_id: record.internal_id,
-                        url: record.url.clone(),
-                        method: record.method.clone(),
-                        request_headers: record.request_headers.clone(),
-                        request_body: request_body_text(&record.request_body),
-                        resource_type: SubresourceResourceType::Xhr,
-                        request_cookie_report: response_head.request_cookie_report.clone(),
-                        network_request_headers: record.initial_network_request_headers.clone(),
-                        challenge,
-                        intercept_response: record.intercept_response,
-                        response_final_url: response_head.final_url.clone(),
-                        response_status: response_head.status,
-                        response_headers: response_head.headers.clone(),
-                        response_body,
-                        response_from_cache: response_head.from_cache,
-                    })
-                } else {
-                    None
-                }
-            })
+            pending
+                .response
+                .intercepts_response(&response_head)
+                .then(|| {
+                    let sender = state_ref.xhr_completion_tx.clone();
+                    let producer = super::fetch::WorkerResponseSender::xhr(
+                        pending.load.clone(),
+                        pending.response.clone(),
+                        state_ref.parent_tx.network_observer(),
+                        completion.id,
+                        move |completion| {
+                            let _ = sender.send(completion);
+                        },
+                    );
+                    let body = ResourceResponseBody::completed(
+                        pending.response.clone(),
+                        response.clone(),
+                        None,
+                    );
+                    producer.pause(body, false)
+                })
         };
-        if let Some(info) = auth_required {
-            let state = state.borrow();
-            let pending = &state.pending_xhrs[&completion.id];
-            publish_worker_fetch_pause(
-                &state,
-                crate::runtime::WorkerFetchTarget::Xhr(completion.id),
-                pending.network.handle(),
-                pending.load.clone(),
-                crate::runtime::RendererWorkerFetchStage::Auth(Box::new(info)),
-            );
-            return;
-        }
-        let response_paused = {
-            let mut state = state.borrow_mut();
-            let Some(pending) = state.pending_xhrs.get_mut(&completion.id) else {
-                return;
-            };
-            let response_head = response.head();
-            match pending.network_record.as_ref() {
-                Some(record) if record.intercept_response => {
-                    let response_body = response.subresource_response_body();
-                    let info = PendingSubresourceResponseInfo {
-                        internal_id: record.internal_id,
-                        url: record.url.clone(),
-                        final_url: response_head.final_url.clone(),
-                        method: record.method.clone(),
-                        request_headers: record.request_headers.clone(),
-                        request_body: request_body_text(&record.request_body),
-                        resource_type: SubresourceResourceType::Xhr,
-                        request_cookie_report: response_head.request_cookie_report.clone(),
-                        network_request_headers: record.initial_network_request_headers.clone(),
-                        response_status: response_head.status,
-                        response_headers: response_head.headers.clone(),
-                        response_body: response_body.clone(),
-                        from_cache: response_head.from_cache,
-                    };
-                    pending.paused_response = Some(ResourceBodyResponse {
-                        head: response_head,
-                        body: response_body,
-                    });
-                    Some(info)
-                }
-                _ => None,
-            }
-        };
-        if let Some(info) = response_paused {
-            let state = state.borrow();
-            let pending = &state.pending_xhrs[&completion.id];
-            publish_worker_fetch_pause(
-                &state,
-                crate::runtime::WorkerFetchTarget::Xhr(completion.id),
-                pending.network.handle(),
-                pending.load.clone(),
-                crate::runtime::RendererWorkerFetchStage::Response(Box::new(info)),
-            );
+        if let Some(response) = paused {
+            pause_worker_xhr_response(scope, state, completion.id, response);
             return;
         }
     }
@@ -1057,6 +1065,13 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
+            report_worker_connect_response_redirect(
+                scope,
+                state,
+                &pending.document_url,
+                &pending.request_url,
+                &response_head,
+            );
             match crate::network_host::validate_cors_response_chain(
                 &pending.document_url,
                 &response_head,
@@ -1064,12 +1079,11 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
             ) {
                 Ok(()) => match response.body_source() {
                     Ok(body) => {
-                        let record = pending.network_record.as_ref();
                         response.publish(
-                            &pending.network,
-                            record
-                                .and_then(|record| record.initial_network_request_headers.clone())
-                                .or(completion.network_request_headers),
+                            &pending.response.network,
+                            pending
+                                .response
+                                .record_request_headers(completion.network_request_headers),
                         );
                         let mut response_head = response_head;
                         response_head.headers = filter_cors_exposed_response_headers(

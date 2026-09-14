@@ -482,9 +482,6 @@ impl JsContextHost {
         let Some(internal_id) = pending.network_request_id() else {
             return;
         };
-        let _ = self
-            .browser_context_runtime
-            .abort_service_worker_fetch(internal_id);
         let aborted = self.abort_subresource_fetch(internal_id);
         tracing::debug!(
             track_sequence = pending.id().get(),

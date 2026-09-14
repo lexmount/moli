@@ -3098,6 +3098,59 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
 }
 
 #[tokio::test]
+async fn response_decisions_do_not_duplicate_worker_redirect_policy_reports() {
+    ensure_v8();
+    for resource_type in [SubresourceResourceType::Fetch, SubresourceResourceType::Xhr] {
+        for intercepted in [false, true] {
+            let (origin, final_origin, first, second) =
+                spawn_cross_origin_redirect_with_cors_http_servers("/start", "/final", "body")
+                    .await;
+            let operation = match resource_type {
+                SubresourceResourceType::Fetch => {
+                    "const response = await fetch('/start'); const text = await response.text();"
+                }
+                SubresourceResourceType::Xhr => {
+                    "const text = await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('GET','/start');x.onload=()=>resolve(x.responseText);x.onerror=()=>reject('xhr failed');x.send();});"
+                }
+                _ => unreachable!(),
+            };
+            let script = format!(
+                "const events=[];addEventListener('securitypolicyviolation',e=>events.push({{directive:e.effectiveDirective,disposition:e.disposition}}));onmessage=async()=>{{{operation} postMessage({{text,events}});close();}};"
+            );
+            let mut handle = spawn_test_worker_with_options(
+                WorkerSpawnOptions::new(script, format!("{origin}/worker.js"))
+                    .with_request_client(
+                        ResourceRequestClient::new(&FetchConfig::default()).unwrap(),
+                    )
+                    .with_content_security_report_only_policies(vec!["connect-src 'self'".into()]),
+            );
+            handle.set_fetch_subresource_interception(intercepted, Some(resource_type));
+            handle.post_message(serialize_test_string("go"));
+            if intercepted {
+                let mut records = WorkerNetworkRecords::default();
+                let request = records.recv_pause(&mut handle).await;
+                continue_worker_request(&request, true, false).await;
+                let response = records.recv_pause(&mut handle).await;
+                let crate::runtime::RendererWorkerFetchStage::Response(info) = response.stage()
+                else {
+                    panic!("final response decision")
+                };
+                assert_eq!(info.internal_id, request.handle().get());
+                assert_eq!(info.final_url.as_str(), format!("{final_origin}/final"));
+                continue_worker_response(&response, None, None).await;
+            }
+            assert_eq!(
+                recv_post_json(&mut handle).await,
+                r#"{"text":"body","events":[{"directive":"connect-src","disposition":"report"}]}"#,
+                "one report for the same redirect with or without a response pause"
+            );
+            first.await.unwrap();
+            second.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn worker_xhr_response_stage_interception_pauses_before_done() {
     let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
@@ -3147,7 +3200,11 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.response_status, 200);
     assert_eq!(
-        info.response_body.try_bytes().unwrap().as_ref(),
+        info.response_body
+            .materialize_bytes_limited(64 * 1024 * 1024)
+            .await
+            .unwrap()
+            .as_slice(),
         b"origin-worker-xhr"
     );
 
@@ -3421,8 +3478,10 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
     assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(
         info.response_body
-            .read_chunk(expected_len - 1, 1)
-            .expect("spooled body tail should be readable"),
+            .read(expected_len - 1, 1)
+            .await
+            .expect("spooled body tail should be readable")
+            .0,
         b"x"
     );
 
@@ -4265,7 +4324,11 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
     assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.response_status, 200);
     assert_eq!(
-        info.response_body.try_bytes().unwrap().as_ref(),
+        info.response_body
+            .materialize_bytes_limited(64 * 1024 * 1024)
+            .await
+            .unwrap()
+            .as_slice(),
         b"origin-worker-body"
     );
 
@@ -4341,8 +4404,10 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
     assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(
         info.response_body
-            .read_chunk(expected_len - 1, 1)
-            .expect("spooled body tail should be readable"),
+            .read(expected_len - 1, 1)
+            .await
+            .expect("spooled body tail should be readable")
+            .0,
         b"x"
     );
 

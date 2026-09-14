@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// A keepalive resource without a JS consumer keeps its request and resource lease until
-/// transport completion. The Page is only an observer of its native receipts.
+/// transport completion. Its originating context observes the native receipts.
 pub(crate) struct KeepaliveResource {
     pub(crate) network: Arc<ResourceTransfer>,
     load: ResourceLoadLease,
@@ -75,32 +75,6 @@ fn finish_keepalive_response(network: &ResourceTransfer, response: &NavigationRe
         },
         SubresourceResponseBody::from_navigation_response(response),
     );
-}
-
-pub(crate) async fn fetch_buffered_keepalive(
-    loader: &crate::network::ResourceRequestClient,
-    request: moli_fetch::Request,
-    cancel: moli_fetch::FetchCancelHandle,
-    network: &ResourceTransfer,
-) -> Result<NavigationResponse, String> {
-    let observed = loader
-        .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel)
-        .await
-        .map_err(|error| error.to_string())?;
-    let headers = observed
-        .request_observation()
-        .map(|request| request.headers().to_vec());
-    match crate::network::resource_response::collect_observed_response(observed, None).await {
-        Ok(response) => {
-            Ok(NavigationResponse::from(response).with_network_request_headers(headers))
-        }
-        Err(error) => {
-            // No response decision is possible on a broken transport. Preserve
-            // its head and prefix before delivering the error to the pending request.
-            network.failed(&error);
-            Err(error.to_string())
-        }
-    }
 }
 
 pub(crate) fn keepalive_request_started(

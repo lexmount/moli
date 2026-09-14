@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) network_partition_key: Option<String>,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -499,6 +500,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            network_partition_key: None,
         }
     }
 }
@@ -521,6 +523,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: request.resource_type == moli_fetch::RequestResourceType::CspReport,
+        network_partition_key: request.network_partition_key().map(str::to_owned),
     }
 }
 
@@ -736,7 +739,14 @@ pub(crate) enum ServiceWorkerFetchResultSender {
         completion_tx: RendererResourceCompletionSender,
         network: std::sync::Arc<crate::network::ResourceResponseStream>,
     },
-    CspReport(std::sync::Arc<crate::network_host::KeepaliveResource>),
+    Worker {
+        sender: Box<crate::worker::WorkerResponseSender>,
+    },
+    CspReport {
+        resource: std::sync::Arc<crate::network_host::KeepaliveResource>,
+        request: Box<Request>,
+    },
+    Body(std::sync::Arc<crate::network::ResourceResponseBody>),
     Direct(tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>),
 }
 
@@ -744,15 +754,19 @@ impl ServiceWorkerFetchResultSender {
     pub(super) fn response_started(&self, head: crate::network::ResourceResponseHead) {
         match self {
             Self::Page { network, .. } => network.response_started(head),
-            Self::CspReport(resource) => resource.response_started(head),
+            Self::Worker { sender, .. } => sender.response.response_started(head),
+            Self::CspReport { resource, .. } => resource.response_started(head),
+            Self::Body(_) => unreachable!("controlled body already owns its response head"),
             Self::Direct(_) => {}
         }
     }
 
-    pub(super) fn data_received(&self, bytes: &[u8]) {
+    pub(super) fn data_received(&self, bytes: Vec<u8>) {
         match self {
-            Self::Page { network, .. } => network.data_received(bytes),
-            Self::CspReport(resource) => resource.data_received(bytes),
+            Self::Page { network, .. } => network.data_received(&bytes),
+            Self::Worker { sender, .. } => sender.response.data_received(&bytes),
+            Self::CspReport { resource, .. } => resource.data_received(&bytes),
+            Self::Body(body) => body.data_received(bytes),
             Self::Direct(_) => {}
         }
     }

@@ -14,6 +14,9 @@ mod renderer_transport_memory;
 mod session_history;
 
 pub use session_history::{SessionHistoryCommit, SessionHistorySeed, SessionHistoryUpdate};
+mod response_body_source;
+
+pub use response_body_source::{SubresourceResponseBodyRead, SubresourceResponseBodySource};
 
 use std::{
     borrow::Cow,
@@ -1554,41 +1557,8 @@ impl PooledSubresourceResponseBody {
         Ok(bytes)
     }
 
-    fn read_exact_at(&self, mut offset: usize, mut buffer: &mut [u8]) -> io::Result<()> {
-        for chunk in &self.chunks {
-            if buffer.is_empty() {
-                break;
-            }
-            if offset >= chunk.len() {
-                offset -= chunk.len();
-                continue;
-            }
-            let len = buffer.len().min(chunk.len() - offset);
-            chunk.read_exact_at(offset, &mut buffer[..len])?;
-            buffer = &mut buffer[len..];
-            offset = 0;
-        }
-
-        if !buffer.is_empty() {
-            let trailing = self.trailing_bytes.get(offset..).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "pooled resource body ended before its recorded length",
-                )
-            })?;
-            let len = buffer.len().min(trailing.len());
-            buffer[..len].copy_from_slice(&trailing[..len]);
-            buffer = &mut buffer[len..];
-        }
-
-        if buffer.is_empty() {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "pooled resource body ended before its recorded length",
-            ))
-        }
+    fn read_exact_at(&self, offset: usize, buffer: &mut [u8]) -> io::Result<()> {
+        read_pooled_body_exact_at(&self.chunks, &self.trailing_bytes, offset, buffer)
     }
 
     fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
@@ -1596,6 +1566,48 @@ impl PooledSubresourceResponseBody {
             chunk.write_to(writer)?;
         }
         writer.write_all(&self.trailing_bytes)
+    }
+}
+
+fn read_pooled_body_exact_at(
+    chunks: &[DiskData],
+    trailing_bytes: &[u8],
+    mut offset: usize,
+    mut buffer: &mut [u8],
+) -> io::Result<()> {
+    for chunk in chunks {
+        if buffer.is_empty() {
+            break;
+        }
+        if offset >= chunk.len() {
+            offset -= chunk.len();
+            continue;
+        }
+        let len = buffer.len().min(chunk.len() - offset);
+        chunk.read_exact_at(offset, &mut buffer[..len])?;
+        buffer = &mut buffer[len..];
+        offset = 0;
+    }
+
+    if !buffer.is_empty() {
+        let trailing = trailing_bytes.get(offset..).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "pooled resource body ended before its recorded length",
+            )
+        })?;
+        let len = buffer.len().min(trailing.len());
+        buffer[..len].copy_from_slice(&trailing[..len]);
+        buffer = &mut buffer[len..];
+    }
+
+    if buffer.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "pooled resource body ended before its recorded length",
+        ))
     }
 }
 
@@ -1638,6 +1650,14 @@ impl Default for SubresourceResponseBodyWriter {
 }
 
 impl SubresourceResponseBodyWriter {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn new(memory_limit: usize) -> Self {
         Self::with_memory_limit_and_disk_pool(memory_limit, None)
     }
@@ -1704,6 +1724,17 @@ impl SubresourceResponseBodyWriter {
                 return;
             }
         }
+    }
+
+    /// Read received bytes without sealing the writer or materializing its disk chunks.
+    pub fn read_range(&self, offset: usize, size: usize) -> io::Result<Vec<u8>> {
+        let end = offset.saturating_add(size).min(self.len);
+        if offset >= end {
+            return Ok(Vec::new());
+        }
+        let mut bytes = vec![0; end - offset];
+        read_pooled_body_exact_at(&self.disk_chunks, &self.memory, offset, &mut bytes)?;
+        Ok(bytes)
     }
 
     pub fn finish(mut self) -> SubresourceResponseBody {
@@ -2485,9 +2516,8 @@ pub struct PendingSubresourceResponseInfo {
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub response_status: u16,
     pub response_headers: Vec<(String, Vec<u8>)>,
-    /// Exact response bytes plus the lossy compatibility text view needed while
-    /// a response-stage Fetch pause is held.
-    pub response_body: SubresourceResponseBody,
+    /// Read access to the actual body, which may still be arriving while paused.
+    pub response_body: SubresourceResponseBodySource,
     pub from_cache: bool,
 }
 
@@ -2503,11 +2533,6 @@ pub struct PendingSubresourceAuthInfo {
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub challenge: SubresourceAuthChallenge,
     pub intercept_response: bool,
-    pub response_final_url: Url,
-    pub response_status: u16,
-    pub response_headers: Vec<(String, Vec<u8>)>,
-    pub response_body: SubresourceResponseBody,
-    pub response_from_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4187,7 +4212,11 @@ mod tests {
         let pool = DiskPool::new(None).unwrap();
         let mut writer = pooled_body_writer(4, &pool);
         writer.append(b"hello");
+        assert_eq!(writer.read_range(3, 5).unwrap(), b"lo");
         writer.append(b" world");
+        assert_eq!(writer.read_range(3, 7).unwrap(), b"lo worl");
+        assert_eq!(writer.read_range(6, usize::MAX).unwrap(), b"world");
+        assert!(writer.read_range(usize::MAX, 2).unwrap().is_empty());
         let pooled = writer.finish();
         assert_eq!(pooled.read_chunk(3, 5).unwrap(), b"lo wo");
         assert_eq!(pooled.read_chunk(6, 3).unwrap(), b"wor");

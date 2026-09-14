@@ -665,7 +665,7 @@ mod tests {
                 network_request_headers: None,
                 response_status: 200,
                 response_headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
-                response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()),
+                response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()).into(),
                 from_cache: false,
             });
         let action = crate::domains::activity::PreparedSubresourceContinueAction::capture_for_test(
@@ -741,7 +741,7 @@ mod tests {
                 network_request_headers: None,
                 response_status: 200,
                 response_headers: Vec::new(),
-                response_body: SubresourceResponseBody::from_bytes(b"old".to_vec()),
+                response_body: SubresourceResponseBody::from_bytes(b"old".to_vec()).into(),
                 from_cache: false,
             });
         let old_action =

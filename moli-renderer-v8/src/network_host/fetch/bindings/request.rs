@@ -146,6 +146,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
                 referrer_policy: parsed.referrer_policy,
                 integrity: parsed.integrity,
                 keepalive: parsed.keepalive,
+                ..Default::default()
             },
         },
     })

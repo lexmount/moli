@@ -28,6 +28,7 @@ enum RequestKind {
     MainScript,
     MainModule,
     CspReport,
+    ControlledCspReport,
     ModuleCspReport,
 }
 
@@ -40,7 +41,10 @@ impl RequestKind {
     }
 
     fn is_report(self) -> bool {
-        matches!(self, Self::CspReport | Self::ModuleCspReport)
+        matches!(
+            self,
+            Self::CspReport | Self::ControlledCspReport | Self::ModuleCspReport
+        )
     }
 
     fn is_script(self) -> bool {
@@ -307,6 +311,10 @@ worker_stage_tests! {
     native_worker_csp_stages_shared_detached: Shared, CspReport, DetachedKeepalive;
     native_worker_csp_stages_service_detached: Service, CspReport, DetachedKeepalive;
     native_worker_csp_stages_detached_failure: Dedicated, CspReport, DetachedBeforeHeadersFailure;
+    native_worker_controlled_csp_stages_complete: Dedicated, ControlledCspReport, Complete;
+    native_worker_controlled_csp_stages_partial: Dedicated, ControlledCspReport, PartialFailure;
+    native_worker_controlled_csp_stages_detached: Dedicated, ControlledCspReport, DetachedKeepalive;
+    native_worker_controlled_csp_stages_detached_failure: Dedicated, ControlledCspReport, DetachedBeforeHeadersFailure;
     native_worker_script_stages_dedicated_import: Dedicated, ImportScript, Complete;
     native_worker_script_stages_nested_import: Nested, ImportScript, Complete;
     native_worker_script_stages_shared_import: Shared, ImportScript, Complete;
@@ -455,6 +463,13 @@ async fn worker_network_stages_with_preflight_retirement(
     let (redirected, redirect_arrived) = oneshot::channel();
     let (redirect, release_redirect) = oneshot::channel();
     let server = tokio::spawn(async move {
+        let controlled_report = matches!(request_kind, RequestKind::ControlledCspReport);
+        let physical_path = if controlled_report {
+            "/upstream"
+        } else {
+            "/probe"
+        };
+        let controller_script = "oninstall=e=>e.waitUntil(skipWaiting());onactivate=e=>e.waitUntil(clients.claim());onfetch=e=>{if(new URL(e.request.url).pathname==='/probe')e.respondWith((async()=>fetch('/upstream',{method:'POST',headers:e.request.headers,body:await e.request.arrayBuffer()}))());};";
         let request_script = match request_kind {
             RequestKind::Fetch => format!(
                 "fetch('/probe',{{keepalive:{}}}).then(r=>r.text()).catch(()=>{{}})",
@@ -488,7 +503,9 @@ async fn worker_network_stages_with_preflight_retirement(
             RequestKind::StaticModule => "import '/probe';".into(),
             RequestKind::DynamicModule => "import('/probe').catch(()=>{})".into(),
             RequestKind::MainScript | RequestKind::MainModule => String::new(),
-            RequestKind::CspReport => "fetch('/blocked').catch(()=>{})".into(),
+            RequestKind::CspReport | RequestKind::ControlledCspReport => {
+                "fetch('/blocked').catch(()=>{})".into()
+            }
             RequestKind::ModuleCspReport => "import('/blocked').catch(()=>{})".into(),
         };
         let options = if matches!(
@@ -560,6 +577,13 @@ async fn worker_network_stages_with_preflight_retirement(
                 format!("navigator.serviceWorker.register('/worker.js',{options})")
             }
         };
+        let bootstrap = if controlled_report {
+            format!(
+                "(async()=>{{await navigator.serviceWorker.register('/controller.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{{once:true}}));{bootstrap}}})()"
+            )
+        } else {
+            bootstrap
+        };
         let html = format!("<!doctype html><script>{bootstrap}</script>");
         let mut preflight_count = 0;
         let mut redirect_gate = Some((redirected, release_redirect));
@@ -608,7 +632,7 @@ async fn worker_network_stages_with_preflight_retirement(
                 stream.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: /probe\r\nAccess-Control-Allow-Origin: {page_origin}\r\nContent-Length: 8\r\nConnection: close\r\n\r\nredirect").as_bytes()).await.unwrap();
                 continue;
             }
-            if path == "/probe" {
+            if path == physical_path {
                 assert_eq!(
                     preflight_count,
                     usize::from(request_kind.needs_preflight())
@@ -629,7 +653,7 @@ async fn worker_network_stages_with_preflight_retirement(
                     }
                 }
                 if request_kind.is_report() {
-                    assert!(request.starts_with("POST /probe HTTP/1.1"));
+                    assert!(request.starts_with(&format!("POST {physical_path} HTTP/1.1")));
                     let length = request
                         .lines()
                         .find_map(|line| {
@@ -715,9 +739,10 @@ async fn worker_network_stages_with_preflight_retirement(
                 "/" => ("text/html", html.as_str()),
                 "/worker.js" => ("text/javascript", worker_script.as_str()),
                 "/nested.js" => ("text/javascript", request_script.as_str()),
+                "/controller.js" if controlled_report => ("text/javascript", controller_script),
                 other => panic!("unexpected Worker fixture request: {other}"),
             };
-            let csp = if request_kind.is_report() && path != "/" {
+            let csp = if request_kind.is_report() && matches!(path, "/worker.js" | "/nested.js") {
                 if matches!(request_kind, RequestKind::ModuleCspReport) {
                     "Content-Security-Policy: script-src 'none'; report-uri /probe\r\n"
                 } else {
@@ -816,7 +841,9 @@ async fn worker_network_stages_with_preflight_retirement(
                             | RequestKind::ManualFetch
                             | RequestKind::PreflightFetch =>
                                 crate::page::SubresourceResourceType::Fetch,
-                            RequestKind::CspReport | RequestKind::ModuleCspReport =>
+                            RequestKind::CspReport
+                            | RequestKind::ControlledCspReport
+                            | RequestKind::ModuleCspReport =>
                                 crate::page::SubresourceResourceType::CspReport,
                             RequestKind::Xhr
                             | RequestKind::SyncXhr

@@ -245,7 +245,7 @@ impl AdmittedNavigationLoad {
             .fetch_navigation_request_with_storage_async(
                 self.resource_storage.clone(),
                 request,
-                self.request_cancellation.clone(),
+                self.request_cancellation.child(),
             )
             .await
     }

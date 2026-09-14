@@ -28,7 +28,7 @@ mod timer_callback;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
-    NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
+    NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerResponseSender, WorkerWebCryptoCompletion,
     cancel_worker_opfs_task, check_worker_websocket_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,

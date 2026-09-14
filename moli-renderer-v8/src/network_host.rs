@@ -1,4 +1,6 @@
 mod async_fetch;
+mod response_receiver;
+pub(crate) use response_receiver::ResourceFetchReceiver;
 mod beacon;
 mod bindings;
 mod body;
@@ -120,9 +122,7 @@ pub(crate) use self::image::{
     start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::{defined_object_string_property, v8_json_parse};
-pub(crate) use self::keepalive::{
-    KeepaliveResource, fetch_buffered_keepalive, keepalive_request_started,
-};
+pub(crate) use self::keepalive::{KeepaliveResource, keepalive_request_started};
 pub(crate) use self::media::{
     MediaElementResourceFetchStart, media_response_status_is_successful,
     start_media_element_resource_fetch,
@@ -294,8 +294,7 @@ use super::{
     native_bridge::JsContextHost,
     types::{
         AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
-        AsyncSubresourceNetworkContext, AsyncSubresourceStreamingChunk,
-        AsyncSubresourceStreamingStarted, PendingSubresourceFetchInfo, SubresourceNetworkRecord,
+        AsyncSubresourceNetworkContext, PendingSubresourceFetchInfo, SubresourceNetworkRecord,
         SubresourceResourceType,
     },
     util::{
