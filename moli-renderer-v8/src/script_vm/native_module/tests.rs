@@ -339,6 +339,35 @@ fn reaction_data_slots_preserve_u64_values_above_js_safe_integer() {
 }
 
 #[test]
+fn native_module_evaluation_preserves_caught_v8_type_error() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let try_catch = pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    let source = v8str(&scope, "null.missing");
+    let script = v8::Script::compile(&scope, source, None).expect("valid script");
+    assert!(crate::script_execution::execute_compiled_script(&mut scope, script).is_none());
+
+    let exception = scope.exception().expect("V8 should throw a TypeError");
+    scope.reset();
+    let error = super::native_module_evaluation_exception_error(
+        &mut scope,
+        exception,
+        "caught evaluation exception",
+    );
+
+    assert_eq!(error.stage(), ModuleLoadStage::Evaluate);
+    assert_eq!(
+        error.error_constructor(),
+        Some(ScriptErrorConstructorKind::TypeError)
+    );
+}
+
+#[test]
 fn dynamic_import_fetch_completion_requires_owner_facade() {
     let mut vm = new_test_vm("https://app.example.test/page.html");
     let document_owner = vm
