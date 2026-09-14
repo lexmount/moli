@@ -550,6 +550,7 @@ pub(super) struct ParserModuleScriptRunner<
 struct DocumentParserModulePendingScript<T> {
     node_id: NodeId,
     state: ParserPendingModuleScriptState<T>,
+    is_async: bool,
     retained_by_parser_order: bool,
     blocking_stylesheet_signatures:
         HashSet<crate::stylesheet_blocking::DocumentBlockingStylesheetSignature>,
@@ -560,6 +561,7 @@ impl<T> DocumentParserModulePendingScript<T> {
         Self {
             node_id: script.node_id,
             state: ParserPendingModuleScriptState::new(),
+            is_async: script.mode == crate::types::ScriptMode::Async,
             retained_by_parser_order: false,
             blocking_stylesheet_signatures: HashSet::new(),
         }
@@ -641,7 +643,7 @@ impl<Target, ParserModuleGraphFailure> ParserModuleScriptRunner<Target, ParserMo
             return ParserModulePendingScriptWatchResult::WaitingForTree;
         }
 
-        let ready = self.take_ready_terminals_in_document_order();
+        let ready = self.take_ready_terminals(key);
         if ready.is_empty() {
             ParserModulePendingScriptWatchResult::WaitingForTree
         } else {
@@ -659,7 +661,7 @@ impl<Target, ParserModuleGraphFailure> ParserModuleScriptRunner<Target, ParserMo
         if self.is_retained_by_parser_order(key) {
             return Some(Vec::new());
         }
-        Some(self.take_ready_terminals_in_document_order())
+        Some(self.take_ready_terminals(key))
     }
 
     pub(super) fn notify_module_tree_load_failed(
@@ -672,7 +674,7 @@ impl<Target, ParserModuleGraphFailure> ParserModuleScriptRunner<Target, ParserMo
         if self.is_retained_by_parser_order(key) {
             return Some(Vec::new());
         }
-        Some(self.take_ready_terminals_in_document_order())
+        Some(self.take_ready_terminals(key))
     }
 
     pub(super) fn blocking_stylesheet_signatures(
@@ -726,9 +728,21 @@ impl<Target, ParserModuleGraphFailure> ParserModuleScriptRunner<Target, ParserMo
         Some(())
     }
 
-    fn take_ready_terminals_in_document_order(
+    fn take_ready_terminals(
         &mut self,
+        key: ParserPendingScriptKey,
     ) -> Vec<ParserModuleGraphTerminalWork<Target, ParserModuleGraphFailure>> {
+        // Async modules belong to the execute-as-soon-as-possible set, so only
+        // their own readiness controls delivery, regardless of document order.
+        if let Some(pending) = self.pending.get_mut(&key)
+            && pending.is_async
+        {
+            let Some(terminal) = pending.state.take_ready_terminal() else {
+                return Vec::new();
+            };
+            self.remove_pending(key);
+            return vec![terminal];
+        }
         let mut ready = Vec::new();
         while let Some(key) = self.next_pending_key_in_document_order() {
             let Some(pending) = self.pending.get(&key) else {
@@ -747,9 +761,9 @@ impl<Target, ParserModuleGraphFailure> ParserModuleScriptRunner<Target, ParserMo
     }
 
     fn next_pending_key_in_document_order(&self) -> Option<ParserPendingScriptKey> {
-        self.pending
-            .iter()
-            .find_map(|(key, pending)| (!pending.retained_by_parser_order).then_some(*key))
+        self.pending.iter().find_map(|(key, pending)| {
+            (!pending.retained_by_parser_order && !pending.is_async).then_some(*key)
+        })
     }
 
     fn remove_pending(
