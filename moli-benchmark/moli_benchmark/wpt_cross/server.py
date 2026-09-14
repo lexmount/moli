@@ -3101,6 +3101,26 @@ def _make_handler(
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
 
+        def _serve_script_load_error_events(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            test = params.get("test", [""])[0]
+            if re.fullmatch(r"[a-zA-Z0-9_]+", test) is None:
+                self.send_error(400)
+                return
+            if "_load" in test:
+                status = 200
+                body = f'"use strict"; {test}.executed = true;'
+            else:
+                status = 404
+                body = (
+                    f'"use strict"; {test}.test.step(function() {{ '
+                    'assert_unreached("404 script should not be executed"); });'
+                )
+            self._send_bytes(
+                "text/javascript", body.encode("ascii"),
+                emit_body=emit_body, status_code=status,
+            )
+
         def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
             headers = _inspect_headers_response_headers(query, list(self.headers.items()))
             # The upstream handler only reads headers. Return immediately and
