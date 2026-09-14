@@ -245,7 +245,7 @@ fn dynamic_external_module_uses_import_map_integrity_when_attribute_is_absent() 
     let preparation = preparation("https://example.test/", NodeId::new(0));
     let mut scheduler = HostScriptScheduler::default();
     scheduler.register_dynamic_import_map(
-        &preparation,
+        &preparation.base_url,
         r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
     );
     scheduler
@@ -272,7 +272,7 @@ fn dynamic_external_module_empty_integrity_overrides_import_map() {
     preparation.fetch_metadata.integrity = Some(String::new());
     let mut scheduler = HostScriptScheduler::default();
     scheduler.register_dynamic_import_map(
-        &preparation,
+        &preparation.base_url,
         r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
     );
     scheduler
