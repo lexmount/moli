@@ -971,13 +971,27 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<ServiceWorkerGetRegistrationArgs>(scope, &args) else {
-        return;
-    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
     let promise = resolver.get_promise(scope);
+    let parsed = {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        match webidl::try_parse_args::<ServiceWorkerGetRegistrationArgs>(&mut scope, &args) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                webidl::throw_error(&mut scope, &error);
+                let exception = scope
+                    .exception()
+                    .unwrap_or_else(|| v8::undefined(&scope).into());
+                scope.reset();
+                let _ = resolver.reject(&scope, exception);
+                rv.set(promise.into());
+                return;
+            }
+        }
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let _ = resolver.resolve(scope, v8::undefined(scope).into());
         rv.set(promise.into());
