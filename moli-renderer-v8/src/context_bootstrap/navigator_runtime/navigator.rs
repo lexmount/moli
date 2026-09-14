@@ -670,10 +670,28 @@ fn navigator_runtime_data_getter_callback<'s>(
             _ => {}
         }
     }
+    if key == "hardwareConcurrency"
+        && let Some(value) = navigator_query_overrides(scope).hardware_concurrency
+    {
+        rv.set_uint32(value.get());
+        return;
+    }
     match backing.get(scope, v8str(scope, key).into()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+fn navigator_query_overrides(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> moli_page_types::NavigatorQueryOverrides {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        return unsafe { &*host_ptr }.navigator_overrides().queries;
+    }
+    scope
+        .get_slot::<std::rc::Rc<std::cell::RefCell<moli_page_types::NavigatorEmulationSessions>>>()
+        .map(|sessions| sessions.borrow().effective())
+        .unwrap_or_default()
 }
 
 fn navigator_cookie_enabled_getter_callback<'s>(

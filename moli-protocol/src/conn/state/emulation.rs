@@ -193,6 +193,7 @@ pub(crate) struct EffectiveTargetEmulationStateDelta {
     pub(crate) emulated_media: bool,
     pub(crate) emulated_device_metrics: bool,
     pub(crate) max_touch_points: bool,
+    pub(crate) navigator_queries: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
 }
@@ -203,6 +204,7 @@ impl EffectiveTargetEmulationStateDelta {
             || self.geolocation_override
             || self.emulated_device_metrics
             || self.max_touch_points
+            || self.navigator_queries
             || self.focus_emulation_enabled
     }
 }
@@ -248,6 +250,7 @@ impl EffectiveTargetEmulationState {
             emulated_device_metrics: previous.emulated_device_metrics
                 != self.emulated_device_metrics,
             max_touch_points: previous.max_touch_points != self.max_touch_points,
+            navigator_queries: false,
             focus_emulation_enabled: previous.focus_emulation_enabled
                 != self.focus_emulation_enabled,
             script_execution_disabled: previous.script_execution_disabled

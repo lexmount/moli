@@ -176,6 +176,7 @@ pub(crate) enum EmulationAction {
     #[strum(serialize = "setCPUThrottlingRate")]
     SetCpuThrottlingRate,
     SetTouchEmulationEnabled,
+    SetHardwareConcurrencyOverride,
     SetEmitTouchEventsForMouse,
     SetScriptExecutionDisabled,
     SetGeolocationOverride,

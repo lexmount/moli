@@ -237,6 +237,25 @@ impl CdpConnection {
             .cloned()
     }
 
+    pub(crate) fn update_navigator_queries_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        update: impl FnOnce(&mut moli_page_types::NavigatorQueryOverrides),
+    ) -> Result<(), &'static str> {
+        let mut owner = self
+            .target_session_owner_mut(session_id)
+            .ok_or("BrowserContextNotLoaded")?;
+        owner.mutate_page_state(|target, key| {
+            update(
+                target
+                    .devtools_sessions
+                    .navigator_emulation
+                    .session_mut(key),
+            )
+        });
+        Ok(())
+    }
+
     pub(crate) fn disable_emulation_session_handler_for_session_owner(
         &mut self,
         session_id: &str,
@@ -249,9 +268,17 @@ impl CdpConnection {
                     .ensure_session(session_key)
                     .emulation_session_state,
             );
+            let previous_queries = target.devtools_sessions.navigator_emulation.effective();
             target
+                .devtools_sessions
+                .navigator_emulation
+                .remove(session_key);
+            let mut delta = target
                 .effective_emulation_state
-                .disable_session_handler(&raw)
+                .disable_session_handler(&raw);
+            delta.navigator_queries =
+                previous_queries != target.devtools_sessions.navigator_emulation.effective();
+            delta
         }))
     }
 }

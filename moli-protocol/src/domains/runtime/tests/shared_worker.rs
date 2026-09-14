@@ -3658,3 +3658,41 @@ async fn shared_worker_discard_console_entries_is_target_local() {
         ctx.sent
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_hardware_concurrency_override_is_independent_of_the_page() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
+    ctx.process_and_wait_for_response_async(json!({"id":99000,"method":"Emulation.setHardwareConcurrencyOverride","params":{"hardwareConcurrency":2}})).await;
+    ctx.expect_result(99000, json!({}), None);
+    let worker = start_attached_shared_worker_session(
+        &mut ctx,
+        99001,
+        "native-hardware",
+        "onconnect = () => {};",
+    )
+    .await;
+    for (id, session, expected) in [(99010, None, 2), (99011, Some(worker.as_str()), 4)] {
+        ctx.process_and_wait_for_response_async(json!({"id":id,"sessionId":session,"method":"Runtime.evaluate","params":{"expression":"navigator.hardwareConcurrency","returnByValue":true}})).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id)["result"]["result"]["value"],
+            json!(expected)
+        );
+    }
+    for (value, valid) in [(3, true), (0, false)] {
+        ctx.process_and_wait_for_response_async(json!({"id":99012,"sessionId":worker,"method":"Emulation.setHardwareConcurrencyOverride","params":{"hardwareConcurrency":value}})).await;
+        let reply = take_response_by_id(&mut ctx, 99012);
+        if valid {
+            assert_eq!(reply["result"], json!({}), "{reply}");
+        } else {
+            assert_eq!(reply["error"]["code"], -32602, "{reply}");
+        }
+        for (id, session, expected) in [(99013, None, 2), (99014, Some(worker.as_str()), 3)] {
+            ctx.process_and_wait_for_response_async(json!({"id":id,"sessionId":session,"method":"Runtime.evaluate","params":{"expression":"navigator.hardwareConcurrency","returnByValue":true}})).await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, id)["result"]["result"]["value"],
+                json!(expected)
+            );
+        }
+    }
+}

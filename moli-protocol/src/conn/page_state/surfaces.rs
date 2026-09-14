@@ -10,6 +10,7 @@ struct SurfaceOverrideInputs {
     network_conditions: Option<EmulatedNetworkConditions>,
     geolocation_override: Option<EmulatedGeolocationOverrideState>,
     max_touch_points: u32,
+    navigator_queries: moli_page_types::NavigatorQueryOverrides,
     focus_emulation_enabled: bool,
     active_target_surface: bool,
     window_document_hidden: bool,
@@ -18,6 +19,11 @@ struct SurfaceOverrideInputs {
 impl SurfaceOverrideInputs {
     fn from_active(browser_context: &BrowserContext) -> Self {
         Self {
+            navigator_queries: browser_context
+                .active_page_target()
+                .devtools_sessions
+                .navigator_emulation
+                .effective(),
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
             max_touch_points: browser_context
@@ -52,6 +58,7 @@ impl SurfaceOverrideInputs {
                 .clone()
                 .or(default_geolocation_override),
             max_touch_points: state.effective_emulation_state.max_touch_points,
+            navigator_queries: state.devtools_sessions.navigator_emulation.effective(),
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: false,
@@ -91,6 +98,7 @@ impl SurfaceOverrideInputs {
                 .network_conditions
                 .map(|conditions| conditions.navigator_online()),
             max_touch_points: self.max_touch_points(),
+            queries: self.navigator_queries,
             geolocation: self
                 .geolocation_override
                 .as_ref()

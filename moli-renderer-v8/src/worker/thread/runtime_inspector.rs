@@ -364,6 +364,7 @@ impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
 pub(super) struct WorkerRuntimeInspector {
     sessions: RefCell<HashMap<String, Rc<v8::inspector::V8InspectorSession>>>,
     detached_sessions: RefCell<HashSet<String>>,
+    navigator_emulation: Rc<RefCell<moli_page_types::NavigatorEmulationSessions>>,
     inspector: v8::inspector::V8Inspector,
     outbound: WorkerInspectorOutbound,
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
@@ -428,6 +429,10 @@ impl WorkerRuntimeInspector {
     ) -> Rc<Self> {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let default_context = Rc::new(RefCell::new(None));
+        let navigator_emulation = Rc::new(RefCell::new(
+            moli_page_types::NavigatorEmulationSessions::default(),
+        ));
+        isolate.set_slot(navigator_emulation.clone());
         Rc::new_cyclic(|weak_inspector| {
             let executor = Rc::new(WorkerInspectorExecutor {
                 isolate: UnsafeCell::new(isolate_ptr),
@@ -446,6 +451,7 @@ impl WorkerRuntimeInspector {
                 inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
                 sessions: RefCell::new(HashMap::new()),
                 detached_sessions: RefCell::new(HashSet::new()),
+                navigator_emulation,
                 outbound: WorkerInspectorOutbound::default(),
                 default_context,
                 default_execution_context_id: Cell::new(None),
@@ -492,6 +498,11 @@ impl WorkerRuntimeInspector {
     pub(super) fn detach_session(&self, inspector_session_id: Option<&str>) {
         let session_key = worker_inspector_session_key(inspector_session_id);
         self.sessions.borrow_mut().remove(&session_key);
+        self.navigator_emulation.borrow_mut().remove(
+            &inspector_session_id
+                .map(|id| moli_page_types::DevToolsSessionKey::Attached(id.to_owned()))
+                .unwrap_or(moli_page_types::DevToolsSessionKey::Primary),
+        );
         self.detached_sessions.borrow_mut().insert(session_key);
     }
 
@@ -547,17 +558,51 @@ impl WorkerRuntimeInspector {
         }
         let dispatch_scope = self.outbound.push_dispatch_scope(&session_key, None);
         let session = self.ensure_session(&session_key);
-        dispatch_with_runtime_defaults(
-            &session,
-            raw_json,
-            &WorkerInspectorSessionOutput {
-                outbound: &self.outbound,
-                session_key: &session_key,
-            },
-        )?;
+        if let Some(response) = self.dispatch_emulation(inspector_session_id, raw_json) {
+            if let Some(call_id) = response["id"]
+                .as_i64()
+                .and_then(|id| i32::try_from(id).ok())
+            {
+                self.outbound
+                    .push_response_value(&session_key, call_id, response);
+            }
+        } else {
+            dispatch_with_runtime_defaults(
+                &session,
+                raw_json,
+                &WorkerInspectorSessionOutput {
+                    outbound: &self.outbound,
+                    session_key: &session_key,
+                },
+            )?;
+        }
         let messages = dispatch_scope.finish();
         self.record_execution_context_state(&messages);
         Ok(messages)
+    }
+
+    fn dispatch_emulation(&self, session_id: Option<&str>, raw_json: &str) -> Option<Value> {
+        let command: Value = serde_json::from_str(raw_json).ok()?;
+        if command["method"] != "Emulation.setHardwareConcurrencyOverride" {
+            return None;
+        }
+        let value = command["params"]["hardwareConcurrency"]
+            .as_u64()
+            .filter(|value| *value <= i32::MAX as u64)
+            .and_then(|value| std::num::NonZeroU32::new(value as u32));
+        let Some(value) = value else {
+            return Some(
+                json!({"id": command["id"], "error": {"code": -32602, "message": "HardwareConcurrency must be a positive int32"}}),
+            );
+        };
+        let key = session_id
+            .map(|id| moli_page_types::DevToolsSessionKey::Attached(id.to_owned()))
+            .unwrap_or(moli_page_types::DevToolsSessionKey::Primary);
+        self.navigator_emulation
+            .borrow_mut()
+            .session_mut(&key)
+            .hardware_concurrency = Some(value);
+        Some(json!({"id": command["id"], "result": {}}))
     }
 
     pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {

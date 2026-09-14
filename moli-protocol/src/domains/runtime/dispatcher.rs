@@ -913,6 +913,57 @@ fn runtime_command_awaits_promise(cmd: &Cmd<'_>, action: RuntimeAction) -> bool 
             .unwrap_or(false)
 }
 
+/// Worker Emulation methods are implemented beside the native Navigator, not
+/// by V8's Inspector. Use the same session transport and completion routing.
+pub(crate) fn try_start_worker_emulation_command_dispatch(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Option<RuntimeCommandTaskStep> {
+    let action = match cmd.action {
+        "setHardwareConcurrencyOverride" => "Emulation.setHardwareConcurrencyOverride",
+        _ => return None,
+    };
+    let pending = match conn.session_route(cmd.session_id) {
+        Some(
+            CdpSessionRoute::DedicatedWorkerTarget { .. }
+            | CdpSessionRoute::SharedWorkerTarget { .. },
+        ) => start_shared_worker_frontend_inspector_dispatch(
+            conn,
+            cmd,
+            cmd.json.to_owned(),
+            cmd.terminal_response_delivery(),
+        )
+        .map(|pending| PendingRuntimeCommandKind::SharedWorkerInspector {
+            pending,
+            binding_effect: None,
+        }),
+        Some(CdpSessionRoute::ServiceWorkerTarget { .. }) => {
+            start_service_worker_frontend_inspector_dispatch(
+                conn,
+                cmd,
+                cmd.json.to_owned(),
+                cmd.terminal_response_delivery(),
+            )
+            .map(|pending| PendingRuntimeCommandKind::ServiceWorkerInspector { pending })
+        }
+        _ => return None,
+    };
+    Some(match pending {
+        Ok(pending) => RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
+            command_id: cmd.id,
+            action,
+            owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+            object_group: None,
+            release_object_ids: Vec::new(),
+            release_object_group: None,
+            await_promise: false,
+            wait_for_deferred_reply: false,
+            pending,
+        })),
+        Err(message) => RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+    })
+}
+
 pub(crate) fn try_start_runtime_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

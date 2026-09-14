@@ -609,3 +609,124 @@ async fn clearing_target_metrics_restores_browser_context_viewport_defaults() {
         json!([900, 700, 3])
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hardware_concurrency_override_is_native_and_precedes_document_scripts() {
+    let mut ctx = setup().await;
+    evaluate(&mut ctx, "globalThis.hardwareGetter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'hardwareConcurrency').get; undefined").await;
+    for value in [2, i32::MAX] {
+        expect_session_command_result(
+            &mut ctx,
+            88100,
+            "SID-1",
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency":value}),
+        )
+        .await;
+        assert_eq!(evaluate(&mut ctx, r#"[
+            navigator.hardwareConcurrency,
+            hardwareGetter.call(navigator),
+            hardwareGetter === Object.getOwnPropertyDescriptor(Navigator.prototype, 'hardwareConcurrency').get,
+            !Object.hasOwn(navigator, 'hardwareConcurrency')
+        ]"#).await, json!([value, value, true, true]));
+    }
+    for value in [
+        json!(0),
+        json!(-1),
+        json!(2147483648_u64),
+        json!(1.5),
+        json!("2"),
+        json!(null),
+    ] {
+        ctx.process_async(json!({"id":88101,"sessionId":"SID-1", "method":"Emulation.setHardwareConcurrencyOverride", "params":{"hardwareConcurrency":value}})).await;
+        let reply = ctx.take_response_by_id(88101);
+        assert_eq!(reply["error"]["code"], -32602, "{reply}");
+        assert_eq!(
+            evaluate(&mut ctx, "navigator.hardwareConcurrency").await,
+            json!(i32::MAX)
+        );
+    }
+    expect_session_command_result(
+        &mut ctx,
+        88102,
+        "SID-1",
+        "Emulation.setHardwareConcurrencyOverride",
+        json!({"hardwareConcurrency":3}),
+    )
+    .await;
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<script>globalThis.childReady=new Promise(r=>globalThis.childDone=r);globalThis.initialHardware=navigator.hardwareConcurrency</script><iframe srcdoc='<script>globalThis.initialHardware=navigator.hardwareConcurrency;parent.childDone()</script>'></iframe>", Some("SID-1")
+    ).await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "childReady.then(() => [initialHardware, frames[0].initialHardware, frames[0].navigator.hardwareConcurrency])"
+        )
+        .await,
+        json!([3, 3, 3])
+    );
+    expect_session_command_result(
+        &mut ctx,
+        88103,
+        "SID-1",
+        "Emulation.setHardwareConcurrencyOverride",
+        json!({"hardwareConcurrency":5}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "[navigator.hardwareConcurrency, frames[0].navigator.hardwareConcurrency]"
+        )
+        .await,
+        json!([5, 5])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hardware_concurrency_sessions_follow_agent_activation_and_detach() {
+    let mut ctx = setup().await;
+    ctx.conn.register_top_level_page_target("TID-1");
+    let baseline = evaluate(&mut ctx, "navigator.hardwareConcurrency").await;
+    let mut sessions = Vec::new();
+    for id in [88110, 88111] {
+        ctx.process_async(json!({"id":id,"method":"Target.attachToTarget", "params":{"targetId":"TID-1","flatten":true}})).await;
+        sessions.push(
+            ctx.take_response_by_id(id)["result"]["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    // The second attached session activates first, through a different Emulation API.
+    expect_session_command_result(
+        &mut ctx,
+        88112,
+        &sessions[1],
+        "Emulation.setUserAgentOverride",
+        json!({"userAgent":"emulation-query-test"}),
+    )
+    .await;
+    for (session, value, effective) in [(0, 2, 2), (1, 8, 2), (0, 3, 3)] {
+        expect_session_command_result(
+            &mut ctx,
+            88113,
+            &sessions[session],
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency":value}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, "navigator.hardwareConcurrency").await,
+            json!(effective)
+        );
+    }
+    for (session, expected) in [(0, json!(8)), (1, baseline)] {
+        ctx.process_async(json!({"id":88114,"method":"Target.detachFromTarget","params":{"sessionId":sessions[session]}})).await;
+        ctx.expect_result(88114, json!({}), None);
+        assert_eq!(
+            evaluate(&mut ctx, "navigator.hardwareConcurrency").await,
+            expected
+        );
+    }
+}

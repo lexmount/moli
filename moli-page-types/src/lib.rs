@@ -52,7 +52,10 @@ pub use inspector_identity::{
     RendererInspectorResponseDelivery,
 };
 pub use layout::LayoutPolicy;
-pub use navigator_overrides::{GeolocationPositionOverride, NavigatorOverrides};
+pub use navigator_overrides::{
+    GeolocationPositionOverride, NavigatorEmulationSessions, NavigatorOverrides,
+    NavigatorQueryOverrides,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentNodeAttributeSnapshot {

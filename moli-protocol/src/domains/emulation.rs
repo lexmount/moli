@@ -198,6 +198,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
         Some(EmulationAction::SetCpuThrottlingRate) => Some(EmulationCommandTaskStep::Complete(
             cpu_throttling_rate_command_output_plan(cmd),
         )),
+        Some(EmulationAction::SetHardwareConcurrencyOverride) => {
+            Some(start_hardware_concurrency_override_command(conn, cmd))
+        }
         Some(EmulationAction::SetTouchEmulationEnabled) => {
             Some(start_touch_emulation_enabled_command(conn, cmd))
         }
@@ -319,6 +322,46 @@ fn start_touch_emulation_enabled_command(
         };
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
+    start_navigator_override_page_command(conn, cmd)
+}
+
+fn start_hardware_concurrency_override_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    let value = match cmd.get_params::<params::SetHardwareConcurrencyOverrideParams>() {
+        Ok(Some(params)) => params.hardware_concurrency,
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
+    };
+    let Some(value) = u32::try_from(value)
+        .ok()
+        .filter(|value| *value <= i32::MAX as u32)
+        .and_then(std::num::NonZeroU32::new)
+    else {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32602,
+            "HardwareConcurrency must be a positive int32",
+        ));
+    };
+    if let Err(message) =
+        conn.update_navigator_queries_for_session_owner(cmd.session_id, |queries| {
+            queries.hardware_concurrency = Some(value);
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, message));
+    }
+    start_navigator_override_page_command(conn, cmd)
+}
+
+fn start_navigator_override_page_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let overrides = conn
         .navigation_load_inputs_for_owner(&owner_scope)

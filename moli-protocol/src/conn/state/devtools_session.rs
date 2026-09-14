@@ -63,6 +63,7 @@ pub(crate) struct DevToolsSessionRegistry {
     primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
+    pub(crate) navigator_emulation: moli_page_types::NavigatorEmulationSessions,
     // Live, non-cloneable authority stays outside DevToolsSessionState, whose
     // snapshots may outlive attachment. Removing an entry releases its claims.
     environment_owners: BTreeMap<DevToolsSessionKey, moli_core::ProcessEnvironmentOwner>,
@@ -77,6 +78,7 @@ impl Default for DevToolsSessionRegistry {
                 DevToolsSessionState::default(),
             )]),
             attached_order: Vec::new(),
+            navigator_emulation: Default::default(),
             environment_owners: BTreeMap::new(),
         }
     }
@@ -153,6 +155,7 @@ impl DevToolsSessionRegistry {
     pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
         self.environment_owners.remove(&key);
+        self.navigator_emulation.remove(&key);
         let removed = self.states.remove(&key);
         if removed.is_some() {
             self.attached_order
@@ -178,6 +181,7 @@ impl DevToolsSessionRegistry {
                 }
                 self.primary_session_id = None;
                 self.environment_owners.remove(session_key);
+                self.navigator_emulation.remove(session_key);
                 Some(std::mem::take(self.primary_mut()))
             }
             DevToolsSessionKey::Attached(attached_session_id)
@@ -330,6 +334,9 @@ impl DevToolsSessionRegistry {
         session_key: &DevToolsSessionKey,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     ) {
+        if browser_identity_override.is_some() {
+            self.navigator_emulation.session_mut(session_key);
+        }
         let state = self.ensure_session(session_key);
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
@@ -405,7 +412,8 @@ impl DevToolsSessionRegistry {
     }
 
     pub(crate) fn has_non_default_state(&self) -> bool {
-        self.primary() != &DevToolsSessionState::default()
+        !self.navigator_emulation.is_empty()
+            || self.primary() != &DevToolsSessionState::default()
             || !self.attached_is_empty()
             || self
                 .environment_owners

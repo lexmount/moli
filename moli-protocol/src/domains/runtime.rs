@@ -176,6 +176,7 @@ pub(crate) use dispatcher::{
     start_console_inspector_command_dispatch, start_debugger_inspector_command_dispatch,
     start_heap_profiler_inspector_command_dispatch, start_moli_diagnostics_command_dispatch,
     start_profiler_inspector_command_dispatch, try_start_runtime_command_dispatch,
+    try_start_worker_emulation_command_dispatch,
 };
 pub use dispatcher::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
