@@ -2148,11 +2148,10 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
-    assert!(
-        engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty(),
-        "the old loaded stylesheet must not remain bound after href changes"
+    assert_eq!(
+        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
+        vec![linked_source_id.clone()],
+        "the loaded stylesheet remains bound while the new href is pending"
     );
 
     engine.record_stylesheet_source_for_url_for_document_for_test(
@@ -2160,16 +2159,31 @@ fn linked_owner_binding_changes_only_on_explicit_install() {
         &new_url,
         StyloStylesheetSource::new(".new { color: blue; }".into(), new_url.clone()),
     );
-    assert!(
+    assert_eq!(
+        engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
+        vec![linked_source_id.clone()],
+        "recording a resource by URL must not replace the pending owner's sheet"
+    );
+    assert_eq!(
         engine
-            .retained_stylesheet_source_ids_for_document_for_test(&host, document)
-            .is_empty(),
-        "recording a resource by URL must not infer an owner binding from live href"
+            .linked_stylesheet_source_for_owner_with_host(&host, link)
+            .unwrap()
+            .serialized_css_text()
+            .as_ref(),
+        ".old { color: red; }"
     );
     assert!(engine.install_recorded_linked_stylesheet_source_for_test(&host, link, &new_url,));
     assert_eq!(
         engine.retained_stylesheet_source_ids_for_document_for_test(&host, document),
         vec![linked_source_id]
+    );
+    assert_eq!(
+        engine
+            .linked_stylesheet_source_for_owner_with_host(&host, link)
+            .unwrap()
+            .serialized_css_text()
+            .as_ref(),
+        ".new { color: blue; }"
     );
 }
 

@@ -252,6 +252,17 @@ fn owner_change_detaches_cached_link_sheet(
             element.attribute("title"),
         );
     }
+    if matches!(
+        change.kind(),
+        DomStylesheetOwnerChangeKind::Attribute { .. }
+    ) {
+        // The source lifecycle retains an installed sheet while its successor
+        // loads. Preserve the corresponding JS object until an actual install
+        // changes its identity, or the owner stops being a stylesheet.
+        return host
+            .linked_stylesheet_source_for_owner(change.owner())
+            .is_none();
+    }
     true
 }
 

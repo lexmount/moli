@@ -1180,6 +1180,11 @@ impl JsContextHost {
         owner: DomHandle,
         request_url: &url::Url,
     ) -> bool {
+        // A loaded owner keeps its current sheet until the successor fetch
+        // settles. Parsed URL cache hydration must not replace it in advance.
+        if self.linked_stylesheet_source_for_owner(owner).is_some() {
+            return false;
+        }
         // A URL-only parsed source has no proof for this link's integrity.
         // Admission through the stylesheet fetch cache can reuse only a terminal
         // validated with the same request options, including integrity metadata.
