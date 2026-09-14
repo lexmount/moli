@@ -547,35 +547,32 @@ impl PageScriptHost {
         else {
             return true;
         };
-        let (mut report_only_violation, mut enforced_violation) = check.into_violations();
+        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
         if owner == OwnerDispatchScope::Top
             && let Some(position) =
                 unsafe { &*self.document_runtime }.parser_script_start_position(script)
         {
             let line = i32::try_from(position.line).unwrap_or(i32::MAX);
             let column = i32::try_from(position.column).unwrap_or(i32::MAX);
-            if let Some(violation) = report_only_violation.as_mut() {
-                violation.line_number = line;
-                violation.column_number = column;
-            }
-            if let Some(violation) = enforced_violation.as_mut() {
+            for violation in report_only_violations
+                .iter_mut()
+                .chain(&mut enforced_violations)
+            {
                 violation.line_number = line;
                 violation.column_number = column;
             }
         }
+        let allowed = enforced_violations.is_empty();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violations
+            .into_iter()
+            .chain(enforced_violations)
+        {
             self.dispatch_content_security_policy_violation_event_for_element_owner_best_effort(
                 scope, host_ptr, owner, script, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
-            return true;
-        };
-        self.dispatch_content_security_policy_violation_event_for_element_owner_best_effort(
-            scope, host_ptr, owner, script, &violation,
-        );
-        false
+        allowed
     }
 
     pub(crate) fn allows_inline_javascript_navigation_by_csp<'s>(
@@ -653,7 +650,8 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         source: &str,
         request: ContentSecurityPolicyScriptElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck> {
+    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
+    {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
