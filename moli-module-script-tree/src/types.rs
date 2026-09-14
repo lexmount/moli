@@ -576,8 +576,11 @@ impl ModuleLoadError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModuleErrorConstructorKind {
+    Error,
     SyntaxError,
     TypeError,
+    WebAssemblyCompileError,
+    WebAssemblyLinkError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
