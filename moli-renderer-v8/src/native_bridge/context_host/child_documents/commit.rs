@@ -324,6 +324,10 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        unsafe { &*self.runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &document_policy_container.inherited_meta_content_security_policies,
+        );
         let ancestor_origins_refreshed =
             self.refresh_current_child_document_ancestor_origins(handle);
         debug_assert!(
