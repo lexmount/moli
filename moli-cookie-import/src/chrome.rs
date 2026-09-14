@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{collections::BTreeMap, fs, path::Path};
+
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -6,9 +9,9 @@ use moli_cookie_jar::{
     CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
     StoredCookieSourceScheme,
 };
-use moli_crypto::{
-    aes_128_cbc_pkcs7_decrypt, aes_256_gcm_decrypt, derive_pbkdf2_hmac_sha1, sha256_digest,
-};
+#[cfg(target_os = "macos")]
+use moli_crypto::derive_pbkdf2_hmac_sha1;
+use moli_crypto::{aes_128_cbc_pkcs7_decrypt, aes_256_gcm_decrypt, sha256_digest};
 use rusqlite::Connection;
 use rusty_leveldb::{DB, LdbIterator, Options};
 use tempfile::TempDir;
