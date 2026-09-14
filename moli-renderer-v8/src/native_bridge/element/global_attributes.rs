@@ -1,6 +1,5 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
-use crate::native_bridge::document::XHTML_NS;
 use crate::util::v8_string;
 use crate::webidl;
 
