@@ -13,7 +13,7 @@ use crate::{
         FrameRequestKind,
     },
     module_runtime::{
-        ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleKind, NativeModuleGraphFetchRequest,
+        ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleMapKey, NativeModuleGraphFetchRequest,
         NativeModuleSingleFetchRequest,
     },
     page_task_queue::RendererPageChildParserModuleRootStartTarget,
@@ -881,7 +881,8 @@ impl JsContextHost {
         ) {
             return;
         }
-        let request = child_parser_module_root_fetch_request(&fetch_start.script);
+        let request =
+            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key());
         let completion_tx = self.resource_completion_tx.clone();
         debug_assert_eq!(target.child_handle(), fetch_start.child_handle);
         let script_handle = fetch_start.script_handle;
@@ -995,11 +996,12 @@ impl JsContextHost {
 
 fn child_parser_module_root_fetch_request(
     script: &PreparedScript,
+    key: &ModuleMapKey,
 ) -> NativeModuleGraphFetchRequest {
     NativeModuleGraphFetchRequest::new(
-        script.url.clone(),
+        key.url().clone(),
         script.initiator_url.clone(),
         ModuleFetchMetadata::from_top_level_script_fetch_metadata(&script.fetch_metadata),
-        ModuleKind::JavaScript,
+        key.kind(),
     )
 }
