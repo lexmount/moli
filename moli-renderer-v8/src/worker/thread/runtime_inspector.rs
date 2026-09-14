@@ -602,6 +602,14 @@ impl WorkerRuntimeInspector {
                     .session_mut(&key)
                     .hardware_concurrency = Some(value);
             }
+            "Emulation.setAutomationOverride" => {
+                let Some(enabled) = command["params"]["enabled"].as_bool() else {
+                    return invalid("InvalidParams");
+                };
+                self.navigator_emulation
+                    .borrow_mut()
+                    .set_automation(&key, enabled);
+            }
             "Emulation.setDataSaverOverride" => {
                 let value = &command["params"]["dataSaverEnabled"];
                 if !value.is_null() && !value.is_boolean() {

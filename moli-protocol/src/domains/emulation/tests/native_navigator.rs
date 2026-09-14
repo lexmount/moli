@@ -800,3 +800,88 @@ async fn data_saver_updates_held_native_objects_and_clears_session_contributions
         json!(true)
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_overrides_combine_sessions_without_replacing_native_getters() {
+    let mut ctx = setup().await;
+    evaluate(&mut ctx,"globalThis.webdriverGetter=Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver').get; undefined").await;
+    expect_session_command_result(
+        &mut ctx,
+        88300,
+        "SID-1",
+        "Emulation.setAutomationOverride",
+        json!({"enabled":false}),
+    )
+    .await;
+    ctx.conn.register_top_level_page_target("TID-1");
+    ctx.process_async(json!({"id":88301,"method":"Target.attachToTarget","params":{"targetId":"TID-1","flatten":true}})).await;
+    let other = ctx.take_response_by_id(88301)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    expect_session_command_result(
+        &mut ctx,
+        88302,
+        &other,
+        "Emulation.setHardwareConcurrencyOverride",
+        json!({"hardwareConcurrency":8}),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        88303,
+        "SID-1",
+        "Emulation.setHardwareConcurrencyOverride",
+        json!({"hardwareConcurrency":2}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "[navigator.hardwareConcurrency,navigator.webdriver]"
+        )
+        .await,
+        json!([2, false]),
+        "automation=false must not activate an agent before its first query override"
+    );
+    for (session, enabled) in [
+        ("SID-1", true),
+        (other.as_str(), false),
+        (other.as_str(), true),
+        ("SID-1", false),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            88304,
+            session,
+            "Emulation.setAutomationOverride",
+            json!({"enabled":enabled}),
+        )
+        .await;
+        assert_eq!(evaluate(&mut ctx,"[navigator.webdriver,webdriverGetter.call(navigator),webdriverGetter===Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver').get]").await,json!([true,true,true]));
+    }
+    ctx.process_async(json!({"id":88305,"sessionId":other,"method":"Emulation.setAutomationOverride","params":{"enabled":0}})).await;
+    assert_eq!(ctx.take_response_by_id(88305)["error"]["code"], -32602);
+    ctx.install_navigation_fixture_for_session_owner("data:text/html,<script>globalThis.initialAutomation=navigator.webdriver</script><iframe></iframe>",Some("SID-1")).await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "[initialAutomation,navigator.webdriver,frames[0].navigator.webdriver]"
+        )
+        .await,
+        json!([true, true, true])
+    );
+    ctx.process_async(
+        json!({"id":88306,"method":"Target.detachFromTarget","params":{"sessionId":other}}),
+    )
+    .await;
+    ctx.expect_result(88306, json!({}), None);
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            "[navigator.webdriver,navigator.hardwareConcurrency]"
+        )
+        .await,
+        json!([false, 2])
+    );
+}

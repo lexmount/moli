@@ -3674,6 +3674,13 @@ async fn worker_navigator_query_overrides_are_independent_of_the_page() {
         "onconnect = () => {};",
     )
     .await;
+    ctx.process_and_wait_for_response_async(json!({"id":99019,"sessionId":worker,"method":"Emulation.setAutomationOverride","params":{"enabled":true}})).await;
+    ctx.expect_result(99019, json!({}), Some(&worker));
+    ctx.process_and_wait_for_response_async(json!({"id":99020,"sessionId":worker,"method":"Runtime.evaluate","params":{"expression":"'webdriver' in navigator","returnByValue":true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 99020)["result"]["result"]["value"],
+        json!(false)
+    );
     for (params, worker_expected) in [
         (json!({}), false),
         (json!({"dataSaverEnabled":true}), true),

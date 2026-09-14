@@ -198,6 +198,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
         Some(EmulationAction::SetCpuThrottlingRate) => Some(EmulationCommandTaskStep::Complete(
             cpu_throttling_rate_command_output_plan(cmd),
         )),
+        Some(EmulationAction::SetAutomationOverride) => {
+            Some(start_automation_override_command(conn, cmd))
+        }
         Some(EmulationAction::SetDataSaverOverride) => {
             Some(start_data_saver_override_command(conn, cmd))
         }
@@ -352,8 +355,8 @@ fn start_hardware_concurrency_override_command(
         ));
     };
     if let Err(message) =
-        conn.update_navigator_queries_for_session_owner(cmd.session_id, |queries| {
-            queries.hardware_concurrency = Some(value);
+        conn.update_navigator_emulation_for_session_owner(cmd.session_id, |sessions, key| {
+            sessions.session_mut(key).hardware_concurrency = Some(value);
         })
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, message));
@@ -375,8 +378,31 @@ fn start_data_saver_override_command(
         }
     };
     if let Err(message) =
-        conn.update_navigator_queries_for_session_owner(cmd.session_id, |queries| {
-            queries.data_saver = value;
+        conn.update_navigator_emulation_for_session_owner(cmd.session_id, |sessions, key| {
+            sessions.session_mut(key).data_saver = value;
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, message));
+    }
+    start_navigator_override_page_command(conn, cmd)
+}
+
+fn start_automation_override_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    let enabled = match cmd.get_params::<params::SetAutomationOverrideParams>() {
+        Ok(Some(params)) => params.enabled,
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
+    };
+    if let Err(message) = conn
+        .update_navigator_emulation_for_session_owner(cmd.session_id, |sessions, key| {
+            sessions.set_automation(key, enabled)
         })
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, message));

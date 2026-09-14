@@ -237,21 +237,19 @@ impl CdpConnection {
             .cloned()
     }
 
-    pub(crate) fn update_navigator_queries_for_session_owner(
+    pub(crate) fn update_navigator_emulation_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-        update: impl FnOnce(&mut moli_page_types::NavigatorQueryOverrides),
+        update: impl FnOnce(
+            &mut moli_page_types::NavigatorEmulationSessions,
+            &moli_page_types::DevToolsSessionKey,
+        ),
     ) -> Result<(), &'static str> {
         let mut owner = self
             .target_session_owner_mut(session_id)
             .ok_or("BrowserContextNotLoaded")?;
         owner.mutate_page_state(|target, key| {
-            update(
-                target
-                    .devtools_sessions
-                    .navigator_emulation
-                    .session_mut(key),
-            )
+            update(&mut target.devtools_sessions.navigator_emulation, key)
         });
         Ok(())
     }

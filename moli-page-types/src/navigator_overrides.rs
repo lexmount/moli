@@ -27,6 +27,7 @@ pub struct GeolocationPositionOverride {
 pub struct NavigatorQueryOverrides {
     pub hardware_concurrency: Option<std::num::NonZeroU32>,
     pub data_saver: Option<bool>,
+    pub automation: bool,
 }
 
 /// Native query overrides in Inspector agent activation order. Page and Worker
@@ -55,6 +56,19 @@ impl NavigatorEmulationSessions {
         &mut self.sessions[index].1
     }
 
+    pub fn set_automation(&mut self, key: &crate::DevToolsSessionKey, enabled: bool) {
+        if enabled {
+            self.session_mut(key).automation = true;
+        } else if let Some((_, settings)) = self
+            .sessions
+            .iter_mut()
+            .find(|(existing, _)| existing == key)
+        {
+            // Disabling alone does not activate a new Inspector agent.
+            settings.automation = false;
+        }
+    }
+
     pub fn remove(&mut self, key: &crate::DevToolsSessionKey) {
         self.sessions.retain(|(existing, _)| existing != key);
     }
@@ -66,6 +80,7 @@ impl NavigatorEmulationSessions {
     pub fn effective(&self) -> NavigatorQueryOverrides {
         let mut effective = NavigatorQueryOverrides::default();
         for (_, settings) in &self.sessions {
+            effective.automation |= settings.automation;
             effective.data_saver = settings.data_saver.or(effective.data_saver);
             effective.hardware_concurrency = settings
                 .hardware_concurrency

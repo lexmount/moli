@@ -672,6 +672,10 @@ fn navigator_runtime_data_getter_callback<'s>(
             _ => {}
         }
     }
+    if key == "webdriver" && navigator_query_overrides(scope).automation {
+        rv.set_bool(true);
+        return;
+    }
     if key == "hardwareConcurrency"
         && let Some(value) = navigator_query_overrides(scope).hardware_concurrency
     {

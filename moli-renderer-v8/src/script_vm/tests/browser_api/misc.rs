@@ -28419,3 +28419,41 @@ fn dom_matrix_exposes_webkit_css_matrix_alias() {
 
     assert_eq!(result, "true|true|DOMMatrix|true|true|true,false,true");
 }
+
+#[test]
+fn automation_override_preserves_the_native_webdriver_baseline() {
+    let mut vm = new_storage_test_vm("https://native-automation.test/");
+    for baseline in [false, true] {
+        // Seed the browser-owned baseline, independently of Emulation state.
+        vm.with_default_context_scope(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let navigator_key = v8::String::new(scope, "navigator").unwrap();
+            let navigator =
+                v8::Local::<v8::Object>::try_from(global.get(scope, navigator_key.into()).unwrap())
+                    .unwrap();
+            let backing = v8::Local::<v8::Object>::try_from(
+                crate::util::get_private_value(scope, navigator, "__moliNavigatorRuntimeData")
+                    .unwrap(),
+            )
+            .unwrap();
+            let key = v8::String::new(scope, "webdriver").unwrap();
+            let value = v8::Boolean::new(scope, baseline);
+            assert_eq!(backing.set(scope, key.into(), value.into()), Some(true));
+            Ok(())
+        })
+        .unwrap();
+        for enabled in [false, true, false] {
+            vm.set_navigator_overrides(&moli_page_types::NavigatorOverrides {
+                queries: moli_page_types::NavigatorQueryOverrides {
+                    automation: enabled,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+            assert_eq!(
+                vm.eval("navigator.webdriver").unwrap(),
+                (baseline || enabled).to_string()
+            );
+        }
+    }
+}
