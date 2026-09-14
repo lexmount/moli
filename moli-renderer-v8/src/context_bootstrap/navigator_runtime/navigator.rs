@@ -414,13 +414,34 @@ struct ServiceWorkerContainerDeclaration {
     #[webapi(accessor_property = "controller", enumerable, getter = navigator_service_worker_controller_getter_callback)]
     controller: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_register_callback, length = 1)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_register_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 1
+    )]
     register: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_get_registration_callback, length = 1)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_get_registration_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 0
+    )]
     get_registration: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_get_registrations_callback, length = 0)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_get_registrations_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 0
+    )]
     get_registrations: (),
 
     #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]

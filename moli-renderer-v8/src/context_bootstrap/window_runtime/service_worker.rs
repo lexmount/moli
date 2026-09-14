@@ -383,6 +383,30 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.length() == 0 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
+        );
+        return;
+    }
+    // Convert the union argument before the options dictionary. The Trusted
+    // Types sink algorithm runs only after all WebIDL argument conversion.
+    let script_argument = args.get(0);
+    let script_argument = match v8::Local::<v8::Object>::try_from(script_argument) {
+        Ok(object) if web_api_interfaces::TrustedScriptURL::is_instance(scope, object) => {
+            script_argument
+        }
+        _ => {
+            let Some(script) = script_argument.to_string(scope) else {
+                return;
+            };
+            script.into()
+        }
+    };
+    let Some(options) = service_worker_registration_options(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             return;
@@ -392,13 +416,6 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
-        );
-        return;
-    }
     let owner = service_worker_container_owner_scope(scope, args.this());
     let Some(request_context) =
         (unsafe { &mut *host_ptr }).service_worker_window_request_context(owner)
@@ -432,14 +449,11 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     };
     let Some(script) = crate::context_bootstrap::trusted_script_url_string_or_throw(
         scope,
-        args.get(0),
+        script_argument,
         requirements,
         "ServiceWorkerContainer register",
         "register",
     ) else {
-        return;
-    };
-    let Some(options) = service_worker_registration_options(scope, &args) else {
         return;
     };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {

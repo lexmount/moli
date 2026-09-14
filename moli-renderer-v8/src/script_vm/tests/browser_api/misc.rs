@@ -13403,7 +13403,7 @@ async fn navigator_service_worker_shim_controls_window_fetch() {
     let expected_fetch_url = format!("{base_url}/app/api/data.txt");
     let expected_out_of_scope_url = format!("{base_url}/outside/data.txt");
     let expected_result = format!(
-        r#"{{"containerType":"object","controllerIsNull":true,"readyType":"object","serviceWorkerConstructorType":"function","registrationConstructorType":"function","registerType":"function","registerName":"register","registerLength":1,"getRegistrationType":"function","getRegistrationName":"getRegistration","getRegistrationLength":1,"getRegistrationsType":"function","getRegistrationsName":"getRegistrations","getRegistrationsLength":0,"removeEventListenerType":"function","controllerChangeHandlerType":"object","controllerChangeLog":["listener:controllerchange:true","handler:controllerchange:true"],"registration":true,"registrations":"true|0","afterRegisterController":true,"controllerStable":true,"controllerMatchesActive":true,"controllerBrand":true,"registrationBrand":true,"registrationTag":"[object ServiceWorkerRegistration]","installingBrand":false,"installingScriptURL":null,"installingState":null,"waitingIsNull":true,"activeIsNull":false,"activeBrand":true,"activeScriptURL":"{expected_worker_url}","activeState":"activated","registrationScope":"{expected_scope}","readyMatchesRegister":true,"responseStatusText":"Handled by worker","responseText":"sw:/app/api/data.txt","dataResponseStatusText":"OK","dataResponseContentType":"text/plain","dataResponseText":"data-url","outOfScopeResult":"resolved:Handled by worker:sw:/outside/data.txt","firstUnregister":true,"secondUnregister":false,"controllerRetained":true,"controllerStateAfterUnregister":"activated","registrationRemoved":true,"afterUnregisterText":"sw:/app/after-unregister.txt"}}"#
+        r#"{{"containerType":"object","controllerIsNull":true,"readyType":"object","serviceWorkerConstructorType":"function","registrationConstructorType":"function","registerType":"function","registerName":"register","registerLength":1,"getRegistrationType":"function","getRegistrationName":"getRegistration","getRegistrationLength":0,"getRegistrationsType":"function","getRegistrationsName":"getRegistrations","getRegistrationsLength":0,"removeEventListenerType":"function","controllerChangeHandlerType":"object","controllerChangeLog":["listener:controllerchange:true","handler:controllerchange:true"],"registration":true,"registrations":"true|0","afterRegisterController":true,"controllerStable":true,"controllerMatchesActive":true,"controllerBrand":true,"registrationBrand":true,"registrationTag":"[object ServiceWorkerRegistration]","installingBrand":false,"installingScriptURL":null,"installingState":null,"waitingIsNull":true,"activeIsNull":false,"activeBrand":true,"activeScriptURL":"{expected_worker_url}","activeState":"activated","registrationScope":"{expected_scope}","readyMatchesRegister":true,"responseStatusText":"Handled by worker","responseText":"sw:/app/api/data.txt","dataResponseStatusText":"OK","dataResponseContentType":"text/plain","dataResponseText":"data-url","outOfScopeResult":"resolved:Handled by worker:sw:/outside/data.txt","firstUnregister":true,"secondUnregister":false,"controllerRetained":true,"controllerStateAfterUnregister":"activated","registrationRemoved":true,"afterUnregisterText":"sw:/app/after-unregister.txt"}}"#
     );
     assert_eq!(result, expected_result);
 
@@ -23950,14 +23950,6 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
                 () => "resolved",
                 error => error && error.name
               );
-              const synchronousErrorName = callback => {
-                try {
-                  callback();
-                  return "none";
-                } catch (error) {
-                  return error && error.name;
-                }
-              };
               globalThis.__serviceWorkerUrlArgumentProbe = { state: "pending" };
               (async () => {
                 const registration = await sw.register("/worker.js", { scope: "null" });
@@ -23971,17 +23963,17 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
                 const nullScope = await rejectionName(
                   sw.register("/resources/worker.js", { scope: null })
                 );
-                const nullType = synchronousErrorName(
-                  () => sw.register("/worker.js", { type: null })
+                const nullType = await rejectionName(
+                  sw.register("/worker.js", { type: null })
                 );
-                const nullUpdateViaCache = synchronousErrorName(
-                  () => sw.register("/worker.js", { updateViaCache: null })
+                const nullUpdateViaCache = await rejectionName(
+                  sw.register("/worker.js", { updateViaCache: null })
                 );
-                const primitiveOptions = synchronousErrorName(
-                  () => sw.register("/worker.js", 1)
+                const primitiveOptions = await rejectionName(
+                  sw.register("/worker.js", 1)
                 );
-                const symbolClient = synchronousErrorName(
-                  () => sw.getRegistration(Symbol("client"))
+                const symbolClient = await rejectionName(
+                  sw.getRegistration(Symbol("client"))
                 );
                 const unregistered = await registration.unregister();
                 globalThis.__serviceWorkerUrlArgumentProbe = {
@@ -24024,6 +24016,60 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
     server
         .await
         .expect("service worker URL argument script server should finish");
+}
+
+#[test]
+fn navigator_service_worker_argument_errors_reject_with_the_original_exception() {
+    let mut vm = new_storage_test_vm("https://service-worker-webidl.test/");
+    vm.eval(
+        r#"
+(() => {
+  const sw = navigator.serviceWorker;
+  const marker = {sentinel: true};
+  globalThis.serviceWorkerArgumentFailures = [];
+  globalThis.serviceWorkerArgumentRejections = 0;
+  function check(callback, expected) {
+    const promise = callback();
+    if (!(promise instanceof Promise)) serviceWorkerArgumentFailures.push('not a Promise');
+    promise.then(
+      () => serviceWorkerArgumentFailures.push('resolved'),
+      error => {
+        serviceWorkerArgumentRejections++;
+        if (expected === marker ? error !== marker : !(error instanceof TypeError)) {
+          serviceWorkerArgumentFailures.push('wrong rejection reason');
+        }
+      }
+    );
+  }
+  check(() => sw.register(), TypeError);
+  check(() => sw.register(Symbol('script')), TypeError);
+  check(() => sw.register('https://[', {scope: Symbol('scope')}), TypeError);
+  check(() => sw.getRegistration({toString() { throw marker; }}), marker);
+  const steps = ['script', 'scope-get', 'scope-string', 'type-get', 'type-string', 'cache-get', 'cache-string'];
+  for (let index = 0; index < steps.length; index++) {
+    const log = [];
+    const step = name => { log.push(name); if (name === steps[index]) throw marker; };
+    check(() => sw.register(
+      {toString() { step('script'); return 'https://['; }},
+      {
+        get scope() { step('scope-get'); return {toString() { step('scope-string'); return './'; }}; },
+        get type() { step('type-get'); return {toString() { step('type-string'); return 'classic'; }}; },
+        get updateViaCache() { step('cache-get'); return {toString() { step('cache-string'); return 'imports'; }}; }
+      }
+    ), marker);
+    if (JSON.stringify(log) !== JSON.stringify(steps.slice(0, index + 1))) {
+      serviceWorkerArgumentFailures.push('conversion order: ' + log);
+    }
+  }
+})()
+"#,
+    )
+    .expect("ServiceWorkerContainer conversion errors should return Promises");
+    assert_eq!(
+        vm.eval("JSON.stringify([serviceWorkerArgumentRejections, serviceWorkerArgumentFailures])")
+            .unwrap(),
+        "[11,[]]"
+    );
 }
 
 #[test]
