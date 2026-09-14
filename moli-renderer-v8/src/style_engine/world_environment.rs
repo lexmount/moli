@@ -161,7 +161,11 @@ impl StyloStyleEnvironment {
                 Some(_) => StyloStyleReducedPreference::NoPreference,
             },
             reduced_data: StyloStyleReducedPreference::NoPreference,
-            reduced_transparency: StyloStyleReducedPreference::NoPreference,
+            reduced_transparency: match overrides.reduced_transparency.as_deref() {
+                Some("reduce") => StyloStyleReducedPreference::Reduce,
+                Some("no-preference") | None => StyloStyleReducedPreference::NoPreference,
+                Some(_) => StyloStyleReducedPreference::NoPreference,
+            },
             contrast: match overrides.contrast.as_deref() {
                 Some("more") => StyloStyleContrastPreference::More,
                 Some("less") => StyloStyleContrastPreference::Less,

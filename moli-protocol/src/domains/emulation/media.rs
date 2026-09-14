@@ -10,6 +10,7 @@ use super::params::{SetEmulatedMediaParams, SetGeolocationOverrideParams};
 enum EmulatedMediaFeatureName {
     PrefersColorScheme,
     PrefersReducedMotion,
+    PrefersReducedTransparency,
     ForcedColors,
     PrefersContrast,
 }
@@ -23,6 +24,7 @@ impl EmulatedMediaFeatureName {
         match self {
             Self::PrefersColorScheme => overrides.color_scheme = value,
             Self::PrefersReducedMotion => overrides.reduced_motion = value,
+            Self::PrefersReducedTransparency => overrides.reduced_transparency = value,
             Self::ForcedColors => overrides.forced_colors = value,
             Self::PrefersContrast => overrides.contrast = value,
         }
@@ -119,6 +121,10 @@ mod tests {
                 "prefers-reduced-motion",
                 EmulatedMediaFeatureName::PrefersReducedMotion,
             ),
+            (
+                "prefers-reduced-transparency",
+                EmulatedMediaFeatureName::PrefersReducedTransparency,
+            ),
             ("forced-colors", EmulatedMediaFeatureName::ForcedColors),
             (
                 "prefers-contrast",
@@ -138,6 +144,8 @@ mod tests {
             .apply_to_overrides(&mut overrides, Some("dark".to_owned()));
         EmulatedMediaFeatureName::PrefersReducedMotion
             .apply_to_overrides(&mut overrides, Some("reduce".to_owned()));
+        EmulatedMediaFeatureName::PrefersReducedTransparency
+            .apply_to_overrides(&mut overrides, Some("reduce".to_owned()));
         EmulatedMediaFeatureName::ForcedColors
             .apply_to_overrides(&mut overrides, Some("active".to_owned()));
         EmulatedMediaFeatureName::PrefersContrast
@@ -145,6 +153,7 @@ mod tests {
 
         assert_eq!(overrides.color_scheme.as_deref(), Some("dark"));
         assert_eq!(overrides.reduced_motion.as_deref(), Some("reduce"));
+        assert_eq!(overrides.reduced_transparency.as_deref(), Some("reduce"));
         assert_eq!(overrides.forced_colors.as_deref(), Some("active"));
         assert_eq!(overrides.contrast.as_deref(), Some("more"));
     }

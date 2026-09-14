@@ -21,6 +21,25 @@ use tokio::{
 
 mod native_navigator;
 
+async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
+    ctx.process_async(json!({
+        "id": 88000, "sessionId": "SID-1", "method": "Runtime.evaluate",
+        "params": {"expression": expression, "returnByValue": true, "awaitPromise": true}
+    }))
+    .await;
+    crate::testing::wait_until_scheduler_message(ctx, "emulated surface evaluation", |message| {
+        message["id"] == json!(88000)
+    })
+    .await;
+    let response = ctx.take_response_by_id(88000);
+    assert!(
+        response["result"]["exceptionDetails"].is_null(),
+        "{response}"
+    );
+    assert!(response["error"].is_null(), "{response}");
+    response["result"]["result"]["value"].clone()
+}
+
 async fn install_geolocation_page_for_test(ctx: &mut TestContext, bc: BrowserContext) {
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_buffered_navigation_fixture_for_session_owner(
@@ -3327,6 +3346,79 @@ async fn emulated_media_updates_existing_media_query_list_matches() {
             ["dark", true, "(prefers-color-scheme: dark)", true],
             ["light", false, "(prefers-color-scheme: light)", true]
         ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reduced_transparency_updates_css_media_events_and_clears_on_the_loaded_page() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    evaluate(&mut ctx, r#"
+        const style = document.head.appendChild(document.createElement('style'));
+        style.textContent = `
+            body { color: rgb(1, 2, 3); }
+            @media (prefers-reduced-transparency: reduce) { body { color: rgb(4, 5, 6); } }
+        `;
+        globalThis.transparency = matchMedia('(prefers-reduced-transparency: reduce)');
+        globalThis.sampleTransparency = () => [transparency.matches, getComputedStyle(document.body).color];
+        sampleTransparency()
+    "#).await;
+    assert_eq!(
+        evaluate(&mut ctx, "sampleTransparency()").await,
+        json!([false, "rgb(1, 2, 3)"])
+    );
+
+    for (value, reduced) in [
+        (Some("reduce"), true),
+        (Some("no-preference"), false),
+        (Some("reduce"), true),
+        (None, false),
+    ] {
+        evaluate(&mut ctx, r#"
+            globalThis.transparencyChange = new Promise(resolve => {
+                transparency.addEventListener('change', event => resolve([
+                    ...sampleTransparency(), event.matches, event.target === transparency, event.isTrusted
+                ]), {once: true});
+            });
+            undefined
+        "#).await;
+        let features: Vec<_> = value
+            .into_iter()
+            .map(|value| json!({"name": "prefers-reduced-transparency", "value": value}))
+            .collect();
+        expect_session_command_result(
+            &mut ctx,
+            88001,
+            "SID-1",
+            "Emulation.setEmulatedMedia",
+            json!({"features": features}),
+        )
+        .await;
+        let color = if reduced {
+            "rgb(4, 5, 6)"
+        } else {
+            "rgb(1, 2, 3)"
+        };
+        assert_eq!(
+            evaluate(&mut ctx, "transparencyChange").await,
+            json!([reduced, color, reduced, true, true])
+        );
+    }
+    // Unknown features are ignored and invalid values reset to the native preference.
+    expect_session_command_result(
+        &mut ctx,
+        88001,
+        "SID-1",
+        "Emulation.setEmulatedMedia",
+        json!({"features": [
+            {"name": "prefers-reduced-transparency", "value": "invalid"},
+            {"name": "unknown-feature", "value": "reduce"}
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "sampleTransparency()").await,
+        json!([false, "rgb(1, 2, 3)"])
     );
 }
 

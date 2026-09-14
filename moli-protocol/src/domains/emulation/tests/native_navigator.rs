@@ -3,25 +3,6 @@ use crate::devtools_runtime::{
     DevToolsDevicePixelRatioSetting, DevToolsSetViewportCommand, DevToolsViewportSetting,
 };
 
-async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
-    ctx.process_async(json!({
-        "id": 88000, "sessionId": "SID-1", "method": "Runtime.evaluate",
-        "params": {"expression": expression, "returnByValue": true, "awaitPromise": true}
-    }))
-    .await;
-    crate::testing::wait_until_scheduler_message(ctx, "native Navigator evaluation", |message| {
-        message["id"] == json!(88000)
-    })
-    .await;
-    let response = ctx.take_response_by_id(88000);
-    assert!(
-        response["result"]["exceptionDetails"].is_null(),
-        "{response}"
-    );
-    assert!(response["error"].is_null(), "{response}");
-    response["result"]["result"]["value"].clone()
-}
-
 async fn setup() -> TestContext {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());

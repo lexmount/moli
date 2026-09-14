@@ -137,6 +137,7 @@ pub struct EmulatedMediaOverrides {
     pub media: Option<String>,
     pub color_scheme: Option<String>,
     pub reduced_motion: Option<String>,
+    pub reduced_transparency: Option<String>,
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
 }
@@ -147,6 +148,7 @@ impl From<EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             media: value.media,
             color_scheme: value.color_scheme,
             reduced_motion: value.reduced_motion,
+            reduced_transparency: value.reduced_transparency,
             forced_colors: value.forced_colors,
             contrast: value.contrast,
         }
@@ -159,6 +161,7 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
             media: value.media.clone(),
             color_scheme: value.color_scheme.clone(),
             reduced_motion: value.reduced_motion.clone(),
+            reduced_transparency: value.reduced_transparency.clone(),
             forced_colors: value.forced_colors.clone(),
             contrast: value.contrast.clone(),
         }

@@ -253,6 +253,14 @@ mod tests {
             }),
             StyleViewport::new(Some(1920.0), Some(1080.0)),
         ));
+        assert!(evaluate_media_query_list(
+            "(prefers-reduced-transparency: reduce)",
+            Some(&crate::protocol_types::EmulatedMediaOverrides {
+                reduced_transparency: Some("reduce".to_owned()),
+                ..Default::default()
+            }),
+            StyleViewport::new(Some(1920.0), Some(1080.0)),
+        ));
     }
 
     #[test]

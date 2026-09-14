@@ -3099,6 +3099,7 @@ pub struct EmulatedMediaOverrides {
     pub media: Option<String>,
     pub color_scheme: Option<String>,
     pub reduced_motion: Option<String>,
+    pub reduced_transparency: Option<String>,
     pub forced_colors: Option<String>,
     pub contrast: Option<String>,
 }
