@@ -5311,7 +5311,6 @@ pub enum RendererPageCommand {
     SetDocumentActivity(moli_page_types::DocumentActivity),
     SetScriptExecutionDisabled(bool),
     SetBypassContentSecurityPolicy(bool),
-    SetCpuThrottlingRate(f64),
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),
     SetNetworkOffline(bool),

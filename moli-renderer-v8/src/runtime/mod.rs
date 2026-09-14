@@ -289,7 +289,9 @@ pub use self::owner_local::{
     RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
-pub use self::page::{JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument};
+pub use self::page::{
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument, RendererDocumentOptions,
+};
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
     RendererPageContextCancelReason, RendererPageContextCancelReceiver,

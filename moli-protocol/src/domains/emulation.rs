@@ -91,7 +91,6 @@ pub(crate) enum EmulationCommandTaskStep {
 enum PendingEmulationPageOperation {
     SetExtraHttpHeaders,
     SetNetworkConditions,
-    SetCpuThrottlingRate,
     SetIdleOverride,
     SetNavigatorOverrides,
     SetEmulatedMedia,
@@ -107,7 +106,6 @@ impl PendingEmulationPageOperation {
             Self::SetExtraHttpHeaders
             | Self::SetNavigatorOverrides
             | Self::SetNetworkConditions
-            | Self::SetCpuThrottlingRate
             | Self::SetEmulatedMedia
             | Self::SetViewportSurface
             | Self::SetDocumentActivity
@@ -197,9 +195,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
         Some(EmulationAction::ClearDeviceMetricsOverride) => {
             Some(start_clear_device_metrics_override_command(conn, cmd))
         }
-        Some(EmulationAction::SetCpuThrottlingRate) => {
-            Some(start_cpu_throttling_rate_command(conn, cmd))
-        }
+        Some(EmulationAction::SetCpuThrottlingRate) => Some(EmulationCommandTaskStep::Complete(
+            cpu_throttling_rate_command_output_plan(cmd),
+        )),
         Some(EmulationAction::SetTouchEmulationEnabled) => {
             Some(start_touch_emulation_enabled_command(conn, cmd))
         }
@@ -343,55 +341,15 @@ fn start_touch_emulation_enabled_command(
     ))
 }
 
-fn start_cpu_throttling_rate_command(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-) -> EmulationCommandTaskStep {
-    let params: params::SetCpuThrottlingRateParams =
-        match cmd.get_params::<params::SetCpuThrottlingRateParams>() {
-            Ok(Some(params)) if params.rate.is_finite() => params,
-            _ => {
-                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32602,
-                    "InvalidParams",
-                ));
-            }
-        };
-    if params.rate > 1.0 {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "CPU throttling is not supported",
-        ));
-    }
-    if conn.browser_context.is_none() {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
-    }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_cpu_throttling_rate(1.0);
-        }
-    }) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
-    }
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
+fn cpu_throttling_rate_command_output_plan(cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params = match cmd.get_params::<params::SetCpuThrottlingRateParams>() {
+        Ok(Some(params)) if params.rate.is_finite() => params,
+        _ => return CommandOutputPlan::error(-32602, "InvalidParams"),
     };
-    match page.start_set_cpu_throttling_rate(1.0) {
-        Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
-            cmd.id,
-            owner_scope,
-            PendingEmulationPageOperation::SetCpuThrottlingRate,
-            pending,
-            None,
-        )),
-        Err(error) => {
-            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
-        }
+    if params.rate > 1.0 {
+        return CommandOutputPlan::error(-32000, "CPU throttling is not supported");
     }
+    CommandOutputPlan::success()
 }
 
 fn emit_touch_events_for_mouse_command_output_plan(
@@ -2399,14 +2357,6 @@ pub(crate) async fn dispose_page_session_async(
                     .await,
             );
         }
-        if delta.cpu_throttling_rate {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "CPU throttling",
-                page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
-                    .await,
-            );
-        }
         if delta.network_conditions {
             record_emulation_disposal_result(
                 &mut first_error,
@@ -2748,9 +2698,6 @@ fn finish_emulation_page_operation(
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetNetworkConditions => page
             .finish_set_network_offline(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetCpuThrottlingRate => page
-            .finish_set_cpu_throttling_rate(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetIdleOverride => page
             .finish_set_idle_override(completion)

@@ -177,7 +177,7 @@ impl OpenStreamingPage {
 
         let (mut page, _, _, creation_artifacts, pending_download) = tokio::time::timeout(
             Duration::from_secs(2),
-            runtime.create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+            runtime.create_streaming_raw_page_from_external_body(
                 page_url.clone(),
                 page_url,
                 None,
@@ -189,21 +189,6 @@ impl OpenStreamingPage {
                 &loader,
                 crate::RendererWebStorageHandles::ephemeral(),
                 raw_body,
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                false,
-                false,
-                1.0,
-                Default::default(),
-                None,
-                false,
-                Vec::new(),
-                false,
-                None,
-                Vec::new(),
                 false,
                 PageVmInitStage::Load,
                 RendererReplyBoundary::DocumentCommit,
@@ -211,8 +196,9 @@ impl OpenStreamingPage {
                 RendererNavigationReplyPolicy::FollowBeforeReply,
                 None,
                 None,
-                None,
-                None,
+                crate::RendererDocumentOptions {
+                    ..Default::default()
+                },
             ),
         )
         .await

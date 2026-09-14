@@ -166,7 +166,6 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) extra_http_headers: Vec<(String, String)>,
     pub(crate) script_execution_disabled: bool,
     pub(crate) bypass_content_security_policy: bool,
-    pub(crate) cpu_throttling_rate: f64,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
     pub(crate) document_activity: moli_page_types::DocumentActivity,
@@ -315,7 +314,6 @@ impl TargetNavigationLoadInputs {
                 .effective_emulation_state
                 .script_execution_disabled,
             bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
-            cpu_throttling_rate: page_state.effective_emulation_state.cpu_throttling_rate,
             emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
             viewport_surface: emulated_device_metrics
                 .as_ref()
@@ -387,7 +385,6 @@ impl TargetNavigationLoadInputs {
             extra_http_headers: Vec::new(),
             script_execution_disabled: false,
             bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
             viewport_surface: None,
             document_activity: Default::default(),

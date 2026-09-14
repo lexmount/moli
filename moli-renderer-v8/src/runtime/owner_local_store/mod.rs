@@ -913,7 +913,6 @@ impl RendererOwnerLocalStore {
                 request.script_execution_disabled = configuration.script_execution_disabled;
                 request.bypass_content_security_policy =
                     configuration.bypass_content_security_policy;
-                request.cpu_throttling_rate = configuration.cpu_throttling_rate;
                 request.emulated_media = configuration.emulated_media;
                 request.idle_override = configuration.idle_override;
                 request.navigator_overrides = configuration.navigator_overrides;

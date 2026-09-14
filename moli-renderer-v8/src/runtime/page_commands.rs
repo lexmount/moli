@@ -1116,13 +1116,6 @@ impl PageVm {
                 self.set_bypass_content_security_policy(bypass);
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::SetCpuThrottlingRate(rate) => {
-                if !rate.is_finite() || rate > 1.0 {
-                    return Err(anyhow!("CPU throttling is not supported"));
-                }
-                self.set_cpu_throttling_rate(1.0);
-                Ok(RendererPageReply::Unit)
-            }
             RendererPageCommand::SetEmulatedMedia(overrides) => {
                 self.set_emulated_media(&overrides);
                 Ok(RendererPageReply::Unit)

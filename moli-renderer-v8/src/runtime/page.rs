@@ -24,6 +24,29 @@ use super::{
     RendererReservedServiceWorkerClient,
 };
 
+/// Optional document bootstrap inputs shared by HTML and streaming creation.
+/// Applied before document-start scripts; live updates use Page commands.
+#[derive(Default)]
+pub struct RendererDocumentOptions {
+    pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+    pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+    pub document_start_scripts: Vec<DocumentStartScript>,
+    pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+    pub extra_http_headers: Vec<(String, String)>,
+    pub script_execution_disabled: bool,
+    pub bypass_content_security_policy: bool,
+    pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,
+    pub viewport_surface: Option<crate::protocol_types::ViewportSurface>,
+    pub document_activity: moli_page_types::DocumentActivity,
+    pub network_offline: bool,
+    pub blocked_url_patterns: Vec<String>,
+    pub fetch_subresource_interception_enabled: bool,
+    pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
+    pub root_frame_id: Option<String>,
+    pub main_document_commit: Option<crate::RendererMainDocumentCommit>,
+}
+
 pub(crate) struct PageVmStateCapture {
     pub(crate) final_url: Url,
     pub(crate) document_title: String,
@@ -221,7 +244,7 @@ impl JsRuntime {
     ) -> Result<PendingHtmlPage> {
         let url = Url::parse("https://reservation.test/")
             .expect("static reservation test URL should parse");
-        self.start_create_html_page_from_response_with_inspector_session_restores(
+        self.start_create_html_page_from_response(
             page_reservation,
             url.clone(),
             url,
@@ -234,24 +257,10 @@ impl JsRuntime {
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html>".to_owned(),
             None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
-            None,
-            None,
             crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
     }
 
@@ -324,6 +333,7 @@ impl JsRuntime {
             .set_renderer_output_transport_sender(sender);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_html_page_from_response(
         &self,
         requested_url: Url,
@@ -336,19 +346,7 @@ impl JsRuntime {
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
         html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+        options: RendererDocumentOptions,
     ) -> Result<(
         RendererPageHandle,
         Arc<RendererPageState>,
@@ -356,148 +354,7 @@ impl JsRuntime {
         RendererPageCreationArtifacts,
         Option<RendererPendingDownloadActivation>,
     )> {
-        self.create_html_page_from_response_with_inspector_session_restores(
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            html,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            Vec::new(),
-            None,
-            None,
-        )
-        .await
-    }
-
-    /// Creates a document using the default focused/visible activity state.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_html_page_from_response_with_inspector_session_restores(
-        &self,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        root_frame_id: Option<String>,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
-    ) -> Result<(
-        RendererPageHandle,
-        Arc<RendererPageState>,
-        RendererPageCreationDiagnostics,
-        RendererPageCreationArtifacts,
-        Option<RendererPendingDownloadActivation>,
-    )> {
-        self.create_html_page_from_response_with_inspector_session_restores_and_activity(
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            html,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            Default::default(),
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            runtime_inspector_session_restore_snapshots,
-            root_frame_id,
-            main_document_commit,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_html_page_from_response_with_inspector_session_restores_and_activity(
-        &self,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        document_activity: moli_page_types::DocumentActivity,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        root_frame_id: Option<String>,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
-    ) -> Result<(
-        RendererPageHandle,
-        Arc<RendererPageState>,
-        RendererPageCreationDiagnostics,
-        RendererPageCreationArtifacts,
-        Option<RendererPendingDownloadActivation>,
-    )> {
-        let mut request = self
+        let request = self
             .inner
             .renderer_owner
             .build_create_html_page_request_with_env(
@@ -512,26 +369,9 @@ impl JsRuntime {
                 web_storage,
                 final_url,
                 html,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                document_activity,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
                 PageVmInitStage::Load,
+                options,
             );
-        request.indexed_db_manager = indexed_db_manager;
-        request.storage_bucket_store = storage_bucket_store;
-        request.root_frame_id = root_frame_id;
-        request.main_document_commit = main_document_commit;
         let reply = self
             .inner
             .renderer_owner
@@ -542,79 +382,9 @@ impl JsRuntime {
             .materialize_page_created_reply_parts(reply)
     }
 
-    /// Fire-and-defer variant of [`Self::create_html_page_from_response`].
-    ///
-    /// Performs the synchronous request preparation, enqueues the renderer
-    /// command, and returns a [`PendingHtmlPage`] without awaiting the reply.
-    /// The renderer thread can then process the heavy V8/parse work in
-    /// parallel with conn-side bookkeeping; the caller awaits the result via
-    /// [`PendingHtmlPage::await_ready`] when the page is actually needed.
     #[allow(clippy::too_many_arguments)]
     pub fn start_create_html_page_from_response(
         &self,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    ) -> Result<PendingHtmlPage> {
-        self.start_create_html_page_from_response_with_inspector_session_restores(
-            self.reserve_page_for_creation(),
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            html,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            Vec::new(),
-            None,
-            None,
-            crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
-            None,
-        )
-    }
-
-    /// Starts a document creation with the default focused/visible activity
-    /// state.
-    #[allow(clippy::too_many_arguments)]
-    pub fn start_create_html_page_from_response_with_inspector_session_restores(
-        &self,
         page_reservation: RendererPageReservationToken,
         requested_url: Url,
         final_url: Url,
@@ -626,95 +396,9 @@ impl JsRuntime {
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
         html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
-    ) -> Result<PendingHtmlPage> {
-        self.start_create_html_page_from_response_with_inspector_session_restores_and_activity(
-            page_reservation,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            html,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            Default::default(),
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            runtime_inspector_session_restore_snapshots,
-            root_frame_id,
-            top_level_storage_key,
-            top_level_navigation_dispatch,
-            main_document_commit,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn start_create_html_page_from_response_with_inspector_session_restores_and_activity(
-        &self,
-        page_reservation: RendererPageReservationToken,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        html: String,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        document_activity: moli_page_types::DocumentActivity,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        root_frame_id: Option<String>,
-        top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
-        top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
+        options: RendererDocumentOptions,
     ) -> Result<PendingHtmlPage> {
         let mut request = self
             .inner
@@ -731,28 +415,11 @@ impl JsRuntime {
                 web_storage,
                 final_url,
                 html,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                document_activity,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
                 PageVmInitStage::Load,
+                options,
             );
-        request.indexed_db_manager = indexed_db_manager;
-        request.storage_bucket_store = storage_bucket_store;
-        request.root_frame_id = root_frame_id;
         request.top_level_storage_key = top_level_storage_key;
         request.top_level_navigation_dispatch = top_level_navigation_dispatch;
-        request.main_document_commit = main_document_commit;
         let reply_rx = self
             .inner
             .renderer_owner
@@ -768,11 +435,12 @@ impl JsRuntime {
     ///
     /// Protocol coordinators that must route pre-install output bind this
     /// identity to their target first, then pass it to
-    /// [`Self::start_create_html_page_from_response_with_inspector_session_restores`].
+    /// [`Self::start_create_html_page_from_response`].
     pub fn reserve_page_for_creation(&self) -> RendererPageReservationToken {
         self.inner.renderer_owner.allocate_page_reservation_token()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_streaming_raw_page_from_external_body(
         &self,
         requested_url: Url,
@@ -786,108 +454,14 @@ impl JsRuntime {
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
         raw_body: ExternalRawDocumentBodyStream,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        wpt_extensions_enabled: bool,
-        stage: PageVmInitStage,
-        top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
-        navigation_reply_policy: crate::RendererNavigationReplyPolicy,
-    ) -> Result<(
-        RendererPageHandle,
-        Arc<RendererPageState>,
-        RendererPageCreationDiagnostics,
-        RendererPageCreationArtifacts,
-        Option<RendererPendingDownloadActivation>,
-    )> {
-        self.create_streaming_raw_page_from_external_body_with_inspector_session_restores(
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            navigation_redirect_chain,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            raw_body,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            Vec::new(),
-            wpt_extensions_enabled,
-            stage,
-            crate::RendererReplyBoundary::Stage,
-            top_level_navigation_dispatch,
-            navigation_reply_policy,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_streaming_raw_page_from_external_body_with_inspector_session_restores(
-        &self,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        navigation_redirect_chain: Vec<crate::protocol_types::NavigationRedirect>,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        raw_body: ExternalRawDocumentBodyStream,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         wpt_extensions_enabled: bool,
         stage: PageVmInitStage,
         reply_boundary: crate::RendererReplyBoundary,
         top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
         navigation_reply_policy: crate::RendererNavigationReplyPolicy,
-        root_frame_id: Option<String>,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
         lifecycle_decider: Option<crate::RendererLifecycleDecider>,
+        options: RendererDocumentOptions,
     ) -> Result<(
         RendererPageHandle,
         Arc<RendererPageState>,
@@ -896,7 +470,7 @@ impl JsRuntime {
         Option<RendererPendingDownloadActivation>,
     )> {
         let prepared = self
-            .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores(
+            .prepare_streaming_raw_document_from_external_body(
                 self.reserve_page_for_creation(),
                 requested_url,
                 final_url,
@@ -909,30 +483,14 @@ impl JsRuntime {
                 loader,
                 web_storage,
                 raw_body,
-                indexed_db_manager,
-                storage_bucket_store,
-                document_start_scripts,
-                runtime_bindings,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                runtime_inspector_session_restore_snapshots,
                 wpt_extensions_enabled,
                 stage,
                 reply_boundary,
                 top_level_navigation_dispatch,
                 navigation_reply_policy,
-                root_frame_id,
                 reserved_service_worker_client,
-                main_document_commit,
                 lifecycle_decider,
+                options,
             )
             .await?;
         let permit = prepared.issue_commit_permit();
@@ -940,93 +498,9 @@ impl JsRuntime {
     }
 
     /// Moves a streaming response and all document bootstrap inputs onto the
-    /// renderer owner lane using the default focused/visible activity state.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_streaming_raw_document_from_external_body_with_inspector_session_restores(
-        &self,
-        page_reservation: RendererPageReservationToken,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        navigation_redirected: bool,
-        navigation_redirect_count: usize,
-        navigation_redirect_chain: Vec<crate::protocol_types::NavigationRedirect>,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        loader: &ResourceRequestClient,
-        web_storage: crate::RendererWebStorageHandles,
-        raw_body: ExternalRawDocumentBodyStream,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        wpt_extensions_enabled: bool,
-        stage: PageVmInitStage,
-        reply_boundary: crate::RendererReplyBoundary,
-        top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
-        navigation_reply_policy: crate::RendererNavigationReplyPolicy,
-        root_frame_id: Option<String>,
-        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
-        lifecycle_decider: Option<crate::RendererLifecycleDecider>,
-    ) -> Result<PreparedRendererDocument> {
-        self.prepare_streaming_raw_document_from_external_body_with_inspector_session_restores_and_activity(
-            page_reservation,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            navigation_redirected,
-            navigation_redirect_count,
-            navigation_redirect_chain,
-            response_status,
-            response_headers,
-            loader,
-            web_storage,
-            raw_body,
-            indexed_db_manager,
-            storage_bucket_store,
-            document_start_scripts,
-            runtime_bindings,
-            extra_http_headers,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            Default::default(),
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            runtime_inspector_session_restore_snapshots,
-            wpt_extensions_enabled,
-            stage,
-            reply_boundary,
-            top_level_navigation_dispatch,
-            navigation_reply_policy,
-            root_frame_id,
-            reserved_service_worker_client,
-            main_document_commit,
-            lifecycle_decider,
-        )
-        .await
-    }
-
-    /// Moves a streaming response and all document bootstrap inputs onto the
     /// renderer owner lane without starting the parser or author scripts.
     #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_streaming_raw_document_from_external_body_with_inspector_session_restores_and_activity(
+    pub async fn prepare_streaming_raw_document_from_external_body(
         &self,
         page_reservation: RendererPageReservationToken,
         requested_url: Url,
@@ -1040,31 +514,14 @@ impl JsRuntime {
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
         raw_body: ExternalRawDocumentBodyStream,
-        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
-        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        extra_http_headers: Vec<(String, String)>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-        viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-        document_activity: moli_page_types::DocumentActivity,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         wpt_extensions_enabled: bool,
         stage: PageVmInitStage,
         reply_boundary: crate::RendererReplyBoundary,
         top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
         navigation_reply_policy: crate::RendererNavigationReplyPolicy,
-        root_frame_id: Option<String>,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<crate::RendererMainDocumentCommit>,
         lifecycle_decider: Option<crate::RendererLifecycleDecider>,
+        options: RendererDocumentOptions,
     ) -> Result<PreparedRendererDocument> {
         let mut request = self
             .inner
@@ -1081,26 +538,9 @@ impl JsRuntime {
                 loader,
                 web_storage,
                 raw_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                document_activity,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
                 stage,
+                options,
             );
-        request.indexed_db_manager = indexed_db_manager;
-        request.storage_bucket_store = storage_bucket_store;
-        request.root_frame_id = root_frame_id;
-        request.main_document_commit = main_document_commit;
         request.wpt_extensions_enabled = wpt_extensions_enabled;
         request.reply_boundary = reply_boundary;
         request.top_level_navigation_dispatch = top_level_navigation_dispatch;

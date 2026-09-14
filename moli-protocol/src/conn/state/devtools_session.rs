@@ -666,7 +666,7 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
@@ -674,28 +674,10 @@ pub(crate) struct DevToolsEmulationSessionState {
     pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: super::EmulatedMediaOverrides,
     pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
-    pub(crate) cpu_throttling_rate: f64,
     pub(crate) max_touch_points: u32,
     pub(crate) emit_touch_events_for_mouse: bool,
     pub(crate) focus_emulation_enabled: bool,
     pub(crate) script_execution_disabled: bool,
-}
-
-impl Default for DevToolsEmulationSessionState {
-    fn default() -> Self {
-        Self {
-            browser_identity_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: super::EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            max_touch_points: 0,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

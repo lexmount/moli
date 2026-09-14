@@ -946,7 +946,6 @@ mod tests {
             document_last_modified: None,
             script_execution_disabled: false,
             bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
             emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
             idle_override: None,
             navigator_overrides: Default::default(),

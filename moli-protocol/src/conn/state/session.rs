@@ -656,7 +656,7 @@ mod tests {
             .devtools_sessions
             .primary_mut()
             .emulation_session_state
-            .cpu_throttling_rate = 4.0;
+            .max_touch_points = 4;
         let effective = state.effective_policy();
         assert_eq!(
             effective
@@ -673,8 +673,8 @@ mod tests {
                 .devtools_sessions
                 .primary()
                 .emulation_session_state
-                .cpu_throttling_rate,
-            4.0,
+                .max_touch_points,
+            4,
             "clearing policy contributions must leave the handler's renderer state intact"
         );
         assert_eq!(

@@ -241,7 +241,7 @@ pub use runtime::{
     RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
     RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
     RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
+    RendererDocumentNodeReference, RendererDocumentNodeTextResolution, RendererDocumentOptions,
     RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,

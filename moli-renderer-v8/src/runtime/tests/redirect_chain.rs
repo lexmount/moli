@@ -55,7 +55,7 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
         // DocumentCommit forces a pending phase-one installation, even when
         // the body is already buffered. No network timing or sleep is needed.
         let (mut page, initial, _, artifacts, download) = runtime
-            .create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+            .create_streaming_raw_page_from_external_body(
                 requested_url.clone(),
                 final_url.clone(),
                 None,
@@ -67,21 +67,6 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
                 &loader,
                 crate::RendererWebStorageHandles::ephemeral(),
                 ExternalRawDocumentBodyStream::from_bytes(body.as_bytes().to_vec()),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                false,
-                false,
-                1.0,
-                Default::default(),
-                None,
-                false,
-                Vec::new(),
-                false,
-                None,
-                Vec::new(),
                 false,
                 PageVmInitStage::Load,
                 reply_boundary,
@@ -89,8 +74,9 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
                 RendererNavigationReplyPolicy::FollowBeforeReply,
                 None,
                 None,
-                None,
-                None,
+                crate::RendererDocumentOptions {
+                    ..Default::default()
+                },
             )
             .await
             .expect("redirected document should attach");

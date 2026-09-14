@@ -1379,7 +1379,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 load_inputs.extra_http_headers.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
                 load_inputs.emulated_media.clone(),
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
@@ -1449,7 +1448,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             load_inputs.extra_http_headers.clone(),
             load_inputs.script_execution_disabled,
             load_inputs.bypass_content_security_policy,
-            load_inputs.cpu_throttling_rate,
             load_inputs.emulated_media.clone(),
             load_inputs.viewport_surface,
             load_inputs.network_offline,
@@ -1557,7 +1555,6 @@ impl CdpConnection {
             extra_http_headers: load_inputs.extra_http_headers,
             script_execution_disabled: load_inputs.script_execution_disabled,
             bypass_content_security_policy: load_inputs.bypass_content_security_policy,
-            cpu_throttling_rate: load_inputs.cpu_throttling_rate,
             emulated_media: load_inputs.emulated_media,
             idle_override,
             navigator_overrides: load_inputs.navigator_overrides,
@@ -1684,7 +1681,6 @@ impl CdpConnection {
                 load_inputs.extra_http_headers.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
                 load_inputs.emulated_media.clone(),
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
@@ -1942,7 +1938,6 @@ impl CdpConnection {
                 load_inputs.extra_http_headers.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
                 load_inputs.emulated_media.clone(),
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
@@ -2898,7 +2893,6 @@ impl CdpConnection {
                 load_inputs.extra_http_headers.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
                 load_inputs.emulated_media.clone(),
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
@@ -3190,7 +3184,6 @@ impl CdpConnection {
                 load_inputs.extra_http_headers.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
                 load_inputs.emulated_media.clone(),
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
@@ -3822,7 +3815,6 @@ async fn prepare_captured_document_response_with_engine_async(
             load_inputs.extra_http_headers.clone(),
             load_inputs.script_execution_disabled,
             load_inputs.bypass_content_security_policy,
-            load_inputs.cpu_throttling_rate,
             load_inputs.emulated_media.clone(),
             load_inputs.viewport_surface,
             load_inputs.network_offline,
@@ -3912,9 +3904,6 @@ async fn apply_navigation_load_input_overrides_async(
     page.set_bypass_content_security_policy_async(load_inputs.bypass_content_security_policy)
         .await
         .map_err(|error| format!("failed to apply page CSP bypass override: {error}"))?;
-    page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
-        .await
-        .map_err(|error| format!("failed to apply page CPU throttling rate: {error}"))?;
     page.set_emulated_media_async(&load_inputs.emulated_media)
         .await
         .map_err(|error| format!("failed to apply page emulated media: {error}"))?;

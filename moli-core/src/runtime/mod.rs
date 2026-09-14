@@ -1266,7 +1266,7 @@ impl Browser {
             pending_download,
         ) = self
             .js_runtime
-            .create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+            .create_streaming_raw_page_from_external_body(
                 requested_url,
                 final_url,
                 None,
@@ -1281,30 +1281,20 @@ impl Browser {
                     self.partition.session_storage_store(),
                 ),
                 raw_body,
-                Some(self.partition.weak_indexed_db_manager()),
-                Some(self.partition.storage_bucket_store()),
-                document_start_scripts,
-                vec![],
-                vec![],
-                self.config.script_execution_disabled(),
-                false,
-                1.0,
-                Default::default(),
-                None,
-                false,
-                Vec::new(),
-                false,
-                None,
-                Vec::new(),
                 self.config.wpt_extensions_enabled(),
                 stage,
                 reply_boundary,
                 moli_renderer_v8::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
                 moli_renderer_v8::RendererNavigationReplyPolicy::FollowBeforeReply,
-                None,
                 reserved_service_worker_client,
-                None,
                 lifecycle_decider,
+                moli_renderer_v8::RendererDocumentOptions {
+                    indexed_db_manager: Some(self.partition.weak_indexed_db_manager()),
+                    storage_bucket_store: Some(self.partition.storage_bucket_store()),
+                    document_start_scripts,
+                    script_execution_disabled: self.config.script_execution_disabled(),
+                    ..Default::default()
+                },
             )
             .await?;
         if pending_download.is_some() {

@@ -158,10 +158,6 @@ impl PageVm {
         self.vm_mut().set_bypass_content_security_policy(bypass);
     }
 
-    pub(crate) fn set_cpu_throttling_rate(&mut self, rate: f64) {
-        self.cpu_throttling_rate = rate;
-    }
-
     pub(crate) fn set_emulated_media(
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,

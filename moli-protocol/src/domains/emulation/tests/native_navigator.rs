@@ -519,16 +519,6 @@ async fn unsupported_throttling_rejects_before_changing_live_offline_state() {
     }
     ctx.process_async(json!({"id":88001,"sessionId":"SID-1","method":"Emulation.setCPUThrottlingRate","params":{"rate":4}})).await;
     ctx.expect_error(88001, -32000, "CPU throttling is not supported");
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_emulation_state
-            .cpu_throttling_rate,
-        1.0
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1191,7 +1191,6 @@ impl PageVm {
             document_last_modified: None,
             script_execution_disabled: self.script_execution_disabled(),
             bypass_content_security_policy: self.bypass_content_security_policy,
-            cpu_throttling_rate: self.cpu_throttling_rate,
             emulated_media: self.emulated_media.clone(),
             idle_override: self.idle_override,
             navigator_overrides: self.navigator_overrides.clone(),

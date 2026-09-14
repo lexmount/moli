@@ -41,11 +41,6 @@ impl TargetEmulationStateUpdate<'_> {
         self.effective.emulated_device_metrics = emulated_device_metrics;
     }
 
-    pub(crate) fn set_cpu_throttling_rate(&mut self, cpu_throttling_rate: f64) {
-        self.raw.cpu_throttling_rate = cpu_throttling_rate;
-        self.effective.cpu_throttling_rate = cpu_throttling_rate;
-    }
-
     pub(crate) fn set_max_touch_points(&mut self, max_touch_points: u32) {
         self.raw.max_touch_points = max_touch_points;
         self.effective.max_touch_points = max_touch_points;

@@ -439,7 +439,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetCpuThrottlingRate,
+            &super::PendingEmulationPageOperation::SetEmulatedMedia,
             Some(dispatched_attachment_id),
         ),
         "changing foreground selection must not make an error from the same Page look stale"
@@ -457,7 +457,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetCpuThrottlingRate,
+            &super::PendingEmulationPageOperation::SetEmulatedMedia,
             Some(dispatched_attachment_id),
         ),
         "only replacement of the exact target attachment may retire its renderer error"
@@ -480,7 +480,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             completed: super::CompletedEmulationRendererDispatch::Pages(vec![
                 super::CompletedEmulationPageCommand {
                     target,
-                    operation: super::PendingEmulationPageOperation::SetCpuThrottlingRate,
+                    operation: super::PendingEmulationPageOperation::SetEmulatedMedia,
                     dispatched_attachment_id: Some(dispatched_attachment_id),
                     completed: Err("renderer attachment retired".to_owned()),
                 },
@@ -862,13 +862,6 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
             .effective_emulation_state
             .emit_touch_events_for_mouse
     );
-    assert_eq!(
-        browser_context
-            .active_page_target()
-            .effective_emulation_state
-            .cpu_throttling_rate,
-        1.0
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -887,17 +880,6 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
     }))
     .await;
     ctx.expect_error(9115, -32602, "InvalidParams");
-
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_emulation_state
-            .cpu_throttling_rate,
-        1.0
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -954,17 +936,6 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
                 && message["result"] == json!({})
         }));
     }
-
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_emulation_state
-            .cpu_throttling_rate,
-        1.0
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1065,7 +1036,7 @@ async fn device_metrics_completion_survives_initial_page_replacement() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn clearing_cpu_throttling_uses_pending_command_dispatch() {
+async fn clearing_cpu_throttling_completes_without_renderer_dispatch() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
 
@@ -1076,14 +1047,8 @@ async fn clearing_cpu_throttling_uses_pending_command_dispatch() {
         "params": { "rate": 1 }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
-        panic!("loaded Emulation.setCPUThrottlingRate should update the live renderer page");
-    };
-    let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
-        panic!("CPU throttling rate should complete in one renderer phase");
+    let CdpCommandTaskStep::Complete(outcome) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("neutral CPU throttling must not enqueue a renderer command");
     };
     let messages = outcome.into_parts().0;
     assert!(messages.iter().any(|message| {
@@ -1091,16 +1056,6 @@ async fn clearing_cpu_throttling_uses_pending_command_dispatch() {
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_emulation_state
-            .cpu_throttling_rate,
-        1.0
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1435,8 +1390,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .conn
         .emulation_session_state_for_session_owner(Some("SID-attached"))
         .expect("attached Emulation handler state");
-    assert_eq!(primary.cpu_throttling_rate, 1.0);
-    assert_eq!(attached.cpu_throttling_rate, 1.0);
+
     assert_eq!(
         primary
             .emulated_device_metrics
@@ -1460,7 +1414,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .as_ref()
         .expect("browser context")
         .active_page_target();
-    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
+
     assert_eq!(
         target
             .effective_emulation_state
@@ -1480,7 +1434,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .as_ref()
         .expect("browser context")
         .active_page_target();
-    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
+
     assert!(
         target
             .effective_emulation_state
@@ -1495,7 +1449,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
         .expect("primary Emulation handler state survives attached disposal");
-    assert_eq!(primary.cpu_throttling_rate, 1.0);
+
     assert!(primary.emulated_device_metrics.is_some());
     assert!(primary.focus_emulation_enabled);
     assert_eq!(
@@ -3493,7 +3447,7 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
         .as_ref()
         .and_then(|browser_context| browser_context.page_target("TID-1"))
         .expect("detached target remains addressable");
-    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
+
     assert_eq!(
         target.effective_emulation_state.emulated_media,
         crate::conn::EmulatedMediaOverrides::default()

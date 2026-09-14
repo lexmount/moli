@@ -320,31 +320,6 @@ impl Page {
         )
     }
 
-    pub async fn set_cpu_throttling_rate_async(&mut self, rate: f64) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetCpuThrottlingRate(rate),
-            "set CPU throttling rate",
-        )
-        .await
-    }
-
-    pub fn start_set_cpu_throttling_rate(&self, rate: f64) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetCpuThrottlingRate(rate))
-    }
-
-    pub fn finish_set_cpu_throttling_rate(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set CPU throttling rate",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
     pub async fn set_emulated_media_async(
         &mut self,
         overrides: &EmulatedMediaOverrides,

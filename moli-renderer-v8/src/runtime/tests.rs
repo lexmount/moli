@@ -72,7 +72,7 @@ async fn prepare_test_external_raw_document_with_content_type_and_reply_boundary
     reply_boundary: RendererReplyBoundary,
 ) -> PreparedRendererDocument {
     runtime
-        .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores(
+        .prepare_streaming_raw_document_from_external_body(
             runtime.reserve_page_for_creation(),
             url.clone(),
             url,
@@ -85,21 +85,6 @@ async fn prepare_test_external_raw_document_with_content_type_and_reply_boundary
             loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
             false,
             PageVmInitStage::Load,
             reply_boundary,
@@ -107,8 +92,9 @@ async fn prepare_test_external_raw_document_with_content_type_and_reply_boundary
             RendererNavigationReplyPolicy::FollowBeforeReply,
             None,
             None,
-            None,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("external raw document should prepare")
@@ -1503,7 +1489,6 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
             extra_http_headers: Vec::new(),
             script_execution_disabled: false,
             bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
             idle_override: None,
             navigator_overrides: Default::default(),
@@ -1640,7 +1625,6 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
             extra_http_headers: Vec::new(),
             script_execution_disabled: false,
             bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
             idle_override: None,
             navigator_overrides: Default::default(),
@@ -2178,32 +2162,6 @@ document.body.appendChild(frame);
         .expect("child descendant-navigation page should close");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn cpu_throttling_rate_rejects_unavailable_rates() {
-    let runtime = JsRuntime::initialize();
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    let url = url::Url::parse("https://example.test/cpu-throttling").unwrap();
-    let mut page = create_test_html_page(&runtime, &loader, url, "<!doctype html>").await;
-    let error = page
-        .run_async_command(RendererPageCommand::SetCpuThrottlingRate(3.0))
-        .await
-        .err()
-        .expect("unavailable throttling must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("CPU throttling is not supported")
-    );
-    for rate in [0.0, 1.0] {
-        let (reply, _) = page
-            .run_async_command(RendererPageCommand::SetCpuThrottlingRate(rate))
-            .await
-            .unwrap();
-        assert!(matches!(reply, RendererPageReply::Unit));
-    }
-    page.close_async().await.unwrap();
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn external_raw_streaming_page_command_builds_phase_one_page() {
     let runtime = JsRuntime::initialize();
@@ -2247,23 +2205,16 @@ async fn external_raw_streaming_page_command_builds_phase_one_page() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::Load,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("external raw streaming page should build");
@@ -2601,7 +2552,6 @@ globalThis.__preparedCommitObserved = JSON.stringify([
             extra_http_headers: Vec::new(),
             script_execution_disabled: false,
             bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
             idle_override: None,
             navigator_overrides: Default::default(),
@@ -2980,23 +2930,16 @@ async fn external_raw_streaming_empty_document_reaches_dom_content_loaded() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::DomContentLoaded,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("empty external raw streaming page should reach DOMContentLoaded");
@@ -3292,23 +3235,16 @@ async fn external_raw_streaming_delegates_post_load_meta_refresh_to_browser() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::Load,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::DelegateToBrowser,
             RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("meta refresh streaming page should attach first document");
@@ -3379,23 +3315,16 @@ async fn external_raw_streaming_defers_dcl_handler_navigation_to_page_reply() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::DomContentLoaded,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::DelegateToBrowser,
             RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("DCL handler page should reach its reply boundary");
@@ -3464,23 +3393,16 @@ globalThis.__ordinaryAfterDcl = new Promise(resolve => {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::DomContentLoaded,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should reach its DCL reply boundary");
@@ -3543,7 +3465,7 @@ async fn renderer_owned_navigation_survives_page_creation_observer_detach() {
     });
 
     let (mut page, _, _, creation_artifacts, pending_download) = runtime
-        .create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+        .create_streaming_raw_page_from_external_body(
             source_url.clone(),
             source_url,
             None,
@@ -3555,21 +3477,6 @@ async fn renderer_owned_navigation_survives_page_creation_observer_detach() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
             false,
             PageVmInitStage::Load,
             RendererReplyBoundary::DocumentCommit,
@@ -3577,8 +3484,9 @@ async fn renderer_owned_navigation_survives_page_creation_observer_detach() {
             RendererNavigationReplyPolicy::FollowBeforeReply,
             None,
             None,
-            None,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("source should attach at its document commit boundary");
@@ -3782,19 +3690,9 @@ async fn per_page_isolate_policy_uses_distinct_isolates_and_isolates_contexts() 
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first shared</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate page should load");
@@ -3820,19 +3718,9 @@ async fn per_page_isolate_policy_uses_distinct_isolates_and_isolates_contexts() 
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second shared</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate page should load");
@@ -4292,19 +4180,9 @@ async fn page_document_isolate_completes_real_v8_foreground_task() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>shared v8 foreground task</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("shared-isolate page should load");
@@ -4352,19 +4230,9 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first rejection listener</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate page should load");
@@ -4382,19 +4250,9 @@ async fn per_page_isolate_policy_routes_unhandled_rejections_to_originating_page
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second rejection listener</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate page should load");
@@ -4561,19 +4419,9 @@ async fn per_page_isolate_policy_keeps_window_open_routes_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first window opener</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate window-open page should load");
@@ -4591,19 +4439,9 @@ async fn per_page_isolate_policy_keeps_window_open_routes_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second window opener</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate window-open page should load");
@@ -4720,19 +4558,9 @@ async fn per_page_isolate_policy_keeps_dedicated_worker_events_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first worker owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate worker-event page should load");
@@ -4750,19 +4578,9 @@ async fn per_page_isolate_policy_keeps_dedicated_worker_events_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second worker owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate worker-event page should load");
@@ -4997,19 +4815,10 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first idb</body>".to_owned(),
-            Some(crate::downgrade_indexed_db_manager(&first_manager)),
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                indexed_db_manager: Some(crate::downgrade_indexed_db_manager(&first_manager)),
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate indexedDB page should load");
@@ -5027,19 +4836,10 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second idb</body>".to_owned(),
-            Some(crate::downgrade_indexed_db_manager(&second_manager)),
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                indexed_db_manager: Some(crate::downgrade_indexed_db_manager(&second_manager)),
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate indexedDB page should load");
@@ -5100,19 +4900,9 @@ async fn per_page_isolate_policy_keeps_blob_urls_page_owned_after_other_page_clo
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first blob owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate page should load");
@@ -5130,19 +4920,9 @@ async fn per_page_isolate_policy_keeps_blob_urls_page_owned_after_other_page_clo
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second blob owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate page should load");
@@ -5232,19 +5012,9 @@ async fn per_page_isolate_policy_keeps_domparser_detached_docs_cleanup_neutral()
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first detached owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate DOMParser page should load");
@@ -5262,19 +5032,9 @@ async fn per_page_isolate_policy_keeps_domparser_detached_docs_cleanup_neutral()
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second detached peer</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate DOMParser page should load");
@@ -5370,19 +5130,9 @@ async fn per_page_isolate_policy_keeps_isolated_worlds_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first isolated world</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate page should load");
@@ -5400,19 +5150,9 @@ async fn per_page_isolate_policy_keeps_isolated_worlds_page_owned() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second isolated world</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate page should load");
@@ -5601,19 +5341,9 @@ async fn per_page_isolate_policy_keeps_child_default_contexts_page_owned() {
             crate::RendererWebStorageHandles::ephemeral(),
             r#"<!doctype html><body><iframe srcdoc="<body>first child</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared child-frame page should load");
@@ -5632,19 +5362,9 @@ async fn per_page_isolate_policy_keeps_child_default_contexts_page_owned() {
             crate::RendererWebStorageHandles::ephemeral(),
             r#"<!doctype html><body><iframe srcdoc="<body>second child</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared child-frame page should load");
@@ -5806,64 +5526,38 @@ async fn per_page_isolate_policy_keeps_child_isolated_worlds_page_owned() {
 
     let (mut first_page, _, _, _creation_artifacts, first_download) = runtime
         .create_html_page_from_response(
-            first_url.clone(),
-            first_url,
-            None,
-            false,
-            0,
-            200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
-            &loader,
-            crate::RendererWebStorageHandles::ephemeral(),
-            r#"<!doctype html><body><iframe srcdoc="<body>first child isolated</body>"></iframe></body>"#
+first_url.clone(),
+first_url,
+None,
+false,
+0,
+200,
+vec![("content-type".to_owned(), "text/html".to_owned())],
+&loader,
+crate::RendererWebStorageHandles::ephemeral(),
+r#"<!doctype html><body><iframe srcdoc="<body>first child isolated</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-        )
+crate::RendererDocumentOptions { ..Default::default() },
+)
         .await
         .expect("first shared child-isolated-world page should load");
     assert!(first_download.is_none());
 
     let (mut second_page, _, _, _creation_artifacts, second_download) = runtime
         .create_html_page_from_response(
-            second_url.clone(),
-            second_url,
-            None,
-            false,
-            0,
-            200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
-            &loader,
-            crate::RendererWebStorageHandles::ephemeral(),
-            r#"<!doctype html><body><iframe srcdoc="<body>second child isolated</body>"></iframe></body>"#
+second_url.clone(),
+second_url,
+None,
+false,
+0,
+200,
+vec![("content-type".to_owned(), "text/html".to_owned())],
+&loader,
+crate::RendererWebStorageHandles::ephemeral(),
+r#"<!doctype html><body><iframe srcdoc="<body>second child isolated</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-        )
+crate::RendererDocumentOptions { ..Default::default() },
+)
         .await
         .expect("second shared child-isolated-world page should load");
     assert!(second_download.is_none());
@@ -6060,19 +5754,9 @@ async fn per_page_isolate_policy_reuses_navigation_isolate_and_replaces_contexts
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>old shared navigation document</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate navigation page should load");
@@ -6090,19 +5774,9 @@ async fn per_page_isolate_policy_reuses_navigation_isolate_and_replaces_contexts
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>peer shared navigation document</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("peer shared-isolate page should load");
@@ -6392,19 +6066,9 @@ async fn per_page_isolate_parser_blocking_navigation_restores_replacement_inspec
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>parser-blocking navigation source</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("parser-blocking navigation source page should load");
@@ -6505,19 +6169,9 @@ async fn per_page_isolate_navigation_churn_disposes_replaced_page_vms() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>churn-initial</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("shared-isolate churn page should load");
@@ -6629,19 +6283,9 @@ async fn per_page_isolate_policy_drops_stale_timer_after_navigation_replacement(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale timer source</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-timer source page should load");
@@ -6659,19 +6303,9 @@ async fn per_page_isolate_policy_drops_stale_timer_after_navigation_replacement(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale timer peer</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-timer peer page should load");
@@ -6798,19 +6432,9 @@ async fn per_page_isolate_policy_drops_stale_fetch_after_navigation_replacement(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale fetch source</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-fetch source page should load");
@@ -6828,19 +6452,9 @@ async fn per_page_isolate_policy_drops_stale_fetch_after_navigation_replacement(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale fetch peer</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-fetch peer page should load");
@@ -6993,19 +6607,9 @@ export const marker = "late-module";"#,
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale module source</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-module source page should load");
@@ -7023,19 +6627,9 @@ export const marker = "late-module";"#,
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale module peer</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-module peer page should load");
@@ -7180,19 +6774,9 @@ async fn per_page_isolate_policy_drops_stale_worker_message_after_navigation_rep
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale worker message source</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-worker-message source page should load");
@@ -7210,19 +6794,9 @@ async fn per_page_isolate_policy_drops_stale_worker_message_after_navigation_rep
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stale worker message peer</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("stale-worker-message peer page should load");
@@ -7419,19 +6993,9 @@ async fn per_page_isolate_policy_routes_dynamic_import_to_originating_page() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first dynamic import owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate page should load");
@@ -7449,19 +7013,9 @@ async fn per_page_isolate_policy_routes_dynamic_import_to_originating_page() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second dynamic import owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate page should load");
@@ -7561,19 +7115,9 @@ async fn per_page_isolate_policy_keeps_shared_worker_alive_after_peer_page_close
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first shared worker client</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate SharedWorker page should load");
@@ -7591,19 +7135,9 @@ async fn per_page_isolate_policy_keeps_shared_worker_alive_after_peer_page_close
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second shared worker client</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate SharedWorker page should load");
@@ -7954,19 +7488,9 @@ async fn per_page_isolate_policy_removes_only_navigated_shared_worker_client() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first shared worker navigation client</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate SharedWorker navigation page should load");
@@ -7984,19 +7508,9 @@ async fn per_page_isolate_policy_removes_only_navigated_shared_worker_client() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second shared worker navigation client</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate SharedWorker navigation page should load");
@@ -8140,19 +7654,9 @@ async fn per_page_isolate_policy_rejects_cross_page_runtime_object_ids() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first runtime object owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate runtime-object page should load");
@@ -8170,19 +7674,9 @@ async fn per_page_isolate_policy_rejects_cross_page_runtime_object_ids() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second runtime object owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate runtime-object page should load");
@@ -8411,19 +7905,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_context_id
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first runtime context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate runtime-context page should load");
@@ -8441,19 +7925,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_context_id
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second runtime context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate runtime-context page should load");
@@ -8602,19 +8076,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_default_co
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first default runtime context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate default runtime-context page should load");
@@ -8632,19 +8096,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_default_co
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second default runtime context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate default runtime-context page should load");
@@ -8765,64 +8219,38 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_child_cont
 
     let (mut first_page, _, _, _creation_artifacts, first_download) = runtime
         .create_html_page_from_response(
-            first_url.clone(),
-            first_url,
-            None,
-            false,
-            0,
-            200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
-            &loader,
-            crate::RendererWebStorageHandles::ephemeral(),
-            r#"<!doctype html><body><iframe srcdoc="<body>first runtime child</body>"></iframe></body>"#
+first_url.clone(),
+first_url,
+None,
+false,
+0,
+200,
+vec![("content-type".to_owned(), "text/html".to_owned())],
+&loader,
+crate::RendererWebStorageHandles::ephemeral(),
+r#"<!doctype html><body><iframe srcdoc="<body>first runtime child</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-        )
+crate::RendererDocumentOptions { ..Default::default() },
+)
         .await
         .expect("first shared-isolate child runtime-context page should load");
     assert!(first_download.is_none());
 
     let (mut second_page, _, _, _creation_artifacts, second_download) = runtime
         .create_html_page_from_response(
-            second_url.clone(),
-            second_url,
-            None,
-            false,
-            0,
-            200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
-            &loader,
-            crate::RendererWebStorageHandles::ephemeral(),
-            r#"<!doctype html><body><iframe srcdoc="<body>second runtime child</body>"></iframe></body>"#
+second_url.clone(),
+second_url,
+None,
+false,
+0,
+200,
+vec![("content-type".to_owned(), "text/html".to_owned())],
+&loader,
+crate::RendererWebStorageHandles::ephemeral(),
+r#"<!doctype html><body><iframe srcdoc="<body>second runtime child</body>"></iframe></body>"#
                 .to_owned(),
-            None,
-
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-        )
+crate::RendererDocumentOptions { ..Default::default() },
+)
         .await
         .expect("second shared-isolate child runtime-context page should load");
     assert!(second_download.is_none());
@@ -9040,19 +8468,9 @@ async fn per_page_isolate_policy_keeps_release_object_group_page_local() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first release group owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate release-group page should load");
@@ -9070,19 +8488,9 @@ async fn per_page_isolate_policy_keeps_release_object_group_page_local() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second release group owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate release-group page should load");
@@ -9218,19 +8626,9 @@ async fn per_page_isolate_policy_replays_runtime_contexts_per_page() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first runtime replay owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate runtime-replay page should load");
@@ -9248,19 +8646,9 @@ async fn per_page_isolate_policy_replays_runtime_contexts_per_page() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second runtime replay owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate runtime-replay page should load");
@@ -9457,19 +8845,9 @@ async fn runtime_enable_events_for_new_inspector_session_replays_existing_isolat
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>new inspector session</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("new-session runtime replay test page should load");
@@ -9502,7 +8880,7 @@ async fn runtime_enable_events_include_renderer_root_frame_id_for_default_contex
     let root_frame_id = "TID-runtime-enable-root-frame";
 
     let (mut page, _, _, _creation_artifacts, pending_download) = runtime
-        .create_html_page_from_response_with_inspector_session_restores(
+        .create_html_page_from_response(
             page_url.clone(),
             page_url,
             None,
@@ -9513,23 +8891,10 @@ async fn runtime_enable_events_include_renderer_root_frame_id_for_default_contex
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>root frame id</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
-            Some(root_frame_id.to_owned()),
-            None,
+            crate::RendererDocumentOptions {
+                root_frame_id: Some(root_frame_id.to_owned()),
+                ..Default::default()
+            },
         )
         .await
         .expect("root-frame test page should load");
@@ -9590,19 +8955,9 @@ async fn per_page_isolate_policy_scopes_runtime_bindings_to_page_worlds() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first runtime binding owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate runtime-binding page should load");
@@ -9620,19 +8975,9 @@ async fn per_page_isolate_policy_scopes_runtime_bindings_to_page_worlds() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second runtime binding owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate runtime-binding page should load");
@@ -10257,19 +9602,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_binding_context_id_
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first binding context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate binding-context page should load");
@@ -10287,19 +9622,9 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_binding_context_id_
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second binding context owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate binding-context page should load");
@@ -10471,19 +9796,9 @@ async fn per_page_isolate_policy_keeps_remove_binding_page_local() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first remove-binding owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate remove-binding page should load");
@@ -10501,19 +9816,9 @@ async fn per_page_isolate_policy_keeps_remove_binding_page_local() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second remove-binding owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate remove-binding page should load");
@@ -10644,19 +9949,9 @@ async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() 
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first document-start owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate document-start page should load");
@@ -10674,19 +9969,9 @@ async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() 
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second document-start owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate document-start page should load");
@@ -10788,19 +10073,9 @@ async fn per_page_isolate_policy_keeps_stored_document_start_scripts_page_local(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>first stored preload owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("first shared-isolate stored-preload page should load");
@@ -10818,19 +10093,9 @@ async fn per_page_isolate_policy_keeps_stored_document_start_scripts_page_local(
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>second stored preload owner</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("second shared-isolate stored-preload page should load");
@@ -10963,19 +10228,9 @@ async fn stored_document_start_script_remove_uses_registry_key_namespace() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>stored preload key namespace</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("registry-key stored-preload page should load");
@@ -11083,19 +10338,9 @@ async fn owner_loop_applies_subresource_fetch_completion_without_wait_command() 
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>owner wake</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should load");
@@ -15277,19 +14522,9 @@ async fn owner_loop_ticks_page_timer_from_active_timer_index() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>timer index</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should load");
@@ -15516,19 +14751,9 @@ async fn owner_runtime_expression_await_uses_page_wake_or_timer_deadline() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             "<!doctype html><body>runtime expression await</body>".to_owned(),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should load");
@@ -16175,23 +15400,16 @@ async fn domcontentloaded_page_creation_reply_resumes_owner_to_load_without_exte
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::DomContentLoaded,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should reply at DOMContentLoaded");
@@ -16249,7 +15467,7 @@ async fn document_commit_background_dcl_completion_resumes_owner_to_load() {
     });
 
     let (mut page, _, _, creation_artifacts, pending_download) = runtime
-        .create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+        .create_streaming_raw_page_from_external_body(
             page_url.clone(),
             page_url,
             None,
@@ -16261,30 +15479,17 @@ async fn document_commit_background_dcl_completion_resumes_owner_to_load() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
             false,
             PageVmInitStage::DomContentLoaded,
             RendererReplyBoundary::DocumentCommit,
             RendererTopLevelNavigationDispatch::DelegateToBrowser,
             RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
-            Some("TID-1".to_owned()),
             None,
             None,
-            None,
+            crate::RendererDocumentOptions {
+                root_frame_id: Some("TID-1".to_owned()),
+                ..Default::default()
+            },
         )
         .await
         .expect("page should attach at document commit");
@@ -16574,23 +15779,16 @@ async fn owner_loop_completes_post_dcl_async_script_without_wait_command() {
             &loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
             false,
             PageVmInitStage::DomContentLoaded,
+            crate::RendererReplyBoundary::Stage,
             RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             RendererNavigationReplyPolicy::FollowBeforeReply,
+            None,
+            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("page should reach DOMContentLoaded");
@@ -16961,23 +16159,16 @@ document.addEventListener("DOMContentLoaded", () => {
         &loader,
         crate::RendererWebStorageHandles::ephemeral(),
         raw_body,
-        None,
-        None,
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        false,
-        1.0,
-        Default::default(),
-        None,
-        false,
-        Vec::new(),
-        false,
-        None,
         false,
         PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
         RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
         RendererNavigationReplyPolicy::FollowBeforeReply,
+        None,
+        None,
+        crate::RendererDocumentOptions {
+            ..Default::default()
+        },
     );
     tokio::pin!(creation);
 
@@ -17086,23 +16277,16 @@ blocked page
         &loader,
         crate::RendererWebStorageHandles::ephemeral(),
         raw_body,
-        None,
-        None,
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        false,
-        1.0,
-        Default::default(),
-        None,
-        false,
-        Vec::new(),
-        false,
-        None,
         false,
         PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
         RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
         RendererNavigationReplyPolicy::FollowBeforeReply,
+        None,
+        None,
+        crate::RendererDocumentOptions {
+            ..Default::default()
+        },
     );
     tokio::pin!(blocked_creation);
     tokio::select! {
@@ -17527,7 +16711,7 @@ fn start_test_html_page_with_optional_indexed_db_manager_and_navigation_dispatch
     top_level_navigation_dispatch: RendererTopLevelNavigationDispatch,
 ) -> super::PendingHtmlPage {
     runtime
-        .start_create_html_page_from_response_with_inspector_session_restores(
+        .start_create_html_page_from_response(
             runtime.reserve_page_for_creation(),
             url.clone(),
             url,
@@ -17539,25 +16723,12 @@ fn start_test_html_page_with_optional_indexed_db_manager_and_navigation_dispatch
             loader,
             crate::RendererWebStorageHandles::ephemeral(),
             html.to_owned(),
-            indexed_db_manager,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
-            None,
             None,
             top_level_navigation_dispatch,
-            None,
+            crate::RendererDocumentOptions {
+                indexed_db_manager,
+                ..Default::default()
+            },
         )
         .expect("test HTML page should start")
 }
@@ -17601,7 +16772,7 @@ async fn create_test_html_page_at_document_commit_with_navigation_dispatch(
             .expect("document-commit HTML body should complete");
     });
     let (mut page, _, _, creation_artifacts, pending_download) = runtime
-        .create_streaming_raw_page_from_external_body_with_inspector_session_restores(
+        .create_streaming_raw_page_from_external_body(
             url.clone(),
             url,
             None,
@@ -17613,21 +16784,6 @@ async fn create_test_html_page_at_document_commit_with_navigation_dispatch(
             loader,
             crate::RendererWebStorageHandles::ephemeral(),
             raw_body,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            1.0,
-            Default::default(),
-            None,
-            false,
-            Vec::new(),
-            false,
-            None,
-            Vec::new(),
             false,
             PageVmInitStage::Load,
             RendererReplyBoundary::DocumentCommit,
@@ -17635,8 +16791,9 @@ async fn create_test_html_page_at_document_commit_with_navigation_dispatch(
             navigation_reply_policy,
             None,
             None,
-            None,
-            None,
+            crate::RendererDocumentOptions {
+                ..Default::default()
+            },
         )
         .await
         .expect("test HTML page should attach at document commit");
