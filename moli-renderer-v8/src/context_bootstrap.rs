@@ -330,10 +330,11 @@ pub(crate) use self::navigation_restore::{
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
-pub(crate) use self::navigator_runtime::notify_geolocation_override_changed;
 pub(crate) use self::navigator_runtime::{
     bind_window_navigator_identity_seed, set_window_navigator_identity,
-    update_cached_window_visual_viewport_dimensions,
+};
+pub(crate) use self::navigator_runtime::{
+    dispatch_window_visual_viewport_resize, notify_geolocation_override_changed,
 };
 pub(crate) use self::notification_runtime::{
     build_notification_object_from_snapshot, notification_get_options_tag,
@@ -1004,3 +1005,5 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
 ) {
     update_live_ranges_for_detached_text_split(scope, original, new_text, offset);
 }
+
+pub(crate) use self::window_accessors::current_window_style_viewport;

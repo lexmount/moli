@@ -626,10 +626,7 @@ impl ScriptExecutionMemoryCounters {
 
 use super::native_bridge::element::ClientRect;
 use super::{
-    context_bootstrap::{
-        dispatch_media_query_list_change_events as dispatch_media_query_list_change_events_for_scope,
-        set_window_navigator_identity, sync_global_location_runtime_state,
-    },
+    context_bootstrap::{set_window_navigator_identity, sync_global_location_runtime_state},
     custom_elements,
     document_runtime::{CurrentScriptContextSpec, DocumentRuntime, DomHandle},
     dom::native::ShadowRootInclusion,
@@ -5005,31 +5002,15 @@ impl ScriptVm {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        let (previous_media, previous_viewport) = {
-            let host = self._context_host.borrow();
-            (host.emulated_media().clone(), host.style_viewport())
-        };
-        let changed = {
+        {
             let mut host = self._context_host.borrow_mut();
             if host.emulated_media() == overrides {
-                false
-            } else {
-                host.set_emulated_media(overrides);
-                true
+                return;
             }
-        };
-        if !changed {
-            return;
+            host.queue_environment_change();
+            host.set_emulated_media(overrides);
         }
-        // MediaQueryList and FontFaceSet have historically settled during the
-        // emulation command itself. Keep that observable timing while the
-        // Window/Document surface events use the rendering-update route.
-        self.dispatch_media_query_list_change_events(
-            &previous_media,
-            previous_viewport,
-            overrides,
-            previous_viewport,
-        );
+        self.sync_document_fonts_for_environment();
     }
 
     pub(super) fn set_emulated_media_for_bootstrap(
@@ -5089,52 +5070,15 @@ impl ScriptVm {
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> Result<()> {
-        let (previous_media, previous_viewport, previous_activity) = {
-            let host = self._context_host.borrow();
-            (
-                host.emulated_media().clone(),
-                host.style_viewport(),
-                host.document_activity(),
-            )
-        };
-        let changed = self
-            ._context_host
-            .borrow_mut()
-            .set_viewport_surface(viewport_surface);
-        if !changed {
-            return Ok(());
+        {
+            let mut host = self._context_host.borrow_mut();
+            if host.viewport_surface() == viewport_surface {
+                return Ok(());
+            }
+            host.queue_environment_change();
+            host.set_viewport_surface(viewport_surface);
         }
-        let (current_media, current_viewport) = {
-            let host = self._context_host.borrow();
-            (host.emulated_media().clone(), host.style_viewport())
-        };
-        let width = current_viewport
-            .width
-            .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_width);
-        let height = current_viewport
-            .height
-            .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height);
-        self.with_default_context_scope(|scope, _host_ptr| {
-            let window = scope.get_current_context().global(scope);
-            crate::context_bootstrap::update_cached_window_visual_viewport_dimensions(
-                scope, window, width, height,
-            );
-            Ok(())
-        })?;
-        self.dispatch_media_query_list_change_events(
-            &previous_media,
-            previous_viewport,
-            &current_media,
-            current_viewport,
-        );
-        // MediaQueryList has already been notified above. Passing the current
-        // media snapshot prevents the later rendering update from repeating
-        // that notification while it delivers resize events.
-        let _ = self._context_host.borrow_mut().queue_environment_change(
-            current_media,
-            previous_viewport,
-            previous_activity,
-        );
+        self.sync_document_fonts_for_environment();
         Ok(())
     }
 
@@ -5153,25 +5097,11 @@ impl ScriptVm {
         &mut self,
         activity: moli_page_types::DocumentActivity,
     ) -> Result<()> {
-        let (previous_media, previous_viewport, previous_activity) = {
-            let host = self._context_host.borrow();
-            (
-                host.emulated_media().clone(),
-                host.style_viewport(),
-                host.document_activity(),
-            )
-        };
-        if previous_activity == activity {
-            return Ok(());
+        let mut host = self._context_host.borrow_mut();
+        if host.document_activity() != activity {
+            host.queue_environment_change();
+            host.set_document_activity(activity);
         }
-        self._context_host
-            .borrow_mut()
-            .set_document_activity(activity);
-        let _ = self._context_host.borrow_mut().queue_environment_change(
-            previous_media,
-            previous_viewport,
-            previous_activity,
-        );
         Ok(())
     }
 
@@ -5195,26 +5125,13 @@ impl ScriptVm {
             .force_fresh_layout_reads_for_test();
     }
 
-    fn dispatch_media_query_list_change_events(
-        &mut self,
-        previous_media: &crate::protocol_types::EmulatedMediaOverrides,
-        previous_viewport: crate::style_engine::StyleViewport,
-        current_media: &crate::protocol_types::EmulatedMediaOverrides,
-        current_viewport: crate::style_engine::StyleViewport,
-    ) {
+    fn sync_document_fonts_for_environment(&mut self) {
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let context = v8::Local::new(scope, &self.page_default_context);
                 let scope = &mut v8::ContextScope::new(scope, context);
-                dispatch_media_query_list_change_events_for_scope(
-                    scope,
-                    previous_media,
-                    previous_viewport,
-                    current_media,
-                    current_viewport,
-                );
                 let host = self._context_host.borrow();
                 for document in host.documents_with_adopted_style_sheets() {
                     crate::native_bridge::document::sync_document_fonts_for_handle(

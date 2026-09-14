@@ -31,7 +31,6 @@ pub(crate) use self::navigator::{
 pub(in crate::context_bootstrap) use self::screen::{
     build_window_screen, install_screen_template_bindings,
 };
-pub(crate) use self::visual_viewport::update_cached_window_visual_viewport_dimensions;
 pub(in crate::context_bootstrap) use self::visual_viewport::{
     build_window_visual_viewport, install_visual_viewport_template_bindings,
 };
@@ -41,3 +40,5 @@ pub(crate) use self::window_state::{
 pub(super) use self::window_state::{
     build_window_navigator_for_receiver, install_navigator_runtime_state,
 };
+
+pub(crate) use self::visual_viewport::dispatch_window_visual_viewport_resize;

@@ -6,7 +6,7 @@ use crate::{
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
@@ -16,9 +16,8 @@ pub(super) enum PendingRenderingUpdatePayload {
     EnvironmentChange(PendingEnvironmentChange),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PendingEnvironmentChange {
-    pub(super) previous_media: crate::protocol_types::EmulatedMediaOverrides,
     pub(super) previous_viewport: crate::style_engine::StyleViewport,
     pub(super) previous_activity: moli_page_types::DocumentActivity,
 }
@@ -116,40 +115,54 @@ impl JsContextHost {
         )
     }
 
-    /// Publish one coalesced environment-change task. Native values are
-    /// updated synchronously; this payload retains the first snapshot so a
-    /// burst of protocol commands produces one observable rendering turn.
-    pub(crate) fn queue_environment_change(
-        &mut self,
-        previous_media: crate::protocol_types::EmulatedMediaOverrides,
-        previous_viewport: crate::style_engine::StyleViewport,
-        previous_activity: moli_page_types::DocumentActivity,
-    ) -> bool {
-        let Some(target) =
-            self.current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top)
-        else {
-            return false;
-        };
-        if self
-            .rendering_updates
-            .find_slot_index(
+    /// Capture each current Document before changing the native environment.
+    /// Repeated updates keep the first viewport/activity baseline; media lists
+    /// already retain their own last reported match.
+    pub(crate) fn queue_environment_change(&mut self) {
+        let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
+            self.child_browsing_context_handles_in_document_order()
+                .into_iter()
+                .map(OwnerDispatchScope::Child),
+        );
+        for dispatch_scope in scopes {
+            if self
+                .current_registered_window_execution_context_identity(dispatch_scope)
+                .is_none()
+            {
+                continue;
+            }
+            let Some(target) =
+                self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+            else {
+                continue;
+            };
+            if self
+                .rendering_updates
+                .find_slot_index(
+                    target,
+                    RendererPageRenderingUpdateTaskKind::EnvironmentChange,
+                    |_| true,
+                )
+                .is_some()
+            {
+                continue;
+            }
+            let previous_viewport = match dispatch_scope {
+                OwnerDispatchScope::Child(handle) => {
+                    super::super::element::iframe_handle_viewport(self, handle)
+                        .unwrap_or_else(|| self.style_viewport())
+                }
+                _ => self.style_viewport(),
+            };
+            self.queue_rendering_update(
                 target,
                 RendererPageRenderingUpdateTaskKind::EnvironmentChange,
-                |_| true,
-            )
-            .is_some()
-        {
-            return true;
+                PendingRenderingUpdatePayload::EnvironmentChange(PendingEnvironmentChange {
+                    previous_viewport,
+                    previous_activity: self.document_activity(),
+                }),
+            );
         }
-        self.queue_rendering_update(
-            target,
-            RendererPageRenderingUpdateTaskKind::EnvironmentChange,
-            PendingRenderingUpdatePayload::EnvironmentChange(PendingEnvironmentChange {
-                previous_media,
-                previous_viewport,
-                previous_activity,
-            }),
-        )
     }
 
     fn queue_rendering_update(
@@ -169,7 +182,6 @@ impl JsContextHost {
         let task_id = self
             .rendering_updates
             .allocate_task_id(RendererPageRenderingUpdateTaskId::from_raw);
-        let expected_payload = payload.clone();
         self.rendering_updates
             .push(PendingExactWindowDocumentTask::new(
                 task_id, target, kind, payload,
@@ -185,7 +197,7 @@ impl JsContextHost {
         let removed = self.rendering_updates.remove_exact(task_id, target, kind);
         debug_assert_eq!(
             removed.as_ref().map(|pending| pending.payload()),
-            Some(&expected_payload)
+            Some(&payload)
         );
         tracing::debug!(
             ?target,
@@ -301,138 +313,133 @@ impl JsContextHost {
         else {
             return false;
         };
-        // Environment changes are currently published for the top-level
-        // Window. Keeping the exact target in the normal ledger still gives
-        // us replacement-safe ownership and leaves child fan-out explicit for
-        // a later frame-tree extension.
-        if target.dispatch_scope() != OwnerDispatchScope::Top {
-            return false;
-        }
         let context_scope = &mut v8::ContextScope::new(scope, resolved.context);
         let previous_scope = target.dispatch_scope().enter(context_scope);
         let global = context_scope.get_current_context().global(context_scope);
-        let current_media = self.emulated_media().clone();
-        let current_viewport = self.style_viewport();
+        let current_viewport =
+            crate::context_bootstrap::current_window_style_viewport(context_scope, self);
         let current_activity = self.document_activity();
-        let mut dispatched = false;
+        // Resize precedes media reporting. Every listener can replace its
+        // Document, so abandon the remaining events as soon as the owner retires.
+        let dispatched = (|| {
+            let mut dispatched = false;
+            let window_target = match target.dispatch_scope() {
+                OwnerDispatchScope::Child(handle) => {
+                    let Some(child_target) = self.current_child_window_event_target(handle) else {
+                        return false;
+                    };
+                    EventTargetHandle::ChildWindow(child_target)
+                }
+                _ => EventTargetHandle::Window,
+            };
 
-        if change.previous_media != current_media {
-            crate::context_bootstrap::dispatch_media_query_list_change_events(
-                context_scope,
-                &change.previous_media,
-                change.previous_viewport,
-                &current_media,
-                current_viewport,
-            );
-            dispatched = true;
-        }
-
-        if change.previous_viewport != current_viewport {
-            crate::context_bootstrap::update_cached_window_visual_viewport_dimensions(
-                context_scope,
-                global,
-                current_viewport
-                    .width
-                    .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
-                current_viewport
-                    .height
-                    .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
-            );
-            if let Ok(event) = crate::host::create_host_event(
-                context_scope,
-                "resize",
-                global.into(),
-                global.into(),
-                false,
-                false,
-            ) {
-                dispatched |= self
-                    .dispatch_public_event_best_effort(
-                        context_scope,
-                        host_ptr,
-                        EventTargetHandle::Window,
-                        event,
-                        "window resize event",
-                    )
-                    .is_ok();
-            }
-
-            if let Some(visual_viewport) = global
-                .get(
-                    context_scope,
-                    crate::util::v8str(context_scope, "visualViewport").into(),
-                )
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                && let Ok(event) = crate::host::create_host_event(
+            let resized = change.previous_viewport.width != current_viewport.width
+                || change.previous_viewport.height != current_viewport.height;
+            if resized {
+                if let Ok(event) = crate::host::create_host_event(
                     context_scope,
                     "resize",
-                    visual_viewport.into(),
-                    visual_viewport.into(),
+                    global.into(),
+                    global.into(),
                     false,
-                    false,
-                )
-            {
-                dispatched |= crate::context_bootstrap::dispatch_simple_event_target_event(
-                    context_scope,
-                    visual_viewport,
-                    "__moliVisualViewportListeners",
-                    "resize",
-                    event,
-                );
-            }
-        }
-
-        if change.previous_activity != current_activity {
-            if change.previous_activity.visible != current_activity.visible
-                && let Some(document) = global
-                    .get(
-                        context_scope,
-                        crate::util::v8str(context_scope, "document").into(),
-                    )
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                && let Ok(event) = crate::host::create_host_event(
-                    context_scope,
-                    "visibilitychange",
-                    document.into(),
-                    document.into(),
-                    false,
-                    false,
-                )
-            {
-                dispatched |= self
-                    .dispatch_public_event_best_effort(
-                        context_scope,
-                        host_ptr,
-                        EventTargetHandle::Node(resolved.document_handle),
-                        event,
-                        "document visibilitychange event",
-                    )
-                    .is_ok();
-            }
-            if change.previous_activity.focused != current_activity.focused {
-                let event_type = if current_activity.focused {
-                    "focus"
-                } else {
-                    "blur"
-                };
-                if let Some(event) = super::super::element::construct_focus_event(
-                    context_scope,
-                    event_type,
-                    None,
                     false,
                 ) {
                     dispatched |= self
                         .dispatch_public_event_best_effort(
                             context_scope,
                             host_ptr,
-                            EventTargetHandle::Window,
+                            window_target,
                             event,
-                            "window focus state event",
+                            "window resize event",
                         )
                         .is_ok();
                 }
+
+                if !self.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                ) {
+                    return dispatched;
+                }
+                dispatched |= crate::context_bootstrap::dispatch_window_visual_viewport_resize(
+                    context_scope,
+                    global,
+                );
             }
-        }
+
+            if !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            ) {
+                return dispatched;
+            }
+            dispatched |=
+                crate::context_bootstrap::dispatch_media_query_list_change_events(context_scope);
+            if !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            ) {
+                return dispatched;
+            }
+
+            if change.previous_activity != current_activity {
+                if change.previous_activity.visible != current_activity.visible
+                    && let Ok(document) = crate::host::event_target_value(
+                        context_scope,
+                        host_ptr,
+                        EventTargetHandle::Node(resolved.document_handle),
+                    )
+                    && let Ok(event) = crate::host::create_host_event(
+                        context_scope,
+                        "visibilitychange",
+                        document,
+                        document,
+                        true,
+                        false,
+                    )
+                {
+                    dispatched |= self
+                        .dispatch_public_event_best_effort(
+                            context_scope,
+                            host_ptr,
+                            EventTargetHandle::Node(resolved.document_handle),
+                            event,
+                            "document visibilitychange event",
+                        )
+                        .is_ok();
+                }
+                if !self.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                ) {
+                    return dispatched;
+                }
+                if change.previous_activity.focused != current_activity.focused {
+                    let event_type = if current_activity.focused {
+                        "focus"
+                    } else {
+                        "blur"
+                    };
+                    if let Some(event) = super::super::element::construct_focus_event(
+                        context_scope,
+                        event_type,
+                        None,
+                        false,
+                    ) {
+                        dispatched |= self
+                            .dispatch_public_event_best_effort(
+                                context_scope,
+                                host_ptr,
+                                window_target,
+                                event,
+                                "window focus state event",
+                            )
+                            .is_ok();
+                    }
+                }
+            }
+            dispatched
+        })();
         target
             .dispatch_scope()
             .restore(context_scope, previous_scope);

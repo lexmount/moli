@@ -2982,9 +2982,11 @@ fn match_media_uses_renderer_viewport_surface_for_viewport_and_screen_queries() 
     );
 }
 
-#[test]
-fn match_media_viewport_surface_change_dispatches_change_event() {
-    let mut vm = new_storage_test_vm("https://match-media-viewport-change.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn match_media_viewport_surface_change_dispatches_change_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://match-media-viewport-change.test/");
 
     let initial = vm
         .eval(
@@ -3012,6 +3014,11 @@ fn match_media_viewport_surface_change_dispatches_change_event() {
 
     vm.set_viewport_surface(Some(viewport_surface_800_600_on_1920_1080_screen()))
         .expect("viewport surface should update");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     let result = vm
         .eval(
@@ -3030,9 +3037,10 @@ JSON.stringify({
     );
 }
 
-#[test]
-fn match_media_change_event_uses_event_prototype_and_declared_properties() {
-    let mut vm = new_storage_test_vm("https://match-media-change-event.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn match_media_change_event_uses_event_prototype_and_declared_properties() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://match-media-change-event.test/");
 
     let initial = vm
         .eval(
@@ -3069,6 +3077,11 @@ fn match_media_change_event_uses_event_prototype_and_declared_properties() {
         color_scheme: Some("dark".to_owned()),
         ..Default::default()
     });
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlChangeEvents)")
@@ -3080,9 +3093,10 @@ fn match_media_change_event_uses_event_prototype_and_declared_properties() {
     );
 }
 
-#[test]
-fn match_media_declared_slots_ignore_string_property_spoofing() {
-    let mut vm = new_storage_test_vm("https://match-media-declared-slots.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn match_media_declared_slots_ignore_string_property_spoofing() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://match-media-declared-slots.test/");
 
     let initial = vm
         .eval(
@@ -3178,6 +3192,11 @@ fn match_media_declared_slots_ignore_string_property_spoofing() {
         color_scheme: Some("dark".to_owned()),
         ..Default::default()
     });
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlSlotProbe)")
@@ -3192,6 +3211,11 @@ fn match_media_declared_slots_ignore_string_property_spoofing() {
         color_scheme: Some("light".to_owned()),
         ..Default::default()
     });
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlSlotProbe)")

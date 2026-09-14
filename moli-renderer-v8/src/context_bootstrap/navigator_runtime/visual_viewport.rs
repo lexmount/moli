@@ -85,21 +85,32 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
     Ok(viewport)
 }
 
-pub(crate) fn update_cached_window_visual_viewport_dimensions<'s>(
+pub(crate) fn dispatch_window_visual_viewport_resize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
-    width: f64,
-    height: f64,
-) {
+) -> bool {
     let Some(viewport) = get_private_value(scope, window, WINDOW_VISUAL_VIEWPORT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
-        return;
+        return false;
     };
-    let width = v8::Number::new(scope, width);
-    set_private_value(scope, viewport, VISUAL_VIEWPORT_WIDTH_SLOT, width.into());
-    let height = v8::Number::new(scope, height);
-    set_private_value(scope, viewport, VISUAL_VIEWPORT_HEIGHT_SLOT, height.into());
+    let Ok(event) = crate::host::create_host_event(
+        scope,
+        "resize",
+        viewport.into(),
+        viewport.into(),
+        false,
+        false,
+    ) else {
+        return false;
+    };
+    dispatch_simple_event_target_event(
+        scope,
+        viewport,
+        VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT,
+        "resize",
+        event,
+    )
 }
 
 fn visual_viewport_attribute_getter_callback<'s>(
@@ -120,6 +131,25 @@ fn visual_viewport_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if matches!(
+        slot,
+        VISUAL_VIEWPORT_WIDTH_SLOT | VISUAL_VIEWPORT_HEIGHT_SLOT
+    ) && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
+    {
+        let viewport =
+            crate::context_bootstrap::current_window_style_viewport(scope, unsafe { &*host_ptr });
+        let value = if slot == VISUAL_VIEWPORT_WIDTH_SLOT {
+            viewport
+                .width
+                .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width)
+        } else {
+            viewport
+                .height
+                .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height)
+        };
+        rv.set_double(value);
+        return;
+    }
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );

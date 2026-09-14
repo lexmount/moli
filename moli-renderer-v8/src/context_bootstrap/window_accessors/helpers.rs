@@ -113,3 +113,15 @@ pub(super) fn window_receiver<'s>(
     webidl::throw_type_error(scope, "Window getter called on incompatible receiver.");
     None
 }
+
+pub(crate) fn current_window_style_viewport(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &crate::native_bridge::JsContextHost,
+) -> crate::style_engine::StyleViewport {
+    let global = scope.get_current_context().global(scope);
+    window_child_context_handle(scope, global)
+        .and_then(|frame_handle| {
+            crate::native_bridge::element::iframe_handle_viewport(host, frame_handle)
+        })
+        .unwrap_or_else(|| host.style_viewport())
+}

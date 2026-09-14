@@ -341,3 +341,213 @@ scrollTo(0, 15);
         "a child rendering update must not retarget its events to the top Document"
     );
 }
+
+fn emulation_viewport(width: u32) -> crate::protocol_types::ViewportSurface {
+    crate::protocol_types::ViewportSurface {
+        inner_width: width,
+        inner_height: 600,
+        outer_width: 1920,
+        outer_height: 1080,
+        device_pixel_ratio: 1.0,
+        screen_width: 1920,
+        screen_height: 1080,
+        screen_avail_width: 1920,
+        screen_avail_height: 1040,
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn environment_updates_defer_and_coalesce_resize_and_media_notifications() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://environment-turn.test/");
+    vm.set_viewport_surface_for_bootstrap(Some(emulation_viewport(640)));
+    vm.eval(
+        r#"
+        globalThis.events = [];
+        globalThis.widthQuery = matchMedia('(min-width: 800px)');
+        globalThis.darkQuery = matchMedia('(prefers-color-scheme: dark)');
+        const record = name => events.push([name, innerWidth, visualViewport.width,
+            widthQuery.matches, darkQuery.matches].join(':'));
+        addEventListener('resize', () => record('window'));
+        visualViewport.addEventListener('resize', () => record('visual'));
+        widthQuery.addEventListener('change', () => record('width'));
+        darkQuery.addEventListener('change', () => record('dark'));
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.set_viewport_surface(Some(emulation_viewport(800)))
+        .unwrap();
+    vm.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides {
+        color_scheme: Some("dark".to_owned()),
+        ..Default::default()
+    });
+    vm.set_viewport_surface(Some(emulation_viewport(900)))
+        .unwrap();
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "");
+    assert_eq!(
+        vm.eval(
+            "[innerWidth, visualViewport.width, widthQuery.matches, darkQuery.matches].join(':')"
+        )
+        .unwrap(),
+        "900:900:true:true"
+    );
+    // A list created after the change already has the current match result.
+    vm.eval("matchMedia('(min-width: 800px)').addEventListener('change', () => events.push('late')); 'ready'").unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "window:900:900:true:true|visual:900:900:true:true|width:900:900:true:true|dark:900:900:true:true"
+    );
+    assert!(
+        !vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    vm.set_viewport_surface(Some(emulation_viewport(900)))
+        .unwrap();
+    assert!(
+        !vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn environment_screen_changes_report_media_without_resizing_the_viewport() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://screen-media-turn.test/");
+    vm.set_viewport_surface_for_bootstrap(Some(emulation_viewport(800)));
+    vm.eval(r#"
+        globalThis.events = [];
+        addEventListener('resize', () => events.push('window'));
+        visualViewport.addEventListener('resize', () => events.push('visual'));
+        matchMedia('(device-width: 1000px)').addEventListener('change', e => events.push('screen:' + e.matches));
+        matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => events.push('dark'));
+        'ready'
+    "#).unwrap();
+    let mut surface = emulation_viewport(800);
+    surface.screen_width = 1000;
+    surface.screen_avail_width = 1000;
+    vm.set_viewport_surface(Some(surface)).unwrap();
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "screen:true");
+    // Returning to the original preference before the turn produces no change.
+    vm.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides {
+        color_scheme: Some("dark".to_owned()),
+        ..Default::default()
+    });
+    vm.set_emulated_media(&Default::default());
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "screen:true");
+    vm.set_viewport_surface(Some(emulation_viewport(800)))
+        .unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("events.join('|')").unwrap(),
+        "screen:true|screen:false"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn environment_resize_replacement_retires_the_remaining_document_events() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://environment-replacement.test/");
+    vm.set_viewport_surface_for_bootstrap(Some(emulation_viewport(640)));
+    vm.eval(r#"
+        globalThis.events = [];
+        addEventListener('resize', () => {
+            events.push('resize');
+            document.open(); document.write('<!doctype html><p>replacement</p>'); document.close();
+        });
+        visualViewport.addEventListener('resize', () => events.push('retired-visual'));
+        matchMedia('(min-width: 800px)').addEventListener('change', () => events.push('retired-media'));
+        document.addEventListener('visibilitychange', () => events.push('retired-visibility'));
+        'ready'
+    "#).unwrap();
+    vm.set_viewport_surface(Some(emulation_viewport(800)))
+        .unwrap();
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(vm.eval("events.join('|')").unwrap(), "resize");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn environment_media_and_visibility_changes_reach_existing_child_documents() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://child-environment.test/");
+    vm.eval(r#"
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        const frame = document.createElement('iframe'); body.appendChild(frame); void frame.contentWindow;
+        'ready'
+    "#).unwrap();
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader
+        )
+        .await
+        .unwrap()
+    );
+    let child_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .unwrap()
+        .context_id;
+    vm.eval_in_child_default_context(child_id, r#"
+        globalThis.events = [];
+        matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => events.push('dark:' + e.matches));
+        document.addEventListener('visibilitychange', () => events.push('hidden:' + document.hidden));
+        'ready'
+    "#).unwrap();
+    vm.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides {
+        color_scheme: Some("dark".to_owned()),
+        ..Default::default()
+    });
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_child_default_context(child_id, "events.join('|')")
+            .unwrap(),
+        ""
+    );
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval_in_child_default_context(child_id, "events.join('|')")
+            .unwrap(),
+        "dark:true|hidden:true"
+    );
+}

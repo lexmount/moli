@@ -1,5 +1,6 @@
 use super::dispatch_media_query_list_event;
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
+use crate::context_bootstrap::current_window_style_viewport;
 use crate::context_bootstrap::events::initialize_event_object;
 use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
@@ -17,18 +18,6 @@ use crate::util::{
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-fn current_window_style_viewport(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
-) -> StyleViewport {
-    let global = scope.get_current_context().global(scope);
-    super::super::window_accessors::window_child_context_handle(scope, global)
-        .and_then(|frame_handle| {
-            crate::native_bridge::element::iframe_handle_viewport(host, frame_handle)
-        })
-        .unwrap_or_else(|| host.style_viewport())
-}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::MediaQueryList)]
@@ -204,14 +193,18 @@ pub(crate) fn window_match_media_callback<'s>(
 
 pub(crate) fn dispatch_media_query_list_change_events<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    previous_media: &crate::protocol_types::EmulatedMediaOverrides,
-    previous_viewport: StyleViewport,
-    current_media: &crate::protocol_types::EmulatedMediaOverrides,
-    current_viewport: StyleViewport,
-) {
-    let Some(registry) = global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT) else {
-        return;
+) -> bool {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
     };
+    let host = unsafe { &*host_ptr };
+    let target = host.current_window_document_task_target(scope);
+    let current_media = host.emulated_media().clone();
+    let current_viewport = current_window_style_viewport(scope, host);
+    let Some(registry) = global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT) else {
+        return false;
+    };
+    let mut dispatched = false;
     for index in 0..registry.length() {
         let Some(value) = registry.get_index(scope, index) else {
             continue;
@@ -222,14 +215,19 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         let Some(media) = media_query_list_media_slot(scope, mql) else {
             continue;
         };
-        let previous_matches = evaluate_match_media_query_list_with_viewport(
-            &media,
-            Some(previous_media),
-            previous_viewport,
-        );
+        if target.is_none_or(|target| {
+            !unsafe { &*host_ptr }.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            )
+        }) {
+            break;
+        }
+        let previous_matches = get_private_value(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT)
+            .is_some_and(|value| value.boolean_value(scope));
         let current_matches = evaluate_match_media_query_list_with_viewport(
             &media,
-            Some(current_media),
+            Some(&current_media),
             current_viewport,
         );
         set_media_query_list_bool_slot(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT, current_matches);
@@ -238,7 +236,9 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         }
         let event = media_query_list_change_event(scope, &media, current_matches);
         let _ = dispatch_media_query_list_event(scope, mql, event);
+        dispatched = true;
     }
+    dispatched
 }
 
 fn media_query_list_change_event<'s>(
@@ -250,6 +250,7 @@ fn media_query_list_change_event<'s>(
         .bind(scope)
         .expect("MediaQueryList change Event declaration should bind");
     initialize_event_object(scope, event, "change", false, false);
+    crate::context_bootstrap::events::mark_event_trusted(scope, event);
     MediaQueryListChangeEventPropertiesDeclaration::new(media.to_owned(), matches)
         .initialize(scope, event)
         .expect("MediaQueryList change Event properties should initialize object");
