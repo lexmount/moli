@@ -3818,7 +3818,7 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
 
     let PageScreencastCaptureStart::Pending(clean_capture) = ctx
         .conn
-        .start_page_screencast_frame_capture(&registration, Some(visual_state))
+        .start_page_screencast_frame_capture(&registration, Some(visual_state.clone()))
     else {
         panic!("an acknowledged subscription should poll its visual state");
     };
@@ -3839,6 +3839,40 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
                 registration.generation(),
             ),
         Some(false),
+    );
+
+    ctx.process_async(json!({
+        "id": 552, "sessionId": "SID-screencast-frame",
+        "method": "Emulation.setDefaultBackgroundColorOverride",
+        "params": {"color": {"r": 255, "g": 0, "b": 0}}
+    }))
+    .await;
+    ctx.expect_result(552, json!({}), Some("SID-screencast-frame"));
+    let PageScreencastCaptureStart::Pending(changed_capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&registration, Some(visual_state.clone()))
+    else {
+        panic!("background change should allow a capture");
+    };
+    let PageScreencastCaptureCompletion::Frame {
+        event,
+        visual_state: changed_state,
+    } = ctx
+        .conn
+        .complete_page_screencast_frame_capture(changed_capture.wait().await)
+    else {
+        panic!("changing only the base color must produce a new screencast frame");
+    };
+    assert_ne!(changed_state, visual_state);
+    let (event, _) = event.into_parts();
+    let bytes = BASE64_STANDARD
+        .decode(event["params"]["data"].as_str().unwrap())
+        .unwrap();
+    let decoded = moli_image::decode_jpeg(&bytes).unwrap();
+    assert!(
+        decoded.rgba[0] >= 250 && decoded.rgba[1] <= 2 && decoded.rgba[2] <= 2,
+        "{:?}",
+        &decoded.rgba[..4]
     );
 }
 

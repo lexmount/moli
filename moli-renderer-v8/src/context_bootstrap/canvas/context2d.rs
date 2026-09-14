@@ -1565,9 +1565,7 @@ fn rasterize_canvas_fragment<'s>(
     });
 }
 
-/// Composites `source` (premultiplied RGBA8) over `destination` (straight
-/// RGBA8) using source-over. This is the format vello_cpu renders into, while
-/// the canvas backing store is straight alpha.
+/// Composites straight-alpha RGBA8 source and destination using source-over.
 fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
     for (dst, src) in destination.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
         let src_alpha = u32::from(src[3]);
@@ -1585,7 +1583,7 @@ fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
             continue;
         }
         for channel in 0..3 {
-            let src_premultiplied = u32::from(src[channel]);
+            let src_premultiplied = (u32::from(src[channel]) * src_alpha + 127) / 255;
             let dst_premultiplied = u32::from(dst[channel]) * dst_alpha / 255;
             let out_premultiplied = src_premultiplied + dst_premultiplied * (255 - src_alpha) / 255;
             dst[channel] = ((out_premultiplied * 255 + out_alpha / 2) / out_alpha) as u8;

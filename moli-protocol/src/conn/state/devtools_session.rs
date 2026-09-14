@@ -668,6 +668,7 @@ pub(crate) struct DevToolsNetworkSessionState {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct DevToolsEmulationSessionState {
+    pub(crate) default_background_color: Option<[u8; 4]>,
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,

@@ -102,6 +102,142 @@ async fn capture_screenshot_accepts_default_equivalent_options() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_applies_base_background_alpha_clear_and_css_priority() {
+    let mut ctx = TestContext::new();
+    let fixture = screenshot_data_url(
+        r#"<!doctype html>
+        <style>html,body{margin:0;overflow:hidden}
+        #box{width:4px;height:4px;background:lime}
+        iframe{position:absolute;left:8px;top:0;width:4px;height:4px;border:0}</style>
+        <div id="box"></div><iframe srcdoc="<!doctype html><style>html,body{margin:0;overflow:hidden}</style>"></iframe>"#,
+    );
+    install_active_screenshot_page(&mut ctx, "BID-BG", "TID-BG", "SID-BG", &fixture).await;
+    set_screenshot_viewport(&mut ctx, "SID-BG", 16, 16, 1.0, 150).await;
+
+    for (params, expected) in [
+        (json!({"color": {"r":0,"g":0,"b":0,"a":0}}), [0, 0, 0, 0]),
+        (
+            json!({"color": {"r":255,"g":0,"b":0,"a":0.5}}),
+            [255, 0, 0, 128],
+        ),
+        (
+            json!({"color": {"r":-1,"g":300,"b":128,"a":2}}),
+            [0, 255, 128, 255],
+        ),
+        (json!({}), [255; 4]),
+    ] {
+        ctx.process_async(json!({"id":151,"sessionId":"SID-BG",
+            "method":"Emulation.setDefaultBackgroundColorOverride","params":params}))
+            .await;
+        ctx.expect_result(151, json!({}), Some("SID-BG"));
+        ctx.process_async(json!({"id":152,"sessionId":"SID-BG","method":"Page.captureScreenshot"}))
+            .await;
+        let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, 152));
+        assert_eq!(decode_png_pixel(&png, 1, 8), expected);
+        assert_eq!(
+            decode_png_pixel(&png, 9, 1),
+            expected,
+            "a transparent child must reveal the top-level base"
+        );
+        assert_eq!(
+            decode_png_pixel(&png, 1, 1),
+            [0, 255, 0, 255],
+            "author paint covers the base color"
+        );
+        ctx.process_async(
+            json!({"id":156,"sessionId":"SID-BG","method":"Page.captureScreenshot",
+            "params":{"format":"jpeg", "quality":100}}),
+        )
+        .await;
+        let bytes = screenshot_bytes(&take_response_by_id(&mut ctx, 156));
+        let jpeg = moli_image::decode_jpeg(&bytes).unwrap();
+        let pixel = &jpeg.rgba[((12 * jpeg.width + 1) * 4) as usize..][..4];
+        for channel in 0..3 {
+            let composited =
+                ((u16::from(expected[channel]) * u16::from(expected[3]) + 127) / 255) as u8;
+            assert!(
+                pixel[channel].abs_diff(composited) <= 2,
+                "JPEG pixel {pixel:?}, RGBA base {expected:?}"
+            );
+        }
+        assert_eq!(pixel[3], 255);
+    }
+
+    ctx.process_async(json!({"id":153,"sessionId":"SID-BG",
+        "method":"Emulation.setDefaultBackgroundColorOverride",
+        "params":{"color":{"r":255,"g":0,"b":0}}}))
+        .await;
+    ctx.expect_result(153, json!({}), Some("SID-BG"));
+    ctx.process_async(json!({"id":157,"sessionId":"SID-BG",
+        "method":"Emulation.setDefaultBackgroundColorOverride",
+        "params":{"color":{"r":4294967296_u64,"g":0,"b":0}}}))
+        .await;
+    ctx.expect_error(157, -32602, "Color channels must be int32 values");
+    ctx.install_navigation_fixture_for_session_owner(&fixture, Some("SID-BG"))
+        .await;
+    ctx.process_async(json!({"id":154,"sessionId":"SID-BG","method":"Page.captureScreenshot"}))
+        .await;
+    let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, 154));
+    assert_eq!(
+        decode_png_pixel(&png, 1, 8),
+        [255, 0, 0, 255],
+        "the target override survives navigation"
+    );
+
+    let css_background = screenshot_data_url("<style>html{background:blue}</style>");
+    ctx.install_navigation_fixture_for_session_owner(&css_background, Some("SID-BG"))
+        .await;
+    ctx.process_async(json!({"id":155,"sessionId":"SID-BG","method":"Page.captureScreenshot"}))
+        .await;
+    let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, 155));
+    assert_eq!(
+        decode_png_pixel(&png, 1, 8),
+        [0, 0, 255, 255],
+        "the CSS canvas background takes precedence"
+    );
+
+    let translucent_css = screenshot_data_url("<style>html{background:rgba(0,0,255,.5)}</style>");
+    ctx.install_navigation_fixture_for_session_owner(&translucent_css, Some("SID-BG"))
+        .await;
+    ctx.process_async(json!({"id":161,"sessionId":"SID-BG","method":"Page.captureScreenshot"}))
+        .await;
+    let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, 161));
+    let pixel = decode_png_pixel(&png, 1, 8);
+    assert!(
+        pixel[0].abs_diff(127) <= 1 && pixel[2].abs_diff(128) <= 1,
+        "{pixel:?}"
+    );
+    assert_eq!(
+        [pixel[1], pixel[3]],
+        [0, 255],
+        "translucent CSS blends over the opaque emulated base"
+    );
+
+    // Blink clears the shared base color whenever a Page emulation handler is detached.
+    ctx.process_async(json!({"id":158,"method":"Target.attachToTarget",
+        "params":{"targetId":"TID-BG","flatten":true}}))
+        .await;
+    let attached = take_response_by_id(&mut ctx, 158)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ctx.process_async(json!({"id":159,"method":"Target.detachFromTarget",
+        "params":{"sessionId":attached}}))
+        .await;
+    ctx.expect_result(159, json!({}), None);
+    ctx.install_navigation_fixture_for_session_owner(&fixture, Some("SID-BG"))
+        .await;
+    ctx.process_async(json!({"id":160,"sessionId":"SID-BG","method":"Page.captureScreenshot"}))
+        .await;
+    let png = screenshot_png_bytes(&take_response_by_id(&mut ctx, 160));
+    assert_eq!(
+        decode_png_pixel(&png, 1, 8),
+        [255; 4],
+        "detaching restores the default base color"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_uses_pending_renderer_page_command_residence() {
     let mut ctx = TestContext::new();
     install_active_screenshot_page(

@@ -567,6 +567,7 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
     let screencast = capture_screencast_frame_with_request(
         &page,
         super::RendererCaptureScreencastFrameRequest {
+            base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
             optimize_for_speed: true,
@@ -675,6 +676,7 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
         .expect("viewport should update");
 
     let request = super::RendererCaptureScreenshotRequest {
+        base_background_color: [255; 4],
         purpose: super::RendererScreenshotPurpose::Screenshot,
         format: super::RendererScreenshotFormat::Jpeg,
         quality: 80,
@@ -741,6 +743,7 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
     let print = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Print {
                 print_background: true,
             },
@@ -759,6 +762,7 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
     let no_background = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Print {
                 print_background: false,
             },
@@ -823,6 +827,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
     let full = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -840,6 +845,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
     let clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -904,6 +910,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
     let viewport_clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -933,6 +940,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
     let page_clip = capture_screenshot_with_request(
         &page,
         super::RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
@@ -964,6 +972,7 @@ async fn capture_screenshot_rejects_full_document_at_the_128k_css_boundary() {
     )
     .await;
     let request = super::RendererCaptureScreenshotRequest {
+        base_background_color: [255; 4],
         purpose: super::RendererScreenshotPurpose::Screenshot,
         format: super::RendererScreenshotFormat::Png,
         quality: 100,
@@ -12122,6 +12131,7 @@ addEventListener("wheel", event => {
     let screencast = capture_screencast_frame_with_request(
         &page,
         super::RendererCaptureScreencastFrameRequest {
+            base_background_color: [255; 4],
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
             optimize_for_speed: true,

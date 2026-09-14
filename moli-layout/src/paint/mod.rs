@@ -561,7 +561,10 @@ where
         return (base_background_color, None);
     }
     if style_has_canvas_background(&root_box.style) {
-        return (root_box.style.background_color(), Some(root));
+        return (
+            composite_canvas_background(root_box.style.background_color(), base_background_color),
+            Some(root),
+        );
     }
 
     let mut stack = root_box.children.iter().rev().copied().collect::<Vec<_>>();
@@ -572,13 +575,35 @@ where
             .is_some_and(|element| element.is_html_element("body"))
         {
             if style_has_canvas_background(&layout_box.style) {
-                return (layout_box.style.background_color(), Some(id));
+                return (
+                    composite_canvas_background(
+                        layout_box.style.background_color(),
+                        base_background_color,
+                    ),
+                    Some(id),
+                );
             }
             break;
         }
         stack.extend(layout_box.children.iter().rev().copied());
     }
     (base_background_color, None)
+}
+
+fn composite_canvas_background(color: PaintColor, base: PaintColor) -> PaintColor {
+    let base_alpha = base.alpha * (1.0 - color.alpha);
+    let alpha = color.alpha + base_alpha;
+    if alpha == 0.0 {
+        return PaintColor::TRANSPARENT;
+    }
+    let component =
+        |foreground, background| (foreground * color.alpha + background * base_alpha) / alpha;
+    PaintColor::new(
+        component(color.red, base.red),
+        component(color.green, base.green),
+        component(color.blue, base.blue),
+        alpha,
+    )
 }
 
 fn style_has_canvas_background(style: &crate::ResolvedLayoutStyle) -> bool {

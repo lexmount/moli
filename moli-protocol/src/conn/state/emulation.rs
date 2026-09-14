@@ -175,6 +175,7 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
 /// Chromium's per-session Emulation handlers update one target-wide renderer.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct EffectiveTargetEmulationState {
+    pub(crate) default_background_color: Option<[u8; 4]>,
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: EmulatedMediaOverrides,
@@ -224,6 +225,7 @@ impl EffectiveTargetEmulationState {
         // Blink clears media on every Emulation handler disable. Keep the
         // target-wide side effect while retaining each handler's raw copy.
         self.emulated_media = EmulatedMediaOverrides::default();
+        self.default_background_color = None;
         if raw.emulated_device_metrics.is_some() {
             self.emulated_device_metrics = None;
         }

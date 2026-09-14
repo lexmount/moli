@@ -186,6 +186,7 @@ pub(crate) enum EmulationAction {
     SetTimezoneOverride,
     SetUserAgentOverride,
     SetEmulatedMedia,
+    SetDefaultBackgroundColorOverride,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]

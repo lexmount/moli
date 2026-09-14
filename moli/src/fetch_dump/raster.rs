@@ -32,6 +32,7 @@ pub(super) async fn render_pdf(page: &mut Page) -> Result<Vec<u8>> {
     let image = capture_page_raster(
         page,
         RendererCaptureScreenshotRequest {
+            base_background_color: [255; 4],
             purpose: RendererScreenshotPurpose::Print {
                 print_background: false,
             },

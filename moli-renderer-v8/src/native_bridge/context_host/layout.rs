@@ -81,6 +81,7 @@ impl JsContextHost {
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,
         viewport: moli_layout::PaintViewport,
+        base_background_color: [u8; 4],
     ) -> crate::runtime::RendererVisualStateToken {
         crate::runtime::RendererVisualStateToken::new(
             document,
@@ -90,6 +91,7 @@ impl JsContextHost {
             self.visual_state_generation(),
             self.visual_resource_generation(),
             viewport,
+            base_background_color,
         )
     }
 

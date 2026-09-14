@@ -2490,10 +2490,11 @@ impl ScriptVm {
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,
         viewport: moli_layout::PaintViewport,
+        base_background_color: [u8; 4],
     ) -> crate::runtime::RendererVisualStateToken {
         self._context_host
             .borrow()
-            .visual_state_token(document, viewport)
+            .visual_state_token(document, viewport, base_background_color)
     }
 
     #[cfg(test)]

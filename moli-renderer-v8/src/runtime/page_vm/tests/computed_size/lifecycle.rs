@@ -144,6 +144,7 @@ async fn computed_size_reads_do_not_invalidate_screencast_tokens() {
         let mut page = page_with_size_fixture(r#"<div id=target style="height:10px;background:red"></div>"#)?;
         set_viewport(&mut page, 40, 30)?;
         let request = |known_visual_state| RendererCaptureScreencastFrameRequest {
+base_background_color: [255; 4],
             format: RendererScreenshotFormat::Png,
             quality: 100,
             optimize_for_speed: true,

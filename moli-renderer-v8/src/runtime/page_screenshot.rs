@@ -72,6 +72,7 @@ struct RendererVisualState {
     viewport_width: u32,
     viewport_height: u32,
     device_pixel_ratio_bits: u32,
+    base_background_color: [u8; 4],
 }
 
 impl RendererVisualStateToken {
@@ -82,6 +83,7 @@ impl RendererVisualStateToken {
         interaction_generation: u64,
         resource_generation: u64,
         viewport: PaintViewport,
+        base_background_color: [u8; 4],
     ) -> Self {
         Self(Arc::new(RendererVisualState {
             document,
@@ -97,6 +99,7 @@ impl RendererVisualStateToken {
             viewport_width: viewport.css_width,
             viewport_height: viewport.css_height,
             device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
+            base_background_color,
         }))
     }
 
@@ -145,6 +148,8 @@ pub struct RendererCaptureScreenshotRequest {
     pub format: RendererScreenshotFormat,
     pub quality: u8,
     pub region: RendererScreenshotRegion,
+    /// Straight-alpha sRGB bytes in RGBA order, beneath author backgrounds.
+    pub base_background_color: [u8; 4],
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
@@ -157,6 +162,8 @@ pub struct RendererCaptureScreenshotRequest {
 pub struct RendererCaptureScreencastFrameRequest {
     pub format: RendererScreenshotFormat,
     pub quality: u8,
+    /// Straight-alpha sRGB bytes in RGBA order, beneath author backgrounds.
+    pub base_background_color: [u8; 4],
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
@@ -170,6 +177,7 @@ impl RendererCaptureScreenshotRequest {
             format: RendererScreenshotFormat::Png,
             quality: 100,
             region: RendererScreenshotRegion::Viewport,
+            base_background_color: [255; 4],
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
@@ -249,9 +257,11 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let visual_state_before = self
-            .vm()
-            .visual_state_token(self.document_lifecycle.identity(), viewport);
+        let visual_state_before = self.vm().visual_state_token(
+            self.document_lifecycle.identity(),
+            viewport,
+            request.base_background_color,
+        );
         if request.known_visual_state.as_ref() == Some(&visual_state_before) {
             return Ok(RendererCaptureScreencastFrameReply::Unchanged);
         }
@@ -260,7 +270,7 @@ impl PageVm {
             region: moli_layout::PaintCaptureRegion::Viewport,
             include_backgrounds: true,
             include_viewport_controls: true,
-            base_background_color: moli_layout::PaintColor::WHITE,
+            base_background_color: paint_background_color(request.base_background_color),
             max_width: request.max_width,
             max_height: request.max_height,
         };
@@ -279,9 +289,11 @@ impl PageVm {
                 return Ok(RendererCaptureScreencastFrameReply::NoDocument);
             }
         };
-        let visual_state_after = self
-            .vm()
-            .visual_state_token(self.document_lifecycle.identity(), viewport);
+        let visual_state_after = self.vm().visual_state_token(
+            self.document_lifecycle.identity(),
+            viewport,
+            request.base_background_color,
+        );
         let visual_state =
             visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
@@ -346,7 +358,7 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -360,6 +372,17 @@ impl PageVm {
                 ("image/png", encoded.width, encoded.height, encoded.bytes)
             }
             RendererScreenshotFormat::Jpeg => {
+                // Chrome captures JPEG against black. The encoder discards alpha,
+                // so composite our straight-alpha raster before handing it over.
+                for pixel in raster.rgba.chunks_exact_mut(4) {
+                    let alpha = u16::from(pixel[3]);
+                    if alpha != 255 {
+                        for channel in &mut pixel[..3] {
+                            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                        }
+                        pixel[3] = 255;
+                    }
+                }
                 let encoded = moli_image::encode_jpeg(&raster, quality)?;
                 ("image/jpeg", encoded.width, encoded.height, encoded.bytes)
             }
@@ -453,11 +476,16 @@ impl RendererCaptureScreenshotRequest {
                 RendererScreenshotPurpose::Screenshot => true,
             },
             include_viewport_controls,
-            base_background_color: moli_layout::PaintColor::WHITE,
+            base_background_color: paint_background_color(self.base_background_color),
             max_width: self.max_width,
             max_height: self.max_height,
         })
     }
+}
+
+fn paint_background_color(rgba: [u8; 4]) -> moli_layout::PaintColor {
+    let [r, g, b, a] = rgba.map(|channel| f32::from(channel) / 255.0);
+    moli_layout::PaintColor::new(r, g, b, a)
 }
 
 fn finite_f32(label: &str, value: f64) -> anyhow::Result<f32> {

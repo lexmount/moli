@@ -12,6 +12,11 @@ pub(crate) struct TargetEmulationStateUpdate<'a> {
 }
 
 impl TargetEmulationStateUpdate<'_> {
+    pub(crate) fn set_default_background_color(&mut self, color: Option<[u8; 4]>) {
+        self.raw.default_background_color = color;
+        self.effective.default_background_color = color;
+    }
+
     pub(crate) fn set_network_conditions(
         &mut self,
         network_conditions: Option<EmulatedNetworkConditions>,
@@ -140,6 +145,20 @@ impl TargetSessionOwnerRef<'_> {
 }
 
 impl CdpConnection {
+    pub(crate) fn default_background_color_for_owner(
+        &self,
+        owner: &crate::conn::CommandOwnerScope,
+    ) -> [u8; 4] {
+        self.target_session_owner_ref_for_owner(owner)
+            .and_then(|owner| {
+                owner
+                    .browser_context
+                    .page_target(&owner.target_id)
+                    .and_then(|target| target.effective_emulation_state.default_background_color)
+            })
+            .unwrap_or([255; 4])
+    }
+
     pub(crate) fn update_emulation_state_for_session_owner(
         &mut self,
         session_id: Option<&str>,

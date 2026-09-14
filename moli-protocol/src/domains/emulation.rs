@@ -227,6 +227,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
             Some(start_user_agent_override_command(conn, cmd))
         }
         Some(EmulationAction::SetEmulatedMedia) => Some(start_emulated_media_command(conn, cmd)),
+        Some(EmulationAction::SetDefaultBackgroundColorOverride) => Some(
+            EmulationCommandTaskStep::Complete(default_background_color_command(conn, cmd)),
+        ),
         None => Some(EmulationCommandTaskStep::Complete(
             CommandOutputPlan::error(-32601, "UnknownMethod"),
         )),
@@ -674,6 +677,37 @@ fn start_update_geolocation_override_command(
         session_id: cmd.session_id.map(str::to_owned),
         pending: PendingEmulationRendererDispatch::Pages(pending),
     })
+}
+
+fn default_background_color_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params: params::SetDefaultBackgroundColorOverrideParams = match cmd.get_params() {
+        Ok(Some(params)) => params,
+        Ok(None) => Default::default(),
+        Err(error) => return CommandOutputPlan::error(-32602, error),
+    };
+    if params.color.as_ref().is_some_and(|color| {
+        [color.r, color.g, color.b]
+            .into_iter()
+            .any(|channel| i32::try_from(channel).is_err())
+    }) {
+        return CommandOutputPlan::error(-32602, "Color channels must be int32 values");
+    }
+    let color = params.color.map(|color| {
+        // Blink's Color constructor clamps the channels and quantizes alpha.
+        [
+            color.r.clamp(0, 255) as u8,
+            color.g.clamp(0, 255) as u8,
+            color.b.clamp(0, 255) as u8,
+            (color.a.unwrap_or(1.0).clamp(0.0, 1.0) * 255.0).round() as u8,
+        ]
+    });
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_default_background_color(color);
+    }) {
+        // Paint is demand-driven; each capture samples the target's current base color.
+        Ok(()) => CommandOutputPlan::success(),
+        Err(error) => CommandOutputPlan::error(-31998, error),
+    }
 }
 
 fn start_emulated_media_command(

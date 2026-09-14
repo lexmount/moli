@@ -215,7 +215,7 @@ struct RasterDimensions {
     byte_len: usize,
 }
 
-/// Rasterizes an owned snapshot to row-major RGBA8 pixels with Vello CPU.
+/// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.
 pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintError> {
     let dimensions = validate_dimensions(snapshot.surface)?;
     let stream = validate_fragment_stream(snapshot)?;
@@ -238,12 +238,28 @@ pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintErr
             actual: rgba.len(),
         });
     }
+    unpremultiply_rgba(&mut rgba);
 
     Ok(RasterImage {
         width: dimensions.width,
         height: dimensions.height,
         rgba,
     })
+}
+
+// Vello's Pixmap stores premultiplied channels; RasterImage and our software
+// color filters consume straight-alpha RGBA. Convert at each backend readback.
+fn unpremultiply_rgba(rgba: &mut [u8]) {
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 {
+            pixel[..3].fill(0);
+        } else if alpha != 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -538,6 +554,7 @@ fn paint_fragment_stream(
             },
             &mut filtered_rgba,
         );
+        unpremultiply_rgba(&mut filtered_rgba);
         apply_software_color_filter(&mut filtered_rgba, filter);
 
         let clip = to_backend_shape(clip);
@@ -2501,6 +2518,36 @@ mod tests {
         let pixel = pixel(&image, 1, 1);
         assert!(pixel[0] <= 2 && pixel[1] <= 2 && pixel[2] <= 2);
         assert_eq!(pixel[3], 255);
+    }
+
+    #[test]
+    fn transparent_raster_and_filter_readbacks_preserve_straight_alpha() {
+        for filter in [None, Some(PaintFilter::Invert(1.0))] {
+            let mut snapshot = snapshot(2, 2, 1.0);
+            snapshot.canvas_color = PaintColor::TRANSPARENT;
+            snapshot.push_fragment(PaintFragment::PushLayer {
+                opacity: 1.0,
+                blend_mode: PaintBlendMode::Normal,
+                composite: PaintCompositeMode::SrcOver,
+                clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 2.0, 2.0)),
+                transform: PaintTransform2D::IDENTITY,
+                filter,
+            });
+            snapshot.push_fragment(PaintFragment::solid_rect(
+                PaintRect::new(0.0, 0.0, 2.0, 2.0),
+                PaintColor::new(1.0, 0.0, 0.0, 0.5),
+            ));
+            snapshot.push_fragment(PaintFragment::PopLayer);
+            let image = raster_snapshot(&snapshot).unwrap();
+            assert_eq!(
+                pixel(&image, 0, 0),
+                if filter.is_some() {
+                    [0, 255, 255, 128]
+                } else {
+                    [255, 0, 0, 128]
+                }
+            );
+        }
     }
 
     #[test]
