@@ -10340,6 +10340,69 @@ lightFrame.name = 'lightTarget';
     assert_eq!(result, "1|1|true|true|false|true|true|true|true");
 }
 #[test]
+fn child_webassembly_native_values_use_public_intrinsic_prototypes() {
+    let mut vm = new_storage_test_vm("https://child-wasm-intrinsics.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const names = ['Module', 'Instance', 'Memory', 'Table', 'Global',
+    'CompileError', 'LinkError', 'RuntimeError'];
+  const parentConstructors = names.map(name => WebAssembly[name]);
+  const frame = document.createElement('iframe');
+  const sibling = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  (document.body || document.documentElement || document).appendChild(sibling);
+  const child = frame.contentWindow;
+  const wasm = child.WebAssembly;
+  const other = sibling.contentWindow.WebAssembly;
+  const results = {};
+  results.isolated = names.every((name, index) =>
+    wasm[name].prototype !== other[name].prototype &&
+    wasm[name].prototype !== parentConstructors[index].prototype &&
+    wasm[name].prototype.constructor === wasm[name] &&
+    other[name].prototype.constructor === other[name] &&
+    parentConstructors[index].prototype.constructor === parentConstructors[index]);
+  results.errorParent = ['CompileError', 'LinkError', 'RuntimeError'].every(name =>
+    Object.getPrototypeOf(wasm[name].prototype) === child.Error.prototype);
+  results.descriptors = names.every(name => {
+    const descriptor = Object.getOwnPropertyDescriptor(wasm[name], 'prototype');
+    return !descriptor.writable && !descriptor.enumerable && !descriptor.configurable;
+  });
+  function thrownInChild(name, operation) {
+    try { operation(); return false; }
+    catch (error) {
+      return error.constructor === wasm[name] && error instanceof wasm[name] &&
+        Object.getPrototypeOf(error) === wasm[name].prototype &&
+        !(error instanceof WebAssembly[name]);
+    }
+  }
+  results.compileError = thrownInChild('CompileError', () =>
+    new wasm.Module(new Uint8Array([0])));
+  const importing = new wasm.Module(new Uint8Array([
+    0,97,115,109,1,0,0,0,1,4,1,96,0,0,2,7,1,1,109,1,102,0,0
+  ]));
+  results.linkError = thrownInChild('LinkError', () =>
+    new wasm.Instance(importing, {m: {f: 1}}));
+  const trap = new wasm.Module(new Uint8Array([
+    0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,7,5,1,1,102,0,0,
+    10,5,1,3,0,0,11
+  ]));
+  results.runtimeError = thrownInChild('RuntimeError', () =>
+    new wasm.Instance(trap).exports.f());
+  const sentinel = new RangeError('author getter');
+  try { new wasm.Memory({get initial() { throw sentinel; }}); }
+  catch (error) { results.authorException = error === sentinel; }
+  return JSON.stringify(results);
+})()
+    "#
+        )
+        .unwrap(),
+        r#"{"isolated":true,"errorParent":true,"descriptors":true,"compileError":true,"linkError":true,"runtimeError":true,"authorException":true}"#
+    );
+}
+
+#[test]
 fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() {
     let mut vm = new_storage_test_vm("https://child-wasm-newtarget.test/");
 
