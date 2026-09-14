@@ -1,3 +1,4 @@
+use crate::native_bridge;
 use moli_file_api::{BlobData, BlobId, BlobStore};
 pub(super) use moli_v8_util::buffer_source_bytes_from_value;
 pub(crate) use moli_webapi::blob::world_wrapper;
