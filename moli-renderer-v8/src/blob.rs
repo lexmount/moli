@@ -1,4 +1,4 @@
-use crate::web_api_interfaces;
+use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{BlobId, BlobStore, blob_slice_relative_index, normalize_blob_mime_type};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};

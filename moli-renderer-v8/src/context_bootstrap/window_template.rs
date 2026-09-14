@@ -28,7 +28,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT: &str = "__moliWindowNamedPropertiesReflectSet";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(plain)]
 struct WindowNamedPropertiesProxyHandlerDeclaration {
     #[webapi(method, length = 4, callback = window_named_properties_proxy_set_callback)]
     set: (),
