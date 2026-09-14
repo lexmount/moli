@@ -363,6 +363,9 @@ impl JsContextHost {
                     content_security_reporting_endpoints: refresh_policy_source
                         .map(|policy| policy.content_security_reporting_endpoints.clone())
                         .unwrap_or_default(),
+                    inherited_meta_content_security_policies: refresh_policy_source
+                        .map(|policy| policy.inherited_meta_content_security_policies.clone())
+                        .unwrap_or_default(),
                     permissions_policy: if is_new {
                         // The synchronous initial about:blank Document is
                         // already subject to the iframe's container policy.
