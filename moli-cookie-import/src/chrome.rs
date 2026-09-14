@@ -372,7 +372,63 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{chrome_expiry, decode_chrome_string, decode_local_storage_key};
+    use super::*;
+
+    #[test]
+    fn imports_chrome_cookies_with_and_without_partition_columns() -> Result<()> {
+        for partitioned in [false, true] {
+            let profile = tempfile::tempdir()?;
+            let network = profile.path().join("Network");
+            fs::create_dir(&network)?;
+            let connection = Connection::open(network.join("Cookies"))?;
+            connection.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO meta VALUES ('version', '24');
+                 CREATE TABLE cookies (
+                    host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB,
+                    path TEXT, expires_utc INTEGER, is_secure INTEGER,
+                    is_httponly INTEGER, samesite INTEGER, priority INTEGER,
+                    source_scheme INTEGER, source_port INTEGER
+                 );
+                 INSERT INTO cookies VALUES (
+                    '.example.com', 'session', 'stored-value', X'', '/',
+                    0, 1, 1, 1, 2, 2, 443
+                 );",
+            )?;
+            if partitioned {
+                connection.execute_batch(
+                    "ALTER TABLE cookies ADD COLUMN top_frame_site_key TEXT;
+                     ALTER TABLE cookies ADD COLUMN has_cross_site_ancestor INTEGER;
+                     UPDATE cookies SET top_frame_site_key = 'https://example.org',
+                        has_cross_site_ancestor = 1;",
+                )?;
+            }
+            drop(connection);
+
+            let cookies = import_cookies(profile.path(), &ChromeCryptoKey::System)?;
+            assert_eq!(cookies.len(), 1);
+            let cookie = &cookies[0];
+            assert_eq!(cookie.name, "session");
+            assert_eq!(cookie.value, "stored-value");
+            assert_eq!(cookie.domain, ".example.com");
+            assert!(!cookie.host_only);
+            assert!(cookie.secure);
+            assert!(cookie.http_only);
+            assert_eq!(cookie.expires, None);
+            assert_eq!(cookie.same_site, StoredCookieSameSite::Lax);
+            assert_eq!(cookie.priority, Some(CookiePriority::High));
+            assert_eq!(cookie.source_scheme, StoredCookieSourceScheme::Secure);
+            assert_eq!(cookie.source_port, 443);
+            assert_eq!(
+                cookie.partition_key,
+                partitioned.then(|| StoredCookiePartitionKey::site(
+                    "https://example.org".to_owned(),
+                    true,
+                )),
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn decodes_chrome_local_storage_latin1_key() {

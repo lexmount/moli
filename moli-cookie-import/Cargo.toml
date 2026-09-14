@@ -11,6 +11,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-cache = { path = "../moli-cookie-cache" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-crypto = { path = "../moli-crypto" }
+# Keep imports self-contained; .cargo/config.toml trims unused SQLite C extensions.
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 rusty-leveldb = "4.0.1"
 serde_json = "1.0.145"

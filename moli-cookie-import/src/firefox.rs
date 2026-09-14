@@ -269,10 +269,21 @@ mod tests {
 
     #[test]
     fn imports_firefox_cookies_and_local_storage_databases() -> Result<()> {
+        check_firefox_database_imports("DELETE")
+    }
+
+    #[test]
+    fn imports_firefox_cookies_and_local_storage_from_wal() -> Result<()> {
+        check_firefox_database_imports("WAL")
+    }
+
+    fn check_firefox_database_imports(journal_mode: &str) -> Result<()> {
         let temp = tempfile::tempdir()?;
         let profile = temp.path().join("firefox");
         fs::create_dir_all(&profile)?;
         let cookies_db = Connection::open(profile.join("cookies.sqlite"))?;
+        cookies_db.pragma_update(None, "journal_mode", journal_mode)?;
+        cookies_db.pragma_update(None, "wal_autocheckpoint", 0)?;
         cookies_db.execute_batch(
             "CREATE TABLE moz_cookies (
                 name TEXT, value TEXT, host TEXT, path TEXT, expiry INTEGER,
@@ -295,11 +306,11 @@ mod tests {
                 ""
             ],
         )?;
-        drop(cookies_db);
-
         let storage_dir = profile.join("storage/default/https+++example.com/ls");
         fs::create_dir_all(&storage_dir)?;
         let storage_db = Connection::open(storage_dir.join("data.sqlite"))?;
+        storage_db.pragma_update(None, "journal_mode", journal_mode)?;
+        storage_db.pragma_update(None, "wal_autocheckpoint", 0)?;
         storage_db.execute_batch(
             "CREATE TABLE database (origin TEXT NOT NULL);
              CREATE TABLE data (
@@ -314,10 +325,17 @@ mod tests {
             "INSERT INTO data VALUES (?1,?2,?3,?4,0,?5)",
             params!["stored-key", 12, 1, 1, compressed],
         )?;
-        drop(storage_db);
+
+        // Keep both connections open so WAL data is not checkpointed on close.
+        if journal_mode == "WAL" {
+            assert!(profile.join("cookies.sqlite-wal").is_file());
+            assert!(storage_dir.join("data.sqlite-wal").is_file());
+        }
 
         let cookies = import_cookies(&profile)?;
         assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].name, "session");
+        assert_eq!(cookies[0].value, "value");
         assert_eq!(cookies[0].same_site, StoredCookieSameSite::Lax);
         let destination = temp.path().join("localstorage.json");
         assert_eq!(import_local_storage(&profile, &destination)?, 1);

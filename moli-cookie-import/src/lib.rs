@@ -178,6 +178,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_sqlite_omits_unused_extensions() -> Result<()> {
+        // Inspect the linked engine so dependency upgrades cannot silently
+        // reintroduce extensions excluded by .cargo/config.toml.
+        let connection = rusqlite::Connection::open_in_memory()?;
+        for option in [
+            "ENABLE_FTS3",
+            "ENABLE_FTS3_PARENTHESIS",
+            "ENABLE_FTS4",
+            "ENABLE_FTS5",
+            "ENABLE_RTREE",
+            "ENABLE_DBSTAT_VTAB",
+            "ENABLE_STAT4",
+            "ENABLE_LOAD_EXTENSION",
+        ] {
+            let enabled: bool =
+                connection.query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
+                    row.get(0)
+                })?;
+            assert!(!enabled, "bundled SQLite unexpectedly enables {option}");
+        }
+        let omits_extension_loading: bool = connection.query_row(
+            "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(omits_extension_loading);
+        Ok(())
+    }
+
+    #[test]
     fn imports_a_netscape_cookie_jar() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let jar = temp.path().join("cookies.txt");

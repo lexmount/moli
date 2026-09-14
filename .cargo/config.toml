@@ -22,3 +22,21 @@ https_proxy = { value = "", force = true }
 ALL_PROXY = { value = "", force = true }
 HTTP_PROXY = { value = "", force = true }
 HTTPS_PROXY = { value = "", force = true }
+
+# Browser imports only query ordinary SQLite tables. libsqlite3-sys enables
+# these extensions in its bundled C build regardless of rusqlite features.
+# Its LIBSQLITE3_FLAGS are appended after the defaults: use -U, since defining
+# an SQLITE_ENABLE_* macro as 0 still enables code guarded by #ifdef.
+# Extension loading requires SQLITE_OMIT_LOAD_EXTENSION to remove the loader.
+# Keep normal SQL/schema parsing, PRAGMAs, thread safety, and WAL support for
+# browser database compatibility. These defaults apply to local and CI builds.
+LIBSQLITE3_FLAGS = """
+    -USQLITE_ENABLE_FTS3
+    -USQLITE_ENABLE_FTS3_PARENTHESIS
+    -USQLITE_ENABLE_FTS5
+    -USQLITE_ENABLE_RTREE
+    -USQLITE_ENABLE_DBSTAT_VTAB
+    -USQLITE_ENABLE_STAT4
+    -USQLITE_ENABLE_LOAD_EXTENSION
+    -DSQLITE_OMIT_LOAD_EXTENSION
+"""
