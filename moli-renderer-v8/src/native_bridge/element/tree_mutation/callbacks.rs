@@ -296,15 +296,26 @@ pub(in crate::native_bridge) fn node_insert_adjacent_html_callback<'s>(
         position,
         InsertAdjacentPosition::BeforeBegin | InsertAdjacentPosition::AfterEnd
     );
-    if needs_parent
-        && unsafe { &*runtime_ptr }
+    if needs_parent {
+        let parent = unsafe { &*runtime_ptr }
             .dom_host()
             .node(target)
-            .and_then(Node::parent_node)
-            .is_none()
-    {
-        rv.set_undefined();
-        return;
+            .and_then(Node::parent_node);
+        let has_no_modifiable_parent = parent.is_none_or(|parent| {
+            unsafe { &*runtime_ptr }
+                .dom_host()
+                .node(parent)
+                .is_none_or(Node::is_document)
+        });
+        if has_no_modifiable_parent {
+            throw_dom_exception(
+                scope,
+                "NoModificationAllowedError",
+                7,
+                "The element has no modifiable parent for sibling insertion.",
+            );
+            return;
+        }
     }
     let Some(document_handle) =
         insert_adjacent_document_handle(unsafe { &*runtime_ptr }, target, position)
