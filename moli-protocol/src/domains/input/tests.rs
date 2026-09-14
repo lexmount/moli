@@ -2424,19 +2424,93 @@ async fn dispatch_key_event_text_controls_preserve_surrogate_pairs() {
         "<html><body><input id='field'><textarea id='bio'></textarea></body></html>",
     )
     .await;
+
     let mut command_id = 5000;
     for control in ["field", "bio"] {
-        for (key, caret, modifiers, expected) in [
-            ("Backspace", 3, 0, r#"["AB",1,1]"#),
-            ("Delete", 1, 0, r#"["AB",1,1]"#),
-            ("ArrowLeft", 3, 0, r#"["A😀B",1,1]"#),
-            ("ArrowRight", 1, 0, r#"["A😀B",3,3]"#),
-            ("ArrowLeft", 3, 8, r#"["A😀B",1,3]"#),
-            ("ArrowRight", 1, 8, r#"["A😀B",1,3]"#),
+        for (initial, key, start, end, modifiers, value, next_start, next_end) in [
+            ("A😀B", "Backspace", 3, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 1, 0, "AB", 1, 1),
+            ("A😀B", "ArrowLeft", 3, 3, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 1, 1, 0, "A😀B", 3, 3),
+            ("A😀B", "ArrowLeft", 3, 3, 8, "A😀B", 1, 3),
+            ("A😀B", "ArrowRight", 1, 1, 8, "A😀B", 1, 3),
+            ("A😀B", "Backspace", 2, 2, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 2, 2, 0, "A😀", 3, 3),
+            ("A😀B", "ArrowLeft", 2, 2, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 2, 2, 0, "A😀B", 4, 4),
+            ("A😀B", "Backspace", 0, 0, 0, "A😀B", 0, 0),
+            ("A😀B", "Delete", 4, 4, 0, "A😀B", 4, 4),
+            ("A😀B", "ArrowLeft", 2, 2, 8, "A😀B", 1, 3),
+            ("A😀B", "ArrowRight", 2, 2, 8, "A😀B", 3, 4),
+            ("A😀B", "Backspace", 1, 2, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 2, 0, "AB", 1, 1),
+            ("A😀B", "Backspace", 2, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 2, 3, 0, "A😀", 3, 3),
+            ("A😀B", "Backspace", 1, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 3, 0, "AB", 1, 1),
+            ("A😀B", "Backspace", 0, 2, 0, "B", 0, 0),
+            ("A😀B", "Delete", 0, 2, 0, "B", 0, 0),
+            ("A😀B", "Backspace", 2, 4, 0, "A😀", 3, 3),
+            ("A😀B", "Delete", 2, 4, 0, "A😀", 3, 3),
+            ("A😀B", "ArrowLeft", 1, 2, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 1, 2, 0, "A😀B", 3, 3),
+            ("A😀B", "ArrowLeft", 2, 3, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 2, 3, 0, "A😀B", 4, 4),
+            ("", "Backspace", 0, 0, 0, "", 0, 0),
+            ("", "Delete", 0, 0, 0, "", 0, 0),
+            ("", "ArrowLeft", 0, 0, 0, "", 0, 0),
+            ("", "ArrowRight", 0, 0, 0, "", 0, 0),
+            ("", "ArrowLeft", 0, 0, 8, "", 0, 0),
+            ("", "ArrowRight", 0, 0, 8, "", 0, 0),
+            ("", "Home", 0, 0, 0, "", 0, 0),
+            ("", "End", 0, 0, 0, "", 0, 0),
+            ("", "Home", 0, 0, 8, "", 0, 0),
+            ("", "End", 0, 0, 8, "", 0, 0),
+            ("😀", "Backspace", 1, 1, 0, "", 0, 0),
+            ("😀", "Delete", 1, 1, 0, "😀", 1, 1),
+            ("😀", "ArrowLeft", 1, 1, 0, "😀", 0, 0),
+            ("😀", "ArrowRight", 1, 1, 0, "😀", 1, 1),
+            ("😀", "ArrowLeft", 1, 1, 8, "😀", 0, 2),
+            ("😀", "ArrowRight", 1, 1, 8, "😀", 1, 1),
+            ("😀", "Home", 1, 1, 0, "😀", 0, 0),
+            ("😀", "End", 1, 1, 0, "😀", 2, 2),
+            ("😀", "Home", 1, 1, 8, "😀", 0, 2),
+            ("😀", "End", 1, 1, 8, "😀", 2, 2),
+            ("A😀", "Backspace", 2, 2, 0, "A", 1, 1),
+            ("A😀", "Delete", 2, 2, 0, "A😀", 2, 2),
+            ("A😀", "ArrowLeft", 2, 2, 0, "A😀", 1, 1),
+            ("A😀", "ArrowRight", 2, 2, 0, "A😀", 2, 2),
+            ("A😀", "ArrowLeft", 2, 2, 8, "A😀", 1, 3),
+            ("A😀", "ArrowRight", 2, 2, 8, "A😀", 2, 2),
+            ("A😀", "Home", 2, 2, 0, "A😀", 0, 0),
+            ("A😀", "End", 2, 2, 0, "A😀", 3, 3),
+            ("A😀", "Home", 2, 2, 8, "A😀", 0, 3),
+            ("A😀", "End", 2, 2, 8, "A😀", 3, 3),
+            ("😀😀", "Backspace", 3, 3, 0, "😀", 2, 2),
+            ("😀😀", "Delete", 3, 3, 0, "😀😀", 3, 3),
+            ("😀😀", "ArrowLeft", 3, 3, 0, "😀😀", 2, 2),
+            ("😀😀", "ArrowRight", 3, 3, 0, "😀😀", 3, 3),
+            ("😀😀", "ArrowLeft", 3, 3, 8, "😀😀", 2, 4),
+            ("😀😀", "ArrowRight", 3, 3, 8, "😀😀", 3, 3),
+            ("😀😀", "Home", 3, 3, 0, "😀😀", 0, 0),
+            ("😀😀", "End", 3, 3, 0, "😀😀", 4, 4),
+            ("😀😀", "Home", 3, 3, 8, "😀😀", 0, 4),
+            ("😀😀", "End", 3, 3, 8, "😀😀", 4, 4),
         ] {
-            evaluate_string(&mut ctx, &format!(
-                "window.__utf16Control = document.getElementById('{control}'); __utf16Control.value = 'A😀B'; __utf16Control.focus(); __utf16Control.setSelectionRange({caret}, {caret}); 'ready'"
-            )).await;
+            assert_eq!(
+                evaluate_string(
+                    &mut ctx,
+                    &format!(
+                        "window.__utf16Control = document.getElementById('{control}'); \
+                         __utf16Control.value = '{initial}'; __utf16Control.focus(); \
+                         __utf16Control.setSelectionRange({start}, {end}); \
+                         JSON.stringify([__utf16Control.selectionStart, __utf16Control.selectionEnd])"
+                    )
+                )
+                .await,
+                json!([start, end]).to_string(),
+                "selection APIs must retain UTF-16 code unit offsets"
+            );
             ctx.process_async(json!({
                 "id": command_id,
                 "method": "Input.dispatchKeyEvent",
@@ -2445,9 +2519,15 @@ async fn dispatch_key_event_text_controls_preserve_surrogate_pairs() {
             .await;
             ctx.expect_result(command_id, json!({}), None);
             command_id += 1;
-            assert_eq!(evaluate_string(&mut ctx,
-                "JSON.stringify([__utf16Control.value, __utf16Control.selectionStart, __utf16Control.selectionEnd])"
-            ).await, expected, "{control} {key} modifiers={modifiers}");
+            assert_eq!(
+                evaluate_string(
+                    &mut ctx,
+                    "JSON.stringify([__utf16Control.value, __utf16Control.selectionStart, __utf16Control.selectionEnd])"
+                )
+                .await,
+                json!([value, next_start, next_end]).to_string(),
+                "{control} {key} value={initial:?} modifiers={modifiers} with selection [{start}, {end}]"
+            );
         }
     }
 }
