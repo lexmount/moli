@@ -248,18 +248,17 @@ pub(crate) fn start_event_source_request<'s>(
         let registered =
             register_event_source_request(scope, host, event_source, &prepared, None, true);
         set_event_source_active_request_id(scope, event_source, Some(registered.internal_id));
-        let _ = host.resource_completion_sender().send_async_subresource(
+        crate::network_host::send_resource_completion(
+            &host.resource_completion_sender(),
+            host.pending_subresource_response_stream(registered.internal_id),
             crate::types::AsyncSubresourceFetchCompletion {
+                network_request_headers: None,
                 internal_id: registered.internal_id,
-                request_url: prepared.resolved_url,
-                request_method: "GET".to_owned(),
-                request_headers: prepared.request_headers,
-                request_body: None,
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: Ok(response.into()).into(),
+                result: Ok(response.into()),
             },
         );
         return;
@@ -297,11 +296,9 @@ pub(crate) fn start_event_source_request<'s>(
         Some(cancel_handle),
         prepared.cors_preflight_request_headers,
         registered.internal_id,
+        host.pending_subresource_response_stream(registered.internal_id),
         host.pending_subresource_preflight_observer(registered.internal_id),
         prepared.resolved_url,
-        "GET".to_owned(),
-        prepared.request_headers,
-        None,
     );
 }
 
@@ -424,25 +421,26 @@ fn dispatch_service_worker_event_source<'s>(
         },
         result_tx: ServiceWorkerFetchResultSender::Page {
             completion_tx: host.resource_completion_sender(),
-            network: host.pending_subresource_network_request(registered.internal_id),
+            network: host.pending_subresource_response_stream(registered.internal_id),
         },
         request_client: registered.load.request_client(),
         resource_task_runner: registered.load.task_runner(),
         cancel_handle,
     };
     if !host.dispatch_service_worker_fetch(dispatch) {
-        let _ = host.resource_completion_sender().send_async_subresource(
+        crate::network_host::send_resource_completion(
+            &host.resource_completion_sender(),
+            host.pending_subresource_response_stream(registered.internal_id),
             crate::types::AsyncSubresourceFetchCompletion {
+                network_request_headers: None,
                 internal_id: registered.internal_id,
-                request_url: prepared.resolved_url.clone(),
-                request_method: "GET".to_owned(),
-                request_headers: prepared.request_headers.clone(),
-                request_body: None,
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: Err("service worker EventSource dispatch failed".to_owned()).into(),
+                result: Err("service worker EventSource dispatch failed"
+                    .to_owned()
+                    .into()),
             },
         );
     }

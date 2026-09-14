@@ -1,8 +1,7 @@
 use super::super::*;
 use super::request::PreparedWindowFetchRequest;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, RequestCacheMode, ScriptFetchRequestMetadata,
-    should_request_be_blocked_due_to_bad_port,
+    BrowserRequestMetadata, FetchCancelHandle, should_request_be_blocked_due_to_bad_port,
 };
 
 pub(super) fn record_intercepted_fetch(
@@ -22,7 +21,7 @@ pub(super) fn record_intercepted_fetch(
     host.record_pending_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
-        prepared.keepalive,
+        prepared.options,
         prepared.connect_policy,
         prepared.csp_report_context,
         prepared.credentials_mode,
@@ -201,7 +200,7 @@ pub(super) fn spawn_network_fetch(
     prepared: PreparedWindowFetchRequest,
 ) -> u64 {
     let loader = prepared.resource_loader.request_client().clone();
-    let mut request = Request::new_browser(
+    let request = Request::new_browser(
         &prepared.method,
         prepared.resolved_url.clone(),
         prepared.body.clone(),
@@ -211,17 +210,10 @@ pub(super) fn spawn_network_fetch(
     .with_initiator_url(&prepared.document_url)
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
-    .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_redirect_mode(prepared.redirect_mode)
-    .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
-    .with_fetch_priority_hint(prepared.priority);
-    if prepared.referrer.is_empty() {
-        request = request.without_inferred_referrer();
-    }
-    if let Some(metadata) = window_fetch_script_metadata(&prepared) {
-        request = request.with_script_fetch_metadata(metadata);
-    }
-    request = request
+    .with_network_partition_key(prepared.network_partition_key.clone());
+    let request = prepared
+        .options
+        .apply(request)
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
         .with_subframe_context(prepared.frame_id.is_some());
 
@@ -237,7 +229,7 @@ pub(super) fn spawn_network_fetch(
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
-        prepared.keepalive,
+        prepared.options,
         prepared.connect_policy,
         prepared.csp_report_context,
         Some(cancel_handle.clone()),
@@ -269,41 +261,11 @@ pub(super) fn spawn_network_fetch(
         Some(cancel_handle),
         prepared.cors_preflight_request_headers,
         internal_id,
+        host.pending_subresource_response_stream(internal_id),
         host.pending_subresource_preflight_observer(internal_id),
         prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.body),
     );
     internal_id
-}
-
-fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
-    match cache {
-        "no-store" => RequestCacheMode::NoStore,
-        "no-cache" | "reload" => RequestCacheMode::Validate,
-        _ => RequestCacheMode::Default,
-    }
-}
-
-fn window_fetch_script_metadata(
-    prepared: &PreparedWindowFetchRequest,
-) -> Option<ScriptFetchRequestMetadata> {
-    let referrer_policy =
-        (!prepared.referrer_policy.is_empty()).then(|| prepared.referrer_policy.clone());
-    let integrity = (!prepared.integrity.is_empty()).then(|| prepared.integrity.clone());
-    if referrer_policy.is_none()
-        && prepared.document_referrer_policy.is_none()
-        && integrity.is_none()
-    {
-        return None;
-    }
-    Some(ScriptFetchRequestMetadata {
-        referrer_policy,
-        document_referrer_policy: prepared.document_referrer_policy.clone(),
-        integrity,
-        ..ScriptFetchRequestMetadata::default()
-    })
 }
 
 fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {

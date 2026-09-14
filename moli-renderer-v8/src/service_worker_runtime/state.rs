@@ -702,6 +702,19 @@ pub(super) enum ServiceWorkerPeriodicSyncStart {
     Dropped,
 }
 
+/// A received body has one source id even when policy requires buffered JS
+/// delivery. Only a recipient that received a JS stream head can consume chunks.
+pub(super) struct ServiceWorkerFetchBodyStream {
+    pub(super) body_source_id: crate::types::NetworkBodySourceId,
+    pub(super) js_consumer: Option<crate::page_task_queue::RendererResourceCompletionSender>,
+}
+
+impl ServiceWorkerFetchBodyStream {
+    pub(super) fn js_body_source_id(&self) -> Option<crate::types::NetworkBodySourceId> {
+        self.js_consumer.as_ref().map(|_| self.body_source_id)
+    }
+}
+
 pub(super) struct ServiceWorkerFetchJob {
     pub(super) request: moli_fetch::Request,
     pub(super) internal_id: u64,
@@ -719,7 +732,7 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(super) navigation_preload_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
-    pub(super) streaming_body_source_id: Option<crate::types::NetworkBodySourceId>,
+    pub(super) body_stream: Option<ServiceWorkerFetchBodyStream>,
 }
 
 impl ServiceWorkerFetchJob {

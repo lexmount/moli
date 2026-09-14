@@ -123,7 +123,7 @@ pub(super) fn dispatch_service_worker_xhr(
         network_context,
         result_tx: ServiceWorkerFetchResultSender::Page {
             completion_tx: host.resource_completion_sender(),
-            network: host.pending_subresource_network_request(internal_id),
+            network: host.pending_subresource_response_stream(internal_id),
         },
         request_client: prepared.resource_loader.request_client().clone(),
         resource_task_runner: prepared.resource_loader.task_runner(),
@@ -133,20 +133,19 @@ pub(super) fn dispatch_service_worker_xhr(
         return Some(internal_id);
     }
 
-    let _ =
-        host.resource_completion_sender()
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url: prepared.resolved_url.clone(),
-                request_method: prepared.method.clone(),
-                request_headers: prepared.request_headers.clone(),
-                request_body: request_body_text,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: Err("service worker xhr dispatch failed".to_owned()).into(),
-            });
+    crate::network_host::send_resource_completion(
+        &host.resource_completion_sender(),
+        host.pending_subresource_response_stream(internal_id),
+        AsyncSubresourceFetchCompletion {
+            network_request_headers: None,
+            internal_id,
+            response_status_text: None,
+            skip_fetch_security_validation: false,
+            response_filter: None,
+            network_error_text: None,
+            result: Err("service worker xhr dispatch failed".to_owned().into()),
+        },
+    );
     Some(internal_id)
 }
 
@@ -353,11 +352,9 @@ pub(super) fn spawn_network_xhr_fetch(
         Some(cancel_handle),
         prepared.cors_preflight_request_headers,
         internal_id,
+        host.pending_subresource_response_stream(internal_id),
         host.pending_subresource_preflight_observer(internal_id),
         prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
     );
     internal_id
 }

@@ -11,6 +11,7 @@ mod fetch_surface;
 mod headers;
 mod image;
 mod js_values;
+mod keepalive;
 mod media;
 mod preflight_events;
 mod request;
@@ -28,9 +29,10 @@ use moli_webapi_declare::WebApiObject;
 use crate::network::ResourceRequestClient;
 
 pub(crate) use self::async_fetch::{
-    collect_image_response_into_parkable,
+    CompletedResourceFetch, collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer,
-    fetch_browser_subresource_with_preflight_headers_and_observer, spawn_async_subresource_fetch,
+    fetch_browser_subresource_with_preflight_headers_and_observer, resource_request_started,
+    send_resource_completion, spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
@@ -65,12 +67,11 @@ pub(crate) use self::browser_response::{
     LocalUrlError, local_url_response, local_url_response_result,
 };
 pub(crate) use self::csp_reports::{
-    CompletedCspReport, CspReportResource, WindowCspReportRequestContext,
-    capture_window_csp_report_request_context, csp_report_request_started,
-    fetch_buffered_csp_report, finish_report_result,
+    WindowCspReportRequestContext, WindowFetchResponsePolicy,
+    capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,
     send_content_security_policy_reports_for_window,
-    send_content_security_policy_violation_report_from_window_context, send_report_completion,
+    send_content_security_policy_violation_report_from_window_context,
 };
 pub(crate) use self::event_source::{
     EVENT_SOURCE_CLOSED, EventSourceMessage, EventSourceParser, EventSourceTerminalMode,
@@ -79,7 +80,7 @@ pub(crate) use self::event_source::{
     fail_event_source_connection, install_event_source_bindings, open_event_source_connection,
     update_event_source_stream_state,
 };
-pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
+pub(crate) use self::fetch::{WindowFetchOptions, validate_no_cors_http_redirect_mode};
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_BODY_SLOT, REQUEST_BODY_USED_SLOT, REQUEST_CACHE_SLOT, REQUEST_CREDENTIALS_SLOT,
@@ -119,6 +120,9 @@ pub(crate) use self::image::{
     start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::{defined_object_string_property, v8_json_parse};
+pub(crate) use self::keepalive::{
+    KeepaliveResource, fetch_buffered_keepalive, keepalive_request_started,
+};
 pub(crate) use self::media::{
     MediaElementResourceFetchStart, media_response_status_is_successful,
     start_media_element_resource_fetch,
@@ -146,7 +150,6 @@ pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
     FetchResponseSecurityViolation, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode_with_filter,
@@ -289,12 +292,11 @@ use super::{
     dom_parser,
     exception_reporting::invoke_callback,
     native_bridge::JsContextHost,
-    page_task_queue::RendererResourceCompletionSender,
     types::{
         AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
         AsyncSubresourceNetworkContext, AsyncSubresourceStreamingChunk,
-        AsyncSubresourceStreamingFinished, AsyncSubresourceStreamingStarted,
-        PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceResourceType,
+        AsyncSubresourceStreamingStarted, PendingSubresourceFetchInfo, SubresourceNetworkRecord,
+        SubresourceResourceType,
     },
     util::{
         context_host_ptr_from_global_bridge, enqueue_host_microtask, throw_type_error, v8_string,

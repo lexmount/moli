@@ -1067,6 +1067,7 @@ mod tests {
     fn completed_failed_script_load_retains_response_for_admitted_waiter() {
         let load = ScriptTextLoad::pending(SCOPE);
         let response = Arc::new(ResourceResponseHead {
+            status_text: None,
             head: response("https://cache.test/failed.js", "//").head(),
             network_request_headers: Some(vec![("x-request".into(), "original".into())]),
         });

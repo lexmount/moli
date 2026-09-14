@@ -1216,6 +1216,47 @@ async fn window_fetch_emits_browser_style_subresource_headers_on_wire() {
     .await;
 }
 
+async fn completed_ping_network_output(
+    page_vm: &mut PageVm,
+) -> anyhow::Result<Vec<ScriptNetworkOutputItem>> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut items = Vec::new();
+        loop {
+            drain_page_work_until_no_pending_subresources(page_vm, "ping network completion")
+                .await?;
+            items.extend(page_vm.vm_mut().take_network_output().into_items());
+            if items
+                .iter()
+                .any(|item| matches!(item, ScriptNetworkOutputItem::SubresourceBodyFinished(_)))
+            {
+                return Ok(items);
+            }
+            page_vm
+                .wait_for_page_work_arrival_without_timeout(false)
+                .await;
+        }
+    })
+    .await
+    .expect("ping must publish its actual terminal")
+}
+
+fn assert_completed_ping(items: &[ScriptNetworkOutputItem], expected_body: &str) {
+    let [
+        ScriptNetworkOutputItem::SubresourceRequestStarted(request),
+        ScriptNetworkOutputItem::SubresourceResponseStarted(response),
+        ScriptNetworkOutputItem::SubresourceBodyFinished(body),
+    ] = items
+    else {
+        panic!("one native request, response and terminal: {items:?}")
+    };
+    assert_eq!(request.resource_type(), SubresourceResourceType::Ping);
+    assert_eq!(request.request_body(), Some(expected_body));
+    assert_eq!(response.handle(), request.handle());
+    assert_eq!(response.status(), 204);
+    assert_eq!(body.handle(), request.handle());
+    assert!(matches!(body.result(), SubresourceBodyFinishedResult::Ready(body) if body.is_empty()));
+}
+
 #[tokio::test]
 async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
     run_page_vm_async_test(async move {
@@ -1235,12 +1276,8 @@ async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
                     .await
                     .expect("sendBeacon request should reach fixture")
                     .expect("sendBeacon fixture should capture request");
-                drain_page_work_until_no_pending_subresources(
-                    &mut page_vm,
-                    "sendBeacon network completion should be observed",
-                )
-                .await?;
-                Ok::<_, anyhow::Error>((returned, request, page_vm.vm_mut().take_network_output()))
+                let network_output = completed_ping_network_output(&mut page_vm).await?;
+                Ok::<_, anyhow::Error>((returned, request, network_output))
             })
             .await
             .expect("sendBeacon test should run on owner lane");
@@ -1254,18 +1291,7 @@ async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
         assert!(request_lower.contains("sec-fetch-mode: no-cors\r\n"));
         assert!(request_lower.ends_with("\r\n\r\npayload"));
 
-        let (records, _, _) = split_network_output_items(network_output);
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.resource_type(), SubresourceResourceType::Ping);
-        assert_eq!(record.request_body(), Some("payload"));
-        let SubresourceNetworkOutcome::Success { status, .. } = record.outcome() else {
-            panic!(
-                "expected sendBeacon network success, got {:?}",
-                record.outcome()
-            );
-        };
-        assert_eq!(*status, 204);
+        assert_completed_ping(&network_output, "payload");
     })
     .await;
 }
@@ -1709,12 +1735,8 @@ async fn anchor_ping_click_posts_ping_subresource_before_navigation() {
                     .await
                     .expect("anchor ping request should reach fixture")
                     .expect("anchor ping fixture should capture request");
-                drain_page_work_until_no_pending_subresources(
-                    &mut page_vm,
-                    "anchor ping network completion should be observed",
-                )
-                .await?;
-                Ok::<_, anyhow::Error>((request, page_vm.vm_mut().take_network_output()))
+                let network_output = completed_ping_network_output(&mut page_vm).await?;
+                Ok::<_, anyhow::Error>((request, network_output))
             })
             .await
             .expect("anchor ping test should run on owner lane");
@@ -1730,11 +1752,7 @@ async fn anchor_ping_click_posts_ping_subresource_before_navigation() {
         assert!(request_lower.contains("sec-fetch-mode: no-cors\r\n"));
         assert!(request.ends_with("\r\n\r\nPING"));
 
-        let (records, _, _) = split_network_output_items(network_output);
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.resource_type(), SubresourceResourceType::Ping);
-        assert_eq!(record.request_body(), Some("PING"));
+        assert_completed_ping(&network_output, "PING");
     })
     .await;
 }

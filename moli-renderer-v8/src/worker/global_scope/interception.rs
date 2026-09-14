@@ -363,10 +363,7 @@ fn cancel_worker_auth(
                     WorkerRequestCompletion {
                         id: fetch_id,
                         network_request_headers: None,
-                        result: Ok(WorkerResourceResponse::Buffered {
-                            head: Box::new(response.head),
-                            body: response.body,
-                        }),
+                        result: Ok(response),
                     },
                 )));
         }
@@ -380,13 +377,9 @@ fn cancel_worker_auth(
                 record.handle_auth_requests = false;
                 record.intercept_response = intercept_response;
             }
-            let _ = state.xhr_completion_tx.send(WorkerXhrCompletion::decision(
-                xhr_id,
-                Ok(WorkerResourceResponse::Buffered {
-                    head: Box::new(response.head),
-                    body: response.body,
-                }),
-            ));
+            let _ = state
+                .xhr_completion_tx
+                .send(WorkerXhrCompletion::decision(xhr_id, Ok(response)));
         }
         WorkerFetchTarget::CspReport(_) => {
             return Err("CSP report has no authentication pause".into());

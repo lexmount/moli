@@ -604,17 +604,27 @@ impl PageVmTaskExecutorTestHarness {
 
     /// Apply one terminal only when the test observes the boundary between
     /// network settlement and a later typed Page successor.
+    /// Preceding native progress receipts are applied in FIFO order.
     ///
     /// This is not a Page-task executor. Complete behavior tests must use
     /// `run_one_page_resource_completion_selected_task_executor_turn`.
     pub(crate) fn apply_one_page_resource_terminal_owner_admission(
         &mut self,
     ) -> anyhow::Result<bool> {
-        self.page_vm
+        while let Some(outcome) = self
+            .page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(
                 &mut self.page_resource_completion_source,
-            )
-            .map(|outcome| outcome.is_some())
+            )?
+        {
+            if !matches!(outcome.action.owner.local_owner(),
+                crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+                    crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn modulepreload_start_test_source(

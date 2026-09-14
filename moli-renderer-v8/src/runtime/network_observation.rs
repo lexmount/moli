@@ -485,10 +485,10 @@ impl RendererNetworkRequest {
         )
     }
 
-    /// A physical preflight belongs to an already-admitted request, including
-    /// a keepalive continuing after its Worker retires. It shares that lease,
+    /// Dependent work (preflights or CSP reports) belongs to its admitted request,
+    /// including a keepalive continuing after its owner retires. It shares that lease,
     /// while ordinary clones keep their original physical request identity.
-    pub(crate) fn preflight(&self) -> Self {
+    pub(crate) fn dependent_request(&self) -> Self {
         Self {
             lease: self.lease.clone(),
             handle: moli_page_types::SubresourceNetworkRequestHandle::allocate(),
@@ -520,7 +520,7 @@ mod worker_request_tests {
             source.start_request().is_none(),
             "retirement rejects new top-level requests"
         );
-        let preflight = parent.preflight();
+        let preflight = parent.dependent_request();
         assert_ne!(preflight.handle(), parent.handle());
         assert_eq!(preflight.clone().handle(), preflight.handle());
         drop(parent);
@@ -528,7 +528,7 @@ mod worker_request_tests {
             closed.lock().is_empty(),
             "admitted preflight still owns its source permission"
         );
-        let redirected_preflight = preflight.preflight();
+        let redirected_preflight = preflight.dependent_request();
         assert_ne!(redirected_preflight.handle(), preflight.handle());
         drop(preflight);
         source.close_source();

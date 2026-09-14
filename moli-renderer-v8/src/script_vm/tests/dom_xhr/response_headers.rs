@@ -42,14 +42,11 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
                     crate::types::AsyncSubresourceStreamingStarted {
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Default::default(),
-                        request_body: None,
+
                         skip_fetch_security_validation: false,
                         response_filter: None,
                         body_source_id,
                         head,
-                        network_request_headers: None,
                     },
                 )
                 .unwrap();
@@ -66,20 +63,18 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
                         response_filter: None,
                         skip_fetch_security_validation: false,
                         internal_id: request.internal_id,
-                        request_url: request.url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Default::default(),
-                        request_body: None,
+
                         response_status_text: None,
                         network_error_text: None,
+                        network_request_headers: None,
                         result: Ok(
                             crate::protocol_types::NavigationResponse::from_head_and_body(
                                 head,
                                 "body".to_owned(),
                                 b"body".to_vec(),
-                            ),
-                        )
-                        .into(),
+                            )
+                            .into(),
+                        ),
                     },
                 )
                 .unwrap();

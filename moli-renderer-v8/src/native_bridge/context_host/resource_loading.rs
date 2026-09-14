@@ -1,5 +1,7 @@
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
+#[cfg(test)]
+use crate::types::{SubresourceBodyFinished, SubresourceResponseStarted};
 use crate::{
     module_runtime::{
         ModuleAttributesKey, ModuleMapKey, ModuleSource, PendingDynamicModuleImport,
@@ -13,9 +15,8 @@ use crate::{
         PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseState,
         PendingWebSocketConnection, PendingWebSocketResponseState, RunningSubresourceFetchState,
         ScriptNetworkOutput, ScriptNetworkOutputItem, StreamingSubresourceFetchState,
-        SubresourceBodyFinished, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
-        SubresourceResponseBody, SubresourceResponseStarted,
+        SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+        SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
     },
 };
 
@@ -184,21 +185,11 @@ impl JsContextHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn record_subresource_response_started(
-        &mut self,
-        response: SubresourceResponseStarted,
-    ) {
+    #[cfg(test)]
+    fn record_subresource_response_started(&mut self, response: SubresourceResponseStarted) {
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceResponseStarted(
             std::sync::Arc::new(response),
         ));
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_subresource_data_received(
-        &mut self,
-        data: crate::types::SubresourceDataReceived,
-    ) {
-        self.push_network_output_item(ScriptNetworkOutputItem::SubresourceDataReceived(data));
         self.note_subresource_activity();
     }
 
@@ -212,7 +203,8 @@ impl JsContextHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn record_subresource_body_finished(&mut self, body: SubresourceBodyFinished) {
+    #[cfg(test)]
+    fn record_subresource_body_finished(&mut self, body: SubresourceBodyFinished) {
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceBodyFinished(
             std::sync::Arc::new(body),
         ));
@@ -536,13 +528,50 @@ impl JsContextHost {
             .expect("a new Document request needs an active source")
     }
 
+    pub(crate) fn pending_subresource_response_stream(
+        &self,
+        internal_id: u64,
+    ) -> std::sync::Arc<crate::network::ResourceResponseStream> {
+        self.pending_subresource_fetches[&internal_id]
+            .response_stream()
+            .clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn pending_subresource_network_request(
         &self,
         internal_id: u64,
     ) -> crate::runtime::RendererNetworkRequest {
-        self.pending_subresource_fetches[&internal_id]
-            .network_request
-            .clone()
+        self.pending_subresource_response_stream(internal_id)
+            .network
+            .request()
+    }
+
+    pub(crate) fn subresource_network(
+        &self,
+        internal_id: u64,
+    ) -> Option<std::sync::Arc<crate::network::ResourceTransfer>> {
+        self.subresource_response_stream(internal_id)
+            .map(|stream| stream.network.clone())
+    }
+
+    pub(crate) fn subresource_response_stream(
+        &self,
+        internal_id: u64,
+    ) -> Option<&std::sync::Arc<crate::network::ResourceResponseStream>> {
+        self.pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })
+            .or_else(|| {
+                self.streaming_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })
+            .and_then(|pending| pending.network.as_ref())
     }
 
     pub(crate) fn pending_subresource_preflight_observer(
@@ -599,50 +628,35 @@ impl JsContextHost {
         })
     }
 
-    fn record_pending_subresource_request_started(
+    fn start_pending_subresource_transfer(
         &mut self,
-        info: &PendingSubresourceFetchInfo,
-        disposition: ResourceLoadDisposition,
-    ) {
-        self.record_pending_subresource_request_started_with_initiator(
-            info,
-            SubresourceRequestInitiatorType::Script,
-            disposition,
-        );
-    }
-
-    fn record_pending_subresource_request_started_with_initiator(
-        &mut self,
+        network: crate::runtime::RendererNetworkRequest,
         info: &PendingSubresourceFetchInfo,
         initiator_type: SubresourceRequestInitiatorType,
         disposition: ResourceLoadDisposition,
-    ) {
-        let Some(handle) = info.network_request_handle else {
-            return;
-        };
-        self.record_subresource_request_started(
-            SubresourceRequestStarted::new(
-                handle,
-                info.frame_id.clone(),
-                info.document_url.clone(),
-                info.url.clone(),
-                info.method.clone(),
-                info.request_headers.clone(),
-                info.request_body.clone(),
-                info.resource_type,
-                initiator_type,
-                info.request_cookie_report.clone(),
-            )
-            .with_request_body_bytes(info.request_body_bytes.clone())
-            .with_keepalive(disposition == ResourceLoadDisposition::Keepalive),
+    ) -> std::sync::Arc<crate::network::ResourceTransfer> {
+        let observer = self.resource_completion_sender().network_observer();
+        let (network, started) = crate::network::ResourceTransfer::start(
+            network,
+            move |observation| observer(observation),
+            |network| {
+                crate::network_host::resource_request_started(
+                    network,
+                    info,
+                    initiator_type,
+                    disposition == ResourceLoadDisposition::Keepalive,
+                )
+            },
         );
+        self.record_native_resource_observation(started);
+        network
     }
 
     pub(crate) fn record_pending_subresource_fetch(
         &mut self,
         fetch_context: super::WindowFetchContext,
         resolver: v8::Global<v8::PromiseResolver>,
-        keepalive: bool,
+        options: crate::network_host::WindowFetchOptions,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -653,7 +667,7 @@ impl JsContextHost {
         mut info: PendingSubresourceFetchInfo,
     ) {
         let network = self.admit_pending_subresource_fetch(&mut info);
-        let disposition = if keepalive {
+        let disposition = if options.metadata.keepalive {
             ResourceLoadDisposition::Keepalive
         } else {
             ResourceLoadDisposition::Ordinary
@@ -665,13 +679,23 @@ impl JsContextHost {
             None,
         );
         self.push_pending_subresource_fetch_info(info.clone());
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        let network = self.start_pending_subresource_transfer(
+            network,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_window_fetch(
+                    network,
+                    &load,
+                    connect_policy,
+                    csp_report_context,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_fetch(fetch_context),
@@ -680,12 +704,7 @@ impl JsContextHost {
                 network_partition_key,
                 policy_context,
                 continuation: PendingSubresourceContinuation::Fetch(
-                    crate::types::PendingWindowFetchContinuation::new(
-                        resolver,
-                        keepalive,
-                        connect_policy,
-                        csp_report_context,
-                    ),
+                    crate::types::PendingWindowFetchContinuation::new(resolver, options),
                 ),
             },
         );
@@ -696,7 +715,7 @@ impl JsContextHost {
         &mut self,
         fetch_context: super::WindowFetchContext,
         resolver: v8::Global<v8::PromiseResolver>,
-        keepalive: bool,
+        options: crate::network_host::WindowFetchOptions,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
@@ -709,7 +728,7 @@ impl JsContextHost {
     ) -> u64 {
         let network = self.admit_pending_subresource_fetch(&mut info);
         let internal_id = info.internal_id;
-        let disposition = if keepalive {
+        let disposition = if options.metadata.keepalive {
             ResourceLoadDisposition::Keepalive
         } else {
             ResourceLoadDisposition::Ordinary
@@ -720,13 +739,23 @@ impl JsContextHost {
             disposition,
             cancel_handle.clone(),
         );
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        let network = self.start_pending_subresource_transfer(
+            network,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_window_fetch(
+                    network,
+                    &load,
+                    connect_policy,
+                    csp_report_context,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_fetch(fetch_context),
@@ -735,12 +764,7 @@ impl JsContextHost {
                 network_partition_key,
                 policy_context,
                 continuation: PendingSubresourceContinuation::Fetch(
-                    crate::types::PendingWindowFetchContinuation::new(
-                        resolver,
-                        keepalive,
-                        connect_policy,
-                        csp_report_context,
-                    ),
+                    crate::types::PendingWindowFetchContinuation::new(resolver, options),
                 ),
             },
         );
@@ -774,13 +798,22 @@ impl JsContextHost {
         if !request_started {
             self.push_pending_subresource_fetch_info(info.clone());
         }
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        let network = self.start_pending_subresource_transfer(
+            network,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load: load.clone(),
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),
@@ -824,7 +857,8 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             Some(cancel_handle.clone()),
         );
-        self.record_pending_subresource_request_started_with_initiator(
+        let network = self.start_pending_subresource_transfer(
+            network,
             &info,
             SubresourceRequestInitiatorType::Other,
             load.disposition(),
@@ -834,7 +868,11 @@ impl JsContextHost {
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -888,25 +926,25 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             registry_cancel_handle,
         );
-        match registration {
+        let initiator = match registration {
             ImageSubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
-                self.record_pending_subresource_request_started(&info, load.disposition());
+                SubresourceRequestInitiatorType::Script
             }
-            ImageSubresourceFetchRegistration::Dispatched(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    request_initiator_type,
-                    load.disposition(),
-                );
-            }
-        }
+            ImageSubresourceFetchRegistration::Dispatched(_) => request_initiator_type,
+        };
+        let network =
+            self.start_pending_subresource_transfer(network, &info, initiator, load.disposition());
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1013,7 +1051,8 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             Some(cancel_handle.clone()),
         );
-        self.record_pending_subresource_request_started_with_initiator(
+        let network = self.start_pending_subresource_transfer(
+            network,
             &info,
             SubresourceRequestInitiatorType::Other,
             load.disposition(),
@@ -1023,7 +1062,11 @@ impl JsContextHost {
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1069,7 +1112,8 @@ impl JsContextHost {
                 Some(cancel_handle.clone()),
             )
             .expect("current stylesheet owner must have a Document resource authority");
-        self.record_pending_subresource_request_started_with_initiator(
+        let network = self.start_pending_subresource_transfer(
+            network,
             &info,
             SubresourceRequestInitiatorType::Css,
             load.disposition(),
@@ -1079,7 +1123,11 @@ impl JsContextHost {
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1098,66 +1146,28 @@ impl JsContextHost {
         Some(internal_id)
     }
 
-    pub(crate) fn record_async_subresource_beacon(
-        &mut self,
-        execution_context: super::WindowExecutionContextIdentity,
-        cancel_handle: Option<moli_fetch::FetchCancelHandle>,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) -> u64 {
-        let network = self.admit_pending_subresource_fetch(&mut info);
-        let internal_id = info.internal_id;
-        let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
-            execution_context.dispatch_scope(),
-            info.resource_type,
-            ResourceLoadDisposition::Keepalive,
-            cancel_handle.clone(),
-        );
-        self.record_pending_subresource_request_started(&info, load.disposition());
-        self.pending_subresource_fetches.insert(
-            internal_id,
-            PendingSubresourceFetchState {
-                redirect_headers: None,
-                request_origin,
-                network_request: network,
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::window_network_only(
-                    execution_context,
-                ),
-                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
-                request_mode: moli_fetch::RequestMode::NoCors,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::Beacon,
-            },
-        );
-        self.note_subresource_activity();
-        internal_id
-    }
-
     pub(crate) fn record_pending_subresource_beacon(
         &mut self,
         execution_context: super::WindowExecutionContextIdentity,
+        request_origin: moli_url::WebOrigin,
+        load: ResourceLoadLease,
+        network: std::sync::Arc<crate::network::ResourceTransfer>,
         network_partition_key: Option<String>,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
-        let network = self.admit_pending_subresource_fetch(&mut info);
+        self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
-        let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
-            execution_context.dispatch_scope(),
-            info.resource_type,
-            ResourceLoadDisposition::Keepalive,
-            None,
-        );
         self.push_pending_subresource_fetch_info(info.clone());
-        self.record_pending_subresource_request_started(&info, load.disposition());
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_network_only(
@@ -1187,7 +1197,6 @@ impl JsContextHost {
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
         self.assign_pending_subresource_fetch_identity(&mut info);
-        let request_network = network.request();
         let internal_id = info.internal_id;
         debug_assert_eq!(
             load.kind(),
@@ -1200,7 +1209,11 @@ impl JsContextHost {
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: request_network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window_document_network_only(
@@ -1210,7 +1223,7 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::NoCors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::CspReport { client_id, network },
+                continuation: PendingSubresourceContinuation::CspReport { client_id },
             },
         );
         self.note_subresource_activity();
@@ -1235,13 +1248,22 @@ impl JsContextHost {
             None,
         );
         self.push_pending_subresource_fetch_info(info.clone());
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        let network = self.start_pending_subresource_transfer(
+            network,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),
@@ -1263,7 +1285,7 @@ impl JsContextHost {
         connection: PendingWebSocketConnection,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
-        let network = self.admit_pending_subresource_fetch(&mut info);
+        self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
             owner,
@@ -1277,7 +1299,7 @@ impl JsContextHost {
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: None,
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1310,13 +1332,22 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             cancel_handle.clone(),
         );
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        let network = self.start_pending_subresource_transfer(
+            network,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
-                network_request: network,
+                network: Some(crate::network::ResourceResponseStream::for_load(
+                    network,
+                    &load,
+                    info.resource_type,
+                )),
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::window(execution_context),
@@ -1411,22 +1442,15 @@ impl JsContextHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn append_streaming_subresource_body(
+    pub(crate) fn note_streaming_subresource_activity(
         &mut self,
         body_source_id: NetworkBodySourceId,
-        bytes: &[u8],
     ) {
-        let appended = if let Some(state) = self
+        if self
             .streaming_subresource_fetches
-            .values_mut()
-            .find(|state| state.body_source_id == body_source_id)
+            .values()
+            .any(|state| state.body_source_id == body_source_id)
         {
-            state.body_writer.append(bytes);
-            true
-        } else {
-            false
-        };
-        if appended {
             self.note_subresource_activity();
         }
     }
@@ -1465,7 +1489,6 @@ impl JsContextHost {
         let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
         let event_source = v8::Local::new(scope, event_source);
         let parser = state.event_source_parser.as_mut()?;
-        state.body_writer.append(bytes);
         let messages = parser.push(bytes);
         let delivery = crate::types::EventSourceStreamingChunkDelivery {
             context,
@@ -1493,7 +1516,6 @@ impl JsContextHost {
             };
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
             let xhr = v8::Local::new(scope, xhr);
-            state.body_writer.append(bytes);
             let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes);
             crate::types::XhrStreamingChunkDelivery {
                 context,
@@ -1501,7 +1523,6 @@ impl JsContextHost {
                 dispatch_scope: state.pending.execution_context.dispatch_scope(),
                 realm_token: state.pending.execution_context.realm_token(),
                 internal_id: state.pending.info.internal_id,
-                request_handle: state.pending.info.network_request_handle,
                 decoded_text,
                 loaded,
                 total,
@@ -1572,45 +1593,32 @@ impl JsContextHost {
         streaming: StreamingSubresourceFetchState,
         error_text: String,
     ) {
-        if let Some(handle) = streaming.pending.info.network_request_handle {
-            let partial_body = streaming.body_writer.finish();
-            self.record_subresource_response_started(
-                SubresourceResponseStarted::new(
-                    handle,
-                    streaming
-                        .head
-                        .redirect_chain
-                        .clone()
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    streaming.head.final_url.clone(),
-                    streaming.head.status,
-                    streaming.head.headers.clone(),
-                    streaming.head.cookie_set_reports.clone(),
-                )
-                .with_from_cache(streaming.head.from_cache)
-                .with_negotiated_http_version(streaming.head.negotiated_http_version)
-                .with_network_request_headers(streaming.network_request_headers.clone()),
-            );
-            self.record_subresource_body_finished(
-                SubresourceBodyFinished::failed_with_partial_body(handle, error_text, partial_body),
-            );
-        } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    streaming.pending.info.frame_id.clone(),
-                    streaming.pending.info.document_url.clone(),
-                    streaming.request_url,
-                    streaming.request_method,
-                    streaming.request_headers,
-                    streaming.request_body,
-                    streaming.pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(streaming.pending.info.request_body_bytes.clone()),
-            );
-        }
+        streaming.pending.network().failed_with(
+            &streaming.pending.response_stream().failure(error_text),
+            |observation| {
+                self.record_native_resource_observation(observation);
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn streaming_response_for_test(
+        &self,
+        body_source_id: NetworkBodySourceId,
+    ) -> Option<&std::sync::Arc<crate::network::ResourceResponseStream>> {
+        self.streaming_subresource_fetches
+            .values()
+            .find(|state| state.body_source_id == body_source_id)
+            .and_then(|state| state.pending.network.as_ref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_test_streaming_body(&mut self, internal_id: u64) -> SubresourceResponseBody {
+        self.streaming_subresource_fetches
+            .get(&internal_id)
+            .and_then(|state| state.pending.response_stream().finish_response())
+            .map(|response| response.body)
+            .unwrap_or_else(|| SubresourceResponseBody::from_bytes(Vec::new()))
     }
 
     pub(crate) fn take_streaming_subresource_fetch(
@@ -1628,30 +1636,12 @@ impl JsContextHost {
     }
 
     fn record_observable_abort_before_response(&mut self, pending: &PendingSubresourceFetchState) {
-        if !matches!(
-            &pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
-        ) {
-            return;
-        }
-        let error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
-        if let Some(handle) = pending.info.network_request_handle {
-            self.record_subresource_body_finished(SubresourceBodyFinished::failed(
-                handle, error_text,
-            ));
-        } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    pending.info.frame_id.clone(),
-                    pending.info.document_url.clone(),
-                    pending.info.url.clone(),
-                    pending.info.method.clone(),
-                    pending.info.request_headers.clone(),
-                    pending.info.request_body.clone(),
-                    pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(pending.info.request_body_bytes.clone()),
+        if let Some(response) = &pending.network {
+            response.network.failed_with(
+                &response.failure(crate::network_host::ABORTED_ERROR_TEXT.to_owned()),
+                |observation| {
+                    self.record_native_resource_observation(observation);
+                },
             );
         }
     }
@@ -1660,87 +1650,27 @@ impl JsContextHost {
         &mut self,
         pending: &PendingSubresourceResponseState,
     ) {
-        if !matches!(
-            &pending.pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
-        ) {
-            return;
-        }
-        let error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
-        if let Some(handle) = pending.pending.info.network_request_handle {
-            self.record_subresource_response_started(
-                SubresourceResponseStarted::new(
-                    handle,
-                    pending.response.redirect_chain.clone(),
-                    pending.response.final_url.clone(),
-                    pending.response.status,
-                    pending.response.headers.clone(),
-                    pending.response.cookie_set_reports.clone(),
-                )
-                .with_from_cache(pending.response.from_cache)
-                .with_negotiated_http_version(pending.response.negotiated_http_version)
-                .with_network_request_headers(
-                    pending
-                        .response
-                        .network_request_headers()
-                        .map(|headers| headers.to_vec()),
-                ),
-            );
-            self.record_subresource_body_finished(
-                SubresourceBodyFinished::failed_with_partial_body(
-                    handle,
-                    error_text,
-                    SubresourceResponseBody::from_navigation_response(&pending.response),
-                ),
-            );
-        } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    pending.pending.info.frame_id.clone(),
-                    pending.pending.info.document_url.clone(),
-                    pending.request_url.clone(),
-                    pending.request_method.clone(),
-                    pending.request_headers.clone(),
-                    pending.request_body.clone(),
-                    pending.pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(pending.pending.info.request_body_bytes.clone()),
-            );
-        }
+        let response = crate::network::ResourceBodyResponse::from(pending.response.clone());
+        pending.pending.network().failed_with(
+            &response.failure(
+                crate::network_host::ABORTED_ERROR_TEXT.to_owned(),
+                pending
+                    .response
+                    .network_request_headers()
+                    .map(<[_]>::to_vec),
+            ),
+            |observation| self.record_native_resource_observation(observation),
+        );
     }
 
     fn record_observable_stream_abort(&mut self, streaming: StreamingSubresourceFetchState) {
-        if !matches!(
-            &streaming.pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
-        ) {
-            return;
-        }
-        let error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
-        if let Some(handle) = streaming.pending.info.network_request_handle {
-            self.record_subresource_body_finished(
-                SubresourceBodyFinished::failed_with_partial_body(
-                    handle,
-                    error_text,
-                    streaming.body_writer.finish(),
-                ),
-            );
-        } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    streaming.pending.info.frame_id.clone(),
-                    streaming.pending.info.document_url.clone(),
-                    streaming.request_url,
-                    streaming.request_method,
-                    streaming.request_headers,
-                    streaming.request_body,
-                    streaming.pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(streaming.pending.info.request_body_bytes.clone()),
-            );
-        }
+        streaming.pending.network().failed_with(
+            &streaming
+                .pending
+                .response_stream()
+                .failure(crate::network_host::ABORTED_ERROR_TEXT.to_owned()),
+            |observation| self.record_native_resource_observation(observation),
+        );
     }
 
     pub(crate) fn abort_event_source_fetch(&mut self, internal_id: u64) -> bool {

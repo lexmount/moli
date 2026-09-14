@@ -11931,6 +11931,8 @@ async fn navigator_service_worker_shim_controls_window_fetch() {
             &loader,
         );
 
+    let network = NativeResourceOutput::observe(&vm);
+
     vm.eval(
         r#"
             (() => {
@@ -12074,50 +12076,33 @@ async fn navigator_service_worker_shim_controls_window_fetch() {
     );
     assert_eq!(result, expected_result);
 
-    let records = vm
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => Some(record),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(records.iter().any(|record| {
-        matches!(
-            record.outcome(),
-            crate::types::SubresourceNetworkOutcome::Success {
-                status: 202,
-                status_text,
-                final_url,
-                ..
-            } if status_text.as_deref() == Some("Handled by worker")
-                && final_url.as_str() == expected_fetch_url
-        )
-    }));
-    assert!(records.iter().any(|record| {
-        matches!(
-            record.outcome(),
-            crate::types::SubresourceNetworkOutcome::Success {
-                status: 200,
-                status_text,
-                final_url,
-                ..
-            } if status_text.as_deref().is_none()
-                && final_url.as_str() == "data:text/plain,data-url"
-        )
-    }));
-    assert!(records.iter().any(|record| {
-        matches!(
-            record.outcome(),
-            crate::types::SubresourceNetworkOutcome::Success {
-                status: 202,
-                status_text,
-                final_url,
-                ..
-            } if status_text.as_deref() == Some("Handled by worker")
-                && final_url.as_str() == expected_out_of_scope_url
-        )
-    }));
+    let items = network.take();
+    for url in [&expected_fetch_url, &expected_out_of_scope_url] {
+        let head = items
+            .iter()
+            .find_map(|item| match item {
+                crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(head)
+                    if head.final_url().as_str() == url =>
+                {
+                    Some(head)
+                }
+                _ => None,
+            })
+            .expect("the intercepted request must retain its physical response head");
+        assert_eq!(head.status(), 202);
+        assert_eq!(head.status_text(), Some("Handled by worker"));
+        assert!(matches!(
+            native_resource_terminal(&items, head.handle()).result(),
+            crate::types::SubresourceBodyFinishedResult::Ready(_)
+        ));
+    }
+    assert!(vm.take_network_output().into_items().any(|item| matches!(
+        item,
+        crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
+            if matches!(record.outcome(), crate::types::SubresourceNetworkOutcome::Success {
+                status: 200, status_text, final_url, ..
+            } if status_text.is_none() && final_url.as_str() == "data:text/plain,data-url")
+    )));
     server
         .await
         .expect("service worker script server should finish");
@@ -14085,6 +14070,8 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
             &loader,
         );
 
+    let network = NativeResourceOutput::observe(&vm);
+
     vm.eval(
         r#"
             (() => {
@@ -14132,7 +14119,7 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        items.extend(vm.take_network_output().into_items());
+        items.extend(network.take());
 
         let font_handle = items.iter().find_map(|item| {
             let crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item
@@ -14140,31 +14127,21 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
                 return None;
             };
             (request.resource_type() == crate::types::SubresourceResourceType::Font
-                && request.url().as_str() == expected_font_url)
+                && request.url().as_str() == expected_font_url
+                && request.request_initiator_type()
+                    == crate::types::SubresourceRequestInitiatorType::Css)
                 .then(|| request.handle())
         });
         let font_seen = font_handle.is_some_and(|handle| {
-            items.iter().any(|item| {
-                let crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item
-                else {
-                    return false;
-                };
-                record.request_handle() == Some(handle)
-                    && record.url().as_str() == expected_font_url
-                    && record.request_initiator_type()
-                        == crate::types::SubresourceRequestInitiatorType::Css
-                    && matches!(
-                        record.outcome(),
-                        crate::types::SubresourceNetworkOutcome::Success {
-                            final_url,
-                            status: 200,
-                            response_body,
-                            ..
-                        } if final_url.as_str() == expected_font_url
-                            && response_body.diagnostic_bytes().as_ref()
-                                == b"stylesheet-font:font:/app/fonts/demo.woff2"
-                    )
-            })
+            items.iter().any(|item| matches!(item,
+                crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(head)
+                    if head.handle() == handle && head.status() == 200
+                        && head.final_url().as_str() == expected_font_url))
+            && items.iter().any(|item| matches!(item,
+                crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(terminal)
+                    if terminal.handle() == handle && matches!(terminal.result(),
+                        crate::types::SubresourceBodyFinishedResult::Ready(body)
+                            if body.diagnostic_bytes().as_ref() == b"stylesheet-font:font:/app/fonts/demo.woff2")))
         });
         if font_seen {
             break;
@@ -14684,6 +14661,8 @@ async fn navigator_service_worker_fetch_handler_fetches_event_request_from_netwo
             &loader,
         );
 
+    let network = NativeResourceOutput::observe(&vm);
+
     vm.eval(
         r#"
             (() => {
@@ -14717,26 +14696,25 @@ async fn navigator_service_worker_fetch_handler_fetches_event_request_from_netwo
     .await;
 
     let expected_fetch_url = format!("{base_url}/app/api/network.txt");
-    let records = vm
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => Some(record),
+    let items = network.take();
+    let head = items
+        .iter()
+        .find_map(|item| match item {
+            crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(head)
+                if head.final_url().as_str() == expected_fetch_url =>
+            {
+                Some(head)
+            }
             _ => None,
         })
-        .collect::<Vec<_>>();
-    assert!(records.iter().any(|record| {
-        matches!(
-            record.outcome(),
-            crate::types::SubresourceNetworkOutcome::Success {
-                status: 203,
-                status_text,
-                final_url,
-                ..
-            } if status_text.as_deref() == Some("Worker Network Fallback")
-                && final_url.as_str() == expected_fetch_url
-        )
-    }));
+        .expect("the intercepted request must retain its physical response head");
+    assert_eq!(head.status(), 203);
+    assert_eq!(head.status_text(), Some("Worker Network Fallback"));
+    assert!(
+        matches!(native_resource_terminal(&items, head.handle()).result(),
+        crate::types::SubresourceBodyFinishedResult::Ready(body)
+            if body.diagnostic_bytes().as_ref() == b"proxied:1:network-body")
+    );
     server
         .await
         .expect("service worker network fallback server should finish");

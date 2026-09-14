@@ -1,5 +1,7 @@
 use super::*;
 
+mod terminal;
+
 fn worker_request_info(
     pause: &crate::runtime::RendererWorkerFetchPause,
 ) -> &crate::protocol_types::PendingSubresourceFetchInfo {

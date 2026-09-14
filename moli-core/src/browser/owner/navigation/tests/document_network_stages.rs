@@ -9,6 +9,7 @@ use crate::page::{
 enum Finish {
     Complete,
     PartialFailure,
+    CancelledAfterChunk,
     PageClosed,
     ChildRemoved,
     DocumentOpened,
@@ -18,7 +19,7 @@ macro_rules! csp_stage_tests {
     ($($name:ident: $child:literal, $finish:ident, $controlled:literal;)*) => {
         $(#[tokio::test]
         async fn $name() {
-            document_csp_stages($child, Finish::$finish, $controlled).await;
+            document_resource_stages($child, Finish::$finish, RequestKind::CspReport, $controlled).await;
         })*
     };
 }
@@ -41,7 +42,64 @@ csp_stage_tests! {
     native_document_csp_stages_service_child_page_closed: true, PageClosed, true;
 }
 
-async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
+#[derive(Clone, Copy, Debug)]
+enum RequestKind {
+    CspReport,
+    Beacon,
+    Ping,
+    Fetch,
+    NoCorsFetch,
+}
+
+macro_rules! keepalive_stage_tests {
+    ($($name:ident: $child:literal, $finish:ident, $kind:ident;)*) => {
+        keepalive_stage_tests! { $($name: $child, $finish, $kind, false;)* }
+    };
+    ($($name:ident: $child:literal, $finish:ident, $kind:ident, $controlled:literal;)*) => {
+        $(#[tokio::test]
+        async fn $name() {
+            document_resource_stages($child, Finish::$finish, RequestKind::$kind, $controlled).await;
+        })*
+    };
+}
+
+keepalive_stage_tests! {
+    native_document_ping_stages_beacon: false, Complete, Beacon;
+    native_document_ping_stages_beacon_partial: false, PartialFailure, Beacon;
+    native_document_ping_stages_beacon_closed: false, PageClosed, Beacon;
+    native_document_ping_stages_beacon_child_removed: true, ChildRemoved, Beacon;
+    native_document_ping_stages_beacon_child_opened: true, DocumentOpened, Beacon;
+    native_document_ping_stages_link: false, Complete, Ping;
+    native_document_ping_stages_link_partial: false, PartialFailure, Ping;
+    native_document_ping_stages_link_closed: false, PageClosed, Ping;
+}
+
+keepalive_stage_tests! {
+    native_document_fetch_stages_live: false, Complete, Fetch;
+    native_document_fetch_stages_partial: false, PartialFailure, Fetch;
+    native_document_fetch_stages_cancelled_after_chunk: false, CancelledAfterChunk, Fetch;
+    native_document_fetch_stages_closed: false, PageClosed, Fetch;
+    native_document_fetch_stages_child_removed: true, ChildRemoved, Fetch;
+    native_document_fetch_stages_no_cors: false, Complete, NoCorsFetch;
+    native_document_fetch_stages_no_cors_cancelled_after_chunk: false, CancelledAfterChunk, NoCorsFetch;
+    native_document_fetch_stages_no_cors_closed: false, PageClosed, NoCorsFetch;
+}
+
+keepalive_stage_tests! {
+    native_document_fetch_stages_service: false, Complete, Fetch, true;
+    native_document_fetch_stages_service_partial: false, PartialFailure, Fetch, true;
+    native_document_fetch_stages_service_closed: false, PageClosed, Fetch, true;
+    native_document_fetch_stages_service_no_cors: false, Complete, NoCorsFetch, true;
+    native_document_fetch_stages_service_no_cors_partial: false, PartialFailure, NoCorsFetch, true;
+    native_document_fetch_stages_service_no_cors_closed: false, PageClosed, NoCorsFetch, true;
+}
+
+async fn document_resource_stages(
+    child: bool,
+    finish: Finish,
+    kind: RequestKind,
+    controlled: bool,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let report_url = format!("{origin}/report");
@@ -65,6 +123,15 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
             let request = String::from_utf8(request).unwrap();
             let path = request.split_whitespace().nth(1).unwrap();
             if controlled && path == "/sw.js" {
+                let validate_body = match kind {
+                    RequestKind::CspReport => {
+                        "const report = await event.request.json(); if (report['csp-report']['effective-directive'] !== 'connect-src') throw new Error('invalid report body');"
+                    }
+                    RequestKind::Fetch | RequestKind::NoCorsFetch => {
+                        "const bytes = Array.from(new Uint8Array(await event.request.arrayBuffer())); if (JSON.stringify(bytes) !== '[0,128,255,65]') throw new Error('request bytes changed');"
+                    }
+                    _ => unreachable!("controlled fixture supports CSP reports and Fetch"),
+                };
                 let finish_stream = if matches!(finish, Finish::PartialFailure) {
                     "controller.error(new Error('truncated'))"
                 } else {
@@ -78,8 +145,7 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                         if (new URL(event.request.url).pathname !== '/report') return;
                         event.respondWith((async () => {{
                             if (!event.request.keepalive) throw new Error('report must be keepalive');
-                            const report = await event.request.json();
-                            if (report['csp-report']['effective-directive'] !== 'connect-src') throw new Error('invalid report body');
+                            {validate_body}
                             await fetch('/report-headers');
                             return new Response(new ReadableStream({{ start(controller) {{
                                 (async () => {{
@@ -88,7 +154,7 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                                     await fetch('/report-tail');
                                     {finish_stream};
                                 }})().catch(error => controller.error(error));
-                            }} }}), {{headers: {{'Content-Type':'text/plain'}}}});
+                            }} }}), {{statusText:'Controlled response',headers: {{'Content-Type':'text/plain'}}}});
                         }})());
                     }});
                 "#
@@ -131,8 +197,16 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                     .expect("CSP report body length");
                 let mut body = vec![0; length];
                 stream.read_exact(&mut body).await.unwrap();
-                let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(report["csp-report"]["effective-directive"], "connect-src");
+                match kind {
+                    RequestKind::CspReport => {
+                        let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(report["csp-report"]["effective-directive"], "connect-src");
+                    }
+                    RequestKind::Beacon | RequestKind::Fetch | RequestKind::NoCorsFetch => {
+                        assert_eq!(body, [0, 128, 255, 65])
+                    }
+                    RequestKind::Ping => assert_eq!(body, b"PING"),
+                }
                 requested.take().unwrap().send(()).unwrap();
                 if release_headers.take().unwrap().await.is_err() {
                     return;
@@ -145,7 +219,19 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                 if release_tail.take().unwrap().await.is_err() {
                     return;
                 }
-                if !matches!(finish, Finish::PartialFailure) {
+                if matches!(finish, Finish::CancelledAfterChunk) {
+                    assert_eq!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            stream.read(&mut byte)
+                        )
+                        .await
+                        .expect("retirement must cancel the physical response")
+                        .unwrap(),
+                        0,
+                        "ordinary Fetch cancellation must close its transport",
+                    );
+                } else if !matches!(finish, Finish::PartialFailure) {
                     stream.write_all(b"dy").await.unwrap();
                 }
                 break;
@@ -155,14 +241,39 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                 path == "/page" || (path == "/child" && child),
                 "unexpected request: {path}"
             );
-            let html = if report_document && controlled {
-                "<!doctype html><script>(async()=>{await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}));fetch('/blocked').catch(()=>{})})()</script>"
-            } else if report_document {
-                "<!doctype html><script>fetch('/blocked').catch(()=>{})</script>"
+            let html = if report_document {
+                let (body, script) = match kind {
+                    RequestKind::CspReport => ("", "fetch('/blocked').catch(()=>{})"),
+                    RequestKind::Beacon => (
+                        "",
+                        "navigator.sendBeacon('/report',new Uint8Array([0,128,255,65]))",
+                    ),
+                    RequestKind::Fetch => (
+                        "",
+                        "fetch('/report',{method:'POST',body:new Uint8Array([0,128,255,65]),keepalive}).then(r=>r.text()).catch(()=>{})",
+                    ),
+                    RequestKind::NoCorsFetch => (
+                        "",
+                        "fetch('/report',{method:'POST',mode:'no-cors',body:new Uint8Array([0,128,255,65]),keepalive}).then(r=>r.text()).catch(()=>{})",
+                    ),
+                    RequestKind::Ping => (
+                        "<a href='#pinged' ping='/report'>ping</a>",
+                        "document.querySelector('a').click()",
+                    ),
+                };
+                let setup = if controlled {
+                    "await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}));"
+                } else {
+                    ""
+                };
+                let keepalive = !matches!(finish, Finish::CancelledAfterChunk);
+                format!(
+                    "<!doctype html>{body}<script>(async()=>{{const keepalive={keepalive};{setup}{script}}})()</script>"
+                )
             } else {
-                "<!doctype html><iframe src='/child'></iframe>"
+                "<!doctype html><iframe src='/child'></iframe>".to_owned()
             };
-            let csp = if report_document {
+            let csp = if report_document && matches!(kind, RequestKind::CspReport) {
                 "Content-Security-Policy: connect-src 'none'; report-uri /report\r\n"
             } else {
                 ""
@@ -191,8 +302,20 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                     && request.url().as_str() == report_url
                 {
                     assert_eq!(request.method(), "POST");
-                    assert_eq!(request.resource_type(), SubresourceResourceType::CspReport);
-                    assert!(request.keepalive());
+                    assert_eq!(
+                        request.resource_type(),
+                        match kind {
+                            RequestKind::CspReport => SubresourceResourceType::CspReport,
+                            RequestKind::Fetch | RequestKind::NoCorsFetch =>
+                                SubresourceResourceType::Fetch,
+                            RequestKind::Beacon | RequestKind::Ping =>
+                                SubresourceResourceType::Ping,
+                        }
+                    );
+                    assert_eq!(
+                        request.keepalive(),
+                        !matches!(finish, Finish::CancelledAfterChunk)
+                    );
                     break (
                         occurrence.renderer.source.clone(),
                         request.handle(),
@@ -279,7 +402,7 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
                 };
                 if matched { break event; }
             }
-        }).await.unwrap_or_else(|_| panic!("CSP child={child} {finish:?}: native stage {stage} must precede the next transport gate"));
+        }).await.unwrap_or_else(|_| panic!("{kind:?} child={child} {finish:?}: native stage {stage} must precede the next transport gate"));
         assert!(event.sequence > sequence);
         sequence = event.sequence;
         let occurrence = match event.event {
@@ -293,6 +416,10 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
         match item.as_ref() {
             ScriptNetworkOutputItem::SubresourceResponseStarted(head) => {
                 assert_eq!(head.status(), 200);
+                assert_eq!(
+                    head.status_text(),
+                    controlled.then_some("Controlled response")
+                );
                 assert!(browser.subscribe().unwrap().0.network_requests.iter().any(|request|
                     request.owner == NetworkOwner::Document(document) && request.renderer_source == source
                     && matches!(&request.state, NetworkRequestState::Responding { response, .. } if response.handle() == handle)));
@@ -303,7 +430,7 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => match (finish, body.result())
             {
                 (
-                    Finish::PartialFailure,
+                    Finish::PartialFailure | Finish::CancelledAfterChunk,
                     SubresourceBodyFinishedResult::FailedWithPartialBody {
                         error_text,
                         partial_body,
@@ -323,12 +450,20 @@ async fn document_csp_stages(child: bool, finish: Finish, controlled: bool) {
             },
             _ => unreachable!(),
         }
+        if stage == 1 && matches!(finish, Finish::CancelledAfterChunk) {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                context.close_web_contents(contents).unwrap().close_async(),
+            )
+            .await
+            .expect("ordinary Fetch must retire after its first physical chunk");
+        }
         if let Some(release) = release {
             release.send(()).unwrap();
         }
     }
     server.await.unwrap();
-    if !matches!(finish, Finish::PageClosed) {
+    if !matches!(finish, Finish::PageClosed | Finish::CancelledAfterChunk) {
         context
             .close_web_contents(contents)
             .unwrap()

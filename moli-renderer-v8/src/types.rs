@@ -68,7 +68,6 @@ pub(super) enum PendingSubresourceContinuation {
     Beacon,
     CspReport {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
-        network: std::sync::Arc<crate::network::ResourceTransfer>,
     },
     EventSource(v8::Global<v8::Object>),
     Fetch(PendingWindowFetchContinuation),
@@ -182,9 +181,7 @@ impl PendingSubresourceContinuation {
 
 pub(super) struct PendingWindowFetchContinuation {
     promise: PendingWindowFetchPromise,
-    keepalive: bool,
-    connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
-    csp_report_context: crate::network_host::WindowCspReportRequestContext,
+    pub(super) options: crate::network_host::WindowFetchOptions,
 }
 
 enum PendingWindowFetchPromise {
@@ -195,20 +192,16 @@ enum PendingWindowFetchPromise {
 impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
-        keepalive: bool,
-        connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
-        csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        options: crate::network_host::WindowFetchOptions,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
-            keepalive,
-            connect_policy,
-            csp_report_context,
+            options,
         }
     }
 
     pub(super) fn keepalive(&self) -> bool {
-        self.keepalive
+        self.options.metadata.keepalive
     }
 
     pub(super) fn is_detached(&self) -> bool {
@@ -216,7 +209,7 @@ impl PendingWindowFetchContinuation {
     }
 
     pub(super) fn detach(&mut self) -> bool {
-        if !self.keepalive || self.is_detached() {
+        if !self.keepalive() || self.is_detached() {
             return false;
         }
         self.promise = PendingWindowFetchPromise::DetachedKeepalive;
@@ -235,14 +228,6 @@ impl PendingWindowFetchContinuation {
             PendingWindowFetchPromise::Active(resolver) => Some(resolver),
             PendingWindowFetchPromise::DetachedKeepalive => None,
         }
-    }
-
-    pub(super) fn connect_policy(&self) -> &crate::document_runtime::DocumentConnectPolicySnapshot {
-        &self.connect_policy
-    }
-
-    pub(super) fn csp_report_context(&self) -> &crate::network_host::WindowCspReportRequestContext {
-        &self.csp_report_context
     }
 }
 
@@ -431,6 +416,7 @@ impl PendingSubresourceExecutionContext {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn window_network_only_identity(
         &self,
     ) -> Option<crate::native_bridge::WindowExecutionContextIdentity> {
@@ -440,6 +426,7 @@ impl PendingSubresourceExecutionContext {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn window_document_network_only_identity(
         &self,
     ) -> Option<crate::native_bridge::WindowDocumentNetworkRequestIdentity> {
@@ -476,7 +463,8 @@ pub(super) struct PendingSubresourceFetchState {
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
-    pub(super) network_request: crate::runtime::RendererNetworkRequest,
+    // WebSocket has its own handshake publisher; every HTTP resource owns a transfer.
+    pub(super) network: Option<std::sync::Arc<crate::network::ResourceResponseStream>>,
     pub(super) load: crate::network::loads::ResourceLoadLease,
     pub(super) execution_context: PendingSubresourceExecutionContext,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -487,12 +475,24 @@ pub(super) struct PendingSubresourceFetchState {
 }
 
 impl PendingSubresourceFetchState {
+    pub(crate) fn network(&self) -> &std::sync::Arc<crate::network::ResourceTransfer> {
+        &self.response_stream().network
+    }
+
+    pub(crate) fn response_stream(
+        &self,
+    ) -> &std::sync::Arc<crate::network::ResourceResponseStream> {
+        self.network
+            .as_ref()
+            .expect("HTTP resource owns a response stream")
+    }
+
     pub(crate) fn preflight_observer(
         &self,
         completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
     ) -> crate::network_host::CorsPreflightNetworkObserver {
         crate::network_host::CorsPreflightNetworkObserver {
-            request: self.network_request.clone(),
+            request: self.network().request(),
             observer: completion_tx.network_observer(),
             frame_id: self.info.frame_id.clone(),
             resource_type: self.info.resource_type,
@@ -528,10 +528,6 @@ impl PendingSubresourceFetchState {
 
 pub(super) struct PendingSubresourceResponseState {
     pub(super) pending: PendingSubresourceFetchState,
-    pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
 }
 
@@ -558,20 +554,6 @@ pub(super) struct RunningSubresourceFetchState {
 }
 
 #[derive(Debug)]
-pub(super) struct AsyncSubresourceFetchCompletion {
-    pub(super) internal_id: u64,
-    pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
-    pub(super) response_status_text: Option<String>,
-    pub(super) skip_fetch_security_validation: bool,
-    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-    pub(super) network_error_text: Option<String>,
-    pub(super) result: AsyncSubresourceFetchResult,
-}
-
-#[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchResult {
     Response(NavigationResponse),
     Image {
@@ -582,80 +564,22 @@ pub(super) enum AsyncSubresourceFetchResult {
 }
 
 impl AsyncSubresourceFetchResult {
-    pub(super) fn from_image_result(
-        result: std::result::Result<
-            (NavigationResponse, moli_parkable_image::ParkableImage),
-            String,
-        >,
-    ) -> Self {
-        match result {
-            Ok((response, encoded)) => Self::Image { response, encoded },
-            Err(error) => Self::Failure(error),
-        }
-    }
-
-    pub(super) fn from_image_parts(
-        result: std::result::Result<NavigationResponse, String>,
-        encoded: Option<moli_parkable_image::ParkableImage>,
-    ) -> Self {
-        match (result, encoded) {
-            (Ok(response), Some(encoded)) => Self::Image { response, encoded },
-            (Ok(response), None) => Self::Response(response),
-            (Err(error), _) => Self::Failure(error),
-        }
-    }
-
-    pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
+    pub(super) fn into_result(self) -> Result<NavigationResponse, String> {
         match self {
-            Self::Response(response) | Self::Image { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn as_ref(&self) -> std::result::Result<&NavigationResponse, &String> {
-        match self {
-            Self::Response(response) | Self::Image { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
-        match self {
-            Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::Failure(_) => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_ok(&self) -> bool {
-        !matches!(self, Self::Failure(_))
-    }
-
-    #[cfg(test)]
-    pub(super) fn err(self) -> Option<String> {
-        match self {
-            Self::Failure(error) => Some(error),
-            Self::Response(_) | Self::Image { .. } => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn expect(self, message: &str) -> NavigationResponse {
-        match self {
-            Self::Response(response) | Self::Image { response, .. } => response,
-            Self::Failure(error) => panic!("{message}: {error:?}"),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn expect_err(self, message: &str) -> String {
-        match self {
-            Self::Failure(error) => error,
-            Self::Response(response) | Self::Image { response, .. } => {
-                panic!("{message}: {response:?}")
+            Self::Response(response) => Ok(response),
+            Self::Image { response, encoded } => {
+                let bytes = encoded
+                    .snapshot()
+                    .map_err(|error| error.to_string())?
+                    .to_vec();
+                Ok(
+                    NavigationResponse::from_head_and_body(response.head(), String::new(), bytes)
+                        .with_network_request_headers(
+                            response.network_request_headers().map(<[_]>::to_vec),
+                        ),
+                )
             }
+            Self::Failure(error) => Err(error),
         }
     }
 }
@@ -665,6 +589,55 @@ impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceF
         match result {
             Ok(response) => Self::Response(response),
             Err(error) => Self::Failure(error),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct AsyncSubresourceFetchCompletion {
+    pub(super) network_request_headers: Option<Vec<(String, String)>>,
+    pub(super) internal_id: u64,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+    pub(super) network_error_text: Option<String>,
+    pub(super) result: std::result::Result<
+        crate::network::ResourceBodyResponse,
+        crate::network::ResourceResponseFailure,
+    >,
+}
+
+impl AsyncSubresourceFetchCompletion {
+    pub(crate) fn publish_with(
+        &self,
+        network: &crate::network::ResourceTransfer,
+        observer: impl FnMut(crate::runtime::RendererNetworkObservation),
+    ) {
+        network.complete_with(|_| self.network_result(), observer);
+    }
+
+    pub(crate) fn network_result(
+        &self,
+    ) -> Result<
+        (
+            crate::network::ResourceResponseHead,
+            SubresourceResponseBody,
+        ),
+        crate::network::ResourceResponseFailure,
+    > {
+        match &self.result {
+            Ok(response) => Ok((
+                crate::network::ResourceResponseHead {
+                    status_text: self.response_status_text.clone(),
+                    head: response.head.clone(),
+                    network_request_headers: self.network_request_headers.clone(),
+                },
+                response.body.clone(),
+            )),
+            Err(error) => Err(match &self.network_error_text {
+                Some(message) => error.clone().with_message(message.clone()),
+                None => error.clone(),
+            }),
         }
     }
 }
@@ -716,12 +689,8 @@ pub(super) struct AsyncSubresourceStreamingStarted {
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: moli_fetch::ResponseHead,
-    pub(super) network_request_headers: Option<Vec<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -730,6 +699,7 @@ pub(super) struct AsyncSubresourceStreamingChunk {
     pub(super) bytes: Vec<u8>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct AsyncSubresourceStreamingFinished {
     pub(super) internal_id: u64,
@@ -767,21 +737,28 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    #[cfg(test)]
     Completion(Box<AsyncSubresourceFetchCompletion>),
-    CspReport(Box<crate::network_host::CompletedCspReport>),
+    TransportCompletion(Box<crate::network_host::CompletedResourceFetch>),
     NativeNetwork(crate::runtime::RendererNetworkObservation),
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
     StreamingChunk(AsyncSubresourceStreamingChunk),
+    #[cfg(test)]
     StreamingFinished(AsyncSubresourceStreamingFinished),
+    TransportStreamingFinished {
+        body_source_id: NetworkBodySourceId,
+        completion: Box<crate::network_host::CompletedResourceFetch>,
+    },
 }
 
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            #[cfg(test)]
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
-            Self::CspReport(completion) => AsyncSubresourceFetchEventTarget::Completion {
+            Self::TransportCompletion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id(),
             },
             Self::NativeNetwork(_) => AsyncSubresourceFetchEventTarget::NativeNetwork,
@@ -792,6 +769,14 @@ impl AsyncSubresourceFetchEvent {
             Self::StreamingChunk(chunk) => AsyncSubresourceFetchEventTarget::StreamingChunk {
                 body_source_id: chunk.body_source_id,
             },
+            Self::TransportStreamingFinished {
+                body_source_id,
+                completion,
+            } => AsyncSubresourceFetchEventTarget::StreamingFinish {
+                internal_id: completion.internal_id(),
+                body_source_id: *body_source_id,
+            },
+            #[cfg(test)]
             Self::StreamingFinished(finished) => {
                 AsyncSubresourceFetchEventTarget::StreamingFinish {
                     internal_id: finished.internal_id,
@@ -938,14 +923,8 @@ pub(super) struct ServiceWorkerControllerChangeCompletion {
 pub(super) struct StreamingSubresourceFetchState {
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) pending: PendingSubresourceFetchState,
-    pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: moli_fetch::ResponseHead,
-    pub(super) network_request_headers: Option<Vec<(String, String)>>,
-    pub(super) body_writer: SubresourceResponseBodyWriter,
     pub(super) event_source_parser: Option<crate::network_host::EventSourceParser>,
     pub(super) xhr_response: Option<XhrStreamingResponseState>,
 }
@@ -1022,7 +1001,6 @@ pub(super) struct XhrStreamingChunkDelivery<'s> {
     pub(super) dispatch_scope: crate::native_bridge::OwnerDispatchScope,
     pub(super) realm_token: Option<crate::native_bridge::RuntimeObservableContextToken>,
     pub(super) internal_id: u64,
-    pub(super) request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(super) decoded_text: String,
     pub(super) loaded: usize,
     pub(super) total: Option<usize>,
@@ -1737,6 +1715,5 @@ mod tests {
         assert!(media.delays_document_load_event());
         assert!(text_track.delays_document_load_event());
         assert!(stylesheet_subresource.delays_document_load_event());
-        assert!(!PendingSubresourceContinuation::Beacon.delays_document_load_event());
     }
 }

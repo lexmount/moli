@@ -62,6 +62,7 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        status_text: None,
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),
         redirected: head.redirected,
@@ -274,7 +275,7 @@ impl ServiceWorkerRuntimeService {
             resource_task_runner: dispatch.resource_task_runner,
             cancel_handle: dispatch.cancel_handle,
             navigation_preload_cancel_handle: None,
-            streaming_body_source_id: None,
+            body_stream: None,
         };
         self.dispatch_controlled_fetch_job(fetch_job, request)
             .is_ok()

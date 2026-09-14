@@ -14,7 +14,9 @@ use tokio::{
 use url::Url;
 
 mod document_network_stages;
+mod late_csp_reports;
 mod network_stages;
+mod rejected_responses;
 
 #[derive(Default)]
 struct NativeWorkerNetworkRecords(
@@ -360,7 +362,7 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
 #[tokio::test]
 async fn native_network_commits_request_response_and_body_without_devtools() {
     use crate::browser::NetworkRequestState;
-    use crate::page::{ScriptNetworkOutputItem, SubresourceNetworkOutcome};
+    use crate::page::{ScriptNetworkOutputItem, SubresourceBodyFinishedResult};
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/native-network", listener.local_addr().unwrap());
     let (headers, release_headers) = oneshot::channel();
@@ -449,17 +451,22 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
         .network_requests
         .iter()
         .filter_map(|request| match &request.state {
-            NetworkRequestState::Recorded(record)
-                if request.owner == crate::browser::NetworkOwner::Document(document)
-                    && record.request_handle() == Some(handle) =>
+            NetworkRequestState::Completed {
+                request: started,
+                response: Some(response),
+                body,
+            } if request.owner == crate::browser::NetworkOwner::Document(document)
+                && started.handle() == handle =>
             {
-                Some(record)
+                assert_eq!(response.handle(), handle);
+                assert_eq!(body.handle(), handle);
+                Some(body)
             }
             _ => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(records.len(), 1);
-    let SubresourceNetworkOutcome::Success { response_body, .. } = records[0].outcome() else {
+    let SubresourceBodyFinishedResult::Ready(response_body) = records[0].result() else {
         panic!("successful request must retain its real body");
     };
     assert_eq!(response_body.clone_body_bytes(), b"body");

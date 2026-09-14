@@ -182,25 +182,26 @@ pub(crate) fn start_media_element_resource_fetch(
             },
             result_tx: ServiceWorkerFetchResultSender::Page {
                 completion_tx: host.resource_completion_sender(),
-                network: host.pending_subresource_network_request(internal_id),
+                network: host.pending_subresource_response_stream(internal_id),
             },
             request_client: loader,
             resource_task_runner: resource_loader.task_runner(),
             cancel_handle,
         };
         if !host.dispatch_service_worker_fetch(dispatch) {
-            let _ = host.resource_completion_sender().send_async_subresource(
+            crate::network_host::send_resource_completion(
+                &host.resource_completion_sender(),
+                host.pending_subresource_response_stream(internal_id),
                 AsyncSubresourceFetchCompletion {
+                    network_request_headers: None,
                     internal_id,
-                    request_url,
-                    request_method: "GET".to_owned(),
-                    request_headers: Default::default(),
-                    request_body: None,
                     response_status_text: None,
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    result: Err("service worker media fetch dispatch failed".to_owned()).into(),
+                    result: Err("service worker media fetch dispatch failed"
+                        .to_owned()
+                        .into()),
                 },
             );
         }
@@ -215,11 +216,9 @@ pub(crate) fn start_media_element_resource_fetch(
         Some(cancel_handle),
         Vec::new(),
         internal_id,
+        host.pending_subresource_response_stream(internal_id),
         host.pending_subresource_preflight_observer(internal_id),
         request_url,
-        "GET".to_owned(),
-        Default::default(),
-        None,
     );
     Ok(MediaElementResourceFetchStart::Pending)
 }

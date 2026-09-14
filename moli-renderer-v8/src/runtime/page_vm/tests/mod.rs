@@ -4238,18 +4238,20 @@ body { background-image: url('/css-image.png'); }
                     "HostLoad must remain blocked while stylesheet subresources are pending"
                 );
 
-                if !page_vm
-                    .page_resource_completion_queue()
-                    .has_ready_completion()
-                {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
-                        wait_for_typed_page_resource_completion(&mut page_vm),
-                    )
-                    .await
-                    .expect("stylesheet font terminal should arrive");
-                }
-                let outcome = run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                let outcome = tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if !page_vm.page_resource_completion_queue().has_ready_completion() {
+                            wait_for_typed_page_resource_completion(&mut page_vm).await;
+                        }
+                        let outcome = run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                        if !matches!(outcome.action.owner.local_owner(),
+                            crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+                                crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))
+                        {
+                            break Ok::<_, anyhow::Error>(outcome);
+                        }
+                    }
+                }).await.expect("stylesheet font terminal should arrive")?;
                 assert_eq!(
                     outcome.action.source(),
                     RendererOwnerResourceActivitySource::AsyncSubresource,
@@ -14232,25 +14234,13 @@ fn split_network_output_items(
     Vec<WebSocketNetworkEvent>,
     Vec<WebSocketLifecycleEvent>,
 ) {
-    let mut records = Vec::new();
-    let mut frame_events = Vec::new();
-    let mut lifecycle_events = Vec::new();
-    for item in output.into_items() {
-        match item {
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => records.push(*record),
-            ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => frame_events.push(event),
-            ScriptNetworkOutputItem::WebSocketLifecycleEvent(event) => {
-                lifecycle_events.push(event);
-            }
-            ScriptNetworkOutputItem::SubresourceRequestStarted(_)
-            | ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
-            | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
-            | ScriptNetworkOutputItem::SubresourceDataReceived(_)
-            | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
-            | ScriptNetworkOutputItem::SubresourceBodyFinished(_) => {}
-        }
-    }
-    (records, frame_events, lifecycle_events)
+    let mut report = moli_page_types::ScriptExecutionReport::default();
+    report.extend_network_output(output);
+    (
+        report.subresource_network_records().to_vec(),
+        report.websocket_network_events().to_vec(),
+        report.websocket_lifecycle_events().to_vec(),
+    )
 }
 
 fn detached_test_run() -> ScriptRun {

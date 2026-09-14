@@ -10,7 +10,7 @@ use crate::{
         ResourceResponseFailure, ResourceResponseHead, ResourceResponseObserver,
         ResourceResponseResult,
     },
-    runtime::RendererNetworkRequest,
+    runtime::{RendererNetworkObservation, RendererNetworkRequest},
 };
 
 /// One resource consumer's publication and completion permission. Work retains
@@ -47,15 +47,23 @@ impl ResourceTransfer {
     }
 
     fn publish(&self, network: &RendererNetworkRequest, item: ScriptNetworkOutputItem) {
-        (self.observer)(network.report(item));
+        self.observe(network.report(item));
+    }
+
+    pub(crate) fn observe(&self, observation: RendererNetworkObservation) {
+        (self.observer)(observation);
     }
 
     fn record_response(
-        &self,
         network: &RendererNetworkRequest,
-        head: moli_fetch::ResponseHead,
-        network_request_headers: Option<Vec<(String, String)>>,
+        response: ResourceResponseHead,
+        observer: &mut impl FnMut(RendererNetworkObservation),
     ) {
+        let ResourceResponseHead {
+            head,
+            status_text,
+            network_request_headers,
+        } = response;
         let response = moli_page_types::SubresourceResponseStarted::new(
             network.handle(),
             head.redirect_chain.into_iter().map(Into::into).collect(),
@@ -64,13 +72,15 @@ impl ResourceTransfer {
             head.headers,
             head.cookie_set_reports,
         )
+        .with_status_text(status_text)
         .with_request_cookie_report(head.request_cookie_report)
         .with_from_cache(head.from_cache)
         .with_negotiated_http_version(head.negotiated_http_version)
         .with_network_request_headers(network_request_headers);
-        self.publish(
-            network,
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Arc::new(response)),
+        observer(
+            network.report(ScriptNetworkOutputItem::SubresourceResponseStarted(
+                Arc::new(response),
+            )),
         );
     }
 
@@ -111,6 +121,7 @@ impl ResourceTransfer {
     pub(crate) fn response_completed(&self, response: &moli_fetch::Response) {
         self.body_completed(
             ResourceResponseHead {
+                status_text: None,
                 head: response.head(),
                 network_request_headers: response
                     .network_request_extra_info()
@@ -121,56 +132,80 @@ impl ResourceTransfer {
     }
 
     pub(crate) fn body_completed(&self, head: ResourceResponseHead, body: SubresourceResponseBody) {
-        let previous = std::mem::replace(&mut *self.state.lock(), ResourceTransferState::Finished);
-        let (network, body) = match previous {
-            ResourceTransferState::Requested(network) => {
-                self.record_response(&network, head.head, head.network_request_headers);
-                let body = SubresourceBodyFinished::ready(network.handle(), body);
-                (network, body)
-            }
-            ResourceTransferState::Responding(network) => {
-                let body = SubresourceBodyFinished::ready_after_streaming(network.handle(), body);
-                (network, body)
-            }
-            ResourceTransferState::Finished => return,
-        };
-        self.publish(
-            &network,
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(body)),
-        );
+        self.body_completed_with(head, body, |observation| self.observe(observation));
+    }
+
+    /// A VM-owned completion records its receipts in the current owner turn,
+    /// before its callback can retire that owner. I/O uses the stored observer.
+    pub(crate) fn body_completed_with(
+        &self,
+        head: ResourceResponseHead,
+        body: SubresourceResponseBody,
+        observer: impl FnMut(RendererNetworkObservation),
+    ) {
+        self.complete_with(|_| Ok((head, body)), observer);
     }
 
     pub(crate) fn failed(&self, error: &ResourceResponseFailure) {
+        self.failed_with(error, |observation| self.observe(observation));
+    }
+
+    pub(crate) fn failed_with(
+        &self,
+        error: &ResourceResponseFailure,
+        observer: impl FnMut(RendererNetworkObservation),
+    ) {
+        self.complete_with(|_| Err(error.clone()), observer);
+    }
+
+    /// Claim terminal permission before checking the result. A winning response
+    /// can admit dependent work before publishing its terminal; a late response
+    /// cannot run policy side effects after cancellation has already won.
+    pub(crate) fn complete_with(
+        &self,
+        result: impl FnOnce(
+            &RendererNetworkRequest,
+        ) -> Result<
+            (ResourceResponseHead, SubresourceResponseBody),
+            ResourceResponseFailure,
+        >,
+        mut observer: impl FnMut(RendererNetworkObservation),
+    ) {
         let previous = std::mem::replace(&mut *self.state.lock(), ResourceTransferState::Finished);
-        let network = match previous {
-            ResourceTransferState::Requested(network) => {
-                if let ResourceResponseFailure::PartialBody { response, .. } = error {
-                    self.record_response(
-                        &network,
-                        response.head.clone(),
-                        response.network_request_headers.clone(),
-                    );
-                }
-                network
-            }
-            ResourceTransferState::Responding(network) => network,
+        let network = match &previous {
+            ResourceTransferState::Requested(network)
+            | ResourceTransferState::Responding(network) => network,
             ResourceTransferState::Finished => return,
         };
-        let body = match error {
-            ResourceResponseFailure::Request(message) => {
-                SubresourceBodyFinished::failed(network.handle(), message.clone())
+        let body = match result(network) {
+            Ok((head, body)) => match previous {
+                ResourceTransferState::Requested(_) => {
+                    Self::record_response(network, head, &mut observer);
+                    SubresourceBodyFinished::ready(network.handle(), body)
+                }
+                ResourceTransferState::Responding(_) => {
+                    SubresourceBodyFinished::ready_after_streaming(network.handle(), body)
+                }
+                ResourceTransferState::Finished => unreachable!(),
+            },
+            Err(ResourceResponseFailure::Request(message)) => {
+                SubresourceBodyFinished::failed(network.handle(), message)
             }
-            ResourceResponseFailure::PartialBody { message, body, .. } => {
-                SubresourceBodyFinished::failed_with_partial_body(
-                    network.handle(),
-                    message.clone(),
-                    body.clone(),
-                )
+            Err(ResourceResponseFailure::PartialBody {
+                message,
+                response,
+                body,
+            }) => {
+                if matches!(previous, ResourceTransferState::Requested(_)) {
+                    Self::record_response(network, response.as_ref().clone(), &mut observer);
+                }
+                SubresourceBodyFinished::failed_with_partial_body(network.handle(), message, body)
             }
         };
-        self.publish(
-            &network,
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(body)),
+        observer(
+            network.report(ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+                body,
+            ))),
         );
     }
 }
@@ -180,11 +215,9 @@ impl ResourceResponseObserver for ResourceTransfer {
         let mut state = self.state.lock();
         match std::mem::replace(&mut *state, ResourceTransferState::Finished) {
             ResourceTransferState::Requested(network) => {
-                self.record_response(
-                    &network,
-                    response.head.clone(),
-                    response.network_request_headers.clone(),
-                );
+                Self::record_response(&network, response.as_ref().clone(), &mut |observation| {
+                    self.observe(observation);
+                });
                 *state = ResourceTransferState::Responding(network);
             }
             ResourceTransferState::Responding(_) => {

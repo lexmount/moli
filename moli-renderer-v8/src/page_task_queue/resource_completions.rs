@@ -9,13 +9,15 @@ use crate::runtime::{
     RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererOwnerRuntimeActivitySource,
     RendererPageToken, RendererRuntimeInspectorResponsePublication,
 };
+#[cfg(test)]
+use crate::types::AsyncSubresourceFetchCompletion;
 use crate::types::{
-    AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
-    ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
-    ChildDocumentLoadCompletion, ChildDynamicImportFetchCompletion,
-    ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
-    ChildParserModuleRootFetchCompletion, DocumentWriteExternalScriptLoadCompletion,
-    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
+    AsyncSubresourceFetchEvent, ChildBlockingStylesheetLoadCompletion,
+    ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion,
+    ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
+    DocumentWriteExternalScriptLoadCompletion, PopupClassicScriptLoadCompletion,
+    PopupDocumentLoadCompletion,
 };
 
 #[derive(Debug, Clone)]
@@ -380,6 +382,7 @@ impl RendererResourceCompletionSender {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn send_async_subresource(
         &self,
         completion: AsyncSubresourceFetchCompletion,
@@ -817,16 +820,13 @@ mod tests {
 
     fn async_subresource_completion(internal_id: u64) -> AsyncSubresourceFetchCompletion {
         AsyncSubresourceFetchCompletion {
+            network_request_headers: None,
             internal_id,
-            request_url: Url::parse("https://example.test/api").unwrap(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new().into(),
-            request_body: None,
             response_status_text: None,
             skip_fetch_security_validation: false,
             response_filter: None,
             network_error_text: None,
-            result: Err("test".to_owned()).into(),
+            result: Err("test".to_owned().into()),
         }
     }
 

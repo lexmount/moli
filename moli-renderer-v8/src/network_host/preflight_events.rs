@@ -27,7 +27,7 @@ impl CorsPreflightNetworkObserver {
     ) -> Result<ResponseHead, String> {
         let observer = self.observer.clone();
         let (network, started) = ResourceTransfer::start(
-            self.request.preflight(),
+            self.request.dependent_request(),
             move |event| observer(event),
             |network| {
                 moli_page_types::SubresourceRequestStarted::new(

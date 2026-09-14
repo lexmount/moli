@@ -2,7 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_fetch::{
-    FetchCancelHandle, RequestCredentialsMode, RequestMode, RequestRedirectMode,
+    BrowserRequestMetadata, FetchCancelHandle, RequestCredentialsMode, RequestMode,
     RequestResourceType, should_request_be_blocked_due_to_bad_port,
 };
 
@@ -47,16 +47,10 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
-    let WindowPingRequestContext {
-        execution_context,
-        resource_loader,
-        frame_id,
-        document_url,
-        base_url,
-        request_origin,
-        network_partition_key,
-    } = request_context;
-    let resolved_url = match resolve_context_url(&base_url, &raw_url, None) {
+    let resource_loader = &request_context.resource_loader;
+    let document_url = &request_context.document_url;
+    let frame_id = &request_context.frame_id;
+    let resolved_url = match resolve_context_url(&request_context.base_url, &raw_url, None) {
         Ok(url) => url,
         Err(_) => {
             crate::util::throw_type_error(scope, "The URL argument is ill-formed or unsupported.");
@@ -76,8 +70,8 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     let request_body_text = request_body_text(&body);
     let request_cookie_report = observe_subresource_request_cookie_report(
         resource_loader.request_client(),
-        &document_url,
-        &request_origin,
+        document_url,
+        &request_context.request_origin,
         &resolved_url,
         "POST",
         RequestCredentialsMode::Include,
@@ -98,75 +92,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         request_cookie_report,
     };
 
-    if host.should_intercept_subresource(SubresourceResourceType::Ping) {
-        host.record_pending_subresource_beacon(
-            execution_context,
-            network_partition_key.clone(),
-            info,
-        );
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-
-    if host.network_offline() {
-        record_beacon_failure(host, info, "Network emulation offline".to_owned());
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-    if host.is_url_blocked(&resolved_url) {
-        record_beacon_failure(host, info, BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned());
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-    if should_request_be_blocked_due_to_bad_port(&resolved_url) {
-        record_beacon_failure(
-            host,
-            info,
-            format!("sendBeacon: blocked bad port for `{resolved_url}`"),
-        );
-        rv.set(v8::Boolean::new(scope, true).into());
-        return;
-    }
-
-    let loader = resource_loader.request_client().clone();
-    let request =
-        match Request::new_bytes("POST", resolved_url.as_str(), body, request_headers.clone()) {
-            Ok(request) => request
-                .with_initiator_url(&document_url)
-                .with_request_origin(request_origin.clone())
-                .with_resource_type(RequestResourceType::Beacon)
-                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Beacon)
-                .with_request_mode(RequestMode::NoCors)
-                .with_credentials_mode(RequestCredentialsMode::Include)
-                .with_network_partition_key(network_partition_key.clone())
-                .with_redirect_mode(RequestRedirectMode::Follow)
-                .with_subframe_context(frame_id.is_some()),
-            Err(error) => {
-                crate::util::throw_type_error(scope, &error.to_string());
-                return;
-            }
-        };
-    let cancel_handle = FetchCancelHandle::new();
-    let internal_id = host.record_async_subresource_beacon(
-        execution_context,
-        Some(cancel_handle.clone()),
-        network_partition_key,
-        info,
-    );
-    spawn_async_subresource_fetch(
-        resource_loader.task_runner(),
-        host.resource_completion_sender(),
-        loader,
-        request,
-        Some(cancel_handle),
-        Vec::new(),
-        internal_id,
-        host.pending_subresource_preflight_observer(internal_id),
-        resolved_url,
-        "POST".to_owned(),
-        request_headers,
-        request_body_text,
-    );
+    send_ping(host, request_context, info, BrowserRequestMetadata::Beacon);
     rv.set(v8::Boolean::new(scope, true).into());
 }
 
@@ -183,21 +109,15 @@ pub(crate) fn send_link_audit_ping(
     let Some(request_context) = window_ping_request_context(scope, host) else {
         return;
     };
-    let WindowPingRequestContext {
-        execution_context,
-        resource_loader,
-        frame_id,
-        document_url,
-        base_url: _,
-        request_origin,
-        network_partition_key,
-    } = request_context;
+    let resource_loader = &request_context.resource_loader;
+    let document_url = &request_context.document_url;
+    let frame_id = &request_context.frame_id;
     let mut request_headers = vec![
         ("Content-Type".to_owned(), "text/ping".to_owned()),
         ("Cache-Control".to_owned(), "max-age=0".to_owned()),
         ("Ping-To".to_owned(), destination_url.to_owned()),
     ];
-    if document_url.scheme() == "http" || moli_url::same_origin(&document_url, &ping_url) {
+    if document_url.scheme() == "http" || moli_url::same_origin(document_url, &ping_url) {
         request_headers.push(("Ping-From".to_owned(), document_url.as_str().to_owned()));
     }
     let request_headers =
@@ -205,8 +125,8 @@ pub(crate) fn send_link_audit_ping(
     let request_body = Some("PING".to_owned());
     let request_cookie_report = observe_subresource_request_cookie_report(
         resource_loader.request_client(),
-        &document_url,
-        &request_origin,
+        document_url,
+        &request_context.request_origin,
         &ping_url,
         "POST",
         RequestCredentialsMode::Include,
@@ -227,74 +147,109 @@ pub(crate) fn send_link_audit_ping(
         request_cookie_report,
     };
 
+    send_ping(host, request_context, info, BrowserRequestMetadata::Ping);
+}
+
+fn send_ping(
+    host: &mut JsContextHost,
+    context: WindowPingRequestContext,
+    mut info: PendingSubresourceFetchInfo,
+    metadata: BrowserRequestMetadata,
+) {
+    let Some(request_network) = host
+        .document_network_reporter()
+        .and_then(|source| source.start_request())
+    else {
+        return;
+    };
+    info.network_request_handle = Some(request_network.handle());
+    let observer = host.resource_completion_sender().network_observer();
+    let (network, started) = crate::network::ResourceTransfer::start(
+        request_network,
+        move |event| observer(event),
+        |request| keepalive_request_started(request, &info),
+    );
     if host.should_intercept_subresource(SubresourceResourceType::Ping) {
+        let load = context
+            .resource_loader
+            .register_load(
+                crate::network::loads::ResourceLoadKind::Beacon,
+                crate::network::loads::ResourceLoadDisposition::Keepalive,
+                None,
+            )
+            .expect("the sending Document has an active resource loader");
         host.record_pending_subresource_beacon(
-            execution_context,
-            network_partition_key.clone(),
+            context.execution_context,
+            context.request_origin.clone(),
+            load,
+            network,
+            context.network_partition_key,
             info,
         );
+        host.record_native_resource_observation(started);
         return;
     }
-
-    if host.network_offline() {
-        record_beacon_failure(host, info, "Network emulation offline".to_owned());
+    host.record_native_resource_observation(started);
+    let failure = if host.network_offline() {
+        Some("Network emulation offline".to_owned())
+    } else if host.is_url_blocked(&info.url) {
+        Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+    } else if should_request_be_blocked_due_to_bad_port(&info.url) {
+        Some(format!(
+            "{}: blocked bad port for `{}`",
+            if matches!(metadata, BrowserRequestMetadata::Beacon) {
+                "sendBeacon"
+            } else {
+                "ping"
+            },
+            info.url
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = failure {
+        network.failed(&crate::network::ResourceResponseFailure::Request(message));
         return;
     }
-    if host.is_url_blocked(&ping_url) {
-        record_beacon_failure(host, info, BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned());
-        return;
-    }
-    if should_request_be_blocked_due_to_bad_port(&ping_url) {
-        record_beacon_failure(
-            host,
-            info,
-            format!("ping: blocked bad port for `{ping_url}`"),
-        );
-        return;
-    }
-
-    let loader = resource_loader.request_client().clone();
     let request = match Request::new_bytes(
         "POST",
-        ping_url.as_str(),
-        Some(b"PING".to_vec()),
-        request_headers.clone(),
+        info.url.as_str(),
+        info.request_body_bytes,
+        info.request_headers,
     ) {
         Ok(request) => request
-            .with_initiator_url(&document_url)
-            .with_request_origin(request_origin.clone())
-            .with_resource_type(RequestResourceType::Ping)
-            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Ping)
+            .with_initiator_url(&info.document_url)
+            .with_request_origin(context.request_origin.clone())
+            .with_resource_type(if matches!(metadata, BrowserRequestMetadata::Beacon) {
+                RequestResourceType::Beacon
+            } else {
+                RequestResourceType::Ping
+            })
+            .with_browser_request_metadata(metadata)
             .with_request_mode(RequestMode::NoCors)
             .with_credentials_mode(RequestCredentialsMode::Include)
-            .with_network_partition_key(network_partition_key.clone())
-            .with_redirect_mode(RequestRedirectMode::Follow)
-            .with_subframe_context(frame_id.is_some()),
+            .with_network_partition_key(context.network_partition_key)
+            .with_subframe_context(info.frame_id.is_some()),
         Err(error) => {
-            record_beacon_failure(host, info, error.to_string());
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                error.to_string(),
+            ));
             return;
         }
     };
-    let cancel_handle = FetchCancelHandle::new();
-    let internal_id = host.record_async_subresource_beacon(
-        execution_context,
-        Some(cancel_handle.clone()),
-        network_partition_key,
-        info,
-    );
-    spawn_async_subresource_fetch(
-        resource_loader.task_runner(),
-        host.resource_completion_sender(),
-        loader,
+    let cancel = FetchCancelHandle::new();
+    let load = context
+        .resource_loader
+        .register_load(
+            crate::network::loads::ResourceLoadKind::Beacon,
+            crate::network::loads::ResourceLoadDisposition::Keepalive,
+            Some(cancel.clone()),
+        )
+        .expect("the sending Document has an active resource loader");
+    KeepaliveResource::new(network, load).fetch(
+        context.resource_loader.request_client().clone(),
         request,
-        Some(cancel_handle),
-        Vec::new(),
-        internal_id,
-        host.pending_subresource_preflight_observer(internal_id),
-        ping_url,
-        "POST".to_owned(),
-        request_headers,
-        request_body,
+        cancel,
     );
 }
 
@@ -368,21 +323,4 @@ fn navigator_beacon_body<'s>(
 fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
     body.as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
-}
-
-fn record_beacon_failure(
-    host: &mut JsContextHost,
-    info: PendingSubresourceFetchInfo,
-    message: String,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        info.frame_id,
-        info.document_url,
-        info.url,
-        info.method,
-        info.request_headers,
-        info.request_body,
-        info.resource_type,
-        message,
-    ));
 }

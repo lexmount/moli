@@ -60,7 +60,6 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) document_url: url::Url,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) network_partition_key: Option<String>,
-    pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
     pub(super) method: String,
@@ -69,13 +68,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) body: Option<Vec<u8>>,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
-    pub(super) redirect_mode: moli_fetch::RequestRedirectMode,
-    pub(super) priority: Option<moli_fetch::FetchPriorityHint>,
-    pub(super) cache: String,
-    pub(super) referrer: String,
-    pub(super) referrer_policy: String,
-    pub(super) integrity: String,
-    pub(super) keepalive: bool,
+    pub(super) options: WindowFetchOptions,
 }
 
 impl PreparedWindowFetchRequest {
@@ -135,7 +128,6 @@ pub(super) fn prepare_window_fetch_request<'s>(
         document_url,
         request_origin,
         network_partition_key,
-        document_referrer_policy,
         policy_context,
         resolved_url,
         method: parsed.method,
@@ -144,12 +136,17 @@ pub(super) fn prepare_window_fetch_request<'s>(
         body: parsed.body,
         request_mode: parsed.request_mode,
         credentials_mode: parsed.credentials_mode,
-        redirect_mode: parsed.redirect_mode,
-        priority: parsed.priority,
-        cache: parsed.cache,
-        referrer: parsed.referrer,
-        referrer_policy: parsed.referrer_policy,
-        integrity: parsed.integrity,
-        keepalive: parsed.keepalive,
+        options: WindowFetchOptions {
+            redirect_mode: parsed.redirect_mode,
+            priority: parsed.priority,
+            document_referrer_policy,
+            metadata: crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata {
+                cache: parsed.cache,
+                referrer: parsed.referrer,
+                referrer_policy: parsed.referrer_policy,
+                integrity: parsed.integrity,
+                keepalive: parsed.keepalive,
+            },
+        },
     })
 }

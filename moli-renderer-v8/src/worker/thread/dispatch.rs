@@ -3374,6 +3374,7 @@ fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        status_text: Some(head.status_text.clone()),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
         redirected: head.redirected,

@@ -1,9 +1,140 @@
 use super::*;
+use crate::network::{
+    ResourceResponseFailure, ResourceResponseHead, ResourceResponseStream, ResourceTransfer,
+};
+use crate::page_task_queue::RendererResourceCompletionSender;
+use crate::types::{AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent};
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, RedirectInfo,
     RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead, StreamingRawResponse,
     is_cors_safelisted_method,
 };
+use std::sync::Arc;
+
+/// An async result belongs to the original pending request until it is claimed.
+/// If its Page route retires before delivery, the result itself settles the
+/// native request rather than losing the physical response with the VM.
+pub(crate) struct CompletedResourceFetch {
+    response: Arc<ResourceResponseStream>,
+    completion: Option<AsyncSubresourceFetchCompletion>,
+}
+
+impl std::fmt::Debug for CompletedResourceFetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletedResourceFetch")
+            .field("completion", &self.completion)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompletedResourceFetch {
+    pub(crate) fn new(
+        response: Arc<ResourceResponseStream>,
+        completion: AsyncSubresourceFetchCompletion,
+    ) -> Self {
+        Self {
+            response,
+            completion: Some(completion),
+        }
+    }
+
+    pub(crate) fn internal_id(&self) -> u64 {
+        self.completion
+            .as_ref()
+            .expect("unclaimed resource result")
+            .internal_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_for_test(mut self) -> AsyncSubresourceFetchCompletion {
+        let completion = self.completion.take().expect("single result consumer");
+        completion.publish_with(&self.response.network, |item| {
+            self.response.network.observe(item)
+        });
+        completion
+    }
+
+    pub(crate) fn claim(
+        mut self,
+        network: &Arc<ResourceTransfer>,
+    ) -> Option<AsyncSubresourceFetchCompletion> {
+        if !Arc::ptr_eq(network, &self.response.network) {
+            return None;
+        }
+        self.completion.take()
+    }
+}
+
+impl Drop for CompletedResourceFetch {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            self.response.network.complete_with(
+                |request| {
+                    let result = completion.network_result();
+                    let head = match &result {
+                        Ok((head, _)) => Some(head),
+                        Err(ResourceResponseFailure::PartialBody { response, .. }) => {
+                            Some(response.as_ref())
+                        }
+                        Err(ResourceResponseFailure::Request(_)) => None,
+                    };
+                    let failure = self
+                        .response
+                        .window_fetch_policy()
+                        .zip(head)
+                        .filter(|(_, head)| !head.head.redirect_chain.is_empty())
+                        .and_then(|(policy, head)| {
+                            policy.check_unclaimed_response(request, &head.head.final_url)
+                        });
+                    match (result, failure) {
+                        (Ok((head, body)), Some(message)) => {
+                            Err(ResourceResponseFailure::PartialBody {
+                                message,
+                                response: Arc::new(head),
+                                body,
+                            })
+                        }
+                        (Err(error), Some(message)) => Err(error.with_message(message)),
+                        (result, None) => result,
+                    }
+                },
+                |observation| self.response.network.observe(observation),
+            );
+        }
+    }
+}
+
+pub(crate) fn send_resource_completion(
+    sender: &RendererResourceCompletionSender,
+    response: Arc<ResourceResponseStream>,
+    completion: AsyncSubresourceFetchCompletion,
+) {
+    let _ = sender.send_async_subresource_event(AsyncSubresourceFetchEvent::TransportCompletion(
+        Box::new(CompletedResourceFetch::new(response, completion)),
+    ));
+}
+
+pub(crate) fn resource_request_started(
+    network: &crate::runtime::RendererNetworkRequest,
+    info: &crate::types::PendingSubresourceFetchInfo,
+    initiator: moli_page_types::SubresourceRequestInitiatorType,
+    keepalive: bool,
+) -> moli_page_types::SubresourceRequestStarted {
+    moli_page_types::SubresourceRequestStarted::new(
+        network.handle(),
+        info.frame_id.clone(),
+        info.document_url.clone(),
+        info.url.clone(),
+        info.method.clone(),
+        info.request_headers.clone(),
+        info.request_body.clone(),
+        info.resource_type,
+        initiator,
+        info.request_cookie_report.clone(),
+    )
+    .with_request_body_bytes(info.request_body_bytes.clone())
+    .with_keepalive(keepalive)
+}
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 
@@ -242,7 +373,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+) -> Result<NetworkFetchResult<StreamingRawResponse>, ResourceResponseFailure> {
     let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
 
     loop {
@@ -259,15 +390,21 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             .map_err(format_network_error)?;
         let network_extra_info_available = observed.request_observation().is_some();
         let head = observed.response().head();
-        match redirects.advance(head, network_extra_info_available)? {
-            ManualCorsRedirectTransition::FinalResponse => {
+        match redirects.advance(head, network_extra_info_available) {
+            Ok(ManualCorsRedirectTransition::FinalResponse) => {
                 let redirect_chain = redirects.into_redirect_chain();
                 observed.response_mut().redirected = !redirect_chain.is_empty();
                 observed.response_mut().redirect_chain = redirect_chain;
                 return Ok(observed);
             }
-            ManualCorsRedirectTransition::ManualResponse => return Ok(observed),
-            ManualCorsRedirectTransition::FollowedRedirect => {}
+            Ok(ManualCorsRedirectTransition::ManualResponse) => return Ok(observed),
+            Ok(ManualCorsRedirectTransition::FollowedRedirect) => {}
+            Err(message) => {
+                let redirect_chain = redirects.into_redirect_chain();
+                observed.response_mut().redirected = !redirect_chain.is_empty();
+                observed.response_mut().redirect_chain = redirect_chain;
+                return Err(rejected_resource_response(observed, message));
+            }
         }
 
         // Redirect bodies are not exposed to Fetch/XHR. Finish this hop before
@@ -322,7 +459,7 @@ pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+) -> Result<NetworkFetchResult<StreamingRawResponse>, ResourceResponseFailure> {
     // Borrow the loader so its fetch runtime stays alive until the caller drains
     // and finishes the returned StreamingRawResponse.
     if browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers) {
@@ -349,8 +486,35 @@ pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_
         .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel_handle)
         .await
         .map_err(format_network_error)?;
-    validate_redirect_mode_response_head(&result.response().head(), redirect_mode)?;
+    if let Err(message) =
+        validate_redirect_mode_response_head(&result.response().head(), redirect_mode)
+    {
+        return Err(rejected_resource_response(result, message));
+    }
     Ok(result)
+}
+
+/// A policy rejection happens at the received head. Preserve those facts and
+/// drop the reader immediately; waiting for a rejected body would delay failure.
+fn rejected_resource_response(
+    observed: NetworkFetchResult<StreamingRawResponse>,
+    message: String,
+) -> ResourceResponseFailure {
+    let (mut response, request) = observed.into_parts();
+    response.cancellation_handle().cancel();
+    let mut body = crate::types::SubresourceResponseBodyWriter::default();
+    while let Some(chunk) = response.try_next_chunk() {
+        body.append(&chunk);
+    }
+    ResourceResponseFailure::PartialBody {
+        message,
+        response: Arc::new(ResourceResponseHead {
+            status_text: None,
+            head: response.head(),
+            network_request_headers: request.map(|request| request.into_headers()),
+        }),
+        body: body.finish(),
+    }
 }
 
 fn format_network_error(error: anyhow::Error) -> String {
@@ -427,21 +591,14 @@ pub(crate) fn spawn_async_subresource_fetch(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     internal_id: u64,
+    resource: Arc<ResourceResponseStream>,
     preflight_observer: CorsPreflightNetworkObserver,
     request_url: url::Url,
-    request_method: String,
-    request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
 ) {
-    let parkable_image_manager = matches!(
-        request.browser_request_metadata(),
-        Some(BrowserRequestMetadata::Image)
-    )
-    .then(|| loader.parkable_image_manager(&task_runner));
     task_runner.spawn(async move {
-        let requires_manual_preflight_redirects =
-            browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-        let can_stream_subresource_body = matches!(
+        // JS can expose selected responses as streams; every physical response
+        // publishes stages and retains its body independently of that consumer.
+        let stream_to_js = matches!(
             request.browser_request_metadata(),
             Some(
                 BrowserRequestMetadata::Fetch
@@ -449,153 +606,92 @@ pub(crate) fn spawn_async_subresource_fetch(
                     | BrowserRequestMetadata::JsonModule
                     | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::StyleModule
-                    | BrowserRequestMetadata::Xhr,
+                    | BrowserRequestMetadata::Xhr
             )
         ) && request.follow_redirects
             && request.request_mode != RequestMode::NoCors;
-        let can_collect_image_body = parkable_image_manager.is_some() && request.follow_redirects;
-        if moli_trace::cdp_runtime_trace_enabled() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %request.url,
-                method = %request.method,
-                browser_request_metadata = ?request.browser_request_metadata(),
-                request_mode = ?request.request_mode,
-                redirect_mode = ?request.redirect_mode,
-                follow_redirects = request.follow_redirects,
-                requires_manual_preflight_redirects,
-                can_stream_subresource_body,
-                can_collect_image_body,
-                stage = "async_subresource_transport_selected",
-            );
-        }
-        if can_collect_image_body {
-            let result = fetch_browser_image_into_parkable(
-                &loader,
-                request,
-                cancel_handle,
-                preflight_request_headers,
-                Some(&preflight_observer),
-                parkable_image_manager
-                    .expect("an image transport selection must retain its parkable manager"),
-            )
-            .await;
-            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: crate::types::AsyncSubresourceFetchResult::from_image_result(result),
-            });
-            return;
-        }
-        if !can_stream_subresource_body {
-            let result = fetch_browser_subresource_with_preflight_headers_and_observer(
-                loader,
-                request,
-                cancel_handle,
-                preflight_request_headers,
-                Some(&preflight_observer),
-            )
-            .await
-            .map(|observed| {
-                let (response, request_observation) = observed.into_parts();
-                crate::protocol_types::NavigationResponse::from(response)
-                    .with_network_request_headers(
-                        request_observation.map(|observation| observation.into_headers()),
-                    )
-            });
-            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: result.into(),
-            });
-            return;
-        }
-
-        let request_url_for_event = request_url.clone();
-        let request_method_for_event = request_method.clone();
-        let request_headers_for_event = request_headers.clone();
-        let request_body_for_event = request_body.clone();
-        let result = fetch_browser_subresource_streaming_with_preflight_headers(
-            completion_tx.clone(),
-            loader,
+        let observed = fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+            &loader,
             request,
             cancel_handle,
             preflight_request_headers,
             Some(&preflight_observer),
-            internal_id,
-            request_url_for_event,
-            request_method_for_event,
-            request_headers_for_event,
-            request_body_for_event,
         )
         .await;
-        if let Err(error) = result {
-            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: crate::types::AsyncSubresourceFetchResult::Failure(error),
-            });
+        let mut body_source_id = None;
+        let mut network_request_headers = None;
+        let result = match observed {
+            Err(error) => Err(error),
+            Ok(observed) => {
+                let (mut response, request_observation) = observed.into_parts();
+                network_request_headers =
+                    request_observation.map(|observation| observation.into_headers());
+                let head = response.head();
+                resource.response_started(ResourceResponseHead {
+                    status_text: None,
+                    head: head.clone(),
+                    network_request_headers: network_request_headers.clone(),
+                });
+                if stream_to_js {
+                    let id = new_network_body_source_id();
+                    body_source_id = Some(id);
+                    let _ = completion_tx.send_async_subresource_event(
+                        AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
+                            AsyncSubresourceStreamingStarted {
+                                skip_fetch_security_validation: false,
+                                response_filter: None,
+                                internal_id,
+                                request_url: request_url.clone(),
+                                body_source_id: id,
+                                head: head.clone(),
+                            },
+                        )),
+                    );
+                }
+                while let Some(bytes) = response.next_chunk().await {
+                    resource.data_received(&bytes);
+                    if let Some(body_source_id) = body_source_id {
+                        let _ = completion_tx.send_async_subresource_event(
+                            AsyncSubresourceFetchEvent::StreamingChunk(
+                                AsyncSubresourceStreamingChunk {
+                                    body_source_id,
+                                    bytes,
+                                },
+                            ),
+                        );
+                    }
+                }
+                match response.finish().await {
+                    Ok(()) => Ok(resource
+                        .finish_response()
+                        .expect("physical response head precedes completion")),
+                    Err(error) => Err(resource.failure(format_network_error(error))),
+                }
+            }
+        };
+        let completion = AsyncSubresourceFetchCompletion {
+            internal_id,
+            response_status_text: None,
+            skip_fetch_security_validation: false,
+            response_filter: None,
+            network_error_text: None,
+            network_request_headers,
+            result,
+        };
+        if let Some(body_source_id) = body_source_id {
+            let _ = completion_tx.send_async_subresource_event(
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id,
+                    completion: Box::new(super::CompletedResourceFetch::new(
+                        resource.clone(),
+                        completion,
+                    )),
+                },
+            );
+        } else {
+            super::send_resource_completion(&completion_tx, resource.clone(), completion);
         }
     });
-}
-
-async fn fetch_browser_image_into_parkable(
-    loader: &ResourceRequestClient,
-    request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
-    preflight_observer: Option<&CorsPreflightNetworkObserver>,
-    manager: moli_parkable_image::ParkableImageManager,
-) -> Result<
-    (
-        crate::protocol_types::NavigationResponse,
-        moli_parkable_image::ParkableImage,
-    ),
-    String,
-> {
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-    let observed = if requires_manual_preflight_redirects {
-        fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
-            loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    } else {
-        fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-            loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    };
-    collect_image_response_into_parkable(observed, manager).await
 }
 
 pub(crate) async fn collect_image_response_into_parkable(
@@ -625,64 +721,6 @@ pub(crate) async fn collect_image_response_into_parkable(
         request_observation.map(|observation| observation.into_headers()),
     );
     Ok((response, encoded))
-}
-
-async fn fetch_browser_subresource_streaming_with_preflight_headers(
-    completion_tx: RendererResourceCompletionSender,
-    loader: ResourceRequestClient,
-    request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
-    preflight_observer: Option<&CorsPreflightNetworkObserver>,
-    internal_id: u64,
-    request_url: url::Url,
-    request_method: String,
-    request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
-) -> Result<(), String> {
-    let body_source_id = new_network_body_source_id();
-    let observed = fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-        &loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-        preflight_observer,
-    )
-    .await?;
-    let (mut response, request_observation) = observed.into_parts();
-    let head = response.head();
-    let _ = completion_tx.send_async_subresource_event(
-        AsyncSubresourceFetchEvent::StreamingStarted(Box::new(AsyncSubresourceStreamingStarted {
-            skip_fetch_security_validation: false,
-            response_filter: None,
-            internal_id,
-            request_url,
-            request_method,
-            request_headers,
-            request_body,
-            body_source_id,
-            head,
-            network_request_headers: request_observation
-                .map(|observation| observation.into_headers()),
-        })),
-    );
-    while let Some(bytes) = response.next_chunk().await {
-        let _ = completion_tx.send_async_subresource_event(
-            AsyncSubresourceFetchEvent::StreamingChunk(AsyncSubresourceStreamingChunk {
-                body_source_id,
-                bytes,
-            }),
-        );
-    }
-    let result = response.finish().await.map_err(format_network_error);
-    let _ = completion_tx.send_async_subresource_event(
-        AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
-            internal_id,
-            body_source_id,
-            result,
-        }),
-    );
-    Ok(())
 }
 
 async fn fetch_once_with_network_metadata(
@@ -782,6 +820,152 @@ mod tests {
         net::TcpListener,
     };
     use url::Url;
+
+    #[test]
+    fn rejected_response_retains_queued_bytes_without_waiting_for_completion() {
+        let (body, received) = tokio::sync::mpsc::unbounded_channel();
+        body.send(b"prefix".to_vec()).unwrap();
+        body.send(vec![0, 128, 255]).unwrap();
+        let (_complete, completion) = tokio::sync::oneshot::channel();
+        let cancel = FetchCancelHandle::new();
+        let response = StreamingRawResponse::new(
+            Url::parse("https://rejected.test/redirect").unwrap(),
+            302,
+            vec![("location".into(), "/next".into())],
+            None,
+            Vec::new(),
+            false,
+            Vec::new(),
+            received,
+            cancel.clone(),
+            completion,
+        );
+        let failure = rejected_resource_response(
+            NetworkFetchResult::new(response, None),
+            "redirect rejected".into(),
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "reject the open transport before returning"
+        );
+        assert!(
+            body.send(b"late".to_vec()).is_err(),
+            "no late body consumer"
+        );
+        let ResourceResponseFailure::PartialBody {
+            message,
+            response,
+            body,
+        } = failure
+        else {
+            panic!("rejection retains its physical response")
+        };
+        assert_eq!(message, "redirect rejected");
+        assert_eq!(response.head.status, 302);
+        assert_eq!(response.head.headers, [("location".into(), "/next".into())]);
+        assert_eq!(body.clone_body_bytes(), b"prefix\0\x80\xff");
+    }
+
+    #[test]
+    fn cancelled_resource_does_not_run_late_response_policy() {
+        let response = ResourceResponseStream::unobserved_for_test();
+        response
+            .network
+            .failed(&ResourceResponseFailure::Request("cancelled".into()));
+        response.network.complete_with(
+            |_| panic!("a losing response must not admit CSP reports"),
+            |_| panic!("cancellation already published the terminal"),
+        );
+    }
+
+    #[test]
+    fn buffered_report_result_survives_a_closed_route_and_a_claim_defers_completion() {
+        use moli_page_types::{
+            NavigationResponse, ScriptNetworkOutputItem, SubresourceBodyFinishedResult,
+        };
+        use parking_lot::Mutex;
+
+        for closed_route in [false, true] {
+            let source = crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test();
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let observed = records.clone();
+            let url = url::Url::parse("data:text/plain,physical").unwrap();
+            let (network, started) = ResourceTransfer::start(
+                source.start_request().unwrap(),
+                move |receipt| {
+                    let crate::runtime::RendererNetworkOutputItem::Resource(item) = receipt.item()
+                    else {
+                        panic!("resource receipt")
+                    };
+                    observed.lock().push(item.clone());
+                },
+                |request| {
+                    moli_page_types::SubresourceRequestStarted::new(
+                        request.handle(),
+                        None,
+                        url.clone(),
+                        url.clone(),
+                        "POST".into(),
+                        moli_fetch::RequestHeaders::default(),
+                        None,
+                        moli_page_types::SubresourceResourceType::CspReport,
+                        moli_page_types::SubresourceRequestInitiatorType::Script,
+                        None,
+                    )
+                },
+            );
+            let crate::runtime::RendererNetworkOutputItem::Resource(started) = started.item()
+            else {
+                panic!("resource admission")
+            };
+            records.lock().push(started.clone());
+            let response =
+                NavigationResponse::from(crate::network_host::local_url_response(&url).unwrap());
+            let completion = AsyncSubresourceFetchCompletion {
+                internal_id: 1,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                network_error_text: None,
+                network_request_headers: response.network_request_headers().map(<[_]>::to_vec),
+                result: Ok(response.into()),
+            };
+            if closed_route {
+                send_resource_completion(
+                    &RendererResourceCompletionSender::closed_for_test(),
+                    ResourceResponseStream::new(network.clone()),
+                    completion,
+                );
+            } else {
+                let completion = CompletedResourceFetch::new(
+                    ResourceResponseStream::new(network.clone()),
+                    completion,
+                )
+                .claim(&network)
+                .unwrap();
+                assert_eq!(
+                    records.lock().len(),
+                    1,
+                    "the claim transfers the decision to its pending request"
+                );
+                completion.publish_with(&network, |item| network.observe(item));
+            }
+            drop(network);
+            let records = records.lock();
+            assert_eq!(
+                records.len(),
+                3,
+                "one admission, physical head and terminal"
+            );
+            let ScriptNetworkOutputItem::SubresourceBodyFinished(body) = records[2].as_ref() else {
+                panic!("terminal last")
+            };
+            let SubresourceBodyFinishedResult::Ready(body) = body.result() else {
+                panic!("retain the actual completed response")
+            };
+            assert_eq!(body.clone_body_bytes(), b"physical");
+        }
+    }
 
     async fn read_http_request_text(stream: &mut tokio::net::TcpStream) -> Result<String> {
         Ok(String::from_utf8(read_http_request_bytes(stream).await?)?)
@@ -1173,6 +1357,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             request_headers.clone(),
             73,
+            ResourceResponseStream::unobserved_for_test(),
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1181,9 +1366,6 @@ mod tests {
                 keepalive: false,
             },
             request_url.clone(),
-            "GET".to_owned(),
-            request_headers.into(),
-            None,
         );
 
         expect_native_preflight(
@@ -1211,9 +1393,14 @@ mod tests {
                     assert_eq!(chunk.body_source_id, body_source_id);
                     body.extend_from_slice(&chunk.bytes);
                 }
-                AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id: finished_body_source_id,
+                    completion,
+                } => {
+                    let finished = completion.complete_for_test();
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert_eq!(finished.internal_id, 73);
-                    assert_eq!(finished.body_source_id, body_source_id);
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert!(finished.result.is_ok());
                     break;
                 }
@@ -1282,6 +1469,14 @@ mod tests {
             .with_redirect_mode(RequestRedirectMode::Follow)
             .with_browser_request_metadata(BrowserRequestMetadata::Image);
 
+        let load = crate::network::loads::resource_load_lease_for_test(loader.clone(), None);
+        let resource = ResourceResponseStream::for_load(
+            ResourceResponseStream::unobserved_for_test()
+                .network
+                .clone(),
+            &load,
+            SubresourceResourceType::Image,
+        );
         spawn_async_subresource_fetch(
             crate::network::RendererResourceTaskRunner::from_current_tokio()?,
             queue.sender(),
@@ -1290,6 +1485,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             Vec::new(),
             75,
+            resource,
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1298,27 +1494,23 @@ mod tests {
                 keepalive: false,
             },
             request_url,
-            "GET".to_owned(),
-            request_headers.clone(),
-            None,
         );
 
-        let AsyncSubresourceFetchEvent::Completion(completion) =
+        let AsyncSubresourceFetchEvent::TransportCompletion(completion) =
             next_async_subresource_event(&mut queue).await?
         else {
             anyhow::bail!("image transport must emit one buffered terminal completion");
         };
+        let completion = completion.complete_for_test();
         assert_eq!(completion.internal_id, 75);
-        assert_eq!(completion.request_headers, request_headers);
         let response = completion
             .result
             .as_ref()
             .map_err(|error| anyhow::anyhow!(error.clone()))?;
-        assert_eq!(response.status, 200);
-        assert!(response.body_bytes().is_empty());
-        let encoded = completion
-            .result
-            .encoded()
+        assert_eq!(response.head.status, 200);
+        let encoded = response
+            .body
+            .parkable_image()
             .expect("image completion must carry its encoded backing");
         assert_eq!(encoded.snapshot()?.as_ref(), b"firsttail");
 
@@ -1388,6 +1580,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             Vec::new(),
             74,
+            ResourceResponseStream::unobserved_for_test(),
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1396,9 +1589,6 @@ mod tests {
                 keepalive: false,
             },
             target_url.clone(),
-            "GET".to_owned(),
-            Vec::new().into(),
-            None,
         );
 
         let body_source_id = match next_async_subresource_event(&mut queue).await? {
@@ -1423,7 +1613,12 @@ mod tests {
                 AsyncSubresourceFetchEvent::StreamingChunk(chunk) => {
                     assert_eq!(chunk.body_source_id, body_source_id);
                 }
-                AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id: finished_body_source_id,
+                    completion,
+                } => {
+                    let finished = completion.complete_for_test();
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert_eq!(finished.internal_id, 74);
                     assert!(finished.result.is_ok());
                     break;
@@ -1478,6 +1673,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             Vec::new(),
             41,
+            ResourceResponseStream::unobserved_for_test(),
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1486,9 +1682,6 @@ mod tests {
                 keepalive: false,
             },
             request_url,
-            "GET".to_owned(),
-            Vec::new().into(),
-            None,
         );
 
         let event = next_async_subresource_event(&mut queue).await?;
@@ -1508,9 +1701,14 @@ mod tests {
                     assert_eq!(chunk.body_source_id, body_source_id);
                     body.extend_from_slice(&chunk.bytes);
                 }
-                AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id: finished_body_source_id,
+                    completion,
+                } => {
+                    let finished = completion.complete_for_test();
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert_eq!(finished.internal_id, 41);
-                    assert_eq!(finished.body_source_id, body_source_id);
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert!(
                         finished.result.is_ok(),
                         "streaming XHR finish failed: {:?}",
@@ -1587,6 +1785,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             request_headers.clone(),
             42,
+            ResourceResponseStream::unobserved_for_test(),
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1595,9 +1794,6 @@ mod tests {
                 keepalive: false,
             },
             request_url,
-            "POST".to_owned(),
-            request_headers.into(),
-            Some("payload".to_owned()),
         );
 
         head_sent_rx
@@ -1628,9 +1824,14 @@ mod tests {
                     assert_eq!(chunk.body_source_id, body_source_id);
                     body.extend_from_slice(&chunk.bytes);
                 }
-                AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id: finished_body_source_id,
+                    completion,
+                } => {
+                    let finished = completion.complete_for_test();
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert_eq!(finished.internal_id, 42);
-                    assert_eq!(finished.body_source_id, body_source_id);
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert!(finished.result.is_ok());
                     break;
                 }
@@ -1750,6 +1951,7 @@ mod tests {
             Some(FetchCancelHandle::new()),
             request_headers.clone(),
             43,
+            ResourceResponseStream::unobserved_for_test(),
             CorsPreflightNetworkObserver {
                 request: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
                 observer: queue.sender().network_observer(),
@@ -1758,9 +1960,6 @@ mod tests {
                 keepalive: false,
             },
             request_url.clone(),
-            "POST".to_owned(),
-            request_headers.into(),
-            Some("payload".to_owned()),
         );
 
         head_sent_rx
@@ -1799,7 +1998,12 @@ mod tests {
                     assert_eq!(chunk.body_source_id, body_source_id);
                     body.extend_from_slice(&chunk.bytes);
                 }
-                AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+                AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                    body_source_id: finished_body_source_id,
+                    completion,
+                } => {
+                    let finished = completion.complete_for_test();
+                    assert_eq!(finished_body_source_id, body_source_id);
                     assert_eq!(finished.internal_id, 43);
                     assert!(finished.result.is_ok());
                     break;

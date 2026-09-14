@@ -43,6 +43,7 @@ impl crate::network::ResourceTransfer {
     ) -> Result<T, String> {
         let body = moli_page_types::SubresourceResponseBody::from_fetch_response(&response);
         let head = crate::network::ResourceResponseHead {
+            status_text: None,
             head: response.head(),
             network_request_headers: response
                 .network_request_extra_info()
@@ -83,6 +84,7 @@ impl crate::network::ResourceTransfer {
     ) -> Result<T, String> {
         let body = moli_page_types::SubresourceResponseBody::from_navigation_response(response);
         let head = crate::network::ResourceResponseHead {
+            status_text: None,
             head: response.head(),
             network_request_headers: response.network_request_headers().map(<[_]>::to_vec),
         };

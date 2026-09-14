@@ -32,7 +32,8 @@ pub use devtools_resource_load::{
 pub use policy::{PageNetworkPolicy, PageNetworkPolicySnapshot};
 pub use request_client::{ResourceRequestClient, ResourceRequestClientOwner};
 pub(crate) use resource_response::{
-    ResourceResponseFailure, ResourceResponseHead, ResourceResponseObserver, ResourceResponseResult,
+    ResourceBodyResponse, ResourceResponseFailure, ResourceResponseHead, ResourceResponseObserver,
+    ResourceResponseResult, ResourceResponseStream,
 };
 pub use task_runner::RendererResourceTaskRunner;
 

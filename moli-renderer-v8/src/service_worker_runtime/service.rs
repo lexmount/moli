@@ -116,11 +116,12 @@ use super::{
     state::{
         LifecycleProgress, ServiceWorkerClient, ServiceWorkerClientEndpoint,
         ServiceWorkerControllerChangeDelivery, ServiceWorkerDevToolsRelatedPauseOnStartPolicy,
-        ServiceWorkerFetchJob, ServiceWorkerLifecycleNotificationDelivery,
-        ServiceWorkerLifecycleStart, ServiceWorkerLifecycleWatcher, ServiceWorkerMessageStart,
-        ServiceWorkerNotificationStart, ServiceWorkerPeriodicSyncStart, ServiceWorkerPushStart,
-        ServiceWorkerQueuedLaunch, ServiceWorkerReadyJob, ServiceWorkerRuntimeInner,
-        ServiceWorkerRuntimeState, ServiceWorkerSyncStart, WeakServiceWorkerRuntimeService,
+        ServiceWorkerFetchBodyStream, ServiceWorkerFetchJob,
+        ServiceWorkerLifecycleNotificationDelivery, ServiceWorkerLifecycleStart,
+        ServiceWorkerLifecycleWatcher, ServiceWorkerMessageStart, ServiceWorkerNotificationStart,
+        ServiceWorkerPeriodicSyncStart, ServiceWorkerPushStart, ServiceWorkerQueuedLaunch,
+        ServiceWorkerReadyJob, ServiceWorkerRuntimeInner, ServiceWorkerRuntimeState,
+        ServiceWorkerSyncStart, WeakServiceWorkerRuntimeService,
     },
     version::{
         ServiceWorkerFetchHandlerExistence, ServiceWorkerFetchHandlerType,
@@ -674,7 +675,9 @@ mod tests {
         queue: &mut crate::page_task_queue::RendererResourceCompletionTestHarness,
     ) -> AsyncSubresourceFetchCompletion {
         match queue.pop_next_async_subresource_event() {
-            Some(crate::types::AsyncSubresourceFetchEvent::Completion(completion)) => *completion,
+            Some(crate::types::AsyncSubresourceFetchEvent::TransportCompletion(completion)) => {
+                completion.complete_for_test()
+            }
             other => panic!("expected async-subresource completion, got {other:?}"),
         }
     }
@@ -952,13 +955,13 @@ mod tests {
             },
             result_tx: ServiceWorkerFetchResultSender::Page {
                 completion_tx,
-                network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                network: crate::network::ResourceResponseStream::unobserved_for_test(),
             },
             request_client: test_request_client(service),
             resource_task_runner: test_resource_task_runner(),
             cancel_handle,
             navigation_preload_cancel_handle: None,
-            streaming_body_source_id: None,
+            body_stream: None,
         }
     }
 
@@ -1813,13 +1816,21 @@ mod tests {
         let first_completion = pop_register_completion(&mut first_queue);
         assert_eq!(first_completion.request_id, 11);
         assert_eq!(
-            first_completion.result.err().as_deref(),
+            first_completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(SERVICE_WORKER_JOB_ABORTED_ERROR)
         );
         let second_completion = pop_register_completion(&mut second_queue);
         assert_eq!(second_completion.request_id, 22);
         assert_eq!(
-            second_completion.result.err().as_deref(),
+            second_completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(SERVICE_WORKER_JOB_ABORTED_ERROR)
         );
         let diagnostics = service.diagnostics_snapshot();
@@ -1859,7 +1870,11 @@ mod tests {
         let register_completion = pop_register_completion(&mut register_queue);
         assert_eq!(register_completion.request_id, 11);
         assert_eq!(
-            register_completion.result.err().as_deref(),
+            register_completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(SERVICE_WORKER_JOB_ABORTED_ERROR)
         );
         let unregister_completion = pop_unregister_completion(&mut unregister_queue);
@@ -4357,13 +4372,13 @@ mod tests {
                         },
                         result_tx: ServiceWorkerFetchResultSender::Page {
                             completion_tx,
-                            network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                            network: crate::network::ResourceResponseStream::unobserved_for_test(),
                         },
                         request_client: test_request_client(&service),
                         resource_task_runner: test_resource_task_runner(),
                         cancel_handle: moli_fetch::FetchCancelHandle::new(),
                         navigation_preload_cancel_handle: None,
-                        streaming_body_source_id: None,
+                        body_stream: None,
                     },
                 );
             }
@@ -4475,7 +4490,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut deleted_fetch_queue);
         assert_eq!(completion.internal_id, deleted_event_id.as_u64());
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(SERVICE_WORKER_REGISTRATION_DELETED_FETCH_ERROR)
         );
         assert!(!kept_fetch_queue.has_ready_completion());
@@ -4832,13 +4851,13 @@ self.addEventListener("message", event => {
                     },
                     result_tx: ServiceWorkerFetchResultSender::Page {
                         completion_tx: completion_queue.sender(),
-                        network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: crate::network::ResourceResponseStream::unobserved_for_test(),
                     },
                     request_client: test_request_client(&service),
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
-                    streaming_body_source_id: None,
+                    body_stream: None,
                 },
             );
             state.versions.insert(
@@ -4891,7 +4910,14 @@ self.addEventListener("message", event => {
 
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 131);
-        assert_eq!(completion.result.err().as_deref(), Some("done"));
+        assert_eq!(
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
+            Some("done")
+        );
     }
 
     #[test]
@@ -8778,13 +8804,13 @@ self.addEventListener("message", event => {
                     },
                     result_tx: ServiceWorkerFetchResultSender::Page {
                         completion_tx: completion_queue.sender(),
-                        network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: crate::network::ResourceResponseStream::unobserved_for_test(),
                     },
                     request_client: test_request_client(&service),
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
-                    streaming_body_source_id: None,
+                    body_stream: None,
                 },
             );
             state.versions.insert(
@@ -8863,7 +8889,11 @@ self.addEventListener("message", event => {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 41);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("restart script load failed")
         );
     }
@@ -9276,7 +9306,10 @@ self.addEventListener("message", event => {
                 completion_queue.sender(),
                 cancel_handle.clone(),
             );
-            job.streaming_body_source_id = Some(body_source_id);
+            job.body_stream = Some(ServiceWorkerFetchBodyStream {
+                body_source_id,
+                js_consumer: Some(completion_queue.sender()),
+            });
             state.pending_fetch_jobs.insert(event_id, job);
         }
 
@@ -10050,7 +10083,7 @@ self.addEventListener("message", event => {
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
-                    streaming_body_source_id: None,
+                    body_stream: None,
                 },
             );
             let version = state.versions.get_mut(&version_id).unwrap();
@@ -10183,13 +10216,13 @@ self.addEventListener("message", event => {
                     },
                     result_tx: ServiceWorkerFetchResultSender::Page {
                         completion_tx: completion_queue.sender(),
-                        network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: crate::network::ResourceResponseStream::unobserved_for_test(),
                     },
                     request_client: test_request_client(&service),
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
-                    streaming_body_source_id: None,
+                    body_stream: None,
                 },
             );
             state.versions.insert(
@@ -10269,7 +10302,14 @@ self.addEventListener("message", event => {
 
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 77);
-        assert_eq!(completion.result.err().as_deref(), Some("handled"));
+        assert_eq!(
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
+            Some("handled")
+        );
     }
 
     #[test]
@@ -10728,13 +10768,13 @@ self.addEventListener("message", event => {
                     },
                     result_tx: ServiceWorkerFetchResultSender::Page {
                         completion_tx: completion_queue.sender(),
-                        network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: crate::network::ResourceResponseStream::unobserved_for_test(),
                     },
                     request_client: test_request_client(&service),
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
-                    streaming_body_source_id: None,
+                    body_stream: None,
                 },
             );
             state.versions.insert(
@@ -10821,7 +10861,14 @@ self.addEventListener("message", event => {
 
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 91);
-        assert_eq!(completion.result.err().as_deref(), Some("done"));
+        assert_eq!(
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
+            Some("done")
+        );
     }
 
     #[test]
@@ -12353,13 +12400,13 @@ self.addEventListener("message", event => {
                         },
                         result_tx: ServiceWorkerFetchResultSender::Page {
                             completion_tx: completion_queue.sender(),
-                            network: crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                            network: crate::network::ResourceResponseStream::unobserved_for_test(),
                         },
                         request_client: test_request_client(&service),
                         resource_task_runner: test_resource_task_runner(),
                         cancel_handle: moli_fetch::FetchCancelHandle::new(),
                         navigation_preload_cancel_handle: None,
-                        streaming_body_source_id: None,
+                        body_stream: None,
                     },
                 );
             }
@@ -12494,7 +12541,11 @@ self.addEventListener("message", event => {
             let completion = pop_async_subresource_completion(&mut completion_queue);
             results.push((
                 completion.internal_id,
-                completion.result.err().unwrap_or_default(),
+                completion
+                    .result
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_default(),
             ));
         }
         results.sort_by_key(|(internal_id, _)| *internal_id);

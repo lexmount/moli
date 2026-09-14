@@ -2,6 +2,113 @@ use super::*;
 use crate::util::v8str;
 use moli_webapi_declare::WebApiObject;
 
+fn install_native_stream_fixture(
+    host: &mut crate::native_bridge::JsContextHost,
+    mut state: StreamingSubresourceFetchState,
+    body: crate::types::SubresourceResponseBodyWriter,
+    scope: &mut v8::PinScope<'_, '_>,
+) {
+    let info = &mut state.pending.info;
+    let handle = *info
+        .network_request_handle
+        .get_or_insert_with(crate::types::SubresourceNetworkRequestHandle::allocate);
+    let request = host
+        .document_network_reporter()
+        .unwrap()
+        .start_request_with_handle(handle)
+        .unwrap();
+    let observer = host.resource_completion_sender().network_observer();
+    let (network, started) = crate::network::ResourceTransfer::start(
+        request,
+        move |item| observer(item),
+        |request| {
+            crate::network_host::resource_request_started(
+                request,
+                info,
+                crate::types::SubresourceRequestInitiatorType::Script,
+                false,
+            )
+        },
+    );
+    host.record_native_resource_observation(started);
+    let stream = if state.pending.continuation.window_fetch().is_some() {
+        crate::network::ResourceResponseStream::for_window_fetch(
+            network,
+            &state.pending.load,
+            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
+                &crate::document_runtime::DocumentPolicyContainer::default(),
+            ),
+            crate::network_host::capture_window_csp_report_request_context(
+                scope,
+                host,
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("test Fetch retains its CSP report context"),
+        )
+    } else {
+        crate::network::ResourceResponseStream::new(network)
+    };
+    stream.response_started(crate::network::ResourceResponseHead {
+        status_text: None,
+        head: state.head.clone(),
+        network_request_headers: None,
+    });
+    stream.set_body_writer_for_test(body);
+    state.pending.network = Some(stream);
+    host.record_streaming_subresource_fetch(state);
+}
+
+fn assert_native_resource_failure(
+    items: &[crate::types::ScriptNetworkOutputItem],
+    url: &Url,
+    error: &str,
+    partial_body: Option<&[u8]>,
+) {
+    use crate::types::{ScriptNetworkOutputItem as Item, SubresourceBodyFinishedResult};
+    let Some(Item::SubresourceRequestStarted(request)) = items.first() else {
+        panic!("one admitted request first: {items:?}")
+    };
+    assert_eq!(request.url(), url);
+    let mut next = 1;
+    if partial_body.is_some() {
+        let Item::SubresourceResponseStarted(response) = &items[next] else {
+            panic!("physical head before failure: {items:?}")
+        };
+        assert_eq!(response.handle(), request.handle());
+        next += 1;
+    }
+    let mut received = 0;
+    while let Some(Item::SubresourceDataReceived(data)) = items.get(next) {
+        assert_eq!(data.handle(), request.handle());
+        received += data.data_length();
+        next += 1;
+    }
+    assert_eq!(
+        items.len(),
+        next + 1,
+        "exactly one terminal and no repeated phase"
+    );
+    let Item::SubresourceBodyFinished(terminal) = &items[next] else {
+        panic!("terminal last: {items:?}")
+    };
+    assert_eq!(terminal.handle(), request.handle());
+    match (terminal.result(), partial_body) {
+        (SubresourceBodyFinishedResult::Failed(message), None) => assert_eq!(message, error),
+        (
+            SubresourceBodyFinishedResult::FailedWithPartialBody {
+                error_text,
+                partial_body,
+            },
+            Some(expected),
+        ) => {
+            assert_eq!(error_text, error);
+            assert_eq!(partial_body.diagnostic_bytes().as_ref(), expected);
+            assert_eq!(received, expected.len());
+        }
+        other => panic!("actual received prefix must survive failure: {other:?}"),
+    }
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct PendingBodyOwnerProbeDeclaration {}
@@ -146,29 +253,6 @@ async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_ini
     let requests = server.finish().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].target, "/xhr-resource");
-}
-
-fn pending_fetch_continuation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    host: &crate::native_bridge::JsContextHost,
-) -> crate::types::PendingSubresourceContinuation {
-    let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
-    crate::types::PendingSubresourceContinuation::Fetch(
-        crate::types::PendingWindowFetchContinuation::new(
-            v8::Global::new(scope, resolver),
-            false,
-            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
-                &crate::document_runtime::DocumentPolicyContainer::default(),
-            ),
-            crate::network_host::capture_window_csp_report_request_context(
-                scope,
-                host,
-                dispatch_scope,
-            )
-            .expect("test Fetch should capture its CSP report context"),
-        ),
-    )
 }
 
 #[test]
@@ -1992,12 +2076,8 @@ __streamingXhr.send();
         response_filter: None,
         internal_id,
         request_url: request_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         body_source_id,
         head: response_head,
-        network_request_headers: None,
     })
     .expect("streaming XHR headers should be delivered");
     assert_eq!(
@@ -2054,6 +2134,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
             .expect("streaming subresource test loader");
     let load_client = load_owner.handle();
     let mut vm = new_storage_test_vm("https://xhr-streaming-cache-state.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 77;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url =
@@ -2086,9 +2167,9 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                 );
                 let xhr = streaming_xhr_probe(scope);
 
-                context_host
-                    .borrow_mut()
-                    .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                install_native_stream_fixture(
+                    &mut context_host.borrow_mut(),
+                    super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
                             redirect_headers: None,
@@ -2123,13 +2204,8 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 load_client,
                                 None,
                             ),
-                            network_request:
-                                crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                            network: None,
                         },
-                        request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
@@ -2159,11 +2235,12 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             from_cache: true,
                             negotiated_http_version: None,
                         },
-                        network_request_headers: None,
-                        body_writer,
                         event_source_parser: None,
                         xhr_response: None,
-                    });
+                    },
+                    body_writer,
+                    scope,
+                );
                 Ok(())
             }
         })
@@ -2172,44 +2249,35 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming XHR finish should record success");
 
-    let records: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-                Some(*record)
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
+    use crate::types::{ScriptNetworkOutputItem as Item, SubresourceBodyFinishedResult};
+    let items = network.take();
+    let [
+        Item::SubresourceRequestStarted(start),
+        Item::SubresourceResponseStarted(head),
+        Item::SubresourceBodyFinished(terminal),
+    ] = items.as_slice()
+    else {
+        panic!("one native response: {items:?}")
+    };
+    assert_eq!(head.handle(), start.handle());
+    assert_eq!(terminal.handle(), start.handle());
+    assert!(head.from_cache());
+    assert_eq!(head.final_url(), &final_url);
+    assert_eq!(head.redirect_chain().len(), 1);
     assert!(
-        record.from_cache(),
-        "streaming completion record must preserve final response cache state"
+        head.redirect_chain()[0].from_cache,
+        "retain cached redirect provenance"
     );
-    match record.outcome() {
-        crate::types::SubresourceNetworkOutcome::Success {
-            redirect_chain,
-            final_url: recorded_final_url,
-            ..
-        } => {
-            assert_eq!(recorded_final_url.as_str(), final_url.as_str());
-            assert_eq!(redirect_chain.len(), 1);
-            assert!(
-                redirect_chain[0].from_cache,
-                "streaming completion record must preserve cached redirect provenance"
-            );
-        }
-        other => panic!("expected streaming XHR success, got {other:?}"),
-    }
+    let SubresourceBodyFinishedResult::Ready(body) = terminal.result() else {
+        panic!("cached response completed")
+    };
+    assert_eq!(body.diagnostic_bytes().as_ref(), b"cached-body");
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn async_subresource_failure_network_error_override_preserves_fetch_rejection_message() {
     let mut vm = new_storage_test_vm("https://sw-non-stream-failure.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let request_url = Url::parse("https://sw-non-stream-failure.test/data").unwrap();
     let rejection_message = "FetchEvent.respondWith rejected an error Response";
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
@@ -2231,16 +2299,13 @@ __swNonStreamFailurePromise.then(
     .expect("promise observer should install");
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id,
-        request_url: request_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: Some(crate::network_host::FAILED_ERROR_TEXT.to_owned()),
-        result: Err(rejection_message.to_owned()).into(),
+        result: Err(rejection_message.to_owned().into()),
     })
     .expect("async subresource failure should settle pending fetch");
 
@@ -2250,26 +2315,12 @@ __swNonStreamFailurePromise.then(
         format!(r#"["TypeError:{rejection_message}"]"#)
     );
 
-    let records: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-                Some(*record)
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].url(), &request_url);
-    match records[0].outcome() {
-        crate::types::SubresourceNetworkOutcome::Failure { error_text } => {
-            assert_eq!(error_text, crate::network_host::FAILED_ERROR_TEXT);
-        }
-        other => panic!("expected network failure record, got {other:?}"),
-    }
+    assert_native_resource_failure(
+        &network.take(),
+        &request_url,
+        crate::network_host::FAILED_ERROR_TEXT,
+        None,
+    );
 
     assert!(
         vm._context_host
@@ -2283,6 +2334,7 @@ __swNonStreamFailurePromise.then(
 #[tokio::test(flavor = "current_thread")]
 async fn streaming_fetch_body_error_records_response_started_then_body_failed() {
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-error.test/");
+    let network = NativeResourceOutput::observe(&vm);
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
     vm.eval("void fetch('/data')")
         .expect("streaming Fetch request should be intercepted");
@@ -2295,12 +2347,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     let body_source_id = crate::network_host::new_network_body_source_id();
     let final_url = Url::parse("https://streaming-fetch-body-error.test/final")
         .expect("final URL should parse");
-    let mut items: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .collect();
+    let mut items: Vec<_> = network.take().into_iter().collect();
     assert!(
         matches!(items.as_slice(), [crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(request)] if request.handle() == request_handle),
         "the request is admitted once before interception: {items:?}"
@@ -2314,9 +2361,6 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
         skip_fetch_security_validation: false,
         internal_id,
         request_url: pending[0].url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         body_source_id,
         head: moli_fetch::ResponseHead {
             final_url: final_url.clone(),
@@ -2329,15 +2373,9 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
             from_cache: false,
             negotiated_http_version: None,
         },
-        network_request_headers: None,
     })
     .expect("streaming Fetch headers should be delivered");
-    items.extend(
-        vm._context_host
-            .borrow_mut()
-            .take_network_output()
-            .into_items(),
-    );
+    items.extend(network.take().into_iter());
     assert!(
         matches!(
             items.as_slice(),
@@ -2356,13 +2394,13 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     )
     .expect("streaming fetch finish error should record staged network output");
 
-    items.extend(
-        vm._context_host
-            .borrow_mut()
-            .take_network_output()
-            .into_items(),
-    );
-    assert_eq!(items.len(), 2, "failure must not repeat the response HEAD");
+    items.extend(network.take().into_iter());
+    assert_eq!(items.len(), 3, "one head, one chunk and one failure");
+    let crate::types::ScriptNetworkOutputItem::SubresourceDataReceived(data) = &items[1] else {
+        panic!("received data before failure")
+    };
+    assert_eq!(data.handle(), request_handle);
+    assert_eq!(data.data_length(), 7);
     match &items[0] {
         crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
             assert_eq!(response.handle(), request_handle);
@@ -2371,7 +2409,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
         }
         other => panic!("expected responseStarted item, got {other:?}"),
     }
-    match &items[1] {
+    match &items[2] {
         crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
             assert_eq!(body.handle(), request_handle);
             match body.result() {
@@ -2379,7 +2417,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     error_text,
                     partial_body,
                 } => {
-                    assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
+                    assert_eq!(error_text, "stream aborted after partial body");
                     assert_eq!(partial_body.diagnostic_bytes().as_ref(), b"partial");
                 }
                 other => panic!("expected failed body with partial payload, got {other:?}"),
@@ -2439,11 +2477,16 @@ fn install_streaming_fetch_response_fixture(
                 );
             let global = context.global(scope);
             let _ = global.set(scope, v8str(scope, global_name).into(), response.into());
-            let continuation = pending_fetch_continuation(scope, resolver, &context_host.borrow());
+            let continuation = crate::types::PendingSubresourceContinuation::Fetch(
+                crate::types::PendingWindowFetchContinuation::new(
+                    v8::Global::new(scope, resolver),
+                    Default::default(),
+                ),
+            );
 
-            context_host
-                .borrow_mut()
-                .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+            install_native_stream_fixture(
+                &mut context_host.borrow_mut(),
+                super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
                         redirect_headers: None,
@@ -2476,13 +2519,8 @@ fn install_streaming_fetch_response_fixture(
                             load_client,
                             Some(cancel_handle),
                         ),
-                        network_request:
-                            crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: None,
                     },
-                    request_url: request_url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new().into(),
-                    request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
@@ -2495,11 +2533,12 @@ fn install_streaming_fetch_response_fixture(
                         from_cache: false,
                         negotiated_http_version: None,
                     },
-                    network_request_headers: None,
-                    body_writer: Default::default(),
                     event_source_parser: None,
                     xhr_response: None,
-                });
+                },
+                Default::default(),
+                scope,
+            );
             Ok(())
         })
         .expect("streaming fetch fixture should be recorded");
@@ -2512,6 +2551,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
             .expect("streaming fetch cancellation test loader");
     let load_client = load_owner.handle();
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 101;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -2542,12 +2582,16 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     v8str(scope, "__streamingFetchBody").into(),
                     stream.into(),
                 );
-                let continuation =
-                    pending_fetch_continuation(scope, resolver, &context_host.borrow());
+                let continuation = crate::types::PendingSubresourceContinuation::Fetch(
+                    crate::types::PendingWindowFetchContinuation::new(
+                        v8::Global::new(scope, resolver),
+                        Default::default(),
+                    ),
+                );
 
-                context_host
-                    .borrow_mut()
-                    .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+                install_native_stream_fixture(
+                    &mut context_host.borrow_mut(),
+                    super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
                             redirect_headers: None,
@@ -2586,13 +2630,8 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                                 load_client,
                                 Some(cancel_handle_for_state),
                             ),
-                            network_request:
-                                crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                            network: None,
                         },
-                        request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
@@ -2605,11 +2644,12 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                             from_cache: false,
                             negotiated_http_version: None,
                         },
-                        network_request_headers: None,
-                        body_writer: Default::default(),
                         event_source_parser: None,
                         xhr_response: None,
-                    });
+                    },
+                    Default::default(),
+                    scope,
+                );
                 Ok(())
             }
         })
@@ -2648,35 +2688,17 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
         vec![crate::types::PendingSubresourceContinueEvent::Completed { internal_id }]
     );
 
-    let items: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .collect();
-    assert_eq!(items.len(), 1);
-    match &items[0] {
-        crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-            assert_eq!(record.url(), &request_url);
-            match record.outcome() {
-                crate::types::SubresourceNetworkOutcome::Failure { error_text } => {
-                    assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-                }
-                other => panic!("expected body cancel failure record, got {other:?}"),
-            }
-        }
-        other => panic!("expected body cancel failure record, got {other:?}"),
-    }
+    assert_native_resource_failure(
+        &network.take(),
+        &request_url,
+        crate::network_host::ABORTED_ERROR_TEXT,
+        Some(b""),
+    );
 
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("late streaming finish after body cancel should be ignored");
     assert!(
-        vm._context_host
-            .borrow_mut()
-            .take_network_output()
-            .into_items()
-            .next()
-            .is_none(),
+        network.take().into_iter().next().is_none(),
         "late streaming finish must not record a completed network response after cancel"
     );
 }
@@ -2687,6 +2709,7 @@ async fn streaming_fetch_body_cancel_records_response_started_then_body_failed()
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch cancellation test loader");
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 104;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -2730,37 +2753,19 @@ async fn streaming_fetch_body_cancel_records_response_started_then_body_failed()
         r#"["resolved"]"#
     );
 
-    let items: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .collect();
-    assert_eq!(items.len(), 2);
-    match &items[0] {
-        crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
-            assert_eq!(response.handle(), request_handle);
-            assert_eq!(response.final_url(), &request_url);
-            assert_eq!(response.status(), 200);
-        }
-        other => panic!("expected responseStarted item, got {other:?}"),
-    }
-    match &items[1] {
-        crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
-            assert_eq!(body.handle(), request_handle);
-            match body.result() {
-                crate::types::SubresourceBodyFinishedResult::FailedWithPartialBody {
-                    error_text,
-                    partial_body,
-                } => {
-                    assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-                    assert_eq!(partial_body.diagnostic_bytes().as_ref(), b"partial");
-                }
-                other => panic!("expected failed body with partial payload, got {other:?}"),
-            }
-        }
-        other => panic!("expected bodyFinished failure item, got {other:?}"),
-    }
+    let items = network.take();
+    assert_native_resource_failure(
+        &items,
+        &request_url,
+        crate::network_host::ABORTED_ERROR_TEXT,
+        Some(b"partial"),
+    );
+    let crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(head) = &items[1] else {
+        unreachable!()
+    };
+    assert_eq!(head.handle(), request_handle);
+    assert_eq!(head.final_url(), &request_url);
+    assert_eq!(head.status(), 200);
 
     let events = vm
         ._context_host
@@ -2774,12 +2779,7 @@ async fn streaming_fetch_body_cancel_records_response_started_then_body_failed()
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("late streaming finish after body cancel should be ignored");
     assert!(
-        vm._context_host
-            .borrow_mut()
-            .take_network_output()
-            .into_items()
-            .next()
-            .is_none(),
+        network.take().into_iter().next().is_none(),
         "late streaming finish must not append success after body cancel failure"
     );
 }
@@ -2946,6 +2946,7 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch clone-error test loader");
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 106;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3009,27 +3010,12 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
         r#"["cancel:resolved","clone-error:TypeError:stream broke"]"#
     );
 
-    let records: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-                Some(*record)
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
-    assert_eq!(record.url(), &request_url);
-    match record.outcome() {
-        crate::types::SubresourceNetworkOutcome::Failure { error_text } => {
-            assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-        }
-        other => panic!("expected source error failure record, got {other:?}"),
-    }
+    assert_native_resource_failure(
+        &network.take(),
+        &request_url,
+        "stream broke",
+        Some(b"hello"),
+    );
 
     let events = vm
         ._context_host
@@ -3047,6 +3033,7 @@ async fn streaming_fetch_body_cancel_aborts_after_all_clone_branches_cancel() {
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch all-branch cancellation test loader");
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 103;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3104,36 +3091,18 @@ async fn streaming_fetch_body_cancel_aborts_after_all_clone_branches_cancel() {
         vec![crate::types::PendingSubresourceContinueEvent::Completed { internal_id }]
     );
 
-    let items: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .collect();
-    assert_eq!(items.len(), 1);
-    match &items[0] {
-        crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-            assert_eq!(record.url(), &request_url);
-            match record.outcome() {
-                crate::types::SubresourceNetworkOutcome::Failure { error_text } => {
-                    assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-                }
-                other => panic!("expected all-branch cancel failure record, got {other:?}"),
-            }
-        }
-        other => panic!("expected all-branch cancel failure record, got {other:?}"),
-    }
+    assert_native_resource_failure(
+        &network.take(),
+        &request_url,
+        crate::network_host::ABORTED_ERROR_TEXT,
+        Some(b""),
+    );
 
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"late".to_vec());
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("late streaming finish after all branches cancel should be ignored");
     assert!(
-        vm._context_host
-            .borrow_mut()
-            .take_network_output()
-            .into_items()
-            .next()
-            .is_none(),
+        network.take().into_iter().next().is_none(),
         "late streaming finish must not record a response after all branches cancel"
     );
 }
@@ -3145,6 +3114,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             .expect("streaming XHR materialization test loader");
     let load_client = load_owner.handle();
     let mut vm = new_storage_test_vm("https://xhr-streaming-materialize-error.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let internal_id = 99;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let request_url = Url::parse("https://xhr-streaming-materialize-error.test/data")
@@ -3173,13 +3143,23 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             let scope = &mut v8::ContextScope::new(scope, context);
 
             let body_owner = pending_body_owner_probe(scope);
-            let _stream =
+            let stream =
                 crate::network_host::pending_network_body_stream(scope, body_owner, body_source_id);
+            let global = context.global(scope);
+            assert!(
+                global
+                    .set(
+                        scope,
+                        v8str(scope, "__materializeBody").into(),
+                        stream.into()
+                    )
+                    .unwrap()
+            );
             let xhr = streaming_xhr_probe(scope);
 
-            context_host
-                .borrow_mut()
-                .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
+            install_native_stream_fixture(
+                &mut context_host.borrow_mut(),
+                super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
                         redirect_headers: None,
@@ -3220,13 +3200,8 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                             load_client,
                             None,
                         ),
-                        network_request:
-                            crate::runtime::RendererNetworkRequest::unobserved_for_test(),
+                        network: None,
                     },
-                    request_url: request_url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new().into(),
-                    request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
@@ -3239,45 +3214,49 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         from_cache: false,
                         negotiated_http_version: None,
                     },
-                    network_request_headers: None,
-                    body_writer,
                     event_source_parser: None,
                     xhr_response: None,
-                });
+                },
+                body_writer,
+                scope,
+            );
             Ok(())
         })
         .expect("streaming XHR fixture should be recorded");
 
+    vm.eval("globalThis.__materializeResult='pending'; __materializeBody.getReader().read().then(()=>globalThis.__materializeResult='closed', error=>globalThis.__materializeResult=error.message)").unwrap();
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
-        .expect("streaming XHR finish should surface a network failure, not panic");
+        .expect("streaming XHR finish should reject the unreadable JS body");
 
-    let records: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-                Some(*record)
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
     assert_eq!(
-        record.resource_type(),
+        vm.eval("__materializeResult.startsWith('failed to materialize streaming XHR body:')")
+            .unwrap(),
+        "true",
+        "body stream must error before it can close"
+    );
+    use crate::types::{ScriptNetworkOutputItem as Item, SubresourceBodyFinishedResult};
+    let items = network.take();
+    let [
+        Item::SubresourceRequestStarted(start),
+        Item::SubresourceResponseStarted(head),
+        Item::SubresourceBodyFinished(terminal),
+    ] = items.as_slice()
+    else {
+        panic!("one physical transfer: {items:?}")
+    };
+    assert_eq!(
+        start.resource_type(),
         crate::types::SubresourceResourceType::Xhr
     );
-    match record.outcome() {
-        crate::types::SubresourceNetworkOutcome::Failure { error_text } => {
-            assert!(
-                error_text.contains("failed to materialize streaming XHR body"),
-                "unexpected error text: {error_text}"
-            );
-        }
-        other => panic!("expected streaming XHR materialization failure, got {other:?}"),
-    }
+    assert_eq!(head.handle(), start.handle());
+    assert_eq!(terminal.handle(), start.handle());
+    // Disk access fails in the later JS consumer. It cannot change the
+    // already completed physical transfer into a second Network terminal.
+    let SubresourceBodyFinishedResult::Ready(body) = terminal.result() else {
+        panic!("the physical response completed")
+    };
+    assert_eq!(body.len(), 5);
+    assert!(body.materialize_bytes().is_err());
 
     let events = vm
         ._context_host

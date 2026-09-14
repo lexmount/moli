@@ -1628,6 +1628,7 @@ pub struct SubresourceResponseBodyWriter {
     disk_pool: Option<DiskPool>,
     disk_chunks: Vec<DiskData>,
     disk_write_failed: bool,
+    image_manager: Option<moli_parkable_image::ParkableImageManager>,
 }
 
 impl Default for SubresourceResponseBodyWriter {
@@ -1658,6 +1659,14 @@ impl SubresourceResponseBodyWriter {
             disk_pool,
             disk_chunks: Vec::new(),
             disk_write_failed: false,
+            image_manager: None,
+        }
+    }
+
+    pub fn for_image(manager: moli_parkable_image::ParkableImageManager) -> Self {
+        Self {
+            image_manager: Some(manager),
+            ..Self::default()
         }
     }
 
@@ -1698,6 +1707,11 @@ impl SubresourceResponseBodyWriter {
     }
 
     pub fn finish(mut self) -> SubresourceResponseBody {
+        if let Some(manager) = self.image_manager.take() {
+            return SubresourceResponseBody::from_parkable_image(
+                manager.from_frozen_bytes(std::mem::take(&mut self.memory)),
+            );
+        }
         if !self.disk_chunks.is_empty() {
             if !self.memory.is_empty() && !self.disk_write_failed {
                 let _ = self.flush_memory_to_disk();
@@ -1745,8 +1759,15 @@ impl SubresourceResponseBody {
         }
     }
 
-    /// Builds a response body that shares the encoded image backing.
-    /// Cloning this body does not clone bytes.
+    /// Returns shared image storage without materializing its bytes.
+    pub fn parkable_image(&self) -> Option<&ParkableImage> {
+        match self.inner.as_ref() {
+            SubresourceResponseBodyInner::ParkableImage(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    /// Builds a body sharing the encoded image backing without copying bytes.
     pub fn from_parkable_image(image: ParkableImage) -> Self {
         Self {
             inner: Arc::new(SubresourceResponseBodyInner::ParkableImage(image)),

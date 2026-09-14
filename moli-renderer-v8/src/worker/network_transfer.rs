@@ -41,6 +41,7 @@ mod tests {
                 let url = url::Url::parse("data:text/javascript,//ok").unwrap();
                 let response = crate::network_host::local_url_response(&url).unwrap();
                 let head = Arc::new(ResourceResponseHead {
+                    status_text: None,
                     head: response.head(),
                     network_request_headers: None,
                 });

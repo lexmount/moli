@@ -46,7 +46,8 @@ impl ServiceWorkerRuntimeService {
                 }
                 should_update_lifecycle = true;
             }
-            let stream_cancel = job.streaming_body_source_id.and_then(|body_source_id| {
+            let stream_cancel = job.body_stream.as_ref().and_then(|stream| {
+                let body_source_id = stream.body_source_id;
                 let version = state.versions.get(&job.version_id())?;
                 if version.run_owner() != *job.owner() {
                     return None;
