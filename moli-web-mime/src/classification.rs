@@ -184,5 +184,6 @@ pub fn is_binary_document_mime_type(input: &str) -> bool {
                 | "application/x-rar-compressed"
                 | "application/x-tar"
                 | "application/zip"
+                | "application/wasm"
         )
 }

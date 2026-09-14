@@ -131,6 +131,10 @@ fn classifies_binary_main_document_headers() {
         "Content-Disposition".to_owned(),
         "attachment; filename=report.html".to_owned(),
     )]));
+    assert!(response_headers_indicate_raw_document(&[(
+        "Content-Type".to_owned(),
+        "application/wasm".to_owned(),
+    )]));
     assert!(!response_headers_indicate_raw_document(&[(
         "Content-Type".to_owned(),
         "text/html; charset=utf-8".to_owned(),
