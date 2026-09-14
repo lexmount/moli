@@ -10050,6 +10050,21 @@ fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
   const ProxyTop = new child.Proxy(new Function(), {});
   ProxyTop.prototype = 7;
 
+  const BoundProxyChild = Function.prototype.bind.call(ProxyChild);
+  BoundProxyChild.prototype = 7;
+  const BoundProxyTop = child.Function.prototype.bind.call(ProxyTop);
+  BoundProxyTop.prototype = 7;
+  let boundGetterCount = 0;
+  const GetterBoundProxyChild = new Proxy(BoundProxyChild, {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        boundGetterCount += 1;
+        return 7;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+
   let getterCount = 0;
   const GetterProxyChild = new Proxy(new child.Function(), {
     get(target, property, receiver) {
@@ -10110,7 +10125,23 @@ fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
       child.DOMParser.prototype,
       topUrl
     ),
-    getterCount
+    boundProxyChild: check(
+      Reflect.construct(DOMParser, [], BoundProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    boundProxyTop: check(
+      Reflect.construct(child.DOMParser, [], BoundProxyTop),
+      DOMParser.prototype,
+      childUrl
+    ),
+    getterBoundProxyChild: check(
+      Reflect.construct(DOMParser, [], GetterBoundProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    getterCount,
+    boundGetterCount
   });
 })()
 "#,
@@ -10119,7 +10150,7 @@ fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
 
     assert_eq!(
         result,
-        r#"{"directTop":[true,true],"directChild":[true,true],"boundChild":[true,true],"boundTop":[true,true],"proxyChild":[true,true],"proxyTop":[true,true],"getterProxyChild":[true,true],"getterCount":1}"#
+        r#"{"directTop":[true,true],"directChild":[true,true],"boundChild":[true,true],"boundTop":[true,true],"proxyChild":[true,true],"proxyTop":[true,true],"getterProxyChild":[true,true],"boundProxyChild":[true,true],"boundProxyTop":[true,true],"getterBoundProxyChild":[true,true],"getterCount":1,"boundGetterCount":1}"#
     );
 }
 
