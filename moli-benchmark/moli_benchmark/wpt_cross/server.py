@@ -159,6 +159,9 @@ FETCH_REDIRECT_RESOURCE_PATHS = {
     "/fetch/api/resources/redirect-empty-location.py",
 }
 FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
+LINK_STYLESHEET_COUNTER_PATH = (
+    "/html/semantics/document-metadata/the-link-element/stylesheet.py"
+)
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
@@ -2931,6 +2934,30 @@ def _make_handler(
                     ("Access-Control-Allow-Origin", "*"),
                     ("Access-Control-Allow-Methods", "YO"),
                 ],
+            )
+
+        def _serve_link_stylesheet_counter(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            try:
+                count = int(fetch_stash.take(params["id"][0], path=LINK_STYLESHEET_COUNTER_PATH))
+            except (KeyError, TypeError, ValueError):
+                count = 0
+            if "count" in params:
+                self._send_bytes(
+                    "text/html", str(count).encode("ascii"),
+                    emit_body=emit_body, cache_control=None,
+                )
+                return
+            try:
+                fetch_stash.put(
+                    params["id"][0], str(count + 1), path=LINK_STYLESHEET_COUNTER_PATH,
+                )
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return
+            self._send_bytes(
+                "text/css", b"body {color: red;}",
+                emit_body=emit_body, cache_control=None,
             )
 
         def _serve_script_with_content_type(self, query: str, *, emit_body: bool) -> None:

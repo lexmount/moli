@@ -4304,6 +4304,36 @@ test(() => {}, "ok");
                                 response.read(), b"FAIL" if method == "GET" else b""
                             )
 
+    def test_fixture_server_counts_link_stylesheet_requests_and_clears_on_read(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("// testharness", encoding="utf-8")
+            resource = "/html/semantics/document-metadata/the-link-element/stylesheet.py"
+            fixture = root_path / resource.lstrip("/")
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text("# dynamic stylesheet resource", encoding="utf-8")
+            first = "11111111-1111-4111-8111-111111111111"
+            second = "22222222-2222-4222-8222-222222222222"
+            with WptFixtureServer(root_path) as server:
+                def request(query: str, *, method: str = "GET", alternate: bool = False) -> tuple[str, bytes]:
+                    port = server.alternate_port if alternate else server.port
+                    url = f"http://127.0.0.1:{port}{resource}?{query}"
+                    with urlopen(Request(url, method=method), timeout=2) as response:
+                        self.assertEqual(response.status, 200)
+                        return response.headers["Content-Type"], response.read()
+
+                self.assertEqual(request(f"id={first}&count="), ("text/html", b"0"))
+                self.assertEqual(request(f"id={first}"), ("text/css", b"body {color: red;}"))
+                self.assertEqual(request(f"id={first}", alternate=True), ("text/css", b"body {color: red;}"))
+                self.assertEqual(request(f"id={first}", method="HEAD"), ("text/css", b""))
+                self.assertEqual(request(f"id={second}"), ("text/css", b"body {color: red;}"))
+                self.assertEqual(request(f"id={first}&count=foo"), ("text/html", b"3"))
+                self.assertEqual(request(f"id={second}&count=foo"), ("text/html", b"1"))
+                self.assertEqual(request(f"id={first}&count=foo"), ("text/html", b"0"))
+                self.assertEqual(request(f"id={first}"), ("text/css", b"body {color: red;}"))
+                self.assertEqual(request(f"id={first}&count=foo"), ("text/html", b"1"))
+
     def test_fixture_server_parses_fetch_status_parameters_as_bytes(self) -> None:
         self.assertEqual(_fetch_status_response(""), (200, "OMG", "", b""))
         self.assertEqual(
