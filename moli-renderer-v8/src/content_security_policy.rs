@@ -11,6 +11,7 @@ use moli_fetch::{
     Request, RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType,
 };
 use moli_webapi_declare::WebApiObject;
+use percent_encoding::percent_decode_str;
 use serde_json::json;
 use url::Url;
 
@@ -1508,9 +1509,10 @@ fn inline_source_violation_sample(source_list: &[&str], source: &str) -> String 
 }
 
 fn normalized_source_list(sources: Vec<&str>) -> Vec<&str> {
+    // The directive parser already splits on CSP's ASCII whitespace. Trimming
+    // again would turn invalid tokens containing vertical tabs into sources.
     sources
         .into_iter()
-        .map(str::trim)
         .filter(|source| !source.is_empty())
         .collect()
 }
@@ -1646,45 +1648,36 @@ fn source_url_matches(
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> bool {
-    if host_source_contains_query_or_fragment(source) {
-        return false;
-    }
-    if let Some(matches) =
-        wildcard_source_url_matches(source, protected_url, request_url, redirect_status)
-    {
-        return matches;
-    }
-    let Ok(source_url) = parse_source_url(source, protected_url) else {
+    let Some(source) = parse_host_source(source) else {
         return false;
     };
-    let scheme_match = csp_scheme_match(source_url.scheme(), request_url.scheme());
+    let source_scheme = source.scheme.unwrap_or_else(|| protected_url.scheme());
+    let scheme_match = csp_scheme_match(source_scheme, request_url.scheme());
     if scheme_match == CspSchemeMatch::NotMatching {
         return false;
     }
-    if source_url.host_str() != request_url.host_str() {
-        return false;
-    }
-    let port_match = csp_port_match(
-        source_url.scheme(),
-        source_url.port_or_known_default(),
-        false,
-        request_url,
-    );
+    let port_match = host_source_port_match(source_scheme, source.port, request_url);
     if !csp_scheme_and_port_match(scheme_match, port_match) {
         return false;
     }
-    if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        || !source_has_path(source)
+    let Some(request_host) = request_url.host_str() else {
+        return false;
+    };
+    if !csp_host_part_matches(source.host, request_host) {
+        return false;
+    }
+    // Keep the existing wildcard-port IPv4 restriction separate from grammar
+    // validation; sources with ordinary ports already accept literal IPv4.
+    if source.port == Some("*")
+        && source.host != "127.0.0.1"
+        && source.host.parse::<std::net::Ipv4Addr>().is_ok()
     {
-        return true;
+        return false;
     }
-    let source_path = source_url.path();
-    let request_path = request_url.path();
-    if source_path.ends_with('/') {
-        request_path.starts_with(source_path)
-    } else {
-        request_path == source_path
-    }
+    redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
+        || source
+            .path
+            .is_none_or(|path| csp_path_part_matches(path, request_url.path()))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1786,58 +1779,60 @@ fn csp_scheme_and_port_match(scheme_match: CspSchemeMatch, port_match: CspPortMa
     scheme_can_upgrade && port_can_upgrade
 }
 
-fn wildcard_source_url_matches(
-    source: &str,
-    protected_url: &Url,
-    request_url: &Url,
-    redirect_status: ContentSecurityPolicyRedirectStatus,
-) -> Option<bool> {
-    let (source_scheme, rest) = if let Some((scheme, rest)) = source.split_once("://") {
+struct CspHostSource<'a> {
+    scheme: Option<&'a str>,
+    host: &'a str,
+    port: Option<&'a str>,
+    path: Option<&'a str>,
+}
+
+fn parse_host_source(source: &str) -> Option<CspHostSource<'_>> {
+    // CSP host-source is not a URL: credentials and scheme-relative URLs are
+    // invalid, and URL parsing must not normalize hosts or dot segments.
+    // https://w3c.github.io/webappsec-csp/#source-lists
+    let (scheme, rest) = if let Some((scheme, rest)) = source.split_once("://")
+        && !scheme.contains('/')
+    {
+        let mut bytes = scheme.bytes();
+        if !bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+            || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+        {
+            return None;
+        }
         (Some(scheme), rest)
-    } else if let Some(rest) = source.strip_prefix("//") {
-        (Some(protected_url.scheme()), rest)
     } else {
         (None, source)
     };
-    let (authority, source_path) = split_authority_and_path(rest);
-    let (source_host, source_port) = split_source_authority(authority)?;
-    let has_wildcard_host = source_host == "*" || source_host.starts_with("*.");
-    // A wildcard port is CSP syntax even with an exact hostname. URL parsing
-    // cannot represent it; keep matching the scheme, host, and path separately.
-    if !has_wildcard_host && (source_port != Some("*") || source.starts_with("//")) {
+    let (authority, path) = split_authority_and_path(rest);
+    let (host, port) = if let Some((host, port)) = authority.split_once(':') {
+        if port != "*" && (port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit())) {
+            return None;
+        }
+        (host, Some(port))
+    } else {
+        (authority, None)
+    };
+    if host != "*" {
+        let labels = host.strip_prefix("*.").unwrap_or(host);
+        let labels = labels.strip_suffix('.').unwrap_or(labels);
+        if !labels.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        }) {
+            return None;
+        }
+    }
+    if path.is_some_and(|path| !csp_path_part_is_valid(path)) {
         return None;
     }
-    let source_scheme = source_scheme.unwrap_or_else(|| protected_url.scheme());
-    let scheme_match = csp_scheme_match(source_scheme, request_url.scheme());
-    if scheme_match == CspSchemeMatch::NotMatching {
-        return Some(false);
-    }
-    let port_match = wildcard_source_port_match(source_scheme, source_port, request_url);
-    if !csp_scheme_and_port_match(scheme_match, port_match) {
-        return Some(false);
-    }
-    let Some(request_host) = request_url.host_str() else {
-        return Some(false);
-    };
-    let host_matches = if has_wildcard_host {
-        wildcard_source_host_matches(source_host, request_host)
-    } else {
-        exact_source_host_matches(source_host, request_host)
-    };
-    if !host_matches {
-        return Some(false);
-    }
-    if let Some(source_path) = source_path
-        && redirect_status == ContentSecurityPolicyRedirectStatus::NoRedirect
-    {
-        let request_path = request_url.path();
-        return Some(if source_path.ends_with('/') {
-            request_path.starts_with(source_path)
-        } else {
-            request_path == source_path
-        });
-    }
-    Some(true)
+    Some(CspHostSource {
+        scheme,
+        host,
+        port,
+        path,
+    })
 }
 
 fn split_authority_and_path(source_rest: &str) -> (&str, Option<&str>) {
@@ -1847,50 +1842,81 @@ fn split_authority_and_path(source_rest: &str) -> (&str, Option<&str>) {
         .unwrap_or((source_rest, None))
 }
 
-fn split_source_authority(authority: &str) -> Option<(&str, Option<&str>)> {
-    if authority.is_empty() {
-        return None;
-    }
-    if let Some((host, port)) = authority.rsplit_once(':')
-        && !host.is_empty()
-        && (port == "*" || port.parse::<u16>().is_ok())
-    {
-        return Some((host, Some(port)));
-    }
-    Some((authority, None))
-}
-
-fn wildcard_source_host_matches(source_host: &str, request_host: &str) -> bool {
-    let source_host = source_host.trim_end_matches('.').to_ascii_lowercase();
-    let request_host = request_host.trim_end_matches('.').to_ascii_lowercase();
+fn csp_host_part_matches(source_host: &str, request_host: &str) -> bool {
     if source_host == "*" {
         return !request_host.is_empty();
     }
-    let Some(source_suffix) = source_host.strip_prefix("*.") else {
-        return false;
-    };
-    request_host.len() > source_suffix.len()
-        && request_host.ends_with(source_suffix)
-        && request_host.as_bytes()[request_host.len() - source_suffix.len() - 1] == b'.'
+    if let Some(suffix) = source_host.strip_prefix('*') {
+        return request_host.len() >= suffix.len()
+            && request_host.as_bytes()[request_host.len() - suffix.len()..]
+                .eq_ignore_ascii_case(suffix.as_bytes());
+    }
+    source_host.eq_ignore_ascii_case(request_host)
 }
 
-fn exact_source_host_matches(source_host: &str, request_host: &str) -> bool {
-    if !source_host.eq_ignore_ascii_case(request_host) {
+fn csp_path_part_is_valid(path: &str) -> bool {
+    // RFC 3986 path-absolute, excluding raw ';' and ',' as required by CSP.
+    if !path.starts_with('/') || path.starts_with("//") {
         return false;
     }
-    let labels = source_host.strip_suffix('.').unwrap_or(source_host);
-    if !labels.split('.').all(|label| {
-        !label.is_empty()
-            && label
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    }) {
-        return false;
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            if !bytes.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+                || !bytes.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+            {
+                return false;
+            }
+        } else if !byte.is_ascii_alphanumeric()
+            && !matches!(
+                byte,
+                b'/' | b'-'
+                    | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b'='
+                    | b':'
+                    | b'@'
+            )
+        {
+            return false;
+        }
     }
-    source_host == "127.0.0.1" || source_host.parse::<std::net::Ipv4Addr>().is_err()
+    true
 }
 
-fn wildcard_source_port_match(
+fn csp_path_part_matches(source_path: &str, request_path: &str) -> bool {
+    if source_path.is_empty() || (source_path == "/" && request_path.is_empty()) {
+        return true;
+    }
+    // Split before decoding so an encoded slash cannot create a path boundary.
+    // Compare bytes: distinct invalid UTF-8 sequences must not become equal.
+    // https://w3c.github.io/webappsec-csp/#match-paths
+    let mut source_segments = source_path.split('/').peekable();
+    let mut request_segments = request_path.split('/');
+    while let Some(source_segment) = source_segments.next() {
+        let Some(request_segment) = request_segments.next() else {
+            return false;
+        };
+        if source_segment.is_empty() && source_segments.peek().is_none() {
+            return true;
+        }
+        if !percent_decode_str(source_segment).eq(percent_decode_str(request_segment)) {
+            return false;
+        }
+    }
+    request_segments.next().is_none()
+}
+
+fn host_source_port_match(
     source_scheme: &str,
     source_port: Option<&str>,
     request_url: &Url,
@@ -1915,17 +1941,8 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     match scheme.to_ascii_lowercase().as_str() {
         "http" | "ws" => Some(80),
         "https" | "wss" => Some(443),
+        "ftp" => Some(21),
         _ => None,
-    }
-}
-
-fn parse_source_url(source: &str, protected_url: &Url) -> Result<Url, url::ParseError> {
-    if source.contains("://") {
-        Url::parse(source)
-    } else if source.starts_with("//") {
-        Url::parse(&format!("{}:{source}", protected_url.scheme()))
-    } else {
-        Url::parse(&format!("{}://{}", protected_url.scheme(), source))
     }
 }
 
@@ -1936,15 +1953,6 @@ fn source_has_path(source: &str) -> bool {
         .or_else(|| source.strip_prefix("//"))
         .unwrap_or(source);
     after_scheme.contains('/')
-}
-
-fn host_source_contains_query_or_fragment(source: &str) -> bool {
-    let after_scheme = source
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .or_else(|| source.strip_prefix("//"))
-        .unwrap_or(source);
-    after_scheme.contains('?') || after_scheme.contains('#')
 }
 
 fn csp_keyword_eq(source: &str, keyword: &str) -> bool {
@@ -2595,17 +2603,179 @@ mod tests {
     }
 
     #[test]
-    fn host_sources_support_scheme_relative_urls() {
-        assert!(allowed(
-            "script-src //cdn.test",
-            ContentSecurityPolicyResourceKind::DocumentScriptElement,
-            "https://cdn.test/app.js"
-        ));
-        assert!(!allowed(
-            "script-src //cdn.test",
-            ContentSecurityPolicyResourceKind::DocumentScriptElement,
-            "http://cdn.test/app.js"
-        ));
+    fn host_sources_reject_scheme_relative_urls() {
+        for source in ["//cdn.test", "//cdn.test:*", "//*.test", "//*.test:*"] {
+            for scheme in ["https", "http"] {
+                assert!(!allowed(
+                    &format!("script-src {source}"),
+                    ContentSecurityPolicyResourceKind::DocumentScriptElement,
+                    &format!("{scheme}://cdn.test/app.js")
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_host_sources_cannot_allow_initial_or_redirected_requests() {
+        for (source, request) in [
+            (
+                "https://cdn.test:*/foo,bar",
+                "https://cdn.test:8443/foo,bar",
+            ),
+            ("https://*.test/foo,bar", "https://cdn.test/foo,bar"),
+            ("https://cdn.test/foo,bar", "https://cdn.test/foo,bar"),
+            ("https://user@cdn.test", "https://cdn.test/asset"),
+            ("https://%63dn.test", "https://cdn.test/asset"),
+            ("https://bad_host.test", "https://bad_host.test/asset"),
+            (
+                "https://*.bad_host.test:*",
+                "https://cdn.bad_host.test:8443/asset",
+            ),
+            ("https://bad..test", "https://bad..test/asset"),
+            ("https://*.test..:*", "https://cdn.test:8443/asset"),
+            ("https://cdn.test:", "https://cdn.test/asset"),
+            ("https://cdn.test:+443", "https://cdn.test/asset"),
+            ("https://cdn.test:65536", "https://cdn.test/asset"),
+            ("https://cdn.test/%", "https://cdn.test/%"),
+            ("https://cdn.test:*/%6g", "https://cdn.test:8443/%6g"),
+            ("https://*.test/%a", "https://cdn.test/%a"),
+            ("https://cdn.test//asset", "https://cdn.test//asset"),
+            (
+                "https://cdn.test/asset\\file",
+                "https://cdn.test/asset/file",
+            ),
+            ("https://cdn.test/[asset]", "https://cdn.test/[asset]"),
+            ("https://cdn.test/asset\u{000b}", "https://cdn.test/asset"),
+            ("\u{000b}https://cdn.test", "https://cdn.test/asset"),
+            ("https://127.1", "https://127.0.0.1/asset"),
+        ] {
+            for redirect_status in [
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+            ] {
+                assert!(
+                    !content_security_policy_allows_url_with_redirect_status(
+                        &[format!("img-src {source}")],
+                        &protected_url(),
+                        &request_url(request),
+                        ContentSecurityPolicyResourceKind::DocumentImage,
+                        redirect_status,
+                    ),
+                    "{source:?} must not allow {request:?} ({redirect_status:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn host_source_paths_decode_segments_for_exact_and_wildcard_sources() {
+        for authority in ["cdn.test", "cdn.test:*", "*.test", "*.test:*", "*", "*:*"] {
+            for (source_path, request_path, expected) in [
+                ("/%61sset", "/asset", true),
+                ("/asset", "/%61sset", true),
+                ("/%61sset/", "/asset/file", true),
+                ("/%61sset/", "/asset", false),
+                ("/asset", "/ASSET", false),
+                ("/asset", "/asset/", false),
+                ("/a%2fb", "/a%2Fb", true),
+                ("/a%2fb", "/a/b", false),
+                ("/a/", "/a%2Fb", false),
+                ("/a/", "/a//b", true),
+                ("/a//", "/a/b", false),
+                ("/a%252fb", "/a%2fb", false),
+                ("/a+b", "/a%20b", false),
+                ("/a%2bb", "/a+b", true),
+                ("/a%2cb", "/a,b", true),
+                ("/a%3bb", "/a;b", true),
+                ("/%ff", "/%FF", true),
+                ("/%ff", "/%fe", false),
+                ("/%e4%b8%ad", "/中", true),
+                ("/a/../asset", "/asset", false),
+                ("/a/%2e%2e/asset", "/asset", false),
+                ("/./asset", "/asset", false),
+                ("/path://asset", "/path://asset", true),
+            ] {
+                let policy = format!("img-src https://{authority}{source_path}");
+                let request = format!("https://cdn.test{request_path}");
+                assert_eq!(
+                    allowed(
+                        &policy,
+                        ContentSecurityPolicyResourceKind::DocumentImage,
+                        &request
+                    ),
+                    expected,
+                    "{policy} with {request}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn valid_host_source_grammar_preserves_ports_and_raw_hostnames() {
+        for (source, request, expected) in [
+            ("HTTPS://CDN.TEST:00443", "https://cdn.test/asset", true),
+            (
+                "cdn.test/path://asset",
+                "https://cdn.test/path://asset",
+                true,
+            ),
+            ("https://cdn.test:0", "https://cdn.test:0/asset", true),
+            (
+                "https://cdn.test:65535",
+                "https://cdn.test:65535/asset",
+                true,
+            ),
+            (
+                "https://xn--bcher-kva.test",
+                "https://bücher.test/asset",
+                true,
+            ),
+            ("https://*.TEST.", "https://cdn.test./asset", true),
+            ("https://*.TEST.", "https://cdn.test/asset", false),
+            ("https://*.test", "https://cdn.test./asset", false),
+            ("ftp://cdn.test", "ftp://cdn.test/asset", true),
+            ("https://192.0.2.1", "https://192.0.2.1/asset", true),
+            (
+                "https://192.0.2.1:8443",
+                "https://192.0.2.1:8443/asset",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                allowed(
+                    &format!("img-src {source}"),
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                    request
+                ),
+                expected,
+                "{source} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn csp_path_matching_preserves_empty_segments_and_byte_boundaries() {
+        for (source, request, expected) in [
+            ("", "", true),
+            ("", "/asset", true),
+            ("/", "", true),
+            ("/", "/asset", true),
+            ("/a/", "/a", false),
+            ("/a/", "/a/", true),
+            ("/a//", "/a/", false),
+            ("/a//", "/a//b", true),
+            ("/a%2fb/", "/a/b/file", false),
+            ("/a%2fb/", "/a%2Fb/file", true),
+            ("/%00", "/%00", true),
+            ("/%00", "/", false),
+            ("/%ff", "/%fe", false),
+        ] {
+            assert_eq!(
+                csp_path_part_matches(source, request),
+                expected,
+                "{source:?} with {request:?}"
+            );
+        }
     }
 
     #[test]
