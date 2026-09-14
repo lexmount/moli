@@ -12,6 +12,9 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
         abort::finish_request_with_abort_error(scope, request, error);
         return;
     }
+    if reject_closed_open_result(scope, request) {
+        return;
+    }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
