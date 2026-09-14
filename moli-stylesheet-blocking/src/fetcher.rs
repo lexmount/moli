@@ -183,6 +183,7 @@ impl StylesheetPhysicalOutcome {
 pub enum StylesheetUsability {
     Ready,
     Failed { reason: Arc<str> },
+    IntegrityFailure { reason: Arc<str> },
 }
 
 impl StylesheetUsability {
@@ -238,6 +239,20 @@ impl StylesheetFetchTerminal {
         }
     }
 
+    pub fn integrity_failure(
+        response: NavigationResponse,
+        origin_clean: bool,
+        reason: impl Into<Arc<str>>,
+    ) -> Self {
+        Self::response(
+            response,
+            StylesheetUsability::IntegrityFailure {
+                reason: reason.into(),
+            },
+            origin_clean,
+        )
+    }
+
     pub fn physical(&self) -> &StylesheetPhysicalOutcome {
         &self.physical
     }
@@ -248,6 +263,10 @@ impl StylesheetFetchTerminal {
 
     pub fn is_ready(&self) -> bool {
         self.usability.is_ready()
+    }
+
+    pub fn failed_integrity(&self) -> bool {
+        matches!(self.usability, StylesheetUsability::IntegrityFailure { .. })
     }
 
     pub fn origin_clean(&self) -> Option<bool> {
