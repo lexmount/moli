@@ -5696,7 +5696,7 @@ async fn intersection_observer_options_reflect_root_margin_and_thresholds() -> R
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverThresholds"),
-        Some(&JsValueSnapshot::String("[0.25,0.75]".to_owned()))
+        Some(&JsValueSnapshot::String("[0.25,0.75,0.75]".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverEntryPrototypeShape"),
