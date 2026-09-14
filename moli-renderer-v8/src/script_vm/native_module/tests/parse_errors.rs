@@ -170,6 +170,112 @@ fn reject_with_error(vm: &mut ScriptVm, error: &ModuleLoadError) -> v8::Global<v
 }
 
 #[test]
+fn wasm_compile_error_survives_module_graph_and_window_reporting() {
+    let mut vm = new_test_vm("https://module-errors.test/page.html");
+    let url = Url::parse("https://module-errors.test/invalid.wasm").unwrap();
+    let mut job = dynamic_import_job_in_vm(
+        &mut vm,
+        url.as_str(),
+        Url::parse("https://module-errors.test/page.html").unwrap(),
+        ModuleImportPhase::Evaluation,
+    );
+    let NativeModuleGraphJobAdvance::NeedFetches(mut requests) =
+        job.advance_dynamic_import_owner_lane(&mut vm).unwrap()
+    else {
+        panic!("the Wasm module must start a fetch");
+    };
+    assert_eq!(requests.len(), 1);
+    let error = job
+        .finish_dynamic_import_fetch_for_request(
+            &mut vm,
+            &requests.pop().unwrap(),
+            Ok(ModuleGraphFetchedSource::new(
+                url,
+                false,
+                ModuleSource::binary(vec![0]),
+            )),
+        )
+        .err()
+        .expect("V8 must reject the invalid Wasm bytes");
+    assert_eq!(error.stage(), ModuleLoadStage::Compile);
+    assert_eq!(
+        error.error_constructor(),
+        Some(ScriptErrorConstructorKind::WebAssemblyCompileError)
+    );
+    vm.eval(
+        r#"
+globalThis.__originalCompileError = WebAssembly.CompileError;
+globalThis.__reported = null;
+addEventListener('error', event => { __reported = event.error; event.preventDefault(); });
+globalThis.WebAssembly = { get CompileError() { throw new Error('author getter'); } };
+"#,
+    )
+    .unwrap();
+    let rejection = reject_with_error(&mut vm, &error);
+    vm.with_default_context_scope(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let rejection = v8::Local::new(scope, &rejection);
+        assert_eq!(
+            global.set(scope, v8str(scope, "__rejected").into(), rejection),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    vm.report_window_error_body(error.message(), None, error.error_value())
+        .unwrap();
+    assert_eq!(
+        vm.eval("String(__rejected.constructor === __originalCompileError && __reported.constructor === __originalCompileError)")
+            .unwrap(),
+        "true",
+        "both import rejection and Window reporting must retain CompileError without reading page constructors"
+    );
+}
+
+#[test]
+fn cached_module_graph_errors_preserve_their_native_constructors() {
+    for (kind, constructor) in [
+        (ScriptErrorConstructorKind::Error, "Error"),
+        (ScriptErrorConstructorKind::SyntaxError, "SyntaxError"),
+        (ScriptErrorConstructorKind::TypeError, "TypeError"),
+        (
+            ScriptErrorConstructorKind::WebAssemblyCompileError,
+            "WebAssembly.CompileError",
+        ),
+        (
+            ScriptErrorConstructorKind::WebAssemblyLinkError,
+            "WebAssembly.LinkError",
+        ),
+    ] {
+        let mut vm = new_test_vm("https://module-errors.test/page.html");
+        let url = Url::parse("https://module-errors.test/cached.mjs").unwrap();
+        vm.document_runtime.mark_native_module_failed(
+            ModuleMapKey::java_script(url.clone()),
+            ModuleLoadError::new(ModuleLoadStage::Instantiate, "cached module failure")
+                .with_error_constructor(kind),
+        );
+        let error = graph_error(&mut vm, url.as_str());
+        let rejection = reject_with_error(&mut vm, &error);
+        vm.with_default_context_scope(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let rejection = v8::Local::new(scope, &rejection);
+            assert_eq!(
+                global.set(scope, v8str(scope, "__rejected").into(), rejection),
+                Some(true)
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            vm.eval(&format!("String(__rejected.constructor === {constructor})"))
+                .unwrap(),
+            "true",
+            "a cached module graph failure must retain {constructor}"
+        );
+    }
+}
+
+#[test]
 fn module_parse_error_preserves_exception_identity_without_merging_equal_messages() {
     let mut vm = new_test_vm("https://module-errors.test/page.html");
     let error = compile_parse_error(&mut vm, "https://module-errors.test/first.mjs");
