@@ -607,13 +607,6 @@ impl HostScriptScheduler {
         self.module_owner.native_module_source(entry_id)
     }
 
-    pub(crate) fn native_module_wasm_record_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<WasmModuleRecord> {
-        self.module_owner.native_module_wasm_record_for(module)
-    }
-
     pub(crate) fn native_module_wasm_record(
         &self,
         entry_id: ModuleEntryId,
@@ -628,16 +621,6 @@ impl HostScriptScheduler {
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.module_owner
             .native_wasm_instance_for_namespace(scope, namespace)
-    }
-
-    pub(crate) fn native_resolved_dependency_module_for(
-        &self,
-        referrer: v8::Local<'_, v8::Module>,
-        specifier: &str,
-        attributes: &crate::module_runtime::ModuleAttributesKey,
-    ) -> Option<v8::Global<v8::Module>> {
-        self.module_owner
-            .native_resolved_dependency_module_for(referrer, specifier, attributes)
     }
 
     pub(crate) fn native_module_entry_url(&self, entry_id: ModuleEntryId) -> Url {
