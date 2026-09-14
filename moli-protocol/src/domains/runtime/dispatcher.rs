@@ -8598,46 +8598,24 @@ fn complete_pending_runtime_binding_context_lookup_command(
     mut task: RuntimeBindingCommandTask,
     completed_lookup: Result<CompletedRuntimeChildDefaultContextLookupDispatch, String>,
 ) -> RuntimeCommandTaskStep {
-    let is_child_default_context = match completed_lookup {
-        Ok(completed_lookup) => {
-            match conn.complete_child_default_execution_context_lookup(completed_lookup) {
-                Ok(is_child_default_context) => is_child_default_context,
-                Err(message) => {
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        completed.command_id,
-                        message,
-                    ));
-                }
-            }
-        }
-        Err(message) => {
-            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                completed.command_id,
-                message,
-            ));
-        }
-    };
-
-    if !is_child_default_context {
-        if matches!(task.action, RuntimeBindingCommand::Add)
-            || matches!(task.action, RuntimeBindingCommand::Remove)
-                && runtime_remove_binding_should_skip_live_page_update(conn, &completed.owner_scope)
-        {
-            task.skip_live_page_update_after_inspector_success = true;
-        }
-        return start_pending_runtime_binding_inspector_phase(conn, &completed, task);
+    if let Err(message) = completed_lookup
+        .and_then(|lookup| conn.complete_child_default_execution_context_lookup(lookup))
+    {
+        return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+            completed.command_id,
+            message,
+        ));
     }
 
-    task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
-    match start_pending_runtime_binding_page_phase(
-        conn,
-        completed.command_id,
-        task.clone(),
-        completed.owner_scope.clone(),
-    ) {
-        Some(pending) => RuntimeCommandTaskStep::Pending(Box::new(pending)),
-        None => complete_runtime_binding_after_live_update(conn, completed, task),
+    // Child default realms are registered V8 Inspector contexts too. Installing
+    // a native callback here would bypass the registering Inspector session.
+    if matches!(task.action, RuntimeBindingCommand::Add)
+        || matches!(task.action, RuntimeBindingCommand::Remove)
+            && runtime_remove_binding_should_skip_live_page_update(conn, &completed.owner_scope)
+    {
+        task.skip_live_page_update_after_inspector_success = true;
     }
+    start_pending_runtime_binding_inspector_phase(conn, &completed, task)
 }
 
 async fn complete_pending_runtime_binding_inspector_command(
