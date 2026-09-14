@@ -5580,6 +5580,7 @@ html/browsers/windows/browsing-context-names/choose-_parent-001.html
 html/browsers/windows/browsing-context-names/choose-_parent-002.html
 html/browsers/windows/browsing-context-names/choose-_parent-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-004.html
+html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/browsing-context-names/choose-_self-002.html
 html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
@@ -6179,6 +6180,7 @@ html/semantics/forms/the-input-element/input-stepdown-weekmonth.html
 html/semantics/forms/the-input-element/input-stepdown.html
 html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
+html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/forms/the-input-element/input-type-change-value.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
