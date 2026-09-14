@@ -35,7 +35,7 @@ use moli_css_parse::{normalize_root_margin, root_margin_components};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{
-    context_bootstrap::build_dom_rect_object,
+    context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
     host::report_event_callback_exception,
     native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
     native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
@@ -405,17 +405,18 @@ struct MutationObserverConstructorArgs {
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "IntersectionObserverInit")]
-struct IntersectionObserverInitMembers<'s> {
-    #[webidl(legacy_nullish, converter = "raw")]
-    root: Option<v8::Local<'s, v8::Value>>,
+struct IntersectionObserverInitMembers {
+    // The derive converts members in declaration order; WebIDL requires lexical order.
+    #[webidl(default = 0)]
+    delay: i32,
+    #[webidl(with = intersection_observer_root_member)]
+    root: Option<NativeNodeId>,
     #[webidl(default = "0px")]
     root_margin: String,
     #[webidl(default = "0px")]
     scroll_margin: String,
-    #[webidl(legacy_nullish, converter = "raw")]
-    threshold: Option<v8::Local<'s, v8::Value>>,
-    #[webidl(default = 0)]
-    delay: i32,
+    #[webidl(with = intersection_observer_threshold_member)]
+    threshold: Vec<f64>,
     #[webidl(default = false)]
     track_visibility: bool,
 }
@@ -1185,16 +1186,14 @@ pub(super) fn intersection_observer_constructor_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let options = match parse_intersection_observer_options(scope, parsed.options, |root| {
-        dom_access::is_intersection_root(host_ptr, root)
-    }) {
+    let options = match parse_intersection_observer_options(scope, parsed.options) {
         Ok(options) => options,
         Err(IntersectionObserverOptionsError::Range(message)) => {
             throw_range_error(scope, message);
             return;
         }
-        Err(IntersectionObserverOptionsError::Type(message)) => {
-            throw_type_error(scope, &message);
+        Err(IntersectionObserverOptionsError::Syntax(message)) => {
+            throw_dom_exception_value(scope, message, "SyntaxError");
             return;
         }
         Err(IntersectionObserverOptionsError::WebIdl(error)) => {
@@ -1607,7 +1606,7 @@ fn has_property(
 }
 
 enum IntersectionObserverOptionsError {
-    Type(String),
+    Syntax(&'static str),
     WebIdl(webidl::WebIdlError),
     Range(&'static str),
 }
@@ -1615,7 +1614,6 @@ enum IntersectionObserverOptionsError {
 fn parse_intersection_observer_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: Option<v8::Local<'s, v8::Value>>,
-    mut root_is_valid: impl FnMut(NativeNodeId) -> bool,
 ) -> Result<IntersectionObserverOptions, IntersectionObserverOptionsError> {
     let Some(value) = value else {
         return Ok(IntersectionObserverOptions::default());
@@ -1630,36 +1628,23 @@ fn parse_intersection_observer_options<'s>(
         Err(error) => return Err(IntersectionObserverOptionsError::WebIdl(error)),
     };
 
-    let mut options = IntersectionObserverOptions::default();
-    if let Some(root_value) = init.root {
-        let Some(root) = callback_value_dom_handle(scope, root_value) else {
-            return Err(IntersectionObserverOptionsError::Type(
-                "Failed to construct 'IntersectionObserver': root is not a Node.".to_owned(),
-            ));
-        };
-        if !root_is_valid(root) {
-            return Err(IntersectionObserverOptionsError::Type(
-                "Failed to construct 'IntersectionObserver': root must be an Element or Document."
-                    .to_owned(),
-            ));
-        }
-        options.root = Some(root);
-    }
+    let mut options = IntersectionObserverOptions {
+        root: init.root,
+        ..IntersectionObserverOptions::default()
+    };
 
-    options.root_margin = normalize_root_margin(&init.root_margin).ok_or_else(|| {
-        IntersectionObserverOptionsError::Type(
-            "Failed to construct 'IntersectionObserver': rootMargin must contain 1 to 4 px or percentage values.".to_owned(),
-        )
-    })?;
-    options.scroll_margin = normalize_root_margin(&init.scroll_margin).ok_or_else(|| {
-        IntersectionObserverOptionsError::Type(
-            "Failed to construct 'IntersectionObserver': scrollMargin must contain 1 to 4 px or percentage values.".to_owned(),
-        )
-    })?;
+    options.root_margin = normalize_root_margin(&init.root_margin).ok_or(
+        IntersectionObserverOptionsError::Syntax(
+            "Failed to construct 'IntersectionObserver': rootMargin must contain 1 to 4 px or percentage values.",
+        ),
+    )?;
+    options.scroll_margin = normalize_root_margin(&init.scroll_margin).ok_or(
+        IntersectionObserverOptionsError::Syntax(
+            "Failed to construct 'IntersectionObserver': scrollMargin must contain 1 to 4 px or percentage values.",
+        ),
+    )?;
 
-    if let Some(thresholds) = threshold_option(scope, init.threshold)? {
-        options.thresholds = thresholds;
-    }
+    options.thresholds = normalize_intersection_thresholds(init.threshold)?;
     options.delay = init.delay;
     options.track_visibility = init.track_visibility;
     if options.track_visibility && options.delay < 100 {
@@ -1682,53 +1667,76 @@ fn bool_option(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-fn threshold_option<'s>(
+fn intersection_observer_root_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> Result<Option<Vec<f64>>, IntersectionObserverOptionsError> {
-    let Some(value) = value else { return Ok(None) };
-
-    let mut thresholds = if value.is_object() {
-        webidl::convert::<webidl::Sequence<webidl::Double>>(
-            scope,
-            value,
-            webidl::Context::member("IntersectionObserverInit", "threshold"),
+    object: v8::Local<'s, v8::Object>,
+    member: &'static str,
+) -> Result<Option<NativeNodeId>, webidl::WebIdlError> {
+    let Some(value) = webidl::legacy_optional_member::<v8::Local<'s, v8::Value>>(
+        scope,
+        object,
+        member,
+        webidl::Context::member("IntersectionObserverInit", member),
+    )?
+    else {
+        return Ok(None);
+    };
+    let root = callback_value_dom_handle(scope, value).ok_or_else(|| {
+        webidl::WebIdlError::custom_message(
+            "Failed to construct 'IntersectionObserver': root is not a Node.",
         )
-        .map_err(IntersectionObserverOptionsError::WebIdl)?
-        .0
-        .into_iter()
-        .map(|value| validate_intersection_threshold(value.0))
-        .collect::<Result<Vec<_>, _>>()?
-    } else {
-        vec![threshold_number(scope, value)?]
-    };
-    thresholds.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
-    thresholds.dedup_by(|left, right| left.total_cmp(right) == Ordering::Equal);
-    if thresholds.is_empty() {
-        thresholds.push(0.0);
-    }
-    Ok(Some(thresholds))
-}
-
-fn threshold_number<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<f64, IntersectionObserverOptionsError> {
-    let Some(number) = value.number_value(scope) else {
-        return Err(IntersectionObserverOptionsError::Type(
-            "Failed to construct 'IntersectionObserver': threshold must be a number.".to_owned(),
+    })?;
+    let valid = context_host_ptr_from_global_bridge(scope)
+        .is_some_and(|host_ptr| dom_access::is_intersection_root(host_ptr, root));
+    if !valid {
+        return Err(webidl::WebIdlError::custom_message(
+            "Failed to construct 'IntersectionObserver': root must be an Element or Document.",
         ));
-    };
-    validate_intersection_threshold(number)
+    }
+    Ok(Some(root))
 }
 
-fn validate_intersection_threshold(number: f64) -> Result<f64, IntersectionObserverOptionsError> {
-    if !number.is_finite() || !(0.0..=1.0).contains(&number) {
+fn intersection_observer_threshold_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    member: &'static str,
+) -> Result<Vec<f64>, webidl::WebIdlError> {
+    let context = webidl::Context::member("IntersectionObserverInit", member);
+    let Some(value) =
+        webidl::optional_member::<v8::Local<'s, v8::Value>>(scope, object, member, context)?
+    else {
+        return Ok(vec![0.0]);
+    };
+
+    // Convert the union at its dictionary position, reading @@iterator once.
+    if let Some(sequence) =
+        webidl::convert_optional_sequence::<webidl::Double>(scope, value, context, &())?
+    {
+        Ok(sequence.0.into_iter().map(|value| value.0).collect())
+    } else {
+        Ok(vec![
+            webidl::convert::<webidl::Double>(scope, value, context)?.0,
+        ])
+    }
+}
+
+fn normalize_intersection_thresholds(
+    mut thresholds: Vec<f64>,
+) -> Result<Vec<f64>, IntersectionObserverOptionsError> {
+    // WebIDL conversion has completed; constructor validation follows margins.
+    if thresholds
+        .iter()
+        .any(|number| !(0.0..=1.0).contains(number))
+    {
         return Err(IntersectionObserverOptionsError::Range(
             "Failed to construct 'IntersectionObserver': threshold must be between 0 and 1.",
         ));
     }
-    Ok(number)
+    thresholds.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    if thresholds.is_empty() {
+        thresholds.push(0.0);
+    }
+    Ok(thresholds)
 }
 
 fn string_set_option(
@@ -2583,7 +2591,7 @@ mod tests {
     #[test]
     fn root_margin_helpers_are_available_to_observer_runtime() {
         assert_eq!(
-            normalize_root_margin("10px /*comment*/ 5% 0 -2.5px").as_deref(),
+            normalize_root_margin("10px /*comment*/ 5% 0px -2.5px").as_deref(),
             Some("10px 5% 0px -2.5px")
         );
         assert_eq!(
