@@ -19,6 +19,7 @@ use tokio::{
     time::{Duration, timeout},
 };
 
+mod device_geometry;
 mod native_navigator;
 
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {

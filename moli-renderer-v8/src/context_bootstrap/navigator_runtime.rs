@@ -41,4 +41,5 @@ pub(super) use self::window_state::{
     build_window_navigator_for_receiver, install_navigator_runtime_state,
 };
 
+pub(crate) use self::screen::dispatch_screen_orientation_change;
 pub(crate) use self::visual_viewport::dispatch_window_visual_viewport_resize;

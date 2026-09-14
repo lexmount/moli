@@ -298,6 +298,7 @@ impl PageVm {
             visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
+                viewport_size: (surface.inner_width, surface.inner_height),
                 image,
                 visual_state,
             },
@@ -511,5 +512,7 @@ fn default_viewport_surface() -> crate::protocol_types::ViewportSurface {
         screen_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_height),
         screen_avail_width: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_avail_width),
         screen_avail_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_avail_height),
+
+        ..Default::default()
     }
 }

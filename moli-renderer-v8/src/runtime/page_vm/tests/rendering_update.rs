@@ -532,7 +532,9 @@ async fn screencast_visual_token_tracks_canvas_and_scroll_while_screenshot_stays
             screen_height: 30,
             screen_avail_width: 40,
             screen_avail_height: 30,
-        }))?;
+
+..Default::default()
+}))?;
         page_vm.vm_mut().eval(
             r#"
 document.documentElement.style.cssText = 'margin:0;background:white';
@@ -1020,7 +1022,9 @@ async fn positioned_layout_matches_chromium_auto_margin_and_relative_inset_rules
                 screen_height: 620,
                 screen_avail_width: 1440,
                 screen_avail_height: 620,
-            }))?;
+
+..Default::default()
+}))?;
         page_vm.vm_mut().eval(
             r#"
 document.head.innerHTML = `<style>
@@ -1108,7 +1112,9 @@ async fn containment_matches_chromium_containing_block_eligibility_and_paint_cli
                 screen_height: 600,
                 screen_avail_width: 800,
                 screen_avail_height: 600,
-            }))?;
+
+..Default::default()
+}))?;
         page_vm.vm_mut().eval(
             r#"
 document.head.innerHTML = `<style>
@@ -1455,7 +1461,9 @@ async fn fixed_flex_auto_margin_consumes_free_space_once() {
                 screen_height: 900,
                 screen_avail_width: 1440,
                 screen_avail_height: 900,
-            }))?;
+
+..Default::default()
+}))?;
         page_vm.vm_mut().eval(
             r#"
 document.head.innerHTML = `<style>

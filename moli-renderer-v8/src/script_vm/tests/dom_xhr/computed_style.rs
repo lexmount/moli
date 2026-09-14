@@ -4629,6 +4629,8 @@ fn computed_horizontal_margin_reads_preserve_retained_style_viewport_context() {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }))
     .expect("viewport surface should update");
     let document = vm.document_handle_for_test();
@@ -4924,6 +4926,8 @@ fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes()
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     };
     vm.set_viewport_surface(Some(surface(1000, 800)))
         .expect("initial viewport surface should update");

@@ -472,6 +472,7 @@ mod observation_invariant_tests {
                 viewport_height_bits: 600.0_f32.to_bits(),
                 screen_width_bits: 800.0_f32.to_bits(),
                 screen_height_bits: 600.0_f32.to_bits(),
+                device_pixel_ratio_bits: 1.0_f32.to_bits(),
                 environment: StyloStyleEnvironment::default(),
                 quirks_mode: QuirksMode::NoQuirks,
                 tree_scope_versions: None,

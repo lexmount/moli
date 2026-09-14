@@ -1046,7 +1046,7 @@ fn start_apply_device_metrics(
     else {
         return Ok(None);
     };
-    let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
+    let viewport_surface = Some(metrics.viewport_surface());
     let pending_viewport = page
         .start_set_viewport_surface(viewport_surface)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
@@ -1072,7 +1072,10 @@ fn set_viewport_metrics_from_current(
     current_metrics: Option<&EmulatedDeviceMetrics>,
     command: &DevToolsSetViewportCommand,
 ) -> Result<EmulatedDeviceMetrics, DevToolsError> {
-    let current = EmulatedViewportSurface::from_metrics(current_metrics);
+    let current = (current_metrics).map_or_else(
+        EmulatedViewportSurface::default,
+        crate::conn::EmulatedDeviceMetrics::viewport_surface,
+    );
     let default = EmulatedViewportSurface::default();
     let (width, height) = match command.viewport {
         DevToolsViewportSetting::Unchanged => (current.inner_width, current.inner_height),
@@ -1103,6 +1106,9 @@ fn set_viewport_metrics_from_current(
         // Preserve the existing WebDriver/BiDi headless work area. CDP device
         // emulation supplies its own available screen dimensions instead.
         screen_avail_height: command.screen_height.unwrap_or(height).min(1040),
+        window_x: current.window_x,
+        window_y: current.window_y,
+        screen_orientation: current.screen_orientation,
     })
 }
 
@@ -2242,7 +2248,7 @@ fn start_browser_context_default_device_metrics_page_commands(
     metrics: &EmulatedDeviceMetrics,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let browser_context_id = browser_context.id.clone();
-    let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
+    let viewport_surface = Some(metrics.viewport_surface());
     let mut pending = Vec::new();
     for target in browser_context.page_targets.iter_mut() {
         if target

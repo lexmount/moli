@@ -58,6 +58,7 @@ pub(crate) const STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT: &str =
     "__moliStyleDeclarationViewportWidth";
 pub(crate) const STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT: &str =
     "__moliStyleDeclarationViewportHeight";
+const STYLE_DECLARATION_DEVICE_PIXEL_RATIO_SLOT: &str = "__moliStyleDeclarationDevicePixelRatio";
 pub(crate) const STYLE_DECLARATION_SCREEN_WIDTH_SLOT: &str = "__moliStyleDeclarationScreenWidth";
 pub(crate) const STYLE_DECLARATION_SCREEN_HEIGHT_SLOT: &str = "__moliStyleDeclarationScreenHeight";
 pub(crate) const STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT: &str =
@@ -274,6 +275,16 @@ fn cache_frame_viewport<'s>(
         STYLE_DECLARATION_SCREEN_HEIGHT_SLOT,
         screen_height,
     );
+    let ratio = viewport
+        .and_then(|viewport| viewport.device_pixel_ratio)
+        .map(|ratio| v8::Number::new(scope, ratio).into())
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    set_private_value(
+        scope,
+        style,
+        STYLE_DECLARATION_DEVICE_PIXEL_RATIO_SLOT,
+        ratio,
+    );
 }
 
 fn style_object_pseudo_element<'s>(
@@ -336,6 +347,11 @@ fn style_object_viewport<'s>(
     .with_screen_size(
         style_object_screen_width(scope, style),
         style_object_screen_height(scope, style),
+    )
+    .with_device_pixel_ratio(
+        get_private_value(scope, style, STYLE_DECLARATION_DEVICE_PIXEL_RATIO_SLOT)
+            .and_then(|value| value.number_value(scope))
+            .filter(|value| value.is_finite() && *value > 0.0),
     )
 }
 
@@ -754,7 +770,8 @@ fn iframe_handle_viewport_with_depth(
                 Some(f64::from(viewport.css_width)),
                 Some(f64::from(viewport.css_height)),
             )
-            .with_screen_size(parent_viewport.screen_width, parent_viewport.screen_height),
+            .with_screen_size(parent_viewport.screen_width, parent_viewport.screen_height)
+            .with_device_pixel_ratio(parent_viewport.device_pixel_ratio),
         );
     }
     Some(
@@ -802,6 +819,7 @@ fn iframe_handle_viewport_with_depth(
                 ));
             StyleViewport::new(width, height)
                 .with_screen_size(parent_viewport.screen_width, parent_viewport.screen_height)
+                .with_device_pixel_ratio(parent_viewport.device_pixel_ratio)
         }),
     )
 }

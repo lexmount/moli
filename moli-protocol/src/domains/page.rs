@@ -1767,7 +1767,6 @@ pub struct PendingPageScreencastCapture {
     session_id: Option<String>,
     generation: i32,
     owner_scope: CommandOwnerScope,
-    viewport: EmulatedViewportSurface,
     pending: PendingPageCommand,
 }
 
@@ -1775,7 +1774,6 @@ pub struct CompletedPageScreencastCapture {
     session_id: Option<String>,
     generation: i32,
     owner_scope: CommandOwnerScope,
-    viewport: EmulatedViewportSurface,
     completed: Result<Box<CompletedPageCommand>, String>,
 }
 
@@ -1795,7 +1793,6 @@ impl PendingPageScreencastCapture {
             session_id: self.session_id,
             generation: self.generation,
             owner_scope: self.owner_scope,
-            viewport: self.viewport,
             completed: self
                 .pending
                 .wait()
@@ -1939,7 +1936,6 @@ impl CdpConnection {
         else {
             return PageScreencastCaptureStart::Stale;
         };
-        let viewport = current_viewport_surface_for_owner(self, &owner_scope);
         let request = RendererCaptureScreencastFrameRequest {
             base_background_color: self.default_background_color_for_owner(&owner_scope),
             format: match config.format() {
@@ -1974,7 +1970,6 @@ impl CdpConnection {
             session_id,
             generation,
             owner_scope,
-            viewport,
             pending,
         })
     }
@@ -1987,7 +1982,6 @@ impl CdpConnection {
             session_id,
             generation,
             owner_scope,
-            viewport,
             completed,
         } = completed;
         let session_id_ref = session_id.as_deref();
@@ -2056,8 +2050,8 @@ impl CdpConnection {
         let metadata = crate::conn::PageScreencastFrameMetadata {
             offset_top: 0.0,
             page_scale_factor: 1.0,
-            device_width: f64::from(viewport.inner_width),
-            device_height: f64::from(viewport.inner_height),
+            device_width: f64::from(frame.viewport_size.0),
+            device_height: f64::from(frame.viewport_size.1),
             scroll_offset_x: 0.0,
             scroll_offset_y: 0.0,
             timestamp: SystemTime::now()
@@ -5809,9 +5803,12 @@ fn current_viewport_surface(
     conn: &CdpConnection,
     session_id: Option<&str>,
 ) -> EmulatedViewportSurface {
-    EmulatedViewportSurface::from_metrics(
-        conn.target_session_owner_emulated_device_metrics(session_id)
-            .as_ref(),
+    (conn
+        .target_session_owner_emulated_device_metrics(session_id)
+        .as_ref())
+    .map_or_else(
+        EmulatedViewportSurface::default,
+        crate::conn::EmulatedDeviceMetrics::viewport_surface,
     )
 }
 
@@ -5819,9 +5816,12 @@ fn current_viewport_surface_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> EmulatedViewportSurface {
-    EmulatedViewportSurface::from_metrics(
-        conn.target_session_owner_emulated_device_metrics_for_owner(owner)
-            .as_ref(),
+    (conn
+        .target_session_owner_emulated_device_metrics_for_owner(owner)
+        .as_ref())
+    .map_or_else(
+        EmulatedViewportSurface::default,
+        crate::conn::EmulatedDeviceMetrics::viewport_surface,
     )
 }
 

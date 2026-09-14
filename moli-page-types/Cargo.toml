@@ -9,6 +9,7 @@ test-support = []
 
 [dependencies]
 bitflags = "2.11.0"
+moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-dom = { path = "../moli-dom" }
 moli-fetch = { path = "../moli-fetch" }

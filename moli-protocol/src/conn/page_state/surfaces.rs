@@ -393,7 +393,10 @@ impl BrowserContext {
 
     pub(crate) fn viewport_surface(&self) -> EmulatedViewportSurface {
         let metrics = self.effective_active_emulated_device_metrics();
-        EmulatedViewportSurface::from_metrics(metrics.as_ref())
+        (metrics.as_ref()).map_or_else(
+            EmulatedViewportSurface::default,
+            crate::conn::EmulatedDeviceMetrics::viewport_surface,
+        )
     }
 
     pub fn max_touch_points(&self) -> u32 {

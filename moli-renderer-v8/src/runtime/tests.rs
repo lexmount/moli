@@ -379,6 +379,8 @@ async fn capture_screenshot_uses_current_root_computed_background_and_viewport()
         screen_height: 3,
         screen_avail_width: 4,
         screen_avail_height: 3,
+
+        ..Default::default()
     };
     let (reply, _) = page
         .run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
@@ -454,6 +456,8 @@ async fn capture_screenshot_paints_downloaded_raster_image_pixels() {
         screen_height: 10,
         screen_avail_width: 20,
         screen_avail_height: 10,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -532,6 +536,8 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
         screen_height: 10,
         screen_avail_width: 20,
         screen_avail_height: 10,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -629,6 +635,8 @@ async fn capture_screenshot_consumes_the_shadow_flat_tree_without_light_dom_leak
         screen_height: 60,
         screen_avail_width: 40,
         screen_avail_height: 60,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -670,6 +678,8 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
         screen_height: 3,
         screen_avail_width: 4,
         screen_avail_height: 3,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -731,6 +741,8 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
         screen_height: 20,
         screen_avail_width: 20,
         screen_avail_height: 20,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -819,6 +831,8 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
         screen_height: 20,
         screen_avail_width: 20,
         screen_avail_height: 20,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -895,6 +909,8 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
         screen_height: 100,
         screen_avail_width: 100,
         screen_avail_height: 100,
+
+        ..Default::default()
     };
     page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
         .await
@@ -1020,6 +1036,8 @@ async fn capture_screenshot_lays_out_real_flex_mixed_flow_and_pseudo() {
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     };
     let (reply, _) = page
         .run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
@@ -11984,6 +12002,8 @@ addEventListener("wheel", event => {
             screen_height: 200,
             screen_avail_width: 200,
             screen_avail_height: 200,
+
+            ..Default::default()
         },
     )))
     .await
@@ -12107,6 +12127,8 @@ addEventListener("wheel", event => {
             screen_height: 20,
             screen_avail_width: 20,
             screen_avail_height: 20,
+
+            ..Default::default()
         },
     )))
     .await

@@ -21,6 +21,37 @@ pub(super) fn metrics_from_cdp(
     let height = size(params.height)?;
     let screen_width = size(params.screen_width.unwrap_or(0))?;
     let screen_height = size(params.screen_height.unwrap_or(0))?;
+    for (position, limit) in [
+        (params.position_x.unwrap_or(0), screen_width),
+        (params.position_y.unwrap_or(0), screen_height),
+    ] {
+        if position < 0 || position > i64::from(limit) {
+            return Err(invalid());
+        }
+    }
+    let (window_x, window_y) = match (params.position_x, params.position_y) {
+        (Some(x), Some(y)) => (x as i32, y as i32),
+        _ if params.mobile => (0, 0),
+        _ => (base.window_x, base.window_y),
+    };
+    let screen_orientation = if let Some(orientation) = params.screen_orientation {
+        let kind = match orientation.r#type.as_ref() {
+            "portraitPrimary" => "portrait-primary",
+            "portraitSecondary" => "portrait-secondary",
+            "landscapePrimary" => "landscape-primary",
+            "landscapeSecondary" => "landscape-secondary",
+            _ => return Err(invalid()),
+        };
+        if !(0..360).contains(&orientation.angle) {
+            return Err(invalid());
+        }
+        moli_page_types::ScreenOrientation {
+            kind,
+            angle: orientation.angle as u16,
+        }
+    } else {
+        base.screen_orientation
+    };
     let scale = params.scale.unwrap_or(1.0);
     if !params.device_scale_factor.is_finite()
         || params.device_scale_factor < 0.0
@@ -76,5 +107,8 @@ pub(super) fn metrics_from_cdp(
         screen_width,
         screen_height,
         screen_avail_height: screen_height,
+        window_x,
+        window_y,
+        screen_orientation,
     })
 }

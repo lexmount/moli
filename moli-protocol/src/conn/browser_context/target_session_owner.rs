@@ -317,7 +317,7 @@ impl TargetNavigationLoadInputs {
             emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
             viewport_surface: emulated_device_metrics
                 .as_ref()
-                .map(|metrics| metrics.viewport_surface().to_page_viewport_surface()),
+                .map(|metrics| metrics.viewport_surface()),
             document_activity,
             network_offline: page_state.network_policy.network_offline()
                 || effective_network_conditions
@@ -356,7 +356,7 @@ impl TargetNavigationLoadInputs {
         inputs.viewport_surface = browser_context
             .default_emulated_device_metrics
             .as_ref()
-            .map(|metrics| metrics.viewport_surface().to_page_viewport_surface());
+            .map(|metrics| metrics.viewport_surface());
         inputs.document_activity = browser_context.active_document_activity();
         inputs.network_offline = browser_context.effective_active_network_offline();
         inputs

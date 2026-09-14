@@ -344,28 +344,32 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     scroll_x: (),
     #[webapi(
         accessor_property = "screenLeft",
-        getter = window_zero_replaceable_getter,
+        getter = window_screen_position_getter,
+        data = self.screen_left_name,
         setter = window_surface_replaceable_setter,
         setter_data = self.screen_left_name
     )]
     screen_left: (),
     #[webapi(
         accessor_property = "screenTop",
-        getter = window_zero_replaceable_getter,
+        getter = window_screen_position_getter,
+        data = self.screen_top_name,
         setter = window_surface_replaceable_setter,
         setter_data = self.screen_top_name
     )]
     screen_top: (),
     #[webapi(
         accessor_property = "screenX",
-        getter = window_zero_replaceable_getter,
+        getter = window_screen_position_getter,
+        data = self.screen_x_name,
         setter = window_surface_replaceable_setter,
         setter_data = self.screen_x_name
     )]
     screen_x: (),
     #[webapi(
         accessor_property = "screenY",
-        getter = window_zero_replaceable_getter,
+        getter = window_screen_position_getter,
+        data = self.screen_y_name,
         setter = window_surface_replaceable_setter,
         setter_data = self.screen_y_name
     )]
@@ -644,12 +648,31 @@ fn window_scroll_x_replaceable_getter<'s>(
     rv.set(v8::Number::new(scope, value).into());
 }
 
-fn window_zero_replaceable_getter<'s>(
+fn window_screen_position_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(v8::Integer::new(scope, 0).into());
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        WINDOW_SURFACE_REPLACEABLE_NAMES,
+        "Window positions",
+    ) else {
+        return;
+    };
+    let receiver = callback_this_object(scope, &args);
+    let position = super::window_accessors::window_host_ptr(scope, receiver)
+        .and_then(|host| unsafe { &*host }.viewport_surface())
+        .map(|surface| {
+            if matches!(name, "screenX" | "screenLeft") {
+                surface.window_x
+            } else {
+                surface.window_y
+            }
+        })
+        .unwrap_or(0);
+    rv.set_int32(position);
 }
 
 fn define_legacy_unforgeable_window_property<'s>(

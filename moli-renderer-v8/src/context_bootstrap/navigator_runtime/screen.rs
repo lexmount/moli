@@ -1,6 +1,6 @@
 use super::super::media_queries::{
-    mark_simple_event_target_slot, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback,
+    dispatch_simple_event_target_event, mark_simple_event_target_slot,
+    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_remove_event_listener_callback,
 };
 use super::super::*;
@@ -457,6 +457,39 @@ fn build_screen_orientation_in_current_realm<'s>(
     Ok(orientation)
 }
 
+pub(crate) fn dispatch_screen_orientation_change<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(screen) = get_private_value(scope, window, WINDOW_SCREEN_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return false;
+    };
+    let Some(orientation) = get_private_value(scope, screen, SCREEN_ORIENTATION_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return false;
+    };
+    let Ok(event) = crate::host::create_host_event(
+        scope,
+        "change",
+        orientation.into(),
+        orientation.into(),
+        false,
+        false,
+    ) else {
+        return false;
+    };
+    dispatch_simple_event_target_event(
+        scope,
+        orientation,
+        SCREEN_ORIENTATION_EVENT_LISTENERS_SLOT,
+        "change",
+        event,
+    )
+}
+
 fn screen_orientation_attribute_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -475,6 +508,20 @@ fn screen_orientation_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if screen_owner_realm_is_current(scope, args.this())
+        && let Some(host) = context_host_ptr_from_global_bridge(scope)
+    {
+        let orientation = unsafe { &*host }
+            .viewport_surface()
+            .unwrap_or_default()
+            .screen_orientation;
+        if slot == SCREEN_ORIENTATION_TYPE_SLOT {
+            rv.set(v8str(scope, orientation.kind).into());
+        } else {
+            rv.set_uint32(u32::from(orientation.angle));
+        }
+        return;
+    }
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );

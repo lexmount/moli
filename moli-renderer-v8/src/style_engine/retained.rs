@@ -22,8 +22,7 @@ use super::{
     state::RetainedStyleSystem,
     stylesheet::{
         append_stylesheet_to_stylist, install_active_stylesheet, install_active_stylesheets,
-        moli_ua_stylesheet_base_url, new_style_device_with_viewport_bits,
-        new_stylist_with_viewport_bits,
+        moli_ua_stylesheet_base_url, new_style_device_with_viewport, new_stylist_with_viewport,
     },
     stylesheet_resources::StylesheetResourceManifest,
     ua::HTML_STYLESHEET as MOLI_UA_STYLESHEET,
@@ -90,14 +89,8 @@ pub(super) fn build_retained_style_system(
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     author_styles_disabled: bool,
 ) -> RetainedStyleSystem {
-    let mut stylist = new_stylist_with_viewport_bits(
-        key.viewport_width_bits,
-        key.viewport_height_bits,
-        key.screen_width_bits,
-        key.screen_height_bits,
-        key.environment,
-        key.quirks_mode,
-    );
+    let mut stylist =
+        new_stylist_with_viewport(key.style_viewport(), key.environment, key.quirks_mode);
     stylist.set_author_styles_enabled(if author_styles_disabled {
         AuthorStylesEnabled::No
     } else {
@@ -384,17 +377,12 @@ fn update_document_scope(
     let device_changed = viewport_size_changed
         || retained.key.screen_width_bits != key.screen_width_bits
         || retained.key.screen_height_bits != key.screen_height_bits
+        || retained.key.device_pixel_ratio_bits != key.device_pixel_ratio_bits
         || retained.key.environment != key.environment;
     let mut device_affected_origins = OriginSet::empty();
     if device_changed {
-        let device = new_style_device_with_viewport_bits(
-            key.viewport_width_bits,
-            key.viewport_height_bits,
-            key.screen_width_bits,
-            key.screen_height_bits,
-            key.environment,
-            key.quirks_mode,
-        );
+        let device =
+            new_style_device_with_viewport(key.style_viewport(), key.environment, key.quirks_mode);
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);

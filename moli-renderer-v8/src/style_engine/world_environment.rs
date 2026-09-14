@@ -39,6 +39,7 @@ pub(crate) struct StyleViewport {
     pub(crate) height: Option<f64>,
     pub(crate) screen_width: Option<f64>,
     pub(crate) screen_height: Option<f64>,
+    pub(crate) device_pixel_ratio: Option<f64>,
 }
 
 impl StyleViewport {
@@ -48,6 +49,7 @@ impl StyleViewport {
             height,
             screen_width: None,
             screen_height: None,
+            device_pixel_ratio: None,
         }
     }
 
@@ -57,6 +59,7 @@ impl StyleViewport {
             height: None,
             screen_width: None,
             screen_height: None,
+            device_pixel_ratio: None,
         }
     }
 
@@ -72,6 +75,13 @@ impl StyleViewport {
         }
     }
 
+    pub(crate) const fn with_device_pixel_ratio(self, device_pixel_ratio: Option<f64>) -> Self {
+        Self {
+            device_pixel_ratio,
+            ..self
+        }
+    }
+
     pub(crate) fn from_viewport_surface(surface: crate::protocol_types::ViewportSurface) -> Self {
         Self::new(
             Some(f64::from(surface.inner_width)),
@@ -81,6 +91,7 @@ impl StyleViewport {
             Some(f64::from(surface.screen_width)),
             Some(f64::from(surface.screen_height)),
         )
+        .with_device_pixel_ratio(Some(surface.device_pixel_ratio))
     }
 }
 

@@ -129,12 +129,13 @@ fn media_query_device(
     let viewport_height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
     let screen_width = viewport.screen_width.unwrap_or(viewport_width as f64) as f32;
     let screen_height = viewport.screen_height.unwrap_or(viewport_height as f64) as f32;
+    let ratio = viewport.device_pixel_ratio.unwrap_or(1.0) as f32;
     let mut device = Device::new(
         environment.stylo_media_type(),
         QuirksMode::NoQuirks,
         Size2D::<f32, CSSPixel>::new(viewport_width, viewport_height),
-        Size2D::<f32, DevicePixel>::new(screen_width, screen_height),
-        Scale::<f32, CSSPixel, DevicePixel>::new(1.0),
+        Size2D::<f32, DevicePixel>::new(screen_width * ratio, screen_height * ratio),
+        Scale::<f32, CSSPixel, DevicePixel>::new(ratio),
         Box::new(MediaQueryFontMetricsProvider),
         initial_style,
         environment.stylo_prefers_color_scheme(),

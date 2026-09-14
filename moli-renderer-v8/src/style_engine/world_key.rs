@@ -21,6 +21,7 @@ pub(super) struct StyleWorldKey {
     pub(super) viewport_height_bits: u32,
     pub(super) screen_width_bits: u32,
     pub(super) screen_height_bits: u32,
+    pub(super) device_pixel_ratio_bits: u32,
     pub(super) environment: StyloStyleEnvironment,
     pub(super) quirks_mode: QuirksMode,
     pub(super) tree_scope_versions: Option<StyleTreeScopeVersions>,
@@ -77,10 +78,25 @@ impl StyleWorldKey {
                 viewport.screen_height,
                 f32::from_bits(viewport_height_bits),
             ),
+            device_pixel_ratio_bits: style_dimension_bits(viewport.device_pixel_ratio, 1.0),
             environment: inputs.environment,
             quirks_mode: inputs.quirks_mode,
             tree_scope_versions,
         }
+    }
+
+    pub(super) fn style_viewport(&self) -> StyleViewport {
+        StyleViewport::new(
+            Some(f64::from(f32::from_bits(self.viewport_width_bits))),
+            Some(f64::from(f32::from_bits(self.viewport_height_bits))),
+        )
+        .with_screen_size(
+            Some(f64::from(f32::from_bits(self.screen_width_bits))),
+            Some(f64::from(f32::from_bits(self.screen_height_bits))),
+        )
+        .with_device_pixel_ratio(Some(f64::from(f32::from_bits(
+            self.device_pixel_ratio_bits,
+        ))))
     }
 
     pub(super) fn updated_for_observation(&self, environment: &StyleWorldEnvironment) -> Self {
@@ -99,6 +115,8 @@ impl StyleWorldKey {
             environment.viewport.screen_height,
             f32::from_bits(viewport_height_bits),
         );
+        next.device_pixel_ratio_bits =
+            style_dimension_bits(environment.viewport.device_pixel_ratio, 1.0);
         next.environment = environment.media;
         next.quirks_mode = environment.quirks_mode;
         next.tree_scope_versions = Some(environment.tree_scope_versions);
@@ -114,7 +132,8 @@ impl StyleWorldKey {
             previous_viewport_height_bits: self.viewport_height_bits,
             next_viewport_height_bits: next.viewport_height_bits,
             screen_changed: self.screen_width_bits != next.screen_width_bits
-                || self.screen_height_bits != next.screen_height_bits,
+                || self.screen_height_bits != next.screen_height_bits
+                || self.device_pixel_ratio_bits != next.device_pixel_ratio_bits,
             previous_screen_width_bits: self.screen_width_bits,
             next_screen_width_bits: next.screen_width_bits,
             previous_screen_height_bits: self.screen_height_bits,
@@ -145,6 +164,8 @@ impl StyleWorldKey {
                     viewport.screen_height,
                     f32::from_bits(viewport_height_bits),
                 )
+            && self.device_pixel_ratio_bits
+                == style_dimension_bits(viewport.device_pixel_ratio, 1.0)
             && self.environment == environment
             && self.quirks_mode == quirks_mode
             && self.tree_scope_versions == Some(tree_scope_versions)
@@ -170,6 +191,8 @@ impl StyleWorldKey {
                     viewport.screen_height,
                     f32::from_bits(viewport_height_bits),
                 )
+            || self.device_pixel_ratio_bits
+                != style_dimension_bits(viewport.device_pixel_ratio, 1.0)
             || self.environment != environment
     }
 }

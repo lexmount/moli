@@ -134,11 +134,8 @@ pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
 ) -> StyleSourceMetadata {
     let guard = stylesheet.shared_lock.read();
     let quirks_mode = stylesheet.contents.read_with(&guard).quirks_mode;
-    let stylist = new_stylist_with_viewport_bits(
-        DEFAULT_VIEWPORT_WIDTH.to_bits(),
-        DEFAULT_VIEWPORT_HEIGHT.to_bits(),
-        DEFAULT_VIEWPORT_WIDTH.to_bits(),
-        DEFAULT_VIEWPORT_HEIGHT.to_bits(),
+    let stylist = new_stylist_with_viewport(
+        StyleViewport::default(),
         StyloStyleEnvironment::default(),
         quirks_mode,
     );
@@ -196,18 +193,7 @@ pub(crate) fn native_font_face_projection_for_stylesheet(
 ) -> NativeStylesheetFontFaceProjection {
     let guard = stylesheet.shared_lock.read();
     let quirks_mode = stylesheet.contents.read_with(&guard).quirks_mode;
-    let viewport_width = viewport.width.unwrap_or(DEFAULT_VIEWPORT_WIDTH as f64) as f32;
-    let viewport_height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
-    let screen_width = viewport.screen_width.unwrap_or(f64::from(viewport_width)) as f32;
-    let screen_height = viewport.screen_height.unwrap_or(f64::from(viewport_height)) as f32;
-    let stylist = new_stylist_with_viewport_bits(
-        viewport_width.to_bits(),
-        viewport_height.to_bits(),
-        screen_width.to_bits(),
-        screen_height.to_bits(),
-        environment,
-        quirks_mode,
-    );
+    let stylist = new_stylist_with_viewport(viewport, environment, quirks_mode);
 
     let mut projection = NativeStylesheetFontFaceProjection::default();
     let contents = stylesheet.contents(&guard);
@@ -349,11 +335,8 @@ fn style_source_metadata_for_css_text_with_origin(
         "",
     )));
     let guard = shared_lock.read();
-    let stylist = new_stylist_with_viewport_bits(
-        DEFAULT_VIEWPORT_WIDTH.to_bits(),
-        DEFAULT_VIEWPORT_HEIGHT.to_bits(),
-        DEFAULT_VIEWPORT_WIDTH.to_bits(),
-        DEFAULT_VIEWPORT_HEIGHT.to_bits(),
+    let stylist = new_stylist_with_viewport(
+        StyleViewport::default(),
         StyloStyleEnvironment::default(),
         QuirksMode::NoQuirks,
     );
@@ -379,46 +362,36 @@ fn style_source_metadata_from_cascade_data(cascade_data: &CascadeData) -> StyleS
     }
 }
 
-pub(super) fn new_stylist_with_viewport_bits(
-    viewport_width_bits: u32,
-    viewport_height_bits: u32,
-    screen_width_bits: u32,
-    screen_height_bits: u32,
+pub(super) fn new_stylist_with_viewport(
+    viewport: StyleViewport,
     environment: StyloStyleEnvironment,
     quirks_mode: QuirksMode,
 ) -> Stylist {
     Stylist::new(
-        new_style_device_with_viewport_bits(
-            viewport_width_bits,
-            viewport_height_bits,
-            screen_width_bits,
-            screen_height_bits,
-            environment,
-            quirks_mode,
-        ),
+        new_style_device_with_viewport(viewport, environment, quirks_mode),
         quirks_mode,
     )
 }
 
-pub(super) fn new_style_device_with_viewport_bits(
-    viewport_width_bits: u32,
-    viewport_height_bits: u32,
-    screen_width_bits: u32,
-    screen_height_bits: u32,
+pub(super) fn new_style_device_with_viewport(
+    viewport: StyleViewport,
     environment: StyloStyleEnvironment,
     quirks_mode: QuirksMode,
 ) -> Device {
-    let width = f32::from_bits(viewport_width_bits);
-    let height = f32::from_bits(viewport_height_bits);
-    let screen_width = f32::from_bits(screen_width_bits);
-    let screen_height = f32::from_bits(screen_height_bits);
+    let width = viewport.width.unwrap_or(f64::from(DEFAULT_VIEWPORT_WIDTH)) as f32;
+    let height = viewport
+        .height
+        .unwrap_or(f64::from(DEFAULT_VIEWPORT_HEIGHT)) as f32;
+    let ratio = viewport.device_pixel_ratio.unwrap_or(1.0) as f32;
+    let screen_width = viewport.screen_width.unwrap_or(f64::from(width)) as f32;
+    let screen_height = viewport.screen_height.unwrap_or(f64::from(height)) as f32;
     let initial_style = ComputedValues::initial_values_with_font_override(Font::initial_values());
     let mut device = Device::new(
         environment.stylo_media_type(),
         quirks_mode,
         Size2D::<f32, CSSPixel>::new(width, height),
-        Size2D::<f32, DevicePixel>::new(screen_width, screen_height),
-        Scale::<f32, CSSPixel, DevicePixel>::new(1.0),
+        Size2D::<f32, DevicePixel>::new(screen_width * ratio, screen_height * ratio),
+        Scale::<f32, CSSPixel, DevicePixel>::new(ratio),
         Box::new(HeadlessFontMetricsProvider),
         initial_style,
         environment.stylo_prefers_color_scheme(),

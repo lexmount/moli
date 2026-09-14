@@ -2950,6 +2950,8 @@ fn viewport_surface_800_600_on_1920_1080_screen() -> crate::protocol_types::View
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }
 }
 

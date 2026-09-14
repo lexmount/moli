@@ -20,6 +20,7 @@ pub(super) enum PendingRenderingUpdatePayload {
 pub(super) struct PendingEnvironmentChange {
     pub(super) previous_viewport: crate::style_engine::StyleViewport,
     pub(super) previous_activity: moli_page_types::DocumentActivity,
+    pub(super) previous_orientation: moli_page_types::ScreenOrientation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,6 +161,10 @@ impl JsContextHost {
                 PendingRenderingUpdatePayload::EnvironmentChange(PendingEnvironmentChange {
                     previous_viewport,
                     previous_activity: self.document_activity(),
+                    previous_orientation: self
+                        .viewport_surface()
+                        .unwrap_or_default()
+                        .screen_orientation,
                 }),
             );
         }
@@ -382,6 +387,23 @@ impl JsContextHost {
                 return dispatched;
             }
 
+            if change.previous_orientation
+                != self
+                    .viewport_surface()
+                    .unwrap_or_default()
+                    .screen_orientation
+            {
+                dispatched |= crate::context_bootstrap::dispatch_screen_orientation_change(
+                    context_scope,
+                    global,
+                );
+                if !self.window_document_owner_is_current_for_dispatch_scope(
+                    target.owner(),
+                    target.dispatch_scope(),
+                ) {
+                    return dispatched;
+                }
+            }
             if change.previous_activity != current_activity {
                 if change.previous_activity.visible != current_activity.visible
                     && let Ok(document) = crate::host::event_target_value(

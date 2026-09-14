@@ -4277,6 +4277,8 @@ fn window_and_visual_viewport_follow_renderer_viewport_surface_changes() {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     };
 
     vm.set_viewport_surface(Some(surface(800, 600)))

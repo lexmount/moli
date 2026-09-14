@@ -15,6 +15,8 @@ fn set_viewport(page: &mut PageVm, width: u32, height: u32) -> anyhow::Result<()
         screen_height: height,
         screen_avail_width: width,
         screen_avail_height: height,
+
+        ..Default::default()
     }))?;
     Ok(())
 }

@@ -663,6 +663,10 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         screen_width: 320,
         screen_height: 240,
         screen_avail_height: 240,
+
+        window_x: 0,
+        window_y: 0,
+        screen_orientation: Default::default(),
     });
 
     ctx.process_async(json!({
@@ -716,6 +720,10 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         screen_width: 500,
         screen_height: 300,
         screen_avail_height: 300,
+
+        window_x: 0,
+        window_y: 0,
+        screen_orientation: Default::default(),
     });
     inactive.replace_loaded_page(Some(page));
     ctx.conn

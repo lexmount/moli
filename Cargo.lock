@@ -2718,6 +2718,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "http-auth",
+ "moli-browser-profile",
  "moli-cookie-jar",
  "moli-dom",
  "moli-fetch",

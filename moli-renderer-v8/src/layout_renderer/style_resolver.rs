@@ -98,6 +98,7 @@ fn layout_style_viewport(runtime: &JsContextHost, viewport: LayoutViewport) -> S
         Some(f64::from(viewport.css_height)),
     )
     .with_screen_size(screen.screen_width, screen.screen_height)
+    .with_device_pixel_ratio(screen.device_pixel_ratio)
 }
 
 impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {

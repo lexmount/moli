@@ -3124,6 +3124,45 @@ pub struct ViewportSurface {
     pub screen_height: u32,
     pub screen_avail_width: u32,
     pub screen_avail_height: u32,
+    pub window_x: i32,
+    pub window_y: i32,
+    pub screen_orientation: ScreenOrientation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenOrientation {
+    pub kind: &'static str,
+    pub angle: u16,
+}
+
+impl Default for ScreenOrientation {
+    fn default() -> Self {
+        let profile = moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+        Self {
+            kind: profile.orientation_type,
+            angle: profile.orientation_angle as u16,
+        }
+    }
+}
+
+impl Default for ViewportSurface {
+    fn default() -> Self {
+        let profile = moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
+        Self {
+            inner_width: profile.inner_width as u32,
+            inner_height: profile.inner_height as u32,
+            outer_width: profile.inner_width as u32,
+            outer_height: profile.inner_height as u32,
+            device_pixel_ratio: profile.device_pixel_ratio,
+            screen_width: profile.screen_width as u32,
+            screen_height: profile.screen_height as u32,
+            screen_avail_width: profile.screen_avail_width as u32,
+            screen_avail_height: profile.screen_avail_height as u32,
+            window_x: 0,
+            window_y: 0,
+            screen_orientation: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

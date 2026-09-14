@@ -6085,6 +6085,8 @@ pub enum RendererCaptureScreenshotReply {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererCapturedScreencastFrame {
+    /// Native viewport dimensions before the encoded frame is fitted to limits.
+    pub viewport_size: (u32, u32),
     pub image: RendererCapturedScreenshot,
     pub visual_state: RendererVisualStateToken,
 }

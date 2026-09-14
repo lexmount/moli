@@ -334,7 +334,8 @@ pub(crate) use self::navigator_runtime::{
     bind_window_navigator_identity_seed, set_window_navigator_identity,
 };
 pub(crate) use self::navigator_runtime::{
-    dispatch_window_visual_viewport_resize, notify_geolocation_override_changed,
+    dispatch_screen_orientation_change, dispatch_window_visual_viewport_resize,
+    notify_geolocation_override_changed,
 };
 pub(crate) use self::notification_runtime::{
     build_notification_object_from_snapshot, notification_get_options_tag,

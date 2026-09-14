@@ -443,6 +443,8 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         screen_height: 800,
         screen_avail_width: 1200,
         screen_avail_height: 800,
+
+        ..Default::default()
     }))
     .expect("iframe input viewport should update");
     vm.force_fresh_layout_reads_for_test();
@@ -612,6 +614,8 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     }))
     .expect("iframe input snapshot viewport should update");
     vm.eval(
@@ -688,6 +692,8 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     }))
     .expect("iframe wheel snapshot viewport should update");
     vm.eval(
@@ -773,6 +779,8 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     }))
     .expect("iframe focus viewport should update");
     vm.force_fresh_layout_reads_for_test();
@@ -885,6 +893,8 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     }))
     .expect("nested iframe viewport should update");
     vm.force_fresh_layout_reads_for_test();
@@ -1294,6 +1304,8 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+
+        ..Default::default()
     }))
     .expect("viewport overflow surface should update");
     vm.eval(
@@ -2030,6 +2042,8 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }))
     .expect("root scrollbar viewport surface should update");
     vm.eval(
@@ -2137,6 +2151,8 @@ fn closed_absolute_popover_does_not_expand_root_scrollable_overflow() {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }))
     .expect("popover overflow viewport surface should update");
     vm.eval(
@@ -2200,6 +2216,8 @@ fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }))
     .expect("root gutter viewport surface should update");
     vm.eval(

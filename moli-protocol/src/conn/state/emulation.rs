@@ -11,6 +11,9 @@ pub struct EmulatedDeviceMetrics {
     pub screen_width: u32,
     pub screen_height: u32,
     pub screen_avail_height: u32,
+    pub window_x: i32,
+    pub window_y: i32,
+    pub screen_orientation: moli_page_types::ScreenOrientation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,55 +31,7 @@ impl EmulatedNetworkConditions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EmulatedViewportSurface {
-    pub inner_width: u32,
-    pub inner_height: u32,
-    pub outer_width: u32,
-    pub outer_height: u32,
-    pub device_pixel_ratio: f64,
-    pub screen_width: u32,
-    pub screen_height: u32,
-    pub screen_avail_width: u32,
-    pub screen_avail_height: u32,
-}
-
-impl Default for EmulatedViewportSurface {
-    fn default() -> Self {
-        let profile = moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
-        Self {
-            inner_width: profile.inner_width as u32,
-            inner_height: profile.inner_height as u32,
-            outer_width: profile.inner_width as u32,
-            outer_height: profile.inner_height as u32,
-            device_pixel_ratio: profile.device_pixel_ratio,
-            screen_width: profile.screen_width as u32,
-            screen_height: profile.screen_height as u32,
-            screen_avail_width: profile.screen_avail_width as u32,
-            screen_avail_height: profile.screen_avail_height as u32,
-        }
-    }
-}
-
-impl EmulatedViewportSurface {
-    pub(crate) fn from_metrics(metrics: Option<&EmulatedDeviceMetrics>) -> Self {
-        metrics.map_or_else(Self::default, EmulatedDeviceMetrics::viewport_surface)
-    }
-
-    pub(crate) fn to_page_viewport_surface(&self) -> moli_core::page::ViewportSurface {
-        moli_core::page::ViewportSurface {
-            inner_width: self.inner_width,
-            inner_height: self.inner_height,
-            outer_width: self.outer_width,
-            outer_height: self.outer_height,
-            device_pixel_ratio: self.device_pixel_ratio,
-            screen_width: self.screen_width,
-            screen_height: self.screen_height,
-            screen_avail_width: self.screen_avail_width,
-            screen_avail_height: self.screen_avail_height,
-        }
-    }
-}
+pub(crate) type EmulatedViewportSurface = moli_page_types::ViewportSurface;
 
 impl EmulatedDeviceMetrics {
     pub(crate) fn screen_avail_height(&self) -> u32 {
@@ -102,6 +57,9 @@ impl EmulatedDeviceMetrics {
             screen_height: self.screen_height,
             screen_avail_width: self.screen_width,
             screen_avail_height: self.screen_avail_height(),
+            window_x: self.window_x,
+            window_y: self.window_y,
+            screen_orientation: self.screen_orientation,
         }
     }
 }
@@ -276,6 +234,10 @@ mod tests {
             screen_width: 800,
             screen_height: 600,
             screen_avail_height: 600,
+
+            window_x: 0,
+            window_y: 0,
+            screen_orientation: Default::default(),
         };
         assert_eq!(metrics.device_pixel_ratio(), 2.0);
 

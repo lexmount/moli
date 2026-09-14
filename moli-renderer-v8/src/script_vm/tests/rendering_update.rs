@@ -353,6 +353,8 @@ fn emulation_viewport(width: u32) -> crate::protocol_types::ViewportSurface {
         screen_height: 1080,
         screen_avail_width: 1920,
         screen_avail_height: 1040,
+
+        ..Default::default()
     }
 }
 
