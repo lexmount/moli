@@ -337,7 +337,6 @@ pub(super) fn svg_animated_string_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_STRING_BASE_VAL_SLOT,
         "SVGAnimatedString",
         &format!("{name} getter"),
     ) {
@@ -363,13 +362,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_ANIMATED_STRING_BASE_VAL_SLOT,
-        "SVGAnimatedString",
-        "baseVal setter",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGAnimatedString", "baseVal setter") {
         return;
     }
     let animated = args.this();
