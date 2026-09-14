@@ -151,7 +151,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
-    descriptor(web_api_interfaces::SVGFilterElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
+        web_api_interfaces::SVGFilterElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
     descriptor(
         web_api_interfaces::SVGDefsElement::DESCRIPTOR,
         ELEMENT_GROUPS,
@@ -321,13 +324,6 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         web_api_interfaces::SVGStyleElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
-    descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGMarkerElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGMetadataElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGScriptElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGStopElement::DESCRIPTOR, ELEMENT_GROUPS),
-    descriptor(web_api_interfaces::SVGStyleElement::DESCRIPTOR, ELEMENT_GROUPS),
     specialized_descriptor(
         web_api_interfaces::SVGPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
@@ -430,7 +426,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         web_api_interfaces::SVGUseElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
-    descriptor(web_api_interfaces::SVGViewElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
+        web_api_interfaces::SVGViewElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
     specialized_descriptor(
         web_api_interfaces::SVGRectElement::DESCRIPTOR,
         ELEMENT_GROUPS,
