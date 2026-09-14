@@ -636,6 +636,45 @@ pub(crate) fn utf16_replace_units_range_lossy(
     string_from_utf16_units_lossy(&next)
 }
 
+pub(crate) fn utf16_scalar_boundary_at_or_after(units: &[u16], offset: usize) -> usize {
+    let offset = offset.min(units.len());
+    if offset > 0
+        && offset < units.len()
+        && (0xD800..=0xDBFF).contains(&units[offset - 1])
+        && (0xDC00..=0xDFFF).contains(&units[offset])
+    {
+        offset + 1
+    } else {
+        offset
+    }
+}
+
+pub(crate) fn utf16_previous_scalar_boundary(units: &[u16], offset: usize) -> usize {
+    let mut previous = offset.min(units.len()).saturating_sub(1);
+    if previous > 0
+        && (0xDC00..=0xDFFF).contains(&units[previous])
+        && (0xD800..=0xDBFF).contains(&units[previous - 1])
+    {
+        previous -= 1;
+    }
+    previous
+}
+
+pub(crate) fn utf16_next_scalar_boundary(units: &[u16], offset: usize) -> usize {
+    let offset = offset.min(units.len());
+    if offset == units.len() {
+        return offset;
+    }
+    let mut next = offset + 1;
+    if next < units.len()
+        && (0xD800..=0xDBFF).contains(&units[offset])
+        && (0xDC00..=0xDFFF).contains(&units[next])
+    {
+        next += 1;
+    }
+    next
+}
+
 pub(crate) fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
     let mut index = 0;
     while index < units.len() {

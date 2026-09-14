@@ -21,7 +21,9 @@ use crate::{
     parser::HtmlParser,
     util::{
         call_object_method, get_private_value, node_wrapper_from_handle, set_private_value,
-        utf16_replace_units_range_lossy, utf16_units, v8_string, v8str,
+        utf16_next_scalar_boundary, utf16_previous_scalar_boundary,
+        utf16_replace_units_range_lossy, utf16_scalar_boundary_at_or_after, utf16_units, v8_string,
+        v8str,
     },
     webidl,
 };
@@ -954,19 +956,27 @@ fn exec_command_delete_text_control(
             }
         })
         .unwrap_or((value_len, value_len));
-    let (from, to, caret) = if start != end {
-        (start, end, start)
+    // Selection APIs expose code units, but native editing first resolves both
+    // endpoints to caret positions that cannot split a surrogate pair.
+    let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+    let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
+    let (from, to) = if start != end {
+        (start, end)
     } else if command == "forwarddelete" {
-        if start >= value_len {
-            return Some(true);
-        }
-        (start, start + 1, start)
+        (
+            start,
+            utf16_next_scalar_boundary(&value_units, start as usize) as u32,
+        )
     } else {
-        if start == 0 {
-            return Some(true);
-        }
-        (start - 1, start, start - 1)
+        (
+            utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
+            start,
+        )
     };
+    if from == to {
+        return Some(true);
+    }
+    let caret = from;
 
     let next_value = utf16_replace_units_range_lossy(
         &value_units,

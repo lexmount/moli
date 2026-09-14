@@ -40,7 +40,10 @@ use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererPointerEventProperties,
     RendererTouchPoint,
 };
-use crate::util::{node_wrapper_from_handle, utf16_len};
+use crate::util::{
+    node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
+    utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
+};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -2102,35 +2105,27 @@ impl ScriptVm {
                 return Ok(input_dispatch_outcome(true));
             }
 
-            if target.is_text_control && key_lower == "backspace" {
+            if target.is_text_control && matches!(key_lower.as_str(), "backspace" | "delete") {
+                let value_units = utf16_units(&text_control_value(runtime, handle));
                 let (start, end) = current_selection_range(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 let (from, to) = if start != end {
                     (start, end)
-                } else if start == 0 {
-                    return Ok(input_dispatch_outcome(true));
+                } else if key_lower == "backspace" {
+                    (
+                        utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
+                        start,
+                    )
                 } else {
-                    (start - 1, start)
+                    (
+                        start,
+                        utf16_next_scalar_boundary(&value_units, start as usize) as u32,
+                    )
                 };
-                let _ =
-                    text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
-                return Ok(input_dispatch_outcome(replace_text_control_selection(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "",
-                )));
-            }
-
-            if target.is_text_control && key_lower == "delete" {
-                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
-                let (start, end) = current_selection_range(runtime, handle);
-                let (from, to) = if start != end {
-                    (start, end)
-                } else if start >= value_len {
+                if from == to {
                     return Ok(input_dispatch_outcome(true));
-                } else {
-                    (start, start + 1)
-                };
+                }
                 let _ =
                     text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
                 return Ok(input_dispatch_outcome(replace_text_control_selection(
@@ -2180,8 +2175,11 @@ impl ScriptVm {
                     "arrowleft" | "left" | "arrowright" | "right" | "home" | "end"
                 )
             {
-                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
+                let value_units = utf16_units(&text_control_value(runtime, handle));
+                let value_len = value_units.len() as u32;
                 let (start, end, direction) = current_selection_state(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 if shift {
                     let (anchor, focus) = match direction.as_str() {
                         "backward" => (end, start),
@@ -2189,12 +2187,24 @@ impl ScriptVm {
                         _ => (end, end),
                     };
                     let next_focus = match key_lower.as_str() {
-                        "arrowleft" | "left" => focus.saturating_sub(1),
-                        "arrowright" | "right" => (focus + 1).min(value_len),
+                        "arrowleft" | "left" => {
+                            utf16_previous_scalar_boundary(&value_units, focus as usize) as u32
+                        }
+                        "arrowright" | "right" => {
+                            utf16_next_scalar_boundary(&value_units, focus as usize) as u32
+                        }
                         "home" => 0,
                         "end" => value_len,
                         _ => focus,
                     };
+                    if next_focus == focus
+                        && matches!(
+                            key_lower.as_str(),
+                            "arrowleft" | "left" | "arrowright" | "right"
+                        )
+                    {
+                        return Ok(input_dispatch_outcome(true));
+                    }
                     let (next_start, next_end, next_direction) = if next_focus < anchor {
                         (next_focus, anchor, "backward")
                     } else if next_focus > anchor {
@@ -2217,20 +2227,29 @@ impl ScriptVm {
                         if start != end {
                             start
                         } else {
-                            start.saturating_sub(1)
+                            utf16_previous_scalar_boundary(&value_units, start as usize) as u32
                         }
                     }
                     "arrowright" | "right" => {
                         if start != end {
                             end
                         } else {
-                            (end + 1).min(value_len)
+                            utf16_next_scalar_boundary(&value_units, end as usize) as u32
                         }
                     }
                     "home" => 0,
                     "end" => value_len,
                     _ => end,
                 };
+                if start == end
+                    && caret == start
+                    && matches!(
+                        key_lower.as_str(),
+                        "arrowleft" | "left" | "arrowright" | "right"
+                    )
+                {
+                    return Ok(input_dispatch_outcome(true));
+                }
                 let _ = text_control_set_selection_range_internal(
                     scope,
                     runtime_ptr,

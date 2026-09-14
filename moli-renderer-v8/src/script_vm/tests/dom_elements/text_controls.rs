@@ -1146,6 +1146,66 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
 }
 
 #[test]
+fn exec_command_text_control_deletion_preserves_surrogate_pairs() {
+    let mut vm = new_storage_test_vm("https://exec-command-surrogate-pairs.test/");
+
+    for tag in ["input", "textarea"] {
+        for (initial, command, start, end, value, caret) in [
+            ("A😀B", "delete", 3, 3, "AB", 1),
+            ("A😀B", "forwardDelete", 1, 1, "AB", 1),
+            ("A😀B", "delete", 2, 2, "AB", 1),
+            ("A😀B", "forwardDelete", 2, 2, "A😀", 3),
+            ("A😀B", "delete", 0, 0, "A😀B", 0),
+            ("A😀B", "forwardDelete", 4, 4, "A😀B", 4),
+            ("A😀B", "delete", 1, 2, "AB", 1),
+            ("A😀B", "forwardDelete", 1, 2, "AB", 1),
+            ("A😀B", "delete", 2, 3, "AB", 1),
+            ("A😀B", "forwardDelete", 2, 3, "A😀", 3),
+            ("A😀B", "delete", 1, 3, "AB", 1),
+            ("A😀B", "forwardDelete", 1, 3, "AB", 1),
+            ("A😀B", "delete", 0, 2, "B", 0),
+            ("A😀B", "forwardDelete", 0, 2, "B", 0),
+            ("A😀B", "delete", 2, 4, "A😀", 3),
+            ("A😀B", "forwardDelete", 2, 4, "A😀", 3),
+            ("", "delete", 0, 0, "", 0),
+            ("", "forwardDelete", 0, 0, "", 0),
+            ("😀", "delete", 1, 1, "", 0),
+            ("😀", "forwardDelete", 1, 1, "😀", 1),
+            ("A😀", "delete", 2, 2, "A", 1),
+            ("A😀", "forwardDelete", 2, 2, "A😀", 2),
+            ("😀😀", "delete", 3, 3, "😀", 2),
+            ("😀😀", "forwardDelete", 3, 3, "😀😀", 3),
+        ] {
+            let result = vm
+                .eval(&format!(
+                    r#"
+(() => {{
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const control = document.createElement('{tag}');
+  body.append(control);
+  control.value = '{initial}';
+  control.focus();
+  control.setSelectionRange({start}, {end});
+  const before = [control.selectionStart, control.selectionEnd];
+  const returned = document.execCommand('{command}');
+  const result = [...before, returned, control.value, control.selectionStart, control.selectionEnd];
+  control.remove();
+  return JSON.stringify(result);
+}})()
+"#
+                ))
+                .expect("execCommand deletion should evaluate");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([start, end, true, value, caret, caret]),
+                "{tag} {command} value={initial:?} with selection [{start}, {end}]"
+            );
+        }
+    }
+}
+
+#[test]
 fn exec_command_insert_html_enforces_maxlength_in_utf16_units() {
     let mut vm = new_storage_test_vm("https://exec-command-insert-html-maxlength.test/");
 
