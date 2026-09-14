@@ -783,13 +783,7 @@ pub(super) fn svg_marker_set_orient_to_angle_callback<'s>(
         );
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        angle,
-        SVG_ANGLE_UNIT_TYPE_SLOT,
-        "SVGAngle",
-        "setOrientToAngle argument",
-    ) {
+    if !require_svg_receiver(scope, angle, "SVGAngle", "setOrientToAngle argument") {
         return;
     }
     sync_svg_angle_from_owner_attribute(scope, angle);
@@ -880,7 +874,7 @@ fn require_svg_interface_receiver<'s>(
         }
         let Some(parent) =
             crate::context_bootstrap::bridge_descriptor::node_bridge_descriptor(interface_name)
-                .and_then(|descriptor| descriptor.parent_constructor)
+                .and_then(|descriptor| descriptor.interface.parent_name())
         else {
             break;
         };
@@ -1210,7 +1204,6 @@ pub(super) fn svg_animated_boolean_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
         "SVGAnimatedBoolean",
         &format!("{name} getter"),
     ) {
@@ -1245,7 +1238,6 @@ pub(super) fn svg_animated_boolean_setter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
         "SVGAnimatedBoolean",
         &format!("{name} setter"),
     ) || name != "baseVal"
@@ -1352,7 +1344,6 @@ pub(super) fn svg_animated_angle_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_ANGLE_BASE_VAL_SLOT,
         "SVGAnimatedAngle",
         &format!("{name} getter"),
     ) {
@@ -1388,7 +1379,6 @@ pub(super) fn svg_animated_rect_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_RECT_BASE_VAL_SLOT,
         "SVGAnimatedRect",
         &format!("{name} getter"),
     ) {
@@ -1424,7 +1414,6 @@ pub(super) fn svg_animated_preserve_aspect_ratio_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT,
         "SVGAnimatedPreserveAspectRatio",
         &format!("{name} getter"),
     ) {
@@ -1461,7 +1450,6 @@ pub(super) fn svg_preserve_aspect_ratio_getter<'s>(
     if !require_svg_receiver(
         scope,
         aspect_ratio,
-        SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
         "SVGPreserveAspectRatio",
         &format!("{name} getter"),
     ) {
@@ -1503,7 +1491,6 @@ pub(super) fn svg_preserve_aspect_ratio_setter<'s>(
     if !require_svg_receiver(
         scope,
         aspect_ratio,
-        SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
         "SVGPreserveAspectRatio",
         &format!("{name} setter"),
     ) {
@@ -1652,13 +1639,7 @@ pub(super) fn svg_angle_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_ANGLE_UNIT_TYPE_SLOT,
-        "SVGAngle",
-        &format!("{name} getter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGAngle", &format!("{name} getter")) {
         return;
     }
     sync_svg_angle_from_owner_attribute(scope, args.this());
@@ -1700,13 +1681,7 @@ pub(super) fn svg_angle_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_ANGLE_UNIT_TYPE_SLOT,
-        "SVGAngle",
-        &format!("{name} setter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGAngle", &format!("{name} setter")) {
         return;
     }
     if svg_angle_is_read_only(scope, args.this()) {
@@ -1917,7 +1892,6 @@ pub(super) fn svg_animated_integer_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
         "SVGAnimatedInteger",
         &format!("{name} getter"),
     ) {
@@ -2116,7 +2090,6 @@ pub(super) fn svg_animated_integer_setter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
         "SVGAnimatedInteger",
         &format!("{name} setter"),
     ) || name != "baseVal"
@@ -3790,13 +3763,7 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_LENGTH_UNIT_TYPE_SLOT,
-        "SVGLength",
-        "newValueSpecifiedUnits",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGLength", "newValueSpecifiedUnits") {
         return;
     }
     let Some(parsed) = webidl::parse_args::<SvgLengthNewValueSpecifiedUnitsArgs>(scope, &args)
@@ -3823,13 +3790,7 @@ pub(super) fn svg_angle_new_value_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_ANGLE_UNIT_TYPE_SLOT,
-        "SVGAngle",
-        "newValueSpecifiedUnits",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGAngle", "newValueSpecifiedUnits") {
         return;
     }
     if svg_angle_is_read_only(scope, args.this()) {
@@ -3863,13 +3824,7 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_LENGTH_UNIT_TYPE_SLOT,
-        "SVGLength",
-        "convertToSpecifiedUnits",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGLength", "convertToSpecifiedUnits") {
         return;
     }
     let Some(parsed) = webidl::parse_args::<SvgLengthConvertToSpecifiedUnitsArgs>(scope, &args)
@@ -3908,13 +3863,7 @@ pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_ANGLE_UNIT_TYPE_SLOT,
-        "SVGAngle",
-        "convertToSpecifiedUnits",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGAngle", "convertToSpecifiedUnits") {
         return;
     }
     if svg_angle_is_read_only(scope, args.this()) {

@@ -110,7 +110,10 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     return Some(true);
                 }
             }
-            Some("DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad" | "DOMMatrix" | "DOMMatrixReadOnly") => {
+            Some(
+                "DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad"
+                | "DOMMatrix" | "DOMMatrixReadOnly",
+            ) => {
                 if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
                     write_geometry_clone_payload(serializer, payload);
                     return Some(true);
