@@ -3,8 +3,9 @@ use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
         EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
-        set_event_default_prevented, set_event_internal_flag,
+        set_event_internal_flag,
     },
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
     util::context_host_ptr_from_global_bridge,
@@ -98,7 +99,12 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
             );
             dispatched |= outcome.invoked;
             if let Some(returned) = outcome.value {
-                apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+                apply_event_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    EventHandlerType::EventHandler,
+                );
             }
         }
     }
@@ -137,7 +143,12 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                 if listener.handler_slot.is_some()
                     && let Some(returned) = outcome.value
                 {
-                    apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+                    apply_event_handler_return_value(
+                        scope,
+                        event,
+                        v8::Local::new(scope, &returned),
+                        EventHandlerType::EventHandler,
+                    );
                 }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 if event_stop_immediate_propagation(scope, event) {
@@ -325,18 +336,5 @@ fn invoke_simple_event_callback_with_invocation<'s>(
             invoked: false,
             value: None,
         },
-    }
-}
-
-fn apply_handler_return_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    returned: v8::Local<'s, v8::Value>,
-) {
-    if returned.is_false()
-        && object_bool_property(scope, event, "cancelable").unwrap_or(false)
-        && !event_internal_bool_flag(scope, event, EVENT_PASSIVE_SLOT)
-    {
-        set_event_default_prevented(scope, event);
     }
 }
