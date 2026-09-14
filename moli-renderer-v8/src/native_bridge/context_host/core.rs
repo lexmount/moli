@@ -1665,6 +1665,10 @@ impl JsContextHost {
         true
     }
 
+    pub(crate) fn is_constructing_form_data_for(&self, form_handle: DomHandle) -> bool {
+        self.constructing_form_data_forms.contains(&form_handle)
+    }
+
     pub(crate) fn end_form_data_construction(&mut self, form_handle: DomHandle) {
         if let Some(index) = self
             .constructing_form_data_forms
