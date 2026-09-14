@@ -1221,6 +1221,7 @@ fn parser_style_csp_checks_complete_contents_once() {
             ("<style id='sheet'>p {color:blue;}</style>", "style-src 'none'", true, 1, true),
             ("<style id='sheet'>p {color:blue;}</style>", "style-src 'sha256-rB6kiow2O3eFUeTNyyLeK3wV0+l7vNB90J1aqllKvjg='", false, 0, true),
             ("<style id='sheet'></style>", "style-src 'none'", false, 1, false),
+            ("<style id='sheet'>p {color:blue;}", "style-src 'none'", false, 1, false),
             ("<script>document.write(\"<style id='sheet'>p {color:blue;}</style>\")</script>", "style-src 'none'", false, 1, false),
             ("<script>const s = document.createElement('style'); s.id = 'sheet'; document.head.append(s); s.textContent = 'p {color:blue;}';</script>", "style-src 'none'", false, 2, false),
         ] {
@@ -1233,7 +1234,7 @@ fn parser_style_csp_checks_complete_contents_once() {
                 *policies = vec![policy.to_owned()];
             });
             let html = Box::leak(format!("<!doctype html><html><head><script>globalThis.__parserStyleViolations = 0; document.addEventListener('securitypolicyviolation', () => __parserStyleViolations++);</script>{markup}").into_boxed_str());
-            let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env(html, env).await;
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, true).await;
             let result = page_vm.evaluate_expression("Boolean(document.getElementById('sheet').sheet)").expect("stylesheet probe");
             assert_eq!(result.get("value").and_then(serde_json::Value::as_bool), Some(expected_sheet), "{markup}, {policy}, report-only={report_only}");
 
