@@ -454,16 +454,16 @@ impl JsContextHost {
                         .clear_content_security_policy_for_bypass();
                 }
                 let ancestor_origins = self.child_document_frame_ancestor_origins(handle);
-                let (report_only_violation, enforced_violation) = loaded
+                let (report_only_violations, enforced_violations) = loaded
                     .policy_container
                     .navigation_response_frame_ancestors_check(
                         &loaded.final_url,
                         DocumentNavigationEmbeddingContext::Nested(&ancestor_origins),
                     )
                     .into_violations();
-                for violation in report_only_violation
+                for violation in report_only_violations
                     .iter()
-                    .chain(enforced_violation.iter())
+                    .chain(enforced_violations.iter())
                 {
                     // The protected response never receives a Document when enforcement blocks
                     // it, so there is no target on which to dispatch a DOM event. Keep the
@@ -481,7 +481,7 @@ impl JsContextHost {
                         &violation.report_to_endpoints,
                     );
                 }
-                if let Some(violation) = enforced_violation {
+                if let Some(violation) = enforced_violations.into_iter().next() {
                     Err(format!(
                         "child document response blocked by Content Security Policy `{}` for `{}`",
                         violation.effective_directive, violation.blocked_uri
