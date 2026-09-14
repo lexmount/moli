@@ -1,6 +1,5 @@
 use super::super::headers::HeadersGuard;
 use super::*;
-use crate::web_api_interfaces;
 use crate::webidl;
 
 pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, &'static str> {

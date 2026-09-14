@@ -430,13 +430,12 @@ pub(crate) use self::stream_adapter::{
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-    body_stream_reader_operations,
-    build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-    build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
-    initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
-    new_readable_stream_from_array_buffer, new_readable_stream_from_source,
-    prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer,
+    body_stream_reader_operations, build_readable_stream_clone_shell,
+    build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+    initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
+    initialize_writable_stream_clone_shell, new_readable_stream_from_array_buffer,
+    new_readable_stream_from_source, prepare_readable_stream_transfer,
+    prepare_transform_stream_transfer, prepare_writable_stream_transfer,
 };
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
