@@ -5022,6 +5022,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   'cookieStore',\
                   'credentialless',\
                   'crossOriginIsolated',\
+                  'globalThis',\
                   'documentPictureInPicture',\
                   'fetch',\
                   'isSecureContext',\
@@ -5142,8 +5143,29 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                 const ownNames = Object.getOwnPropertyNames(win).sort();\
                 const ownKeys = Reflect.ownKeys(win).map(String).sort();\
                 const locationOwnNames = Object.getOwnPropertyNames(win.location).sort();\
-                const selfDescriptor = Object.getOwnPropertyDescriptor(win, 'self');\
-                const lengthDescriptor = Object.getOwnPropertyDescriptor(win, 'length');\
+                const accessorDescriptors = [\
+                  'window',\
+                  'self',\
+                  'location',\
+                  'closed',\
+                  'frames',\
+                  'length',\
+                  'top',\
+                  'opener',\
+                  'parent'\
+                ].map((name) => {\
+                  const descriptor = Object.getOwnPropertyDescriptor(win, name);\
+                  const cachedDescriptor = Object.getOwnPropertyDescriptor(win, name);\
+                  return [\
+                    name,\
+                    descriptor?.enumerable,\
+                    descriptor?.configurable,\
+                    [typeof descriptor?.get, descriptor?.get?.name ?? null, descriptor?.get?.length ?? null],\
+                    [typeof descriptor?.set, descriptor?.set?.name ?? null, descriptor?.set?.length ?? null],\
+                    descriptor?.get === cachedDescriptor?.get,\
+                    descriptor?.set === cachedDescriptor?.set\
+                  ];\
+                });\
                 const locationDescriptor = Object.getOwnPropertyDescriptor(win, 'location');\
                 const locationHrefDescriptor = Object.getOwnPropertyDescriptor(win.location, 'href');\
                 const locationHashDescriptor = Object.getOwnPropertyDescriptor(win.location, 'hash');\
@@ -5226,24 +5248,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   ownNamesLeakInternal: ownNames.some((name) => name.startsWith('__moli')),\
                   ownKeysLeakInternal: ownKeys.some((name) => name.startsWith('__moli')),\
                   locationOwnNamesLeakInternal: locationOwnNames.some((name) => name.startsWith('__moli')),\
-                  selfDescriptor: {\
-                    enumerable: selfDescriptor?.enumerable,\
-                    configurable: selfDescriptor?.configurable,\
-                    writable: selfDescriptor?.writable,\
-                    valueIsSelf: selfDescriptor?.value === win\
-                  },\
-                  lengthDescriptor: {\
-                    enumerable: lengthDescriptor?.enumerable,\
-                    configurable: lengthDescriptor?.configurable,\
-                    getterType: typeof lengthDescriptor?.get,\
-                    setterType: typeof lengthDescriptor?.set\
-                  },\
-                  locationDescriptor: {\
-                    enumerable: locationDescriptor?.enumerable,\
-                    configurable: locationDescriptor?.configurable,\
-                    getterType: typeof locationDescriptor?.get,\
-                    setterType: typeof locationDescriptor?.set\
-                  },\
+                  accessorDescriptors,\
                   locationHrefDescriptor: {\
                     enumerable: locationHrefDescriptor?.enumerable,\
                     configurable: locationHrefDescriptor?.configurable,\
@@ -5300,7 +5305,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
     assert_eq!(
         result,
         Some(
-            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:true:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:true:true","replace:true:true","__moliChildBrowsingContextHandle:false:false","unknownCrossOriginProbe:false:false"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"selfDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueIsSelf":true},"lengthDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationHrefDescriptor":{"enumerable":false,"configurable":false,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"postMessageDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:false:false:function:blur:0","focus:false:false:false:function:focus:0","close:false:false:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:SecurityError:true","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"SecurityError:true"}"#.to_owned(),
+            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:true:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:true:true","replace:true:true","__moliChildBrowsingContextHandle:false:false","unknownCrossOriginProbe:false:false"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"accessorDescriptors":[["window",false,true,["function","get window",0],["undefined",null,null],true,true],["self",false,true,["function","get self",0],["undefined",null,null],true,true],["location",false,true,["function","get location",0],["function","set location",1],true,true],["closed",false,true,["function","get closed",0],["undefined",null,null],true,true],["frames",false,true,["function","get frames",0],["undefined",null,null],true,true],["length",false,true,["function","get length",0],["undefined",null,null],true,true],["top",false,true,["function","get top",0],["undefined",null,null],true,true],["opener",false,true,["function","get opener",0],["undefined",null,null],true,true],["parent",false,true,["function","get parent",0],["undefined",null,null],true,true]],"locationHrefDescriptor":{"enumerable":false,"configurable":false,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"postMessageDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:false:false:function:blur:0","focus:false:false:false:function:focus:0","close:false:false:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:SecurityError:true","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","globalThis:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"SecurityError:true"}"#.to_owned(),
         ),
         "{}",
         page.serialize_html_async().await.unwrap()
