@@ -13,7 +13,7 @@ use crate::{
         FrameRequestKind,
     },
     module_runtime::{
-        ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleKind, NativeModuleGraphFetchRequest,
+        ModuleFetchMetadata, ModuleGraphFetchedSource, ModuleMapKey, NativeModuleGraphFetchRequest,
         NativeModuleSingleFetchRequest,
     },
     page_task_queue::RendererPageChildParserModuleRootStartTarget,
@@ -920,7 +920,8 @@ impl PageScriptHost {
         ) {
             return;
         }
-        let request = child_parser_module_root_fetch_request(&fetch_start.script);
+        let request =
+            child_parser_module_root_fetch_request(&fetch_start.script, fetch_start.start.key());
         let csp_context = self.module_fetch_csp_context_for_owner(
             crate::native_bridge::context_host::OwnerDispatchScope::Child(target.child_handle()),
             request.source_url(),
@@ -1053,11 +1054,12 @@ impl PageScriptHost {
 
 fn child_parser_module_root_fetch_request(
     script: &PreparedScript,
+    key: &ModuleMapKey,
 ) -> NativeModuleGraphFetchRequest {
     NativeModuleGraphFetchRequest::new(
-        script.url.clone(),
+        key.url().clone(),
         script.initiator_url.clone(),
         ModuleFetchMetadata::from_top_level_script_fetch_metadata(&script.fetch_metadata),
-        ModuleKind::JavaScript,
+        key.kind(),
     )
 }

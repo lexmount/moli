@@ -1,7 +1,7 @@
 use super::{OwnerDispatchScope, PageScriptHost};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::{
-    module_runtime::{ModuleAttributesKey, PendingDynamicModuleImport, WasmModuleRecord},
+    module_runtime::PendingDynamicModuleImport,
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
