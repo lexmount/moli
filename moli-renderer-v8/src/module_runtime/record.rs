@@ -21,6 +21,7 @@ pub(crate) struct ModuleRecordEntry {
     wasm_module: Option<WasmModuleRecord>,
     // Own the evaluation data; the Context's lookup only keeps a weak reference.
     synthetic_text_module_source: Option<Rc<super::SyntheticTextModuleSource>>,
+    evaluation: OnceCell<Rc<super::ModuleEvaluationRecord>>,
     state: ModuleRecordState,
 }
 
@@ -36,6 +37,7 @@ impl ModuleRecordEntry {
             requests,
             wasm_module: None,
             synthetic_text_module_source: None,
+            evaluation: OnceCell::new(),
             state: ModuleRecordState::Compiled,
         }
     }
@@ -52,6 +54,7 @@ impl ModuleRecordEntry {
             requests,
             wasm_module: Some(wasm_module),
             synthetic_text_module_source: None,
+            evaluation: OnceCell::new(),
             state: ModuleRecordState::Compiled,
         }
     }
@@ -70,6 +73,22 @@ impl ModuleRecordEntry {
 
     pub(crate) fn compiled_module(&self) -> &v8::Global<v8::Module> {
         &self.compiled_module
+    }
+
+    pub(super) fn register_evaluation(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        dependencies: Vec<(ModuleRequestRecord, v8::Global<v8::Module>)>,
+    ) {
+        self.evaluation.get_or_init(|| {
+            let module = v8::Local::new(scope, &self.compiled_module);
+            super::ModuleEvaluationRecord::register(
+                scope,
+                module,
+                self.wasm_module.clone(),
+                dependencies,
+            )
+        });
     }
 
     pub(crate) fn requests(&self) -> &[ModuleRequestRecord] {

@@ -2,7 +2,7 @@ use super::{JsContextHost, OwnerDispatchScope};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::types::DedicatedWorkerId;
 use crate::{
-    module_runtime::{ModuleAttributesKey, PendingDynamicModuleImport, WasmModuleRecord},
+    module_runtime::PendingDynamicModuleImport,
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
@@ -83,14 +83,6 @@ impl JsContextHost {
         unsafe { &mut *self.runtime }.resolve_module_specifier(specifier, base_url)
     }
 
-    pub(crate) fn native_module_wasm_record_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<WasmModuleRecord> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_module_wasm_record_for(module)
-    }
-
     pub(crate) fn native_wasm_instance_for_namespace<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -98,24 +90,6 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Object>> {
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.runtime }.native_wasm_instance_for_namespace(scope, namespace)
-    }
-
-    pub(crate) fn native_resolved_dependency_module_for(
-        &self,
-        referrer: v8::Local<'_, v8::Module>,
-        specifier: &str,
-        attributes: &ModuleAttributesKey,
-    ) -> Option<v8::Global<v8::Module>> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }
-            .native_resolved_dependency_module_for(referrer, specifier, attributes)
-    }
-
-    pub(crate) fn native_document_modulator_ptr(
-        &self,
-    ) -> *const crate::module_runtime::NativeDocumentModulator {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_document_modulator_ptr()
     }
 
     pub(crate) fn queue_native_dynamic_module_import(
