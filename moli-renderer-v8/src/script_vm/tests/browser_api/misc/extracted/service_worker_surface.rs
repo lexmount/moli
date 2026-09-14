@@ -2852,3 +2852,32 @@ async fn service_worker_register_csp_blocks_before_fetch_or_registration() {
         );
     }
 }
+
+#[test]
+fn service_worker_register_rejects_invalid_dictionary_arguments() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://service-worker-arguments.test/");
+    vm.eval(
+        r#"
+        const container = navigator.serviceWorker;
+        globalThis.invalidRegistrationOptions = "pending";
+        let lookup;
+        try {
+            lookup = container.register("worker.js", {type: null});
+        } catch (error) {
+            invalidRegistrationOptions = "throw:" + error.name;
+        }
+        if (lookup) {
+            lookup.then(
+                () => invalidRegistrationOptions = "resolved",
+                error => invalidRegistrationOptions = error.name
+            );
+        }
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("invalidRegistrationOptions")
+            .unwrap(),
+        "TypeError"
+    );
+}

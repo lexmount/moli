@@ -275,31 +275,27 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
-        );
-        return;
-    }
-    // Convert the union argument before the options dictionary. The Trusted
-    // Types sink algorithm runs only after all WebIDL argument conversion.
-    let script_argument = args.get(0);
-    let script_argument = match v8::Local::<v8::Object>::try_from(script_argument) {
-        Ok(object) if web_api_interfaces::TrustedScriptURL::is_instance(scope, object) => {
-            script_argument
-        }
-        _ => {
-            let Some(script) = script_argument.to_string(scope) else {
+    let parsed = {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        convert_service_worker_registration_arguments(&mut scope, &args).ok_or_else(|| {
+            scope
+                .exception()
+                .unwrap_or_else(|| v8::undefined(&scope).into())
+        })
+    };
+    let (script_argument, options) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let Some(resolver) = v8::PromiseResolver::new(scope) else {
                 return;
             };
-            script.into()
+            rv.set(resolver.get_promise(scope).into());
+            let _ = resolver.reject(scope, error);
+            return;
         }
     };
-    let Some(options) = service_worker_registration_options(scope, &args) else {
-        return;
-    };
-    // The container owns registration promises and rejection values, including
+    // The container owns the registration operation's promise and errors, including
     // calls through a register method borrowed from another Window.
     let Some(context) = args.this().get_creation_context(scope) else {
         return;
@@ -1967,6 +1963,30 @@ fn reject_service_worker_navigation_preload_state_error(
             );
         }
     }
+}
+
+fn convert_service_worker_registration_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<(v8::Local<'s, v8::Value>, ServiceWorkerRegistrationOptions)> {
+    if args.length() == 0 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'register' on 'ServiceWorkerContainer': 1 argument required, but only 0 present.",
+        );
+        return None;
+    }
+    // Convert the union argument before the options dictionary. The Trusted
+    // Types sink algorithm runs only after all WebIDL argument conversion.
+    let script_argument = args.get(0);
+    let script_argument = match v8::Local::<v8::Object>::try_from(script_argument) {
+        Ok(object) if web_api_interfaces::TrustedScriptURL::is_instance(scope, object) => {
+            script_argument
+        }
+        _ => script_argument.to_string(scope)?.into(),
+    };
+    let options = service_worker_registration_options(scope, args)?;
+    Some((script_argument, options))
 }
 
 fn service_worker_registration_options<'s>(
