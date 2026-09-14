@@ -1180,6 +1180,16 @@ impl JsContextHost {
         owner: DomHandle,
         request_url: &url::Url,
     ) -> bool {
+        // A URL-only parsed source has no proof for this link's integrity.
+        // Admission through the stylesheet fetch cache can reuse only a terminal
+        // validated with the same request options, including integrity metadata.
+        if self
+            .dom_host()
+            .get_attribute(owner, "integrity")
+            .is_some_and(|metadata| !metadata.is_empty())
+        {
+            return false;
+        }
         let dom_host = self.dom_host() as *const _;
         let Some(source) = self.style_engine.cached_linked_stylesheet_source_with_host(
             unsafe { &*dom_host },
