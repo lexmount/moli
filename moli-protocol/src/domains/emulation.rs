@@ -920,13 +920,6 @@ fn start_device_metrics_override_command(
             ));
         }
     };
-    if conn.browser_context.is_none()
-        && conn
-            .target_owner_identity_for_session(cmd.session_id)
-            .is_none()
-    {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
-    }
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let previous = conn.target_session_owner_emulated_device_metrics_for_owner(&owner);
     let mut base = conn
@@ -954,6 +947,13 @@ fn start_device_metrics_override_command(
             ));
         }
     };
+    if conn.browser_context.is_none()
+        && conn
+            .target_owner_identity_for_session(cmd.session_id)
+            .is_none()
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
+    }
     match start_apply_device_metrics(conn, cmd.id, metrics, owner) {
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(pending),
         Ok(None) => EmulationCommandTaskStep::Complete(CommandOutputPlan::success()),

@@ -1,10 +1,11 @@
+use super::params::{ScrollbarType, SetDeviceMetricsOverrideParams, ViewportMeta};
 use crate::conn::EmulatedDeviceMetrics;
 
 /// CDP zero dimensions remove the layout override for that axis. The actual
 /// visible widget is resized only when both axes are supplied; it can differ
 /// from the previous emulated layout after a single-axis command.
 pub(super) fn metrics_from_cdp(
-    params: super::params::SetDeviceMetricsOverrideParams,
+    params: SetDeviceMetricsOverrideParams,
     previous: Option<&EmulatedDeviceMetrics>,
     base: &crate::conn::EmulatedViewportSurface,
 ) -> Result<EmulatedDeviceMetrics, crate::devtools_runtime::DevToolsError> {
@@ -31,7 +32,6 @@ pub(super) fn metrics_from_cdp(
     }
     let (window_x, window_y) = match (params.position_x, params.position_y) {
         (Some(x), Some(y)) => (x as i32, y as i32),
-        _ if params.mobile => (0, 0),
         _ => (base.window_x, base.window_y),
     };
     let screen_orientation = if let Some(orientation) = params.screen_orientation {
@@ -60,6 +60,33 @@ pub(super) fn metrics_from_cdp(
         || scale > 10.0
     {
         return Err(invalid());
+    }
+    // Mobile emulation also needs viewport-meta processing, autosizing and
+    // overlay scrollbars. Reject it instead of publishing only its geometry.
+    // Default/disabled options below retain the native desktop behavior.
+    for (unsupported, setting) in [
+        (params.mobile, "mobile=true"),
+        (params.display_feature.is_some(), "displayFeature"),
+        (params.device_posture.is_some(), "devicePosture"),
+        (
+            matches!(params.scrollbar_type, Some(ScrollbarType::Overlay)),
+            "scrollbarType=overlay",
+        ),
+        (
+            params.screen_orientation_lock_emulation == Some(true),
+            "screenOrientationLockEmulation=true",
+        ),
+        (
+            matches!(params.viewport_meta, Some(ViewportMeta::Enable)),
+            "viewportMeta=enable",
+        ),
+    ] {
+        if unsupported {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::Unsupported,
+                format!("Emulation.setDeviceMetricsOverride does not support {setting}."),
+            ));
+        }
     }
     let device_scale_factor = if params.device_scale_factor == 0.0 {
         base.device_pixel_ratio
@@ -115,8 +142,6 @@ pub(super) fn metrics_from_cdp(
     };
     let (screen_width, screen_height) = if screen_width != 0 && screen_height != 0 {
         (screen_width, screen_height)
-    } else if params.mobile {
-        (width, height)
     } else {
         (base.screen_width, base.screen_height)
     };
@@ -130,16 +155,8 @@ pub(super) fn metrics_from_cdp(
             native_device_pixel_ratio: base.device_pixel_ratio,
             viewport,
         }),
-        outer_width: if params.mobile {
-            width
-        } else {
-            base.outer_width
-        },
-        outer_height: if params.mobile {
-            height
-        } else {
-            base.outer_height
-        },
+        outer_width: base.outer_width,
+        outer_height: base.outer_height,
         device_scale_factor,
         screen_width,
         screen_height,

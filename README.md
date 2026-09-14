@@ -361,6 +361,12 @@ Its current intentional boundaries include:
   at or below 1 disable throttling; non-positive latency and throughput values
   disable network throttling. Unsupported combinations are rejected before
   changing offline state.
+- Device metrics support desktop geometry and capture transforms. `mobile:true`
+  returns an unsupported error; mobile viewport-meta processing, text autosizing
+  and overlay scrollbars are not implemented. Display features, device posture,
+  forced overlay scrollbars, orientation-lock emulation and explicit viewport-meta
+  processing are also rejected before changing existing metrics. Default scrollbar
+  and viewport-meta settings, and disabling orientation-lock emulation, are accepted.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 

@@ -27,6 +27,127 @@ async fn set_metrics(ctx: &mut TestContext, extra: serde_json::Value) {
     .await;
 }
 
+fn unsupported_modes() -> [(&'static str, serde_json::Value); 7] {
+    [
+        ("mobile=true", json!({"mobile": true})),
+        (
+            "displayFeature",
+            json!({"displayFeature": {
+                "orientation": "vertical", "offset": 200, "maskLength": 0
+            }}),
+        ),
+        (
+            "devicePosture",
+            json!({"devicePosture": {"type": "folded"}}),
+        ),
+        (
+            "devicePosture",
+            json!({"devicePosture": {"type": "continuous"}}),
+        ),
+        ("scrollbarType=overlay", json!({"scrollbarType": "overlay"})),
+        (
+            "screenOrientationLockEmulation=true",
+            json!({"screenOrientationLockEmulation": true}),
+        ),
+        ("viewportMeta=enable", json!({"viewportMeta": "enable"})),
+    ]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_metrics_unsupported_modes_preserve_live_and_saved_state() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    set_metrics(&mut ctx, json!({})).await;
+    let snapshot = "[innerWidth, innerHeight, devicePixelRatio, screenX, screenY, screen.orientation.type, screen.orientation.angle]";
+    let before = evaluate(&mut ctx, snapshot).await;
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
+    let saved = ctx
+        .conn
+        .target_session_owner_emulated_device_metrics_for_owner(&owner);
+
+    for (setting, extra) in unsupported_modes() {
+        let mut params = metrics(extra);
+        params["width"] = json!(390);
+        params["height"] = json!(844);
+        params["deviceScaleFactor"] = json!(3);
+        params["screenOrientation"] = json!({"type": "portraitPrimary", "angle": 90});
+        ctx.process_async(json!({
+            "id": 88410, "sessionId": "SID-1",
+            "method": "Emulation.setDeviceMetricsOverride", "params": params
+        }))
+        .await;
+        ctx.expect_error(
+            88410,
+            -32000,
+            &format!("Emulation.setDeviceMetricsOverride does not support {setting}."),
+        );
+        assert_eq!(
+            ctx.conn
+                .target_session_owner_emulated_device_metrics_for_owner(&owner),
+            saved
+        );
+        assert_eq!(evaluate(&mut ctx, snapshot).await, before, "{setting}");
+    }
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<meta name=viewport content='width=device-width'><body>next",
+        Some("SID-1"),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, snapshot).await,
+        before,
+        "rejected settings must not become the next document's bootstrap state"
+    );
+
+    set_metrics(
+        &mut ctx,
+        json!({
+            "width": 300, "height": 250, "scrollbarType": "default",
+            "screenOrientationLockEmulation": false, "viewportMeta": "default",
+            "unknownClientExtension": {"value": 1}
+        }),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "[innerWidth, innerHeight]").await,
+        json!([300, 250])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_metrics_validate_known_options_even_without_a_target() {
+    let mut ctx = TestContext::new();
+    assert!(ctx.conn.browser_context.is_none());
+    for (setting, extra) in unsupported_modes() {
+        ctx.process_async(json!({
+            "id": 88411, "method": "Emulation.setDeviceMetricsOverride", "params": metrics(extra)
+        }))
+        .await;
+        ctx.expect_error(
+            88411,
+            -32000,
+            &format!("Emulation.setDeviceMetricsOverride does not support {setting}."),
+        );
+    }
+    for invalid in [
+        json!({"mobile": "true"}),
+        json!({"displayFeature": {"orientation": "vertical", "offset": 200}}),
+        json!({"displayFeature": {"orientation": "diagonal", "offset": 200, "maskLength": 0}}),
+        json!({"devicePosture": {"type": "unknown"}}),
+        json!({"scrollbarType": "unknown"}),
+        json!({"screenOrientationLockEmulation": "true"}),
+        json!({"viewportMeta": "unknown"}),
+        json!({"width": -1}),
+    ] {
+        ctx.process_async(json!({
+            "id": 88412, "method": "Emulation.setDeviceMetricsOverride", "params": metrics(invalid)
+        }))
+        .await;
+        ctx.expect_error(88412, -32602, "InvalidParams");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn screen_orientation_and_position_update_held_objects_and_clear() {
     let mut ctx = TestContext::new();

@@ -269,7 +269,7 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_hot_apply_window_surf
         &mut ctx,
         &attached.session_id,
         117_107,
-        "JSON.stringify({innerWidth, innerHeight, devicePixelRatio})",
+        "JSON.stringify({innerWidth, innerHeight, outerWidth, outerHeight, devicePixelRatio})",
     )
     .await;
     let original_payload: Value = serde_json::from_str(
@@ -287,7 +287,7 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_hot_apply_window_surf
             "width": 375,
             "height": 667,
             "deviceScaleFactor": 2,
-            "mobile": true,
+            "mobile": false,
             "screenWidth": 400,
             "screenHeight": 700
         }
@@ -318,8 +318,8 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_hot_apply_window_surf
     .expect("viewport payload json");
     assert_eq!(payload["innerWidth"], 375);
     assert_eq!(payload["innerHeight"], 667);
-    assert_eq!(payload["outerWidth"], 375);
-    assert_eq!(payload["outerHeight"], 667);
+    assert_eq!(payload["outerWidth"], original_payload["outerWidth"]);
+    assert_eq!(payload["outerHeight"], original_payload["outerHeight"]);
     assert_eq!(payload["devicePixelRatio"], 2);
     assert_eq!(payload["screenWidth"], 400);
     assert_eq!(payload["screenHeight"], 700);
@@ -335,7 +335,7 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_hot_apply_window_surf
         &mut ctx,
         &attached.session_id,
         117_111,
-        "JSON.stringify({innerWidth, innerHeight, devicePixelRatio})",
+        "JSON.stringify({innerWidth, innerHeight, outerWidth, outerHeight, devicePixelRatio})",
     )
     .await;
     let cleared_payload: Value = serde_json::from_str(
