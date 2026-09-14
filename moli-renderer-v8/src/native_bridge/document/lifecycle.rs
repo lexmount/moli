@@ -20,8 +20,9 @@ use crate::{
     parser::HtmlParser,
     util::{
         call_object_method, get_private_value, node_wrapper_from_handle, set_private_value,
-        utf16_next_scalar_boundary, utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
-        utf16_scalar_boundary_at_or_after, utf16_units, v8_string, v8str,
+        utf16_next_scalar_boundary, utf16_previous_scalar_boundary,
+        utf16_replace_units_range_lossy, utf16_scalar_boundary_at_or_after, utf16_units, v8_string,
+        v8str,
     },
     webidl,
 };
