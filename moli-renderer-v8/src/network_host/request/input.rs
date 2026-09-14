@@ -1,6 +1,5 @@
 use super::super::headers::HeadersGuard;
 use super::*;
-use crate::web_api_interfaces;
 use crate::webidl;
 use moli_url::WebOrigin;
 use url::Url;
