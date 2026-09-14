@@ -189,3 +189,101 @@ if (parentGetLoaded.call(face) !== face.loaded) realmFailures.push('cross-realm 
         "[2,[]]"
     );
 }
+
+#[test]
+fn webidl_receiver_service_worker_operations_reject_before_argument_conversion() {
+    let mut vm = new_storage_test_vm("https://service-worker-receiver.test/");
+    vm.eval(
+        r#"
+(() => {
+  const sw = navigator.serviceWorker;
+  const register = sw.register;
+  const getRegistration = sw.getRegistration;
+  const getRegistrations = sw.getRegistrations;
+  globalThis.serviceWorkerReceiverFailures = [];
+  globalThis.serviceWorkerReceiverRejections = 0;
+  let conversions = 0;
+  const script = {toString() { conversions++; return 'https://['; }};
+  const options = {get scope() { conversions++; return './'; }};
+  function check(promise) {
+    if (!(promise instanceof Promise)) serviceWorkerReceiverFailures.push('not a Promise');
+    promise.then(
+      () => serviceWorkerReceiverFailures.push('resolved'),
+      error => {
+        serviceWorkerReceiverRejections++;
+        if (!(error instanceof TypeError)) serviceWorkerReceiverFailures.push('wrong error');
+      }
+    );
+  }
+  for (const receiver of [{}, Object.create(sw), new Proxy(sw, {}), null]) {
+    check(register.call(receiver, script, options));
+    check(getRegistration.call(receiver, script));
+    check(getRegistrations.call(receiver));
+  }
+  if (conversions !== 0) serviceWorkerReceiverFailures.push('converted invalid receiver arguments');
+  const prototype = Object.getPrototypeOf(sw);
+  Object.setPrototypeOf(sw, null);
+  check(register.call(sw, script));
+  Object.setPrototypeOf(sw, prototype);
+  if (conversions !== 1) serviceWorkerReceiverFailures.push('lost native receiver identity');
+  if (register.length !== 1 || getRegistration.length !== 0 || getRegistrations.length !== 0) {
+    serviceWorkerReceiverFailures.push('operation length');
+  }
+})()
+"#,
+    )
+    .expect("ServiceWorkerContainer receiver checks should return rejected Promises");
+    assert_eq!(
+        vm.eval("JSON.stringify([serviceWorkerReceiverRejections, serviceWorkerReceiverFailures])")
+            .unwrap(),
+        "[13,[]]"
+    );
+}
+
+#[test]
+fn webidl_receiver_service_worker_promises_use_the_callee_realm() {
+    let mut vm = new_storage_test_vm("https://service-worker-receiver.test/");
+    vm.eval(
+        r#"
+(() => {
+  const html = document.appendChild(document.createElement('html'));
+  html.appendChild(document.createElement('body'));
+  const child = document.body.appendChild(document.createElement('iframe')).contentWindow;
+  const parentSw = navigator.serviceWorker;
+  const childSw = child.navigator.serviceWorker;
+  const marker = {sentinel: true};
+  const throwingScript = {toString() { throw marker; }};
+  globalThis.serviceWorkerRealmFailures = [];
+  globalThis.serviceWorkerRealmRejections = 0;
+  for (const [callback, P, E, expected] of [
+    [() => childSw.register.call(parentSw, Symbol('script')), child.Promise, child.TypeError, null],
+    [() => parentSw.register.call(childSw, Symbol('script')), Promise, TypeError, null],
+    [() => childSw.getRegistration.call(parentSw, Symbol('client')), child.Promise, child.TypeError, null],
+    [() => childSw.register.call({}), child.Promise, child.TypeError, null],
+    [() => childSw.register.call(parentSw, throwingScript), child.Promise, child.TypeError, marker],
+    [() => parentSw.register.call(childSw, throwingScript), Promise, TypeError, marker]
+  ]) {
+    const promise = callback();
+    const otherP = P === Promise ? child.Promise : Promise;
+    const otherE = E === TypeError ? child.TypeError : TypeError;
+    if (!(promise instanceof P) || promise instanceof otherP) serviceWorkerRealmFailures.push('Promise realm');
+    promise.then(
+      () => serviceWorkerRealmFailures.push('resolved'),
+      error => {
+        serviceWorkerRealmRejections++;
+        if (expected === marker ? error !== marker : (!(error instanceof E) || error instanceof otherE)) {
+          serviceWorkerRealmFailures.push('rejection identity or realm');
+        }
+      }
+    );
+  }
+})()
+"#,
+    )
+    .expect("ServiceWorkerContainer cross-realm operations should return Promises");
+    assert_eq!(
+        vm.eval("JSON.stringify([serviceWorkerRealmRejections, serviceWorkerRealmFailures])")
+            .unwrap(),
+        "[6,[]]"
+    );
+}
