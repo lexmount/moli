@@ -412,6 +412,15 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
     }
 }
 
+#[cfg(test)]
+pub(super) fn finish_parser_session_for_test(
+    parser_session: &mut DocumentParserSession,
+    vm: &mut ScriptVm,
+) {
+    let mut parser_owner = PhaseOneParserOwner { vm };
+    let _ = parser_session.finish(&mut parser_owner);
+}
+
 pub(super) enum PageTaskTurnResult {
     /// No parse-visible task was runnable.
     NoTask,

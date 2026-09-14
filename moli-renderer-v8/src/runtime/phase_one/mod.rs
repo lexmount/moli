@@ -441,6 +441,14 @@ mod tests {
         html: &'static str,
         env: PageVmEnvConfig,
     ) -> PageVm {
+        parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, false).await
+    }
+
+    async fn parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(
+        html: &'static str,
+        env: PageVmEnvConfig,
+        finish_after_step: bool,
+    ) -> PageVm {
         let PhaseOnePageVmHarness {
             mut page_vm,
             loader,
@@ -472,6 +480,12 @@ mod tests {
         .await
         .expect("parser step should complete");
         assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
+        if finish_after_step {
+            driver.parser_session.request_finish();
+            page_vm.vm_mut().with_dom_host_parse_step(|vm| {
+                super::parser_turn::finish_parser_session_for_test(driver.parser_session, vm)
+            });
+        }
         page_vm
     }
 
