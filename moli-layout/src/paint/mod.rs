@@ -153,6 +153,12 @@ where
         ..PaintProjectionMetrics::default()
     };
     let mut current_cull = PaintCullRegion::for_capture(capture.viewport_rect);
+    if capture.clip_to_viewport {
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: PaintShape::Rect(capture.viewport_rect),
+            transform: capture.viewport_to_surface,
+        });
+    }
     if let Some(background) = propagated_background {
         let transform = capture.viewport_to_surface;
         let paint_space = PaintSpace::ROOT.with_outer_transform(transform);
@@ -466,6 +472,9 @@ where
     active_clips.clear(&mut snapshot);
     debug_assert!(context_layers.is_empty());
     debug_assert!(context_cull_regions.is_empty());
+    if capture.clip_to_viewport {
+        snapshot.push_fragment(PaintFragment::PopLayer);
+    }
     PaintProjectionResult { snapshot, metrics }
 }
 

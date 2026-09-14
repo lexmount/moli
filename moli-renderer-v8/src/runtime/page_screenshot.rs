@@ -1,6 +1,8 @@
-use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
-use moli_layout::{LayoutRect, PaintCaptureRequest, PaintViewport};
-use moli_page_types::LayoutPolicy;
+use moli_layout::{
+    LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
+    PaintViewport,
+};
+use moli_page_types::{LayoutPolicy, ViewportSurface};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -197,7 +199,8 @@ impl PageVm {
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         };
         self.flush_page_action_window(barrier)?;
-        let paint_capture = request.paint_capture_request()?;
+        let paint_capture =
+            request.paint_capture_request(self.viewport_surface.unwrap_or_default())?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
             && self.emulated_media.media.is_none()
         {
@@ -249,9 +252,7 @@ impl PageVm {
         if self.layout_policy == LayoutPolicy::Mock {
             return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
         }
-        let surface = self
-            .viewport_surface
-            .unwrap_or_else(default_viewport_surface);
+        let surface = self.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -267,7 +268,7 @@ impl PageVm {
         }
         before_layout();
         let paint_capture = PaintCaptureRequest {
-            region: moli_layout::PaintCaptureRegion::Viewport,
+            region: paint_viewport_region(surface, ViewportCapture::Widget)?,
             include_backgrounds: true,
             include_viewport_controls: true,
             base_background_color: paint_background_color(request.base_background_color),
@@ -298,7 +299,7 @@ impl PageVm {
             visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
             RendererCapturedScreencastFrame {
-                viewport_size: (surface.inner_width, surface.inner_height),
+                viewport_size: surface.visible_size(),
                 image,
                 visual_state,
             },
@@ -318,9 +319,7 @@ impl PageVm {
         if self.layout_policy == LayoutPolicy::Mock {
             return Ok(RendererImageCaptureOutcome::LayoutDisabled);
         }
-        let surface = self
-            .viewport_surface
-            .unwrap_or_else(default_viewport_surface);
+        let surface = self.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -449,13 +448,18 @@ fn visual_state_for_captured_screencast_frame(
 }
 
 impl RendererCaptureScreenshotRequest {
-    fn paint_capture_request(&self) -> anyhow::Result<PaintCaptureRequest> {
+    fn paint_capture_request(
+        &self,
+        surface: ViewportSurface,
+    ) -> anyhow::Result<PaintCaptureRequest> {
         let include_viewport_controls = matches!(
             self.region,
             RendererScreenshotRegion::Viewport | RendererScreenshotRegion::ViewportClip(_)
         );
         let region = match self.region {
-            RendererScreenshotRegion::Viewport => moli_layout::PaintCaptureRegion::Viewport,
+            RendererScreenshotRegion::Viewport => {
+                paint_viewport_region(surface, ViewportCapture::Surface)?
+            }
             RendererScreenshotRegion::FullDocument => moli_layout::PaintCaptureRegion::FullDocument,
             RendererScreenshotRegion::ViewportClip(clip)
             | RendererScreenshotRegion::PageClip(clip) => {
@@ -496,23 +500,55 @@ fn finite_f32(label: &str, value: f64) -> anyhow::Result<f32> {
     Ok(value as f32)
 }
 
-fn default_viewport_surface() -> crate::protocol_types::ViewportSurface {
-    fn dimension(value: f64) -> u32 {
-        debug_assert!(value.is_finite() && value >= 0.0 && value <= f64::from(u32::MAX));
-        value as u32
-    }
+enum ViewportCapture {
+    /// Screenshots restore the emulated DPR, regardless of the preview scale.
+    Surface,
+    /// Screencasts capture the actual widget, including the preview scale.
+    Widget,
+}
 
-    crate::protocol_types::ViewportSurface {
-        inner_width: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
-        inner_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
-        outer_width: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
-        outer_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
-        device_pixel_ratio: DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio,
-        screen_width: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_width),
-        screen_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_height),
-        screen_avail_width: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_avail_width),
-        screen_avail_height: dimension(DEFAULT_WINDOW_SURFACE_PROFILE.screen_avail_height),
-
-        ..Default::default()
-    }
+fn paint_viewport_region(
+    surface: ViewportSurface,
+    capture: ViewportCapture,
+) -> anyhow::Result<PaintCaptureRegion> {
+    let Some(view) = surface.emulated_view else {
+        return Ok(PaintCaptureRegion::Viewport);
+    };
+    let (scale, width, height) = match capture {
+        ViewportCapture::Surface => {
+            let ratio = surface.device_pixel_ratio / view.native_device_pixel_ratio;
+            (
+                ratio,
+                f64::from(surface.inner_width) * ratio,
+                f64::from(surface.inner_height) * ratio,
+            )
+        }
+        ViewportCapture::Widget => (view.scale, f64::from(view.width), f64::from(view.height)),
+    };
+    let (transform, scroll_scale) = if let Some(viewport) = view.viewport {
+        // Blink applies the preview scale first, then the page-coordinate
+        // viewport offset and scale. Resolve scroll compensation during layout.
+        (
+            LayoutTransform2D::new([
+                viewport.scale * scale,
+                0.0,
+                0.0,
+                viewport.scale * scale,
+                -viewport.x * viewport.scale,
+                -viewport.y * viewport.scale,
+            ]),
+            viewport.scale,
+        )
+    } else {
+        (LayoutTransform2D::scale(scale, scale), 0.0)
+    };
+    Ok(PaintCaptureRegion::TransformedViewport {
+        surface: PaintCaptureSurface::new(
+            finite_f32("capture width", width)?,
+            finite_f32("capture height", height)?,
+            finite_f32("native device-pixel ratio", view.native_device_pixel_ratio)?,
+        ),
+        transform,
+        scroll_scale,
+    })
 }

@@ -3127,6 +3127,36 @@ pub struct ViewportSurface {
     pub window_x: i32,
     pub window_y: i32,
     pub screen_orientation: ScreenOrientation,
+    /// Presentation of the native widget, independent of the CSS layout size.
+    pub emulated_view: Option<EmulatedView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmulatedView {
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+    /// The compositor keeps its native DPR even when CSS reports an override.
+    pub native_device_pixel_ratio: f64,
+    pub viewport: Option<EmulatedViewport>,
+}
+
+/// Page-coordinate origin and scale of a forced compositor viewport. Its
+/// requested extent is already accounted for in the native widget dimensions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmulatedViewport {
+    pub x: f64,
+    pub y: f64,
+    pub scale: f64,
+}
+
+impl ViewportSurface {
+    pub fn visible_size(self) -> (u32, u32) {
+        self.emulated_view
+            .map_or((self.inner_width, self.inner_height), |view| {
+                (view.width, view.height)
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3161,6 +3191,7 @@ impl Default for ViewportSurface {
             window_x: 0,
             window_y: 0,
             screen_orientation: Default::default(),
+            emulated_view: None,
         }
     }
 }

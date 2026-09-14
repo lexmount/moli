@@ -5,6 +5,8 @@ use crate::domains::page::{
 };
 use serde_json::Value;
 
+mod emulation;
+
 /// cdp.page: captureScreenshot – invalid image format
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_bad_format() {
@@ -655,8 +657,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         .emulated_device_metrics = Some(EmulatedDeviceMetrics {
         width: 320,
         height: 240,
-        visible_width: 320,
-        visible_height: 240,
+        view: None,
         outer_width: 320,
         outer_height: 240,
         device_scale_factor: 2.0,
@@ -712,8 +713,7 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         .emulated_device_metrics = Some(EmulatedDeviceMetrics {
         width: 500,
         height: 300,
-        visible_width: 500,
-        visible_height: 300,
+        view: None,
         outer_width: 500,
         outer_height: 300,
         device_scale_factor: 1.5,

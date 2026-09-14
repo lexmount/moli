@@ -2,9 +2,7 @@
 pub struct EmulatedDeviceMetrics {
     pub width: u32,
     pub height: u32,
-    /// Actual visible widget dimensions, retained across single-axis overrides.
-    pub visible_width: u32,
-    pub visible_height: u32,
+    pub view: Option<moli_page_types::EmulatedView>,
     pub outer_width: u32,
     pub outer_height: u32,
     pub device_scale_factor: f64,
@@ -60,6 +58,7 @@ impl EmulatedDeviceMetrics {
             window_x: self.window_x,
             window_y: self.window_y,
             screen_orientation: self.screen_orientation,
+            emulated_view: self.view,
         }
     }
 }
@@ -226,8 +225,7 @@ mod tests {
         let mut metrics = EmulatedDeviceMetrics {
             width: 800,
             height: 600,
-            visible_width: 800,
-            visible_height: 600,
+            view: None,
             outer_width: 800,
             outer_height: 600,
             device_scale_factor: 2.0,

@@ -61,19 +61,55 @@ pub(super) fn metrics_from_cdp(
     {
         return Err(invalid());
     }
-    let mut visible_width = previous.map_or(base.inner_width, |m| m.visible_width);
-    let mut visible_height = previous.map_or(base.inner_height, |m| m.visible_height);
-    if width != 0 && height != 0 && !params.dont_set_visible_size.unwrap_or(false) {
-        visible_width = width;
-        visible_height = height;
+    let device_scale_factor = if params.device_scale_factor == 0.0 {
+        base.device_pixel_ratio
+    } else {
+        params.device_scale_factor
+    };
+    let mut visible_size = previous.map_or(base.visible_size(), |metrics| {
+        metrics.viewport_surface().visible_size()
+    });
+    let mut requested_size = (width, height);
+    let mut viewport = None;
+    if let Some(clip) = params.viewport {
+        if ![clip.x, clip.y, clip.width, clip.height, clip.scale]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return Err(invalid());
+        }
+        let viewport_scale = clip.scale * device_scale_factor / base.device_pixel_ratio;
+        if !viewport_scale.is_finite() {
+            return Err(invalid());
+        }
+        // Chromium accepts zero/negative clip scales. They can leave no visible
+        // content, but must not turn a negative extent into an enormous widget.
+        let dimension = |value: f64| value.round().clamp(0.0, f64::from(i32::MAX)) as u32;
+        requested_size = (
+            dimension(clip.width * viewport_scale),
+            dimension(clip.height * viewport_scale),
+        );
+        if clip.x >= 0.0 {
+            viewport = Some(moli_page_types::EmulatedViewport {
+                x: clip.x,
+                y: clip.y,
+                scale: viewport_scale,
+            });
+        }
+    }
+    if requested_size.0 != 0
+        && requested_size.1 != 0
+        && !params.dont_set_visible_size.unwrap_or(false)
+    {
+        visible_size = requested_size;
     }
     let width = if width == 0 {
-        (f64::from(visible_width) / scale).round() as u32
+        (f64::from(visible_size.0) / scale).round() as u32
     } else {
         width
     };
     let height = if height == 0 {
-        (f64::from(visible_height) / scale).round() as u32
+        (f64::from(visible_size.1) / scale).round() as u32
     } else {
         height
     };
@@ -87,8 +123,13 @@ pub(super) fn metrics_from_cdp(
     Ok(EmulatedDeviceMetrics {
         width,
         height,
-        visible_width,
-        visible_height,
+        view: Some(moli_page_types::EmulatedView {
+            width: visible_size.0,
+            height: visible_size.1,
+            scale,
+            native_device_pixel_ratio: base.device_pixel_ratio,
+            viewport,
+        }),
         outer_width: if params.mobile {
             width
         } else {
@@ -99,11 +140,7 @@ pub(super) fn metrics_from_cdp(
         } else {
             base.outer_height
         },
-        device_scale_factor: if params.device_scale_factor == 0.0 {
-            base.device_pixel_ratio
-        } else {
-            params.device_scale_factor
-        },
+        device_scale_factor,
         screen_width,
         screen_height,
         screen_avail_height: screen_height,

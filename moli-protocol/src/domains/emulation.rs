@@ -1096,8 +1096,7 @@ fn set_viewport_metrics_from_current(
     Ok(EmulatedDeviceMetrics {
         width,
         height,
-        visible_width: width,
-        visible_height: height,
+        view: None,
         outer_width: width,
         outer_height: height,
         device_scale_factor,
