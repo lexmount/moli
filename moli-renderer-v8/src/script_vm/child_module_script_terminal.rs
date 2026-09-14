@@ -68,7 +68,11 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
         } else {
             crate::module_runtime::next_inline_module_url(self.vm, client.base_url())
         };
-        let request_key = ModuleMapKey::java_script(source_url.clone());
+        let request_key = if client.source_is_external() {
+            ModuleMapKey::from_script_url(source_url.clone())
+        } else {
+            ModuleMapKey::java_script(source_url.clone())
+        };
         self.handle_parser_root_terminal_result(
             task_owner,
             realm_id,
