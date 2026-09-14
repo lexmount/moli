@@ -4903,6 +4903,7 @@ fn script_error_constructor_kind_from_value(
     let prototype = object.get_prototype(scope)?;
     for candidate in [
         ScriptErrorConstructorKind::SyntaxError,
+        ScriptErrorConstructorKind::TypeError,
         ScriptErrorConstructorKind::WebAssemblyCompileError,
         ScriptErrorConstructorKind::WebAssemblyLinkError,
         ScriptErrorConstructorKind::Error,
@@ -5469,6 +5470,42 @@ mod tests {
             Some(ScriptErrorConstructorKind::SyntaxError),
             "an exact V8 exception constructor must win over the module-kind fallback"
         );
+    }
+
+    #[test]
+    fn native_module_instantiate_preserves_caught_v8_type_errors() {
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let try_catch = pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        let source = v8str(&scope, "null.missing");
+        let script = v8::Script::compile(&scope, source, None).expect("valid script");
+        assert!(script.run(&scope).is_none());
+        let exception = scope.exception().expect("V8 should throw a TypeError");
+        let caught_constructor =
+            super::script_error_constructor_kind_from_value(&mut scope, exception);
+        assert_eq!(
+            caught_constructor,
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
+
+        for has_wasm_entry in [false, true] {
+            let error = super::native_module_instantiate_load_error(
+                "caught V8 exception".to_owned(),
+                caught_constructor,
+                has_wasm_entry,
+            );
+            assert_eq!(error.stage(), ModuleLoadStage::Instantiate);
+            assert_eq!(
+                error.error_constructor(),
+                Some(ScriptErrorConstructorKind::TypeError),
+                "the graph fallback must preserve the caught TypeError (wasm={has_wasm_entry})"
+            );
+        }
     }
 
     #[test]
