@@ -11,22 +11,21 @@ use crate::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
         FileSystemHandleClonePayload, GeometryClonePayload, ImageDataClonePayload,
         ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_file_object,
-        build_file_list_object, file_list_files_from_object,
-        build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
-        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
-        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
-        detach_transferred_message_port, dom_exception_clone_fields,
-        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
-        file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
-        initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
-        prepare_transform_stream_transfer, prepare_writable_stream_transfer,
-        quota_exceeded_error_clone_fields, require_internal_stream_value,
-        selected_file_from_object,
-        build_geometry_object_from_clone_payload, geometry_clone_payload_from_object,
+        attach_file_system_file_snapshot_clone_payload, build_file_list_object, build_file_object,
+        build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
+        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
+        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
+        detach_message_port_owner_for_transfer, detach_transferred_message_port,
+        dom_exception_clone_fields, ensure_message_port_wrapper_for_id,
+        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
+        file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
+        image_data_clone_payload_from_object, initialize_readable_stream_clone_shell,
+        initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
+        message_port_id_from_object, new_dom_exception_value, new_quota_exceeded_error_value,
+        prepare_readable_stream_transfer, prepare_transform_stream_transfer,
+        prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
+        require_internal_stream_value, selected_file_from_object,
     },
     dom::native::SelectedFile,
     types::MessagePortId,
@@ -379,7 +378,10 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
-            Some("DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad" | "DOMMatrix" | "DOMMatrixReadOnly") => {
+            Some(
+                "DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad"
+                | "DOMMatrix" | "DOMMatrixReadOnly",
+            ) => {
                 if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
                     write_geometry_clone_payload(serializer, payload);
                     return Some(true);
@@ -465,7 +467,10 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return None;
                 };
                 let Ok(length) = u32::try_from(files.len()) else {
-                    throw_data_clone_exception(scope, "Too many Files in structured clone FileList.");
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many Files in structured clone FileList.",
+                    );
                     return None;
                 };
                 let mut clone_ids = Vec::with_capacity(files.len());
