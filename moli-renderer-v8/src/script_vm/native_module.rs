@@ -41,17 +41,18 @@ use crate::frame_owner_model::{
 use crate::module_runtime::{
     DynamicModuleEvaluationTarget, DynamicModuleFetchContinuation, DynamicModuleFetchFailure,
     DynamicModuleFetchFinish, DynamicModuleJoinedFetch, DynamicModuleScheduledFetch,
-    ModuleAttributesKey, ModuleEntryId, ModuleGraphFetchedSource, ModuleGraphHandle,
-    ModuleIdentityHash, ModuleImportPhase, ModuleKind, ModuleLoadError, ModuleLoadStage,
-    ModuleMapEntryState, ModuleMapKey, ModuleMapTerminalNotification, ModuleRecordEntry,
-    ModuleRequestRecord, ModuleScriptGraphFetchContinuation, ModuleSource, NativeDocumentModulator,
-    NativeDynamicImportSingleModuleClient, NativeDynamicModuleImportReady, NativeModuleGraphJob,
-    NativeModuleGraphJobAdvance, NativeModuleMapSingleModuleClient, NativeModuleOwnerEvent,
-    NativeModuleScriptSingleModuleClient, NativeModuleSingleFetchRequest,
+    ModuleAttributesKey, ModuleEntryId, ModuleEvaluationRecord, ModuleGraphFetchedSource,
+    ModuleGraphHandle, ModuleIdentityHash, ModuleImportPhase, ModuleKind, ModuleLoadError,
+    ModuleLoadStage, ModuleMapEntryState, ModuleMapKey, ModuleMapTerminalNotification,
+    ModuleRecordEntry, ModuleRequestRecord, ModuleScriptGraphFetchContinuation, ModuleSource,
+    NativeDocumentModulator, NativeDynamicImportSingleModuleClient, NativeDynamicModuleImportReady,
+    NativeModuleGraphJob, NativeModuleGraphJobAdvance, NativeModuleMapSingleModuleClient,
+    NativeModuleOwnerEvent, NativeModuleScriptSingleModuleClient, NativeModuleSingleFetchRequest,
     NativeModulepreloadFetchStart, PendingDynamicModuleImport, ResolverScopeGuard,
     WasmDependencyModuleMessages, WasmImportRecord, WasmModuleRecord,
     ensure_wasm_dependency_module_namespace_ready, evaluate_wasm_synthetic_module,
     module_identity_hash_from_v8_module, preserve_current_v8_module_exception,
+    resolve_evaluation_module_callback, resolve_evaluation_source_callback,
     resolve_static_module_callback, resolve_static_source_callback, throw_wasm_link_error,
     wasm_dependency_export_value,
 };
@@ -3590,6 +3591,10 @@ impl ScriptVm {
                 let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
+                if has_wasm_entry {
+                    unsafe { &*document_modulator }
+                        .register_wasm_evaluation_graph(&mut scope, graph);
+                }
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator);
                 match root_module.instantiate_module2(
                     &scope,
@@ -4647,16 +4652,16 @@ fn wasm_synthetic_module_evaluation_steps<'s>(
     module: v8::Local<'s, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     v8::callback_scope!(unsafe scope, context);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return throw_synthetic_module_error(scope, "synthetic module host is not available");
-    };
-    let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module) else {
+    let Some(record) = ModuleEvaluationRecord::for_module(context, module) else {
         return throw_synthetic_module_error(
             scope,
             "WebAssembly synthetic module record is not available",
         );
     };
-    evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
+    let Some(wasm_record) = record.wasm() else {
+        return throw_synthetic_module_error(scope, "synthetic module has no WebAssembly record");
+    };
+    evaluate_wasm_synthetic_module(scope, module, wasm_record, |scope, import| {
         wasm_import_value(scope, module, import)
     })
 }
@@ -4710,24 +4715,21 @@ fn wasm_import_value<'s>(
     referrer: v8::Local<'s, v8::Module>,
     import: &WasmImportRecord,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return throw_wasm_link_error(scope, "wasm import host is not available");
+    let context = scope.get_current_context();
+    let Some(record) = ModuleEvaluationRecord::for_module(context, referrer) else {
+        return throw_wasm_link_error(scope, "wasm import module record is not available");
     };
     let attributes = ModuleAttributesKey::empty();
-    let Some(dependency) = (unsafe { &*host_ptr }).native_resolved_dependency_module_for(
-        referrer,
-        import.module(),
-        &attributes,
-    ) else {
+    let Some(dependency) = record.dependency(import.module(), &attributes) else {
         return throw_wasm_link_error(scope, "wasm import dependency is not available");
     };
     let dependency = v8::Local::new(scope, &dependency);
     ensure_dependency_module_namespace_ready(scope, dependency)?;
-    let dependency_wasm_record = (unsafe { &*host_ptr }).native_module_wasm_record_for(dependency);
+    let dependency_record = ModuleEvaluationRecord::for_module(context, dependency);
     wasm_dependency_export_value(
         scope,
         dependency,
-        dependency_wasm_record.as_ref(),
+        dependency_record.as_ref().and_then(|record| record.wasm()),
         import.name(),
         "failed to allocate wasm import export name",
         "wasm import export is not available",
@@ -4738,38 +4740,29 @@ fn ensure_dependency_module_namespace_ready<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     module: v8::Local<'s, v8::Module>,
 ) -> Option<()> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        throw_synthetic_module_error(scope, "module dependency host is not available");
-        return None;
-    };
-    let document_modulator_ptr = (unsafe { &*host_ptr }).native_document_modulator_ptr();
-    let document_modulator = unsafe { &*document_modulator_ptr };
+    let context = scope.get_current_context();
     let mut dependency_modules_for =
         |_: &mut v8::PinScope<'s, '_>, dependency: v8::Local<'s, v8::Module>| {
-            document_modulator.evaluation_dependency_modules_for(dependency)
+            ModuleEvaluationRecord::for_module(context, dependency)
+                .map(|record| record.evaluation_dependencies())
         };
     ensure_wasm_dependency_module_namespace_ready(
         scope,
         module,
-        |scope: &mut v8::PinScope<'s, '_>, module: v8::Local<'s, v8::Module>| {
-            let _resolver_scope = ResolverScopeGuard::new(document_modulator_ptr);
-            match module.instantiate_module2(
+        |scope: &mut v8::PinScope<'s, '_>, module: v8::Local<'s, v8::Module>| match module
+            .instantiate_module2(
                 scope,
-                resolve_static_module_callback,
-                resolve_static_source_callback,
+                resolve_evaluation_module_callback,
+                resolve_evaluation_source_callback,
             ) {
-                Some(true) => Some(()),
-                Some(false) => {
-                    throw_synthetic_module_error(
-                        scope,
-                        "module dependency instantiate returned false",
-                    );
-                    None
-                }
-                None => {
-                    preserve_current_v8_module_exception(scope);
-                    None
-                }
+            Some(true) => Some(()),
+            Some(false) => {
+                throw_synthetic_module_error(scope, "module dependency instantiate returned false");
+                None
+            }
+            None => {
+                preserve_current_v8_module_exception(scope);
+                None
             }
         },
         &mut dependency_modules_for,
