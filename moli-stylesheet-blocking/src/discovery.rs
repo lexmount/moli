@@ -101,6 +101,7 @@ pub struct StylesheetElementRead {
     is_html_element: bool,
     local_name: String,
     parser_blocking_eligible: bool,
+    style_parser_children_pending: bool,
     rel: Option<String>,
     href: Option<String>,
     as_attr: Option<String>,
@@ -121,6 +122,7 @@ impl StylesheetElementRead {
         Some(Self {
             is_html_element: element.namespace() == "http://www.w3.org/1999/xhtml",
             local_name: element.local_name().to_owned(),
+            style_parser_children_pending: element.style_parser_children_pending(),
             parser_blocking_eligible: if element.is_html_element("link") {
                 element.link_created_by_parser()
             } else {
@@ -154,6 +156,7 @@ impl StylesheetElementRead {
             is_html_element: true,
             local_name: "link".to_owned(),
             parser_blocking_eligible: true,
+            style_parser_children_pending: false,
             rel: Some("stylesheet".to_owned()),
             href: Some(href.to_owned()),
             as_attr: None,
@@ -690,7 +693,10 @@ fn parser_created_style_import_urls(
 ) -> Option<Vec<Url>> {
     let native_node_id = NativeNodeId::new(node_id.index());
     let element = document.stylesheet_element(native_node_id)?;
-    if !element.is_html_element("style") || !element.parser_blocking_eligible {
+    if !element.is_html_element("style")
+        || !element.parser_blocking_eligible
+        || element.style_parser_children_pending
+    {
         return None;
     }
     if !media_blocks_scripts(element.media.as_deref()) {
@@ -792,6 +798,16 @@ mod tests {
         assert!(host.set_attribute(style, "disabled", ""));
         assert!(host.append_child(style, text));
         assert!(host.append_child(host.document_handle(), style));
+
+        assert!(
+            document_owned_blocking_stylesheet_candidate_for_node(
+                &host,
+                moli_dom::NodeId::new(style.index()),
+            )
+            .is_none(),
+            "an open parser style must not start imports"
+        );
+        assert!(host.finish_parsing_style_children(style));
 
         let candidate = document_owned_blocking_stylesheet_candidate_for_node(
             &host,

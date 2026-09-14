@@ -131,9 +131,7 @@ use source_id::StyleSourceKind;
 use source_id::{StyleInvalidationSourceTarget, StyleScopeId};
 pub(crate) use source_lifecycle::OwnedStyleSourceDocumentContext;
 use source_lifecycle::StyleSourceDocumentContext;
-pub(crate) use source_owner::{
-    link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
-};
+pub(crate) use source_owner::{link_rel_qualifies_as_stylesheet, stylesheet_owner_can_have_sheet};
 pub(crate) use stylesheet_resources::{StylesheetResourceGeneration, StylesheetResourceSnapshot};
 #[cfg(test)]
 use stylesheet_resources::{

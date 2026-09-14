@@ -41,7 +41,7 @@ pub(super) fn owner_font_face_projection(
     let dom_host = host.dom_host();
     let element = dom_host.node(owner)?.as_element()?;
     if !dom_host.is_connected(owner)
-        || !crate::style_engine::stylesheet_owner_type_is_supported(element)
+        || !crate::style_engine::stylesheet_owner_can_have_sheet(element)
     {
         return None;
     }

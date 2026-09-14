@@ -115,7 +115,7 @@ impl DocumentRuntime {
         );
     }
 
-    fn apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+    pub(super) fn apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

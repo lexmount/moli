@@ -2478,6 +2478,47 @@ mod tests {
     }
 
     #[test]
+    fn parser_style_children_finish_at_close_and_eof() {
+        for (opening, closing) in [
+            ("<html><head><style id='sheet'>", "</style>"),
+            ("<html><body><svg><style id='sheet'>", "</style></svg>"),
+            ("<html><head><style id='sheet'>", ""),
+        ] {
+            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://example.test/page").unwrap(),
+            );
+            stream.pump_parser_step(&format!("{opening}p {{ col"));
+            let document = stream.snapshot_parser_stream_document().into_document();
+            let style =
+                document.elements_by_tag_name(document.document_node_id(), "style", false)[0];
+            assert!(
+                document
+                    .node(style)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_parser_children_pending()
+            );
+            stream.pump_parser_step(&format!("or: blue; }}{closing}"));
+            let document = if closing.is_empty() {
+                stream.finish()
+            } else {
+                stream.snapshot_parser_stream_document().into_document()
+            };
+            assert!(
+                !document
+                    .node(style)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_parser_children_pending()
+            );
+            assert_eq!(
+                document.text_content(style).as_deref(),
+                Some("p { color: blue; }")
+            );
+        }
+    }
+
+    #[test]
     fn parser_stream_reports_split_connected_meta_csp_once_and_ignores_template_contents() {
         let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page").expect("test url"),

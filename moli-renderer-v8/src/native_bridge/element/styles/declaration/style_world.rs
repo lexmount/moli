@@ -7,7 +7,7 @@ use crate::{
         FullStyleWorldSnapshot, IncrementalStyleWorldUpdate, PreparedStyleWorldUpdate,
         StyleSourceId, StyleTreeScopeVersions, StyleViewport, StyleWorldEnvironment,
         StyleWorldUpdatePlan, StyloStyleEnvironment, StyloStylesheetSource,
-        link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
+        link_rel_qualifies_as_stylesheet, stylesheet_owner_can_have_sheet,
     },
     stylesheet_blocking::link_rel_includes_token,
 };
@@ -344,7 +344,7 @@ pub(super) fn active_stylesheet_handles(
                 element.is_html_element("link") && link_stylesheet_is_enabled(runtime, *handle);
             (style || link)
                 && (include_detached || stylesheet_is_active_in_scope(runtime, root, *handle))
-                && stylesheet_owner_type_is_supported(element)
+                && stylesheet_owner_can_have_sheet(element)
         })
         .collect::<Vec<_>>();
     let preferred_title = handles
