@@ -6107,6 +6107,59 @@ globalThis.__outerContinued = true;
     }
 
     #[test]
+    fn parser_style_csp_checks_complete_contents_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+            for (markup, policy, report_only, expected_violations, expected_sheet) in [
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'none'", false, 1, false),
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'none'", true, 1, true),
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'sha256-rB6kiow2O3eFUeTNyyLeK3wV0+l7vNB90J1aqllKvjg='", false, 0, true),
+                ("<style id='sheet'></style>", "style-src 'none'", false, 1, false),
+                ("<style id='sheet'>p {color:blue;}", "style-src 'none'", false, 1, false),
+                ("<script>document.write(\"<style id='sheet'>p {color:blue;}</style>\")</script>", "style-src 'none'", false, 1, false),
+                ("<script>const s = document.createElement('style'); s.id = 'sheet'; document.head.append(s); s.textContent = 'p {color:blue;}';</script>", "style-src 'none'", false, 2, false),
+            ] {
+                let env = default_test_page_vm_env_config_with(|env| {
+                    let policies = if report_only {
+                        &mut env.document_policy_container.response_content_security_report_only_policies
+                    } else {
+                        &mut env.document_policy_container.response_content_security_policies
+                    };
+                    *policies = vec![policy.to_owned()];
+                });
+                let html = Box::leak(format!("<!doctype html><html><head><script>globalThis.__parserStyleViolations = 0; document.addEventListener('securitypolicyviolation', () => __parserStyleViolations++);</script>{markup}").into_boxed_str());
+                let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, true).await;
+                let result = page_vm.evaluate_expression("Boolean(document.getElementById('sheet').sheet)").expect("stylesheet probe");
+                assert_eq!(result.get("value").and_then(serde_json::Value::as_bool), Some(expected_sheet), "{markup}, {policy}, report-only={report_only}");
+
+                let local_executor = page_vm.local_executor.clone();
+                let page_vm_ptr: *mut PageVm = &mut page_vm;
+                super::access::run_named_owner_local_task(
+                    local_executor,
+                    "parser style CSP task channel closed",
+                    async move {
+                        let page_vm = unsafe { &mut *page_vm_ptr };
+                        page_vm.page_task_queue.accept_ready_parse_time_wakes();
+                        page_vm.vm_mut().drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
+                        while let Some(task) = page_vm.page_task_queue.parse_time_pop_front() {
+                            let work = PostParsePageOwnedWork::lifecycle_work(
+                                crate::page_task_queue::PostParseLifecycleWork::from_parse_time_page_task(task),
+                            );
+                            execute_page_owned_work_turn_on_local_task(page_vm, work).await?;
+                        }
+                        Ok(())
+                    },
+                ).await.expect("parser style tasks");
+                let result = page_vm.evaluate_expression("__parserStyleViolations").expect("violation event count");
+                assert_eq!(result.get("value").and_then(serde_json::Value::as_u64), Some(expected_violations), "{markup}, {policy}, report-only={report_only}");
+            }
+        }));
+    }
+
+    #[test]
     fn buffered_script_preload_cache_reuses_ready_late_parser_blocking_preload() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -785,6 +785,24 @@ mod tests {
     use url::Url;
 
     #[test]
+    fn xml_style_children_finish_at_close() {
+        for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
+            let document = XmlParser.parse(
+                Url::parse("https://example.test/style.xml").unwrap(),
+                format!("<style xmlns='{namespace}'>p {{ color: blue; }}</style>"),
+            );
+            let root = document.document_element_node_id().unwrap();
+            assert!(
+                !document
+                    .node(root)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_children_parsing()
+            );
+        }
+    }
+
+    #[test]
     fn xml_parser_records_unclosed_and_mismatched_elements() {
         for (index, source) in [
             "<root>",
