@@ -45,11 +45,11 @@ impl ScriptVm {
             return complete_default_app_manifest(&document_url, Some(&manifest_url));
         }
 
-        let (_report_only_violation, enforced_violation) = self
+        let (_report_only_violation, enforced_violations) = self
             .document_runtime
             .document_subresource_csp_check(&manifest_url, DocumentSubresourceCspKind::Manifest)
             .into_violations();
-        if enforced_violation.is_some() {
+        if !enforced_violations.is_empty() {
             return complete_default_app_manifest(&document_url, Some(&manifest_url));
         }
 
