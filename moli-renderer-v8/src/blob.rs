@@ -1,4 +1,4 @@
-use crate::web_api_interfaces;
+use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
     BlobId, BlobLineEndings, BlobStore, blob_slice_relative_index, clamp_blob_long_long,
     normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,

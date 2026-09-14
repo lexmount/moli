@@ -10,7 +10,6 @@ const FILE_LIST_FILES_SLOT: &str = "__lmFileListFiles";
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::FileList, require_prototype)]
 struct FileListObjectDeclaration {
-
     #[webapi(slot = FILE_LIST_LENGTH_SLOT)]
     length: f64,
 }

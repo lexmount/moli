@@ -251,7 +251,7 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
 pub(crate) use self::dom_rect::build_dom_rect_object;
-pub(crate) use self::dom_rect_list::{build_dom_rect_list_object};
+pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value, apply_event_handler_return_value, clear_event_composed_path, event_attribute, event_backing,
@@ -269,7 +269,7 @@ pub(crate) use self::file_api::{
 pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,
-    flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
+    flush_one_pending_file_reader, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
