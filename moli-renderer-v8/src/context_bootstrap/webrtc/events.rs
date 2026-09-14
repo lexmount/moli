@@ -1,5 +1,5 @@
-use crate::web_api_interfaces;
 use super::{ice_candidate::ice_candidate_receiver_branded, rtc_data_channel_receiver_branded};
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::events::{initialize_event_object_with_type, parse_event_init},
     util::{
