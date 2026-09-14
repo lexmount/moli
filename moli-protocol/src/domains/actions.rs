@@ -177,6 +177,7 @@ pub(crate) enum EmulationAction {
     SetCpuThrottlingRate,
     SetTouchEmulationEnabled,
     SetHardwareConcurrencyOverride,
+    SetDataSaverOverride,
     SetEmitTouchEventsForMouse,
     SetScriptExecutionDisabled,
     SetGeolocationOverride,

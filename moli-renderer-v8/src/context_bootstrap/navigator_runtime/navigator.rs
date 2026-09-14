@@ -257,6 +257,8 @@ struct WorkerNavigatorRuntimeDataPrototypeDeclaration {
     languages: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 18))]
     device_memory: (),
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 20))]
+    connection: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 21))]
     user_agent_data: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 23))]
@@ -299,7 +301,7 @@ struct NavigatorConnectionDeclaration {
     #[webapi(data_property, enumerable, value = DEFAULT_CONNECTION_RTT)]
     rtt: (),
 
-    #[webapi(data_property, enumerable, value = DEFAULT_CONNECTION_SAVE_DATA)]
+    #[webapi(accessor_property, getter = navigator_connection_save_data_getter_callback, enumerable)]
     save_data: (),
 
     #[webapi(data_property, enumerable, init = "null")]
@@ -731,6 +733,22 @@ fn navigator_user_activation_state_getter_callback<'s>(
     }
     let active = current_protocol_user_gesture_activation(scope);
     rv.set(v8::Boolean::new(scope, active).into());
+}
+
+fn navigator_connection_save_data_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !navigator_connection_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    rv.set_bool(
+        navigator_query_overrides(scope)
+            .data_saver
+            .unwrap_or(DEFAULT_CONNECTION_SAVE_DATA),
+    );
 }
 
 fn navigator_connection_event_target_noop_callback<'s>(

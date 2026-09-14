@@ -26,6 +26,7 @@ pub struct GeolocationPositionOverride {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigatorQueryOverrides {
     pub hardware_concurrency: Option<std::num::NonZeroU32>,
+    pub data_saver: Option<bool>,
 }
 
 /// Native query overrides in Inspector agent activation order. Page and Worker
@@ -65,6 +66,7 @@ impl NavigatorEmulationSessions {
     pub fn effective(&self) -> NavigatorQueryOverrides {
         let mut effective = NavigatorQueryOverrides::default();
         for (_, settings) in &self.sessions {
+            effective.data_saver = settings.data_saver.or(effective.data_saver);
             effective.hardware_concurrency = settings
                 .hardware_concurrency
                 .or(effective.hardware_concurrency);

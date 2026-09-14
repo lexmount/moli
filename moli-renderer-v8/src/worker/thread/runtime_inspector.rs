@@ -583,26 +583,38 @@ impl WorkerRuntimeInspector {
 
     fn dispatch_emulation(&self, session_id: Option<&str>, raw_json: &str) -> Option<Value> {
         let command: Value = serde_json::from_str(raw_json).ok()?;
-        if command["method"] != "Emulation.setHardwareConcurrencyOverride" {
-            return None;
-        }
-        let value = command["params"]["hardwareConcurrency"]
-            .as_u64()
-            .filter(|value| *value <= i32::MAX as u64)
-            .and_then(|value| std::num::NonZeroU32::new(value as u32));
-        let Some(value) = value else {
-            return Some(
-                json!({"id": command["id"], "error": {"code": -32602, "message": "HardwareConcurrency must be a positive int32"}}),
-            );
-        };
         let key = session_id
             .map(|id| moli_page_types::DevToolsSessionKey::Attached(id.to_owned()))
             .unwrap_or(moli_page_types::DevToolsSessionKey::Primary);
-        self.navigator_emulation
-            .borrow_mut()
-            .session_mut(&key)
-            .hardware_concurrency = Some(value);
-        Some(json!({"id": command["id"], "result": {}}))
+        let invalid =
+            |message| Some(json!({"id":command["id"],"error":{"code":-32602,"message":message}}));
+        match command["method"].as_str()? {
+            "Emulation.setHardwareConcurrencyOverride" => {
+                let value = command["params"]["hardwareConcurrency"]
+                    .as_u64()
+                    .filter(|value| *value <= i32::MAX as u64)
+                    .and_then(|value| std::num::NonZeroU32::new(value as u32));
+                let Some(value) = value else {
+                    return invalid("HardwareConcurrency must be a positive int32");
+                };
+                self.navigator_emulation
+                    .borrow_mut()
+                    .session_mut(&key)
+                    .hardware_concurrency = Some(value);
+            }
+            "Emulation.setDataSaverOverride" => {
+                let value = &command["params"]["dataSaverEnabled"];
+                if !value.is_null() && !value.is_boolean() {
+                    return invalid("InvalidParams");
+                }
+                self.navigator_emulation
+                    .borrow_mut()
+                    .session_mut(&key)
+                    .data_saver = value.as_bool();
+            }
+            _ => return None,
+        }
+        Some(json!({"id":command["id"],"result":{}}))
     }
 
     pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {

@@ -921,6 +921,7 @@ pub(crate) fn try_start_worker_emulation_command_dispatch(
 ) -> Option<RuntimeCommandTaskStep> {
     let action = match cmd.action {
         "setHardwareConcurrencyOverride" => "Emulation.setHardwareConcurrencyOverride",
+        "setDataSaverOverride" => "Emulation.setDataSaverOverride",
         _ => return None,
     };
     let pending = match conn.session_route(cmd.session_id) {

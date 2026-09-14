@@ -730,3 +730,73 @@ async fn hardware_concurrency_sessions_follow_agent_activation_and_detach() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn data_saver_updates_held_native_objects_and_clears_session_contributions() {
+    let mut ctx = setup().await;
+    evaluate(&mut ctx, "globalThis.connection = navigator.connection; globalThis.saveDataGetter = Object.getOwnPropertyDescriptor(connection, 'saveData').get; undefined").await;
+    for (params, expected) in [
+        (json!({"dataSaverEnabled":true}), true),
+        (json!({"dataSaverEnabled":false}), false),
+        (json!({}), false),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            88200,
+            "SID-1",
+            "Emulation.setDataSaverOverride",
+            params,
+        )
+        .await;
+        assert_eq!(evaluate(&mut ctx, "[connection.saveData, saveDataGetter.call(connection), connection === navigator.connection, saveDataGetter === Object.getOwnPropertyDescriptor(connection, 'saveData').get]").await, json!([expected,expected,true,true]));
+    }
+    expect_session_command_result(
+        &mut ctx,
+        88201,
+        "SID-1",
+        "Emulation.setDataSaverOverride",
+        json!({"dataSaverEnabled":true}),
+    )
+    .await;
+    ctx.process_async(json!({"id":88202,"sessionId":"SID-1","method":"Emulation.setDataSaverOverride","params":{"dataSaverEnabled":"false"}})).await;
+    assert_eq!(ctx.take_response_by_id(88202)["error"]["code"], -32602);
+    ctx.install_navigation_fixture_for_session_owner("data:text/html,<script>globalThis.initialSaveData=navigator.connection.saveData</script><iframe></iframe>",Some("SID-1")).await;
+    assert_eq!(evaluate(&mut ctx, "[initialSaveData,navigator.connection.saveData,frames[0].navigator.connection.saveData]").await, json!([true,true,true]));
+    ctx.conn.register_top_level_page_target("TID-1");
+    ctx.process_async(json!({"id":88203,"method":"Target.attachToTarget","params":{"targetId":"TID-1","flatten":true}})).await;
+    let other = ctx.take_response_by_id(88203)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (params, expected) in [
+        (json!({"dataSaverEnabled":false}), false),
+        (json!({}), true),
+        (json!({"dataSaverEnabled":false}), false),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            88204,
+            &other,
+            "Emulation.setDataSaverOverride",
+            params,
+        )
+        .await;
+        assert_eq!(
+            evaluate(
+                &mut ctx,
+                "[navigator.connection.saveData,frames[0].navigator.connection.saveData]"
+            )
+            .await,
+            json!([expected, expected])
+        );
+    }
+    ctx.process_async(
+        json!({"id":88205,"method":"Target.detachFromTarget","params":{"sessionId":other}}),
+    )
+    .await;
+    ctx.expect_result(88205, json!({}), None);
+    assert_eq!(
+        evaluate(&mut ctx, "navigator.connection.saveData").await,
+        json!(true)
+    );
+}
