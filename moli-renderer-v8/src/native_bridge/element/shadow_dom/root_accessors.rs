@@ -99,7 +99,7 @@ fn sync_shadow_root_style_sheets<'s>(
             continue;
         };
         if !runtime.dom_host().is_connected(sheet_handle)
-            || !crate::style_engine::stylesheet_owner_type_is_supported(element)
+            || !crate::style_engine::stylesheet_owner_can_have_sheet(element)
         {
             continue;
         }
@@ -132,7 +132,7 @@ fn sync_detached_shadow_root_style_sheets<'s>(
         else {
             continue;
         };
-        if !crate::style_engine::stylesheet_owner_type_is_supported(element) {
+        if !crate::style_engine::stylesheet_owner_can_have_sheet(element) {
             continue;
         }
         if element.local_name().eq_ignore_ascii_case("link")

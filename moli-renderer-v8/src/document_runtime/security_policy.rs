@@ -389,6 +389,9 @@ impl DocumentRuntime {
         let Some(element) = self.dom_host.node(owner).and_then(Node::as_element) else {
             return;
         };
+        if element.style_parser_children_pending() {
+            return;
+        }
         let source = self.dom_host.text_content(owner).unwrap_or_default();
         let nonce = element.cryptographic_nonce().map(str::to_owned);
         let is_declarative_css_module =

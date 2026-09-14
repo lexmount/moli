@@ -667,6 +667,13 @@ impl<'host> XmlTreeSinkBase for XmlDocumentSink<'host> {
         self.target.borrow().document_handle()
     }
 
+    fn pop(&self, node: &Self::Handle) {
+        self.target
+            .borrow_mut()
+            .dom_host
+            .finish_parsing_style_children(node.node_id);
+    }
+
     fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
         target
             .element_name
@@ -773,6 +780,24 @@ mod tests {
     use super::XmlParser;
     use moli_dom::native::{DomHost, NativeDom, NativeNodeId, Node, NodeType};
     use url::Url;
+
+    #[test]
+    fn xml_style_children_finish_at_close() {
+        for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
+            let document = XmlParser.parse(
+                Url::parse("https://example.test/style.xml").unwrap(),
+                format!("<style xmlns='{namespace}'>p {{ color: blue; }}</style>"),
+            );
+            let root = document.document_element_node_id().unwrap();
+            assert!(
+                !document
+                    .node(root)
+                    .and_then(Node::as_element)
+                    .unwrap()
+                    .style_parser_children_pending()
+            );
+        }
+    }
 
     #[test]
     fn xml_parser_records_unclosed_and_mismatched_elements() {

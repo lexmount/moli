@@ -1444,6 +1444,14 @@ impl DocumentRuntime {
         let mut canceled_load_event_bindings = Vec::new();
         let mut prepared = Vec::new();
         for (owner, should_queue) in transitions {
+            if self
+                .dom_host
+                .node(owner)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.style_parser_children_pending())
+            {
+                continue;
+            }
             canceled_load_event_bindings.extend(self.invalidate_style_related_state(owner));
             if !should_queue {
                 continue;
@@ -1875,10 +1883,13 @@ fn connected_modulepreload_has_non_matching_media(
 fn connected_style_owner_kind(
     element: &crate::dom::native::Element,
 ) -> Option<ConnectedStyleOwnerKind> {
+    if element.style_parser_children_pending() {
+        return None;
+    }
     if super::is_inline_style_element(element) {
         return if is_declarative_css_module_style_element(element) {
             Some(ConnectedStyleOwnerKind::DeclarativeCssModule)
-        } else if crate::style_engine::stylesheet_owner_type_is_supported(element) {
+        } else if crate::style_engine::stylesheet_owner_can_have_sheet(element) {
             Some(ConnectedStyleOwnerKind::ClassicStyle)
         } else {
             None

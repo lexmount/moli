@@ -54,6 +54,17 @@ impl DocumentRuntime {
         source_profile: TreeMutationSourceProfile,
     ) {
         match mutation {
+            ParserDomMutation::FinishParsingStyleChildren { node } => {
+                let effects = self
+                    .dom_host_mut()
+                    .finish_parsing_style_children_effects(node);
+                self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+                    scope,
+                    host_ptr,
+                    effects,
+                    mutation_options,
+                );
+            }
             ParserDomMutation::AppendChild { parent, child } => self
                 .apply_parser_append_child_to_live_dom_host(
                     scope,

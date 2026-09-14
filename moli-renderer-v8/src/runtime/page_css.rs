@@ -119,7 +119,7 @@ impl PageVm {
         let dom_host = self.vm().document_runtime.dom_host();
         let node = dom_host.node(handle)?;
         let element = node.as_element()?;
-        if !crate::style_engine::stylesheet_owner_type_is_supported(element) {
+        if !crate::style_engine::stylesheet_owner_can_have_sheet(element) {
             return None;
         }
 
