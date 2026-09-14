@@ -378,9 +378,10 @@ where
     Ok(Some(Sequence(values)))
 }
 
-// Records are converted from own property names and then property values. If two
-// JavaScript keys become the same WebIDL key after key conversion, the later
-// property wins, matching the WebIDL record replacement behavior.
+// Record conversion collects own keys, then observes each descriptor immediately
+// before converting that entry. Getters and Proxy traps can affect later entries.
+// If two JavaScript keys become the same WebIDL key after key conversion, the
+// later property wins, matching the WebIDL record replacement behavior.
 impl<'s, K, V> WebIdlConverter<'s> for Record<K, V>
 where
     K: WebIdlConverter<'s> + PartialEq,
@@ -398,12 +399,17 @@ where
     ) -> Result<Self, WebIdlError> {
         let object = v8::Local::<v8::Object>::try_from(value)
             .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
-        let properties = own_property_names(scope, object, context)?;
+        let properties = own_property_keys(scope, object, context)?;
         let mut entries: Vec<(K, V)> = Vec::with_capacity(properties.length() as usize);
         for index in 0..properties.length() {
             let key_value = properties.get_index(scope, index).ok_or_else(|| {
                 WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record"))
             })?;
+            let property = v8::Local::<v8::Name>::try_from(key_value)
+                .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
+            if !record_property_is_enumerable(scope, object, property, context)? {
+                continue;
+            }
             let key = K::convert(scope, key_value, context, &K::Options::default())?;
             let value = record_property_value(scope, object, key_value, context)?;
             let value = V::convert(scope, value, context, &V::Options::default())?;
@@ -1200,14 +1206,19 @@ fn call_sequence_function<'s>(
     }
 }
 
-fn own_property_names<'s>(
+fn own_property_keys<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     context: Context,
 ) -> Result<v8::Local<'s, v8::Array>, WebIdlError> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    match object.get_own_property_names(&scope, v8::GetPropertyNamesArgs::default()) {
+    let args = v8::GetPropertyNamesArgs {
+        property_filter: v8::PropertyFilter::ALL_PROPERTIES,
+        key_conversion: v8::KeyConversionMode::ConvertToString,
+        ..Default::default()
+    };
+    match object.get_own_property_names(&scope, args) {
         Some(properties) => Ok(properties),
         None if scope.has_caught() => {
             let _ = scope.rethrow();
@@ -1218,6 +1229,38 @@ fn own_property_names<'s>(
             WebIdlErrorKind::CannotConvert("record"),
         )),
     }
+}
+
+fn record_property_is_enumerable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    key: v8::Local<'s, v8::Name>,
+    context: Context,
+) -> Result<bool, WebIdlError> {
+    let descriptor = {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        match object.get_own_property_descriptor(&scope, key) {
+            Some(descriptor) => descriptor,
+            None if scope.has_caught() => {
+                let _ = scope.rethrow();
+                return Err(WebIdlError::pending_exception(context));
+            }
+            None => {
+                return Err(WebIdlError::new(
+                    context,
+                    WebIdlErrorKind::CannotConvert("record"),
+                ));
+            }
+        }
+    };
+    if descriptor.is_undefined() {
+        return Ok(false);
+    }
+    let descriptor = v8::Local::<v8::Object>::try_from(descriptor)
+        .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
+    property_result(scope, descriptor, "enumerable", context)
+        .map(|value| value.is_some_and(|value| value.is_true()))
 }
 
 fn record_property_value<'s>(
