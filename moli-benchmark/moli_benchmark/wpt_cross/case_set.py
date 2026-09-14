@@ -829,15 +829,18 @@ def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ..
 
 
 @lru_cache(maxsize=None)
-def _script_content_type_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
-    resource = "html/semantics/scripting-1/the-script-element/serve-with-content-type.py"
-    relative = posixpath.relpath(resource, directory)
+def _script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in ("serve-with-content-type.py", "resources/load-error-events.py"):
+        resource = "html/semantics/scripting-1/the-script-element/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
     return tuple(
         re.compile(
             rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
             rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
         )
-        for reference in ("/" + resource, relative, "./" + relative)
+        for reference in references
     )
 
 
@@ -850,7 +853,7 @@ def _supported_wptserve_handler_references(
     if rel is not None:
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
-        supported += _script_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _script_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/range":
