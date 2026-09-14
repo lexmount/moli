@@ -57,7 +57,7 @@ async fn child_parser_module_roots_compile_binary_wasm_responses() {
         for (path, body, expected) in [
             // A custom section contains arbitrary bytes, including invalid UTF-8.
             ("/valid.WASM?v=1", vec![0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 0, 255], "load"),
-            ("/invalid.wasm", vec![0], "CompileError|load"),
+            ("/invalid.wasm", vec![0], "CompileError:true|load"),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").await?;
             let base_url = format!("http://{}", listener.local_addr()?);
@@ -85,7 +85,8 @@ async fn child_parser_module_roots_compile_binary_wasm_responses() {
                 globalThis.__wasmRootEvents = [];
                 const child = document.getElementById('wasm-child').contentWindow;
                 child.addEventListener('error', event => {
-                    __wasmRootEvents.push(event.error.name);
+                    __wasmRootEvents.push(event.error.name + ':' +
+                        (event.error.constructor === child.WebAssembly.CompileError));
                     event.preventDefault();
                 });
                 const script = child.document.querySelector('script');
