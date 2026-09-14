@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -162,6 +164,42 @@ time.sleep(30)
 
 
 class SupervisorSchedulingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_error_is_reported_even_when_absent_from_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = parse_args(["--group", "protocol", "--output-dir", temporary])
+            error = (
+                "CDPSession.send: Protocol error (Emulation.setCPUThrottlingRate): "
+                "CPU throttling is not supported"
+            )
+
+            async def failed_worker(
+                job: WorkerJob, output_dir: Path, _: float
+            ) -> WorkerOutcome:
+                log_path = output_dir / f"{job.file_stem}.log"
+                log_path.write_text("group failed: Error\n", encoding="utf-8")
+                return WorkerOutcome(
+                    job=job,
+                    status="failed",
+                    duration_seconds=0,
+                    exit_code=1,
+                    log_path=log_path,
+                    result_path=output_dir / f"{job.file_stem}.json",
+                    scenario_count=0,
+                    error=error,
+                )
+
+            stderr = io.StringIO()
+            with (
+                patch("moli_cdp_smoke.supervisor._run_worker_job", failed_worker),
+                redirect_stderr(stderr),
+            ):
+                exit_code, summary = await run_supervisor(args)
+
+            self.assertEqual(exit_code, 1)
+            self.assertFalse(summary["ok"])
+            self.assertIn(error, stderr.getvalue())
+            self.assertIn("group failed: Error", stderr.getvalue())
+
     async def test_jobs_bound_allows_isolated_workers_to_run_in_parallel(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             args = parse_args(

@@ -381,6 +381,11 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
     for outcome in outcomes:
         if outcome.passed or outcome.status == "skipped":
             continue
+        if outcome.error:
+            print(
+                f"\n--- {outcome.job.label} ({outcome.status}) error ---\n{outcome.error}",
+                file=sys.stderr,
+            )
         print(
             f"\n--- {outcome.job.label} ({outcome.status}) log tail ---\n"
             f"{_log_tail(outcome.log_path)}",

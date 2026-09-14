@@ -40,9 +40,9 @@ async def run_chromium_cdp_group(state: SmokeState) -> None:
     await _verify_chromium_io_resolve_blob_sample(state)
     await _verify_chromium_performance_enable_sample(state)
     await _verify_chromium_performance_metrics_sample(state)
-    await _verify_chromium_cpu_throttling_multiple_pages_sample(state)
+    await _verify_cpu_throttling_capability_multiple_pages_sample(state)
     await _verify_chromium_profiler_cpu_profile_sample(state)
-    await _verify_chromium_profiler_cpu_profile_with_throttling_sample(state)
+    await _verify_profiler_after_rejected_cpu_throttling_sample(state)
     await _verify_chromium_profiler_stop_without_start_sample(state)
     await _verify_chromium_profiler_sampling_interval_contract_sample(state)
     await _verify_chromium_profiler_enable_disable_contract_sample(state)
@@ -3790,7 +3790,7 @@ async def _verify_chromium_performance_metrics_sample(state: SmokeState) -> None
     state.record("chromium_performance_metrics_sample")
 
 
-async def _verify_chromium_cpu_throttling_multiple_pages_sample(state: SmokeState) -> None:
+async def _verify_cpu_throttling_capability_multiple_pages_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain")
     second_page = await state.context.new_page()
     second_cdp = await state.context.new_cdp_session(second_page)
@@ -3800,20 +3800,28 @@ async def _verify_chromium_cpu_throttling_multiple_pages_sample(state: SmokeStat
             wait_until="load",
             timeout=10_000,
         )
-        await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 2.0})
-        await second_cdp.send("Emulation.setCPUThrottlingRate", {"rate": 3.0})
-        await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1.0})
-        await second_cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1.0})
+        # Moli supports disabling throttling, but cannot throttle execution.
+        # A successful no-op here would mislead clients about the CPU rate.
+        for cdp, rate in [(state.cdp, 2.0), (second_cdp, 3.0)]:
+            error = await _send_cdp_expect_optional_error(
+                cdp, "Emulation.setCPUThrottlingRate", {"rate": rate}
+            )
+            if not error or "CPU throttling is not supported" not in str(error):
+                raise SmokeError(f"CPU rate {rate} should report unsupported: {error}")
+            for neutral_rate in [1.0, 0.5, 0.0, -1.0]:
+                result = await cdp.send("Emulation.setCPUThrottlingRate", {"rate": neutral_rate})
+                assert_equal(result, {}, f"CPU rate {neutral_rate} disables throttling")
+            result = await cdp.send("Runtime.evaluate", {"expression": "1 + 1", "returnByValue": True})
+            assert_equal(result.get("result", {}).get("value"), 2, "page remains usable after rejected throttling")
     finally:
         await second_page.close()
-    state.record("chromium_cpu_throttling_multiple_pages_sample")
+    state.record("cpu_throttling_capability_multiple_pages_sample")
 
 
 async def _verify_chromium_profiler_cpu_profile_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain")
     await state.cdp.send("Profiler.enable")
     await state.cdp.send("Profiler.setSamplingInterval", {"interval": 100})
-    await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 2.0})
     await state.cdp.send("Profiler.start")
     try:
         burn = await state.cdp.send(
@@ -3840,7 +3848,6 @@ async def _verify_chromium_profiler_cpu_profile_sample(state: SmokeState) -> Non
         )
         profile_result = await state.cdp.send("Profiler.stop")
     finally:
-        await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1.0})
         await state.cdp.send("Profiler.disable")
 
     profile = profile_result.get("profile") or {}
@@ -3855,28 +3862,31 @@ async def _verify_chromium_profiler_cpu_profile_sample(state: SmokeState) -> Non
     state.record("chromium_profiler_cpu_profile_sample")
 
 
-async def _verify_chromium_profiler_cpu_profile_with_throttling_sample(state: SmokeState) -> None:
+async def _verify_profiler_after_rejected_cpu_throttling_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-cpu-throttling")
-    await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4.0})
     await state.cdp.send("Profiler.enable")
     await state.cdp.send("Profiler.setSamplingInterval", {"interval": 100})
     await state.cdp.send("Profiler.start")
     try:
+        error = await _send_cdp_expect_optional_error(
+            state.cdp, "Emulation.setCPUThrottlingRate", {"rate": 4.0}
+        )
+        if not error or "CPU throttling is not supported" not in str(error):
+            raise SmokeError(f"CPU throttling while profiling should report unsupported: {error}")
         burn = await state.cdp.send(
             "Runtime.evaluate",
             {
                 "expression": """
                     (() => {
-                        function chromiumProfilerThrottledWork() {
+                        function profilerWorkAfterRejectedThrottle() {
                             let count = 0;
                             const limit = 10000000;
                             const target = Date.now() + 1000;
                             for (let i = 0; i < limit && Date.now() < target; ++i)
                                 count += i;
-                            window.__chromiumProfilerThrottledCount = count;
                             return count >= 0;
                         }
-                        return chromiumProfilerThrottledWork();
+                        return profilerWorkAfterRejectedThrottle();
                     })()
                 """,
                 "returnByValue": True,
@@ -3885,21 +3895,20 @@ async def _verify_chromium_profiler_cpu_profile_with_throttling_sample(state: Sm
         assert_equal(
             burn.get("result", {}).get("value"),
             True,
-            "Chromium Profiler throttled CPU work sample",
+            "Profiler work after rejected CPU throttling",
         )
         profile_result = await state.cdp.send("Profiler.stop")
     finally:
-        await state.cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1.0})
         await state.cdp.send("Profiler.disable")
 
     profile = profile_result.get("profile") or {}
     nodes = profile.get("nodes") or []
     if not isinstance(nodes, list) or not nodes:
-        raise SmokeError(f"Profiler.stop should return non-empty throttled profile nodes: {profile_result}")
-    _assert_profile_tree_shape(profile, "Profiler throttled CPU profile")
-    if "chromiumProfilerThrottledWork" not in _profile_function_names(profile):
-        raise SmokeError(f"Throttled CPU profile should include sampled work frame: {profile_result}")
-    state.record("chromium_profiler_cpu_profile_with_throttling_sample")
+        raise SmokeError(f"Profiler.stop should return non-empty profile nodes after rejected throttling: {profile_result}")
+    _assert_profile_tree_shape(profile, "Profiler after rejected CPU throttling")
+    if "profilerWorkAfterRejectedThrottle" not in _profile_function_names(profile):
+        raise SmokeError(f"CPU profile after rejected throttling should include sampled work frame: {profile_result}")
+    state.record("profiler_after_rejected_cpu_throttling_sample")
 
 
 async def _verify_chromium_profiler_stop_without_start_sample(state: SmokeState) -> None:
