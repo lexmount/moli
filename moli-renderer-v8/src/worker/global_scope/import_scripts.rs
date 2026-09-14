@@ -237,11 +237,9 @@ pub(super) fn fetch_worker_import_source_blocking(
             response.body_bytes(),
         )?;
         if let Some(initiator_url) = &request_initiator_url {
-            validate_fetch_response_security_policy_for_origin(
-                initiator_url,
-                &WebOrigin::from_url(initiator_url),
-                &response.final_url,
-                &response.headers,
+            validate_fetch_response_security_policy(
+                WebOrigin::from_url(initiator_url),
+                &response.head(),
                 RequestMode::NoCors,
                 RequestCredentialsMode::SameOrigin,
                 policy_context,

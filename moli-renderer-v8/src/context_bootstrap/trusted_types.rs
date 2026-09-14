@@ -705,13 +705,9 @@ pub(crate) fn trusted_type_kind<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<TrustedTypeKind> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let kind = get_private_value(scope, object, TRUSTED_TYPE_KIND_SLOT)?;
-    match kind.to_string(scope)?.to_rust_string_lossy(scope).as_str() {
-        "html" => Some(TrustedTypeKind::Html),
-        "script" => Some(TrustedTypeKind::Script),
-        "script-url" => Some(TrustedTypeKind::ScriptUrl),
-        _ => None,
-    }
+    TRUSTED_TYPE_KINDS
+        .into_iter()
+        .find(|kind| kind.interface().is_instance(scope, object))
 }
 
 pub(crate) fn trusted_type_string<'s>(
