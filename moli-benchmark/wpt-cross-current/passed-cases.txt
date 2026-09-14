@@ -8512,6 +8512,7 @@ streams/writable-streams/start.any.js?moli-wpt-any=dedicatedworker
 streams/writable-streams/start.any.js?moli-wpt-any=window
 streams/writable-streams/write.any.js?moli-wpt-any=dedicatedworker
 streams/writable-streams/write.any.js?moli-wpt-any=window
+subresource-integrity/subresource-integrity.html
 svg/coordinate-systems/svgtransformlist-replaceitem.html
 svg/coordinate-systems/transform-translate-single-parameter.html
 svg/crashtests/chrome-bug-1172059.html
