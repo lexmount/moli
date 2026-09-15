@@ -580,6 +580,29 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn check_document_connect_csp_for_owner_with_script_location<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        document_url: &url::Url,
+        request_url: &url::Url,
+    ) -> DocumentCspOutcome {
+        let Some(check) = self.document_connect_csp_check_for_owner_with_redirect_status(
+            owner,
+            document_url,
+            request_url,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        ) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        if check.has_no_violations() {
+            return DocumentCspOutcome::Allowed;
+        }
+        let location =
+            crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+        self.dispatch_document_connect_csp_check(scope, owner, check, Some(&location))
+    }
+
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -596,7 +619,27 @@ impl JsContextHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
-        let (report_only_violations, enforced_violations) = check.into_violations();
+        self.dispatch_document_connect_csp_check(scope, owner, check, None)
+    }
+
+    fn dispatch_document_connect_csp_check<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: OwnerDispatchScope,
+        check: DocumentContentSecurityPolicyCheck,
+        source_location: Option<
+            &crate::content_security_policy::ContentSecurityPolicySourceLocation,
+        >,
+    ) -> DocumentCspOutcome {
+        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
+        if let Some(source_location) = source_location {
+            for violation in report_only_violations
+                .iter_mut()
+                .chain(&mut enforced_violations)
+            {
+                source_location.apply_to(violation);
+            }
+        }
         let host_ptr: *mut JsContextHost = self;
         for violation in report_only_violations {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
