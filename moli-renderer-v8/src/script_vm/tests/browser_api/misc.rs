@@ -18648,18 +18648,11 @@ async fn navigator_service_worker_fetch_restarts_stopped_active_worker() {
           }));
         });
     "#;
-    let (base_url, server) = spawn_service_worker_response_server(vec![
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            worker_script,
-        ),
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            worker_script,
-        ),
-    ])
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        worker_script,
+    )])
     .await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let (mut vm, browser_context_runtime) =
@@ -18708,6 +18701,11 @@ async fn navigator_service_worker_fetch_restarts_stopped_active_worker() {
         r#""counter:1:/app/first.txt|counter:2:/app/second.txt|activated""#
     );
 
+    // Close the script server before restarting: the installed version must
+    // start from its stored source without another network request.
+    server
+        .await
+        .expect("service worker restart script server should finish");
     browser_context_runtime.stop_service_worker_hosts_for_test();
     let diagnostics = browser_context_runtime.moli_memory_diagnostics();
     assert_eq!(diagnostics["serviceWorker"]["runningVersions"], 0);
@@ -18740,10 +18738,6 @@ async fn navigator_service_worker_fetch_restarts_stopped_active_worker() {
             .expect("after-stop probe should be readable"),
         r#""counter:1:/app/third.txt""#
     );
-
-    server
-        .await
-        .expect("service worker restart script server should finish");
 }
 
 #[tokio::test]
