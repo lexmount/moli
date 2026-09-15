@@ -121,6 +121,7 @@ pub(super) fn dispatch_service_worker_xhr(
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),

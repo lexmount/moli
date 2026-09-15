@@ -1592,8 +1592,42 @@ impl JsContextHost {
                 .streaming_subresource_fetches
                 .get(&internal_id)
                 .is_some_and(|state| state.body_source_id == body_source_id),
-            AsyncSubresourceFetchEventTarget::ObservedNetworkRecord => true,
+            AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
+            | AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation => true,
         }
+    }
+
+    pub(crate) fn window_fetch_redirect_check(
+        &self,
+        internal_id: u64,
+    ) -> Option<moli_fetch::RequestRedirectCheck> {
+        let pending = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })?;
+        let fetch = pending.continuation.window_fetch()?;
+        if !fetch.connect_policy().has_policies() {
+            return None;
+        }
+        let report_context = fetch.csp_report_context().clone();
+        let completion_tx = self.resource_completion_sender();
+        fetch.redirect_csp_state().redirect_check(
+            fetch.connect_policy().clone(),
+            pending.info.document_url.clone(),
+            pending.info.url.clone(),
+            move |violation| {
+                let _ = completion_tx.send_async_subresource_event(
+                    crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                        report_context: Box::new(report_context.clone()),
+                        violation: Box::new(violation),
+                    },
+                );
+            },
+        )
     }
 
     fn pending_xhr_for_upload(&self, internal_id: u64) -> Option<&PendingSubresourceFetchState> {

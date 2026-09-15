@@ -5666,26 +5666,37 @@ async fn window_fetch_cross_origin_redirect_without_cors_rejects_and_records_fai
 
 #[tokio::test]
 async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_initial_url() {
-    run_page_vm_async_test(async move {
-            let (source_base_url, _, source_server, target_server) =
-                spawn_cross_origin_redirect_with_cors_http_servers(
+    for use_meta in [false, true] {
+        run_page_vm_async_test(async move {
+            let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (source_base_url, source_server) =
+                spawn_single_redirect_http_server(
                     "/fetch-csp-redirect-source",
-                    "/fetch-csp-redirect-target",
-                    "cors-allowed-target",
+                    format!("http://{}/fetch-csp-redirect-target", target_listener.local_addr().unwrap()),
                 )
                 .await;
             let fetch_url = format!("{source_base_url}/fetch-csp-redirect-source");
             let document_url =
                 Url::parse(&format!("{source_base_url}/page.html")).expect("document url");
             let mut page_vm = test_page_vm_with_document_url(document_url);
-            page_vm
-                .vm_mut()
-                .set_response_content_security_policies(&[String::from("connect-src 'self'")]);
+            if !use_meta {
+                page_vm
+                    .vm_mut()
+                    .set_response_content_security_policies(&[String::from("connect-src 'self'")]);
+            }
             let local_executor = page_vm.local_executor.clone();
             let fetch_url_literal = serde_json::to_string(&fetch_url).expect("serialize fetch url");
 
             let (observed, network_output) = local_executor
                 .run(async move {
+                    if use_meta {
+                        page_vm.vm_mut().eval(r#"
+                            const policy = document.createElement("meta");
+                            policy.httpEquiv = "Content-Security-Policy";
+                            policy.content = "connect-src 'self'";
+                            document.head.append(policy);
+                        "#)?;
+                    }
                     page_vm.vm_mut().eval(&format!(
                         r#"
                         (() => {{
@@ -5753,9 +5764,8 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_init
             source_server
                 .await
                 .expect("fetch CSP redirect source server should finish");
-            target_server
-                .await
-                .expect("fetch CSP redirect target server should finish");
+            assert!(tokio::time::timeout(Duration::from_millis(50), target_listener.accept()).await.is_err(),
+                "CSP must block before connecting to the redirect target");
             let observed: serde_json::Value =
                 serde_json::from_str(&observed).expect("parse fetch CSP redirect observation");
             assert_eq!(
@@ -5787,6 +5797,7 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_init
             ));
         })
         .await;
+    }
 }
 
 #[tokio::test]

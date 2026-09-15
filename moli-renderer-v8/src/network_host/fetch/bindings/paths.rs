@@ -287,6 +287,9 @@ pub(super) fn spawn_network_fetch(
         },
         requires_preflight,
     );
+    if let Some(check) = host.window_fetch_redirect_check(internal_id) {
+        request = request.with_redirect_check(check);
+    }
     spawn_async_subresource_fetch(
         prepared.resource_loader.task_runner(),
         host.resource_completion_sender(),
