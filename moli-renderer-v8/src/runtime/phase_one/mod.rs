@@ -5311,6 +5311,19 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
 
     #[test]
     fn main_parser_blocking_source_failure_uses_the_shared_completion_event_flow() {
+        for (movement, expected) in [
+            ("", "error:true|error-microtask"),
+            ("foreign.body.append(script);", ""),
+            (
+                "foreign.body.append(script); document.body.append(script);",
+                "error:true|error-microtask",
+            ),
+        ] {
+            assert_main_parser_blocking_source_failure_events(movement, expected);
+        }
+    }
+
+    fn assert_main_parser_blocking_source_failure_events(movement: &str, expected: &str) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -5350,6 +5363,13 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .vm_mut()
                 .eval("window.__mainParserClassicFailureEvents = []")
                 .expect("source failure event state should initialize");
+            page_vm.vm_mut().eval(&format!(r#"
+                (() => {{
+                    const script = document.querySelector('script');
+                    const foreign = document.implementation.createHTMLDocument('');
+                    {movement}
+                }})()
+            "#)).expect("source failure script movement should complete");
 
             let task_owner = page_vm
                 .vm()
@@ -5405,8 +5425,8 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                     .vm_mut()
                     .eval("__mainParserClassicFailureEvents.join('|')")
                     .expect("source failure events should evaluate"),
-                "error:true|error-microtask",
-                "source failure must dispatch error with currentScript cleared and settle its reactions before parser continuation"
+                expected,
+                "source failure must check the preparation Document before dispatching error and settling reactions"
             );
         }));
     }
