@@ -3013,6 +3013,21 @@ async fn stylesheet_blocked_external_set_document_content_script_fetches_in_para
         },
     )
     .await;
+    let request_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.responseReceived")
+                && message["params"]["response"]["url"]
+                    == json!(format!("http://{addr}/parallel.js"))
+        })
+        .expect("the script's physical response head")["params"]["requestId"]
+        .clone();
+    wait_until_scheduler_message(&mut ctx, "preloaded script body completion", |message| {
+        message["method"] == json!("Network.loadingFinished")
+            && message["params"]["requestId"] == request_id
+    })
+    .await;
     assert!(ctx.sent.iter().any(|message| {
         message["method"] == json!("Network.requestWillBeSent")
             && message["params"]["request"]["url"] == json!(format!("http://{addr}/parallel.js"))
@@ -3857,6 +3872,21 @@ async fn document_written_stylesheet_pauses_set_document_content_parser_tail() {
                     == json!(format!("http://{addr}/after-written.js"))
         },
     )
+    .await;
+    let request_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.responseReceived")
+                && message["params"]["response"]["url"]
+                    == json!(format!("http://{addr}/after-written.js"))
+        })
+        .expect("the script's physical response head")["params"]["requestId"]
+        .clone();
+    wait_until_scheduler_message(&mut ctx, "preloaded script body completion", |message| {
+        message["method"] == json!("Network.loadingFinished")
+            && message["params"]["requestId"] == request_id
+    })
     .await;
     assert!(ctx.sent.iter().any(|message| {
         message["method"] == json!("Network.requestWillBeSent")

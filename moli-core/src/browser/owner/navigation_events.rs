@@ -26,7 +26,7 @@ impl Browser {
     pub(super) fn complete_native_response(
         &mut self,
         request: NavigationRequest,
-        body: Result<crate::browser::CapturedBody, String>,
+        body: Result<crate::browser::CapturedBody, crate::browser::NavigationBodyFailure>,
     ) -> Result<(), String> {
         let contents = self
             .context_mut(request.web_contents.context())?
@@ -36,6 +36,23 @@ impl Browser {
             .complete_native_response(request, body);
         contents.settle_background_navigation_completion(&request.navigation);
         if completed {
+            self.events
+                .publish(BrowserEvent::NavigationResponseChanged(request));
+        }
+        Ok(())
+    }
+
+    pub(super) fn record_native_response_data(
+        &mut self,
+        request: NavigationRequest,
+        bytes: usize,
+    ) -> Result<(), String> {
+        if self
+            .context_mut(request.web_contents.context())?
+            .web_contents_mut(request.web_contents)?
+            .navigation_mut()
+            .record_native_response_data(request, bytes)
+        {
             self.events
                 .publish(BrowserEvent::NavigationResponseChanged(request));
         }

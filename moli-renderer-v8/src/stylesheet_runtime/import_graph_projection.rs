@@ -37,7 +37,6 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
                 blocking_operation: None,
                 source_operation: None,
                 import_roots: Vec::new(),
-                document_url: document_url.clone(),
                 request_url,
                 source_owners: source_owners.clone(),
                 resource_type: SubresourceResourceType::Stylesheet,

@@ -49,7 +49,6 @@ async fn expect_child_frame_task_source_after_realm_prerequisite(
 /// prerequisite that can precede it.
 async fn expect_page_child_frame_task_source_after_realm_prerequisite(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     expected: impl Into<ChildFrameSemanticTurnKind>,
     context: &str,
 ) {
@@ -58,7 +57,6 @@ async fn expect_page_child_frame_task_source_after_realm_prerequisite(
         && page
             .run_one_child_frame_task_executor_turn(
                 ChildFrameSemanticTurnKind::RealmMaterialization,
-                loader,
             )
             .await
             .expect("exact child realm prerequisite should run")
@@ -67,7 +65,7 @@ async fn expect_page_child_frame_task_source_after_realm_prerequisite(
         // consume before the requested family.
     }
     assert!(
-        page.run_one_child_frame_task_executor_turn(expected, loader)
+        page.run_one_child_frame_task_executor_turn(expected)
             .await
             .expect("exact child semantic task should run"),
         "{context}"
@@ -9989,7 +9987,6 @@ async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload()
     .expect("javascript URL reload child setup should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(__javascriptUrlReloadLoadCount)",
         "1",
         "initial child document should load",
@@ -10009,7 +10006,6 @@ async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload()
     .expect("javascript URL followed by fragment navigation should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(__javascriptUrlReloadLoadCount)",
         "2",
         "javascript URL replacement should dispatch load",
@@ -10036,7 +10032,6 @@ async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload()
         .expect("replacement document reload should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(__javascriptUrlReloadLoadCount)",
         "3",
         "replacement document should reload the network resource",
@@ -10701,13 +10696,11 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
 "#,
     )
     .expect("child joint-history frame setup should evaluate");
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("child setup should use the selected-task dispatcher");
-    let _ = vm
-        .run_one_oldest_ready_page_task_executor_turn(&loader)
-        .await;
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    let _ = vm.run_one_oldest_ready_page_task_executor_turn().await;
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("child setup should use the selected-task dispatcher");
 
@@ -10732,9 +10725,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
         setup,
         "https://joint-child-back.test/page.html|2|2|https://joint-child-back.test/page.html#child"
     );
-    let _ = vm
-        .run_one_oldest_ready_page_task_executor_turn(&loader)
-        .await;
+    let _ = vm.run_one_oldest_ready_page_task_executor_turn().await;
 
     vm.eval("history.back(); 'queued'")
         .expect("top history back should queue traversal");
@@ -10742,7 +10733,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
     let mut result = String::new();
     for _ in 0..4 {
         assert!(
-            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+            vm.run_one_oldest_ready_page_task_executor_turn()
                 .await
                 .expect("wait driver should advance joint-history traversal")
         );
@@ -10906,7 +10897,7 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
     .expect("child navigation-error frame setup should evaluate");
     for _ in 0..128 {
         if !vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("child navigation-error setup should use the selected-task dispatcher")
         {
@@ -10982,11 +10973,11 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
     assert_eq!(setup, "queued");
 
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("child traversal should run through the production history source")
     );
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("child detach navigation-error timeouts should drain");
     let settled = vm
@@ -11050,7 +11041,7 @@ async fn child_meta_refresh_timer_is_canceled_when_frame_reloads() {
         .expect("child replacement load log should evaluate");
     assert_eq!(replaced_loads, "first|second");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("stale child meta refresh timer should drain without firing");
     let final_loads = vm
@@ -11091,7 +11082,7 @@ async fn child_meta_refresh_navigate_event_cancellation_prevents_reload() {
     .expect("child meta refresh cancellation setup should evaluate");
     vm.drain_pending_child_frame_work_for_test();
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("canceled child meta refresh timer should settle");
     vm.drain_pending_child_frame_work_for_test();
@@ -11132,7 +11123,7 @@ async fn child_meta_refresh_rejects_javascript_urls() {
     )
     .expect("child javascript refresh setup should evaluate");
     vm.drain_pending_child_frame_work_for_test();
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("child timer lane should settle");
 
@@ -11164,7 +11155,7 @@ async fn child_sandbox_blocks_meta_refresh_when_it_is_created() {
     vm.drain_pending_child_frame_work_for_test();
     vm.eval("document.querySelector('iframe').removeAttribute('sandbox'); 'removed'")
         .expect("sandbox removal should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("child timer lane should settle");
 
@@ -11197,7 +11188,7 @@ async fn child_meta_refresh_remains_scheduled_when_sandbox_is_added_later() {
         "document.querySelector('iframe').setAttribute('sandbox', 'allow-same-origin'); 'added'",
     )
     .expect("sandbox addition should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("scheduled child refresh should run");
 
@@ -11807,34 +11798,30 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
 
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child static media srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child media parser script should run before lifecycle",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child media document should enter interactive and accept its media token",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child media document should dispatch DOMContentLoaded",
     )
     .await;
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader,)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("blocked child HostLoad probe should succeed"),
         "the media token must keep HostLoad unavailable"
@@ -11847,18 +11834,15 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
         r#"{"events":["dcl"],"readyState":"interactive"}"#
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "child media loadstart turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "child media loadedmetadata turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "child media loadstart turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "child media loadedmetadata turn").await;
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader,)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("metadata child HostLoad probe should succeed"),
         "metadata must not release the media delay"
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "child media loadeddata turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "child media loadeddata turn").await;
     assert_eq!(
         vm.eval("globalThis.__childMediaDelayEvents.join('|')")
             .expect("child media loadeddata trace should evaluate"),
@@ -11868,14 +11852,12 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
 
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "loadeddata should queue a later complete lifecycle turn",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "completed media document should load on a still later HostLoad turn",
     )
@@ -11887,12 +11869,8 @@ async fn child_static_media_delays_complete_and_iframe_load_until_loadeddata() {
         .expect("released child media lifecycle should evaluate"),
         r#"{"events":["dcl","loadstart","loadedmetadata","loadeddata","frame-load"],"readyState":"complete"}"#
     );
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "non-blocking child media canplay turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "non-blocking child media canplay turn")
+        .await;
 }
 
 #[tokio::test]
@@ -11931,21 +11909,18 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
     .expect("child failed media setup should evaluate");
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child failed media srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child media parser script should install listeners",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child failed media document should become interactive",
     )
@@ -11958,19 +11933,13 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
     );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child failed media document should dispatch DOMContentLoaded",
     )
     .await;
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "child failed media loadstart turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "child failed media loadstart turn").await;
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader,)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("pending-media child HostLoad probe should succeed"),
         "the pending media request must keep child HostLoad unavailable"
@@ -11991,12 +11960,8 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
         "resource completion must not inline-dispatch media error or iframe load"
     );
 
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "child failed media error owner turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "child failed media error owner turn")
+        .await;
     assert_eq!(
         vm.eval("globalThis.__childFailedMediaEvents.join('|')")
             .expect("child media error trace should evaluate"),
@@ -12004,14 +11969,12 @@ async fn child_media_network_failure_releases_lifecycle_before_later_host_load()
     );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "media error should expose complete only on a later lifecycle turn",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "completed failed-media document should dispatch iframe load later",
     )
@@ -12058,21 +12021,18 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     .expect("child failed image setup should evaluate");
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child failed image srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child image parser script should install listeners",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child image document should become interactive",
     )
@@ -12085,7 +12045,6 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child image document should dispatch DOMContentLoaded",
     )
@@ -12106,7 +12065,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
         })
         .expect("child image handle");
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("pending-image child HostLoad probe should succeed"),
         "the pending image request must keep child HostLoad unavailable"
@@ -12137,7 +12096,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
         "same-document detach must preserve current image ownership"
     );
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("detached-image child HostLoad probe should succeed"),
         "same-document image removal must preserve the child document delay until the event"
@@ -12160,8 +12119,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("child image error selected task should run"),
@@ -12169,8 +12127,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     );
     assert!(
         !vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("child image error source should become idle"),
@@ -12183,14 +12140,12 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "image error should expose complete only on a later lifecycle turn",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "completed failed-image document should dispatch iframe load later",
     )
@@ -12237,49 +12192,38 @@ async fn child_dynamic_media_accepted_during_dcl_delays_later_load_turns() {
 
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child dynamic media srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "dynamic media parser script should install its DCL producer",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "dynamic media document should enter interactive",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "DCL should accept dynamic media before complete is prepared",
     )
     .await;
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader,)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("dynamic-media child HostLoad probe should succeed"),
         "DCL-inserted media must block HostLoad"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "dynamic media loadstart turn")
-        .await;
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "dynamic media loadedmetadata turn",
-    )
-    .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "dynamic media loadeddata turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "dynamic media loadstart turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "dynamic media loadedmetadata turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "dynamic media loadeddata turn").await;
     assert_eq!(
         vm.eval("globalThis.__childDynamicMediaEvents.join('|')")
             .expect("dynamic media terminal trace should evaluate"),
@@ -12287,14 +12231,12 @@ async fn child_dynamic_media_accepted_during_dcl_delays_later_load_turns() {
     );
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "dynamic media terminal should expose complete later",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "dynamic media completion should expose iframe load later",
     )
@@ -12336,29 +12278,25 @@ async fn child_static_text_track_starts_at_interactive_without_own_load_token() 
 
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child static text-track srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child track parser script should install its listener",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "interactive should start the static child track",
     )
     .await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("child default text-track mode owner turn"),
@@ -12394,12 +12332,12 @@ async fn child_static_text_track_starts_at_interactive_without_own_load_token() 
         );
     }
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("child track load-start networking turn")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("child track terminal networking turn")
     );
@@ -12420,7 +12358,6 @@ async fn child_static_text_track_starts_at_interactive_without_own_load_token() 
     ] {
         expect_page_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
-            &loader,
             source,
             &format!("track document should later advance through {transition}"),
         )
@@ -12543,7 +12480,7 @@ async fn child_document_replacement_retires_media_sequence_and_delay() {
         .await;
     }
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("retired child media callbacks should remain harmless");
     assert_eq!(
@@ -12587,28 +12524,24 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
     .expect("moving child media setup should evaluate");
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "moving child media srcdoc should commit before parser work",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "moving media parser script should run",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "moving media document should enter interactive",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "moving media document should dispatch DOMContentLoaded",
     )
@@ -12665,14 +12598,12 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
 
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "moving media away should release child complete later",
     )
     .await;
     expect_page_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "the child iframe should load after its media owner moves away",
     )
@@ -12681,16 +12612,10 @@ async fn moving_pending_child_media_restarts_under_the_new_document_owner() {
         !vm.has_ready_timeout(),
         "moving a pending media element must not create a synthetic Page timer"
     );
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "stale child media loadstart turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "stale child media loadstart turn").await;
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("moved main media {phase} turn"),
         )
         .await;
@@ -13662,7 +13587,7 @@ async fn child_document_open_in_dom_content_loaded_yields_to_timer() {
     );
 
     assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
+        vm.run_next_due_timer_callback_for_test()
             .await
             .expect("timer turn should advance child DCL timer")
     );
@@ -14186,7 +14111,6 @@ globalThis.__probeDomainChildDocument = () => {
     .expect("cross-origin document.domain frame setup should run");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__domainAccessLoadCount)",
         "1",
         "initial document.domain child should load",
@@ -14247,7 +14171,6 @@ __domainAccessFrame.src = globalThis.__replacementDomainChildUrl;
     .expect("replacement cross-origin child navigation should start");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__domainAccessLoadCount)",
         "2",
         "replacement document.domain child should load",
@@ -14317,7 +14240,6 @@ globalThis.__probeOneSidedDomainFrame = () => {
     .expect("same-origin document.domain frame setup should run");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__oneSidedDomainChildLoaded)",
         "true",
         "same-origin document.domain child should load",
@@ -14577,13 +14499,10 @@ globalThis.__lazyHistoryReloadFrame = historyFrame;
     )
     .expect("lazy iframe reload setup should evaluate");
 
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__lazyReloadLoads.location === 1 && __lazyReloadLoads.navigation === 1 && __lazyReloadLoads.history === 1)",
-        "true",
-        "all reload entry points should preserve the pending attribute navigation",
-    )
+    advance_page_task_executor_until_eval_equals(&mut vm,
+"String(__lazyReloadLoads.location === 1 && __lazyReloadLoads.navigation === 1 && __lazyReloadLoads.history === 1)",
+"true",
+"all reload entry points should preserve the pending attribute navigation")
     .await;
 
     assert_eq!(
@@ -14674,7 +14593,6 @@ globalThis.__lazyCrossOriginReplaceFrame = crossOriginFrame;
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__lazySameOriginLoaded && globalThis.__lazyCrossOriginLoaded)",
         "true",
         "replacement child navigations should complete",
@@ -14759,7 +14677,6 @@ opaqueFrame.srcdoc = "<p id='opaque-secret'>opaque child</p>";
     .expect("universal-access child setup should run");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__universalAccessTupleLoaded)",
         "true",
         "tuple-origin child realm should materialize",
@@ -14863,7 +14780,6 @@ frame.src = globalThis.__crossOriginChildUrl;
     .expect("cross-origin child SecurityError realm setup should run");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__crossOriginChildLoaded)",
         "true",
         "cross-origin child realm should materialize",

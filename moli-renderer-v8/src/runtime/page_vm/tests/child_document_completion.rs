@@ -29,15 +29,17 @@ fn owner_attached_page_vm(
 }
 
 pub(super) async fn wait_for_page_resource_completion(
+    page_vm: &mut PageVm,
     queue: &mut impl crate::page_resource_completion::RendererPageResourceCompletionTestSource,
     wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
     label: &str,
 ) {
-    if queue.has_ready_completion() {
-        return;
-    }
     tokio::time::timeout(Duration::from_secs(2), async {
-        while !queue.has_ready_completion() {
+        loop {
+            run_ready_native_resource_turns(page_vm).expect("native resource Page turn");
+            if resource_result_is_ready(queue) {
+                return;
+            }
             wake_rx
                 .recv()
                 .await
@@ -46,6 +48,24 @@ pub(super) async fn wait_for_page_resource_completion(
     })
     .await
     .unwrap_or_else(|_| panic!("{label} did not produce a terminal before timeout"));
+}
+
+pub(super) async fn wait_for_child_document_completion(page_vm: &mut PageVm, label: &str) {
+    wait_for_resource_result(page_vm, label).await;
+    assert!(matches!(
+        page_vm.page_resource_completion_queue().next_ready_owner().map(|owner| owner.local_owner()),
+        Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::ChildDocumentNavigation(_))
+    ), "expected child navigation result for {label}");
+}
+
+fn take_child_network_records(page_vm: &mut PageVm) -> Vec<SubresourceNetworkRecord> {
+    let (records, sockets, lifecycle) =
+        split_network_output_items(page_vm.vm_mut().take_network_output());
+    assert!(sockets.is_empty() && lifecycle.is_empty());
+    records
+        .into_iter()
+        .filter(|record| record.resource_type() == crate::types::SubresourceResourceType::Document)
+        .collect()
 }
 
 async fn start_external_child_document_load(
@@ -98,7 +118,7 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -107,7 +127,7 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
         let (handle, target) =
             start_external_child_document_load(&mut page_vm, "typed-child-frame", &child_url).await;
 
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "typed child fetch").await;
+        wait_for_child_document_completion(&mut page_vm, "typed child fetch").await;
         assert_eq!(
             queue.next_ready_owner(),
             Some(
@@ -144,7 +164,10 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
             )?,
             "typed child"
         );
-        assert!(page_vm.take_completed_child_document_networks().is_empty());
+        let network = take_child_network_records(&mut page_vm);
+        assert_eq!(network.len(), 1);
+        assert_eq!(network[0].url().as_str(), child_url);
+
         assert!(!queue.has_ready_completion());
 
         server.await.expect("typed child server should finish");
@@ -176,7 +199,7 @@ async fn child_document_response_frame_ancestors_gates_commit() {
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -184,7 +207,7 @@ async fn child_document_response_frame_ancestors_gates_commit() {
         let allowed_url = format!("{base_url}/allowed-child.html");
         start_external_child_document_load(&mut page_vm, "frame-ancestors-allowed", &allowed_url)
             .await;
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "allowed child fetch").await;
+        wait_for_child_document_completion(&mut page_vm, "allowed child fetch").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("allowed child terminal should apply");
@@ -199,10 +222,13 @@ async fn child_document_response_frame_ancestors_gates_commit() {
         page_vm
             .vm_mut()
             .eval("globalThis.__blockedChildExecuted = false")?;
+        let allowed_network = take_child_network_records(&mut page_vm);
+        assert_eq!(allowed_network.len(), 1);
+        assert_eq!(allowed_network[0].url().as_str(), allowed_url);
         let blocked_url = format!("{base_url}/blocked-child.html");
         start_external_child_document_load(&mut page_vm, "frame-ancestors-blocked", &blocked_url)
             .await;
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "blocked child fetch").await;
+        wait_for_child_document_completion(&mut page_vm, "blocked child fetch").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("blocked child terminal should settle");
@@ -228,27 +254,24 @@ async fn child_document_response_frame_ancestors_gates_commit() {
             "false",
             "blocked response script must never execute"
         );
-        let network = page_vm.take_completed_child_document_networks();
+        let network = take_child_network_records(&mut page_vm);
         assert_eq!(
             network.len(),
             1,
             "a policy-blocked response remains a network fact"
         );
-        assert_eq!(network[0].snapshot.request_url, blocked_url);
-        assert_eq!(network[0].snapshot.response.as_ref().unwrap().status, 200);
+        assert_eq!(network[0].url().as_str(), blocked_url);
+        let crate::types::SubresourceNetworkOutcome::Success {
+            status,
+            response_body,
+            ..
+        } = network[0].outcome()
+        else {
+            panic!("policy block must retain the physical success")
+        };
+        assert_eq!(*status, 200);
         assert!(
-            String::from_utf8_lossy(
-                &network[0]
-                    .snapshot
-                    .response
-                    .as_ref()
-                    .unwrap()
-                    .response_body
-                    .as_ref()
-                    .unwrap()
-                    .clone_body_bytes()
-            )
-            .contains("must-not-commit")
+            String::from_utf8_lossy(&response_body.clone_body_bytes()).contains("must-not-commit")
         );
 
         server
@@ -266,7 +289,7 @@ async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_reques
         run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&dns_failure_fetch_config())
             .expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse("http://127.0.0.1/page.html").expect("page URL"),
         );
@@ -277,7 +300,7 @@ async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_reques
         )
         .await;
 
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "failed child fetch").await;
+        wait_for_child_document_completion(&mut page_vm, "failed child fetch").await;
         assert_eq!(
             queue.next_ready_owner(),
             Some(
@@ -315,12 +338,12 @@ async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_reques
                 .current_child_document_navigation_fetch_target(handle),
             None
         );
-        let network = page_vm.take_completed_child_document_networks();
+        let network = take_child_network_records(&mut page_vm);
         assert_eq!(network.len(), 1, "a transport error retains its actual failed request");
-        assert_eq!(network[0].snapshot.request_url, "http://127.0.0.1:1/unreachable.html");
-        assert_eq!(network[0].snapshot.request_method, "GET");
-        assert!(!network[0].snapshot.response.as_ref().unwrap_err().is_empty());
-        assert!(page_vm.take_completed_child_document_networks().is_empty());
+        assert_eq!(network[0].url().as_str(), "http://127.0.0.1:1/unreachable.html");
+        assert_eq!(network[0].method(), "GET");
+        assert!(matches!(network[0].outcome(), crate::types::SubresourceNetworkOutcome::Failure { error_text } if !error_text.is_empty()));
+        assert!(take_child_network_records(&mut page_vm).is_empty());
         assert!(page_vm.take_completed_child_frame_navigation_loads().is_empty(), "a failed request cannot fabricate a child commit or Load");
         assert!(!queue.has_ready_completion());
         Ok::<_, anyhow::Error>(())
@@ -342,7 +365,7 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -355,6 +378,11 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
         )
         .await;
 
+        wait_for_child_document_completion(
+            &mut page_vm,
+            "retired response received before replacement",
+        )
+        .await;
         page_vm.vm_mut().eval(
             "document.getElementById('replacement-child-frame').srcdoc = \
              \"<p id='replacement-child'>replacement</p>\";",
@@ -370,11 +398,11 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
                 .vm()
                 .current_child_document_navigation_fetch_target(handle),
             Some(retired_target),
-            "replacement must retire the exact fetch target before its response arrives"
+            "replacement must retire the exact fetch target before its completion is applied"
         );
         let _ = page_vm.take_completed_child_frame_navigation_loads();
-        while wake_rx.try_recv().is_ok() {}
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "retired child fetch").await;
+
+        wait_for_child_document_completion(&mut page_vm, "retired child fetch").await;
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
 
         let outcome = page_vm
@@ -410,9 +438,9 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
             )?,
             "null"
         );
-        let historical = page_vm.take_completed_child_document_networks();
+        let historical = take_child_network_records(&mut page_vm);
         assert_eq!(historical.len(), 1);
-        assert_eq!(historical[0].snapshot.request_url, retired_url);
+        assert_eq!(historical[0].url().as_str(), retired_url);
         assert!(
             page_vm
                 .take_completed_child_frame_navigation_loads()
@@ -447,7 +475,7 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -458,6 +486,11 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
             &mut page_vm,
             "same-root-navigation-frame",
             &older_url,
+        )
+        .await;
+        wait_for_child_document_completion(
+            &mut page_vm,
+            "older response received before replacement",
         )
         .await;
         page_vm.vm_mut().eval(&format!(
@@ -484,8 +517,8 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
             .current_child_document_navigation_fetch_target(handle)
             .expect("newer navigation must expose its exact request target");
         assert_ne!(older_target, newer_target);
-        while wake_rx.try_recv().is_ok() {}
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "older child response").await;
+
+        wait_for_child_document_completion(&mut page_vm, "older child response").await;
         let activity_epoch_before_older_terminal = page_vm.vm().subresource_activity_epoch();
 
         let older_outcome = page_vm
@@ -513,11 +546,11 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
             page_vm.vm().subresource_activity_epoch(),
             activity_epoch_before_older_terminal
         );
-        let historical = page_vm.take_completed_child_document_networks();
+        let historical = take_child_network_records(&mut page_vm);
         assert_eq!(historical.len(), 1);
-        assert_eq!(historical[0].snapshot.request_url, older_url);
+        assert_eq!(historical[0].url().as_str(), older_url);
 
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "newer child response").await;
+        wait_for_child_document_completion(&mut page_vm, "newer child response").await;
         let newer_outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("newer response should retain its own application authority");
@@ -545,15 +578,10 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
 #[tokio::test(flavor = "current_thread")]
 async fn nested_stale_child_response_retains_producer_captured_parent_frame() {
     run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![(
-            "/nested-retired-child.html",
-            "HTTP/1.1 200 OK",
-            "<!doctype html><p>retired nested response</p>".to_owned(),
-            Duration::from_millis(100),
-        )])
-        .await;
+        let (base_url, request_seen, disconnected, server) =
+            spawn_request_seen_disconnect_observing_http_server().await;
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -597,6 +625,7 @@ document.getElementById("nested-owner-frame").contentDocument.body.appendChild(n
             "nested external navigation start",
         )
         .await;
+        tokio::time::timeout(Duration::from_secs(2), request_seen).await??;
         page_vm.vm_mut().eval(
             r#"
 document.getElementById("nested-owner-frame").contentDocument
@@ -609,9 +638,13 @@ document.getElementById("nested-owner-frame").contentDocument
             "nested response replacement",
         )
         .await;
+        let nested_attachment = page_vm.take_pending_child_frame_tree_events().into_iter().find_map(|event| match event {
+            crate::protocol_types::ChildFrameTreeEventSnapshot::Attached(attachment) if attachment.parent_frame_id.as_deref() == Some(outer_frame_id.as_str()) => Some(attachment),
+            _ => None,
+        }).expect("nested child must retain its producer-time parent attachment");
         let _ = page_vm.take_completed_child_frame_navigation_loads();
-        while wake_rx.try_recv().is_ok() {}
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "nested stale fetch").await;
+
+        wait_for_child_document_completion(&mut page_vm, "nested stale fetch").await;
 
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
@@ -620,17 +653,26 @@ document.getElementById("nested-owner-frame").contentDocument
             outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }
         ));
-        let historical = page_vm.take_completed_child_document_networks();
+        let historical = take_child_network_records(&mut page_vm);
         assert_eq!(historical.len(), 1);
-        assert_eq!(historical[0].snapshot.request_url, nested_url);
+        assert_eq!(historical[0].url().as_str(), nested_url);
         assert_eq!(
-            historical[0].parent_frame_id.as_deref(),
+            nested_attachment.parent_frame_id.as_deref(),
             Some(outer_frame_id.as_str()),
             "Network attribution must retain the producer-time nested parent, not rediscover it after replacement"
         );
-        assert_ne!(historical[0].frame_id, outer_frame_id);
+        assert_eq!(historical[0].frame_id(), Some(nested_attachment.frame_id.as_str()));
+        assert_ne!(nested_attachment.frame_id, outer_frame_id);
+        assert!(
+            matches!(historical[0].outcome(), SubresourceNetworkOutcome::Failure { .. }),
+            "replacement cancels the original physical request"
+        );
         assert!(page_vm.take_completed_child_frame_navigation_loads().is_empty());
 
+        assert!(
+            disconnected.await?,
+            "replacement must close the admitted TCP request"
+        );
         server.await.expect("nested stale child server should finish");
         Ok::<_, anyhow::Error>(())
     })
@@ -661,7 +703,7 @@ async fn unload_navigation_supersedes_authorized_terminal_during_application() {
         });
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
+        let (mut page_vm, mut queue, _wake_rx) = owner_attached_page_vm(
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
@@ -702,8 +744,8 @@ raceFrame.src = {target_url:?};
             "network navigation start",
         )
         .await;
-        while wake_rx.try_recv().is_ok() {}
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "unload-race fetch").await;
+
+        wait_for_child_document_completion(&mut page_vm, "unload-race fetch").await;
 
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
@@ -728,11 +770,11 @@ raceFrame.src = {target_url:?};
             PageResourceCompletionOutputEffect::CaptureRequired,
             "the completed response remains historical after unload supersedes its commit"
         );
-        let historical = page_vm.take_completed_child_document_networks();
+        let historical = take_child_network_records(&mut page_vm);
         assert_eq!(historical.len(), 1);
-        assert_eq!(historical[0].snapshot.request_url, target_url);
-        assert_eq!(historical[0].snapshot.response.is_err(), failed);
-        assert!(page_vm.take_completed_child_document_networks().is_empty());
+        assert_eq!(historical[0].url().as_str(), target_url);
+        assert_eq!(matches!(historical[0].outcome(), crate::types::SubresourceNetworkOutcome::Failure { .. }), failed);
+        assert!(take_child_network_records(&mut page_vm).is_empty());
 
         run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
             &mut page_vm,
@@ -767,7 +809,6 @@ raceFrame.src = {target_url:?};
 
 pub(super) fn stale_loaded_completion(
     target: ChildDocumentNavigationFetchTarget,
-    frame_id: &str,
     request_url: &str,
 ) -> ChildDocumentLoadCompletion {
     let loader_id = format!("TEST-CHILD-LOADER-{}", target.load_id());
@@ -781,30 +822,7 @@ pub(super) fn stale_loaded_completion(
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
                 markup: "<!doctype html>".to_owned(),
-                document_network: Some(
-                    crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(
-                        crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
-                            frame_id: frame_id.to_owned(),
-                            parent_frame_id: None,
-                            loader_id,
-                            snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-                                request_url: request_url.to_owned(),
-                                request_method: "GET".to_owned(),
-                                request_headers: Vec::new(),
-                                response: Ok(
-                                    crate::protocol_types::ChildFrameDocumentNetworkResponse {
-                                        final_url: request_url.to_owned(),
-                                        status: 200,
-                                        response_headers: Vec::new(),
-                                        encoded_data_length: 0,
-                                        response_body: None,
-                                        from_cache: false,
-                                    },
-                                ),
-                            },
-                        },
-                    ),
-                ),
+                resource_timing: None,
             },
         ))),
     )
@@ -831,19 +849,11 @@ async fn child_document_terminals_are_fifo_and_one_per_page_turn() {
         let mut queue = RendererPageNetworkingSource::new_for_test();
         queue.enqueue_local_for_test(RendererPageResourceCompletion::child_document_load(
             root_document,
-            stale_loaded_completion(
-                target(1),
-                "fifo-child-frame",
-                "https://fifo-child.test/first.html",
-            ),
+            stale_loaded_completion(target(1), "https://fifo-child.test/first.html"),
         ));
         queue.enqueue_local_for_test(RendererPageResourceCompletion::child_document_load(
             root_document,
-            stale_loaded_completion(
-                target(2),
-                "fifo-child-frame",
-                "https://fifo-child.test/second.html",
-            ),
+            stale_loaded_completion(target(2), "https://fifo-child.test/second.html"),
         ));
         assert_eq!(
             queue.next_ready_owner(),
@@ -859,11 +869,15 @@ async fn child_document_terminals_are_fifo_and_one_per_page_turn() {
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("first terminal should consume one turn");
 
-        let first_network = page_vm.take_completed_child_document_networks();
-        assert_eq!(first_network.len(), 1);
+        assert!(take_child_network_records(&mut page_vm).is_empty());
         assert_eq!(
-            first_network[0].snapshot.request_url,
-            "https://fifo-child.test/first.html"
+            queue.next_ready_owner(),
+            Some(
+                RendererPageResourceCompletionOwner::child_document_navigation(
+                    root_document,
+                    target(2)
+                )
+            )
         );
         assert!(queue.has_ready_completion());
 
@@ -871,12 +885,7 @@ async fn child_document_terminals_are_fifo_and_one_per_page_turn() {
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("second terminal should require its own turn");
 
-        let second_network = page_vm.take_completed_child_document_networks();
-        assert_eq!(second_network.len(), 1);
-        assert_eq!(
-            second_network[0].snapshot.request_url,
-            "https://fifo-child.test/second.html"
-        );
+        assert!(take_child_network_records(&mut page_vm).is_empty());
         assert!(!queue.has_ready_completion());
         Ok::<_, anyhow::Error>(())
     })

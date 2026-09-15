@@ -81,7 +81,6 @@ impl PageVm {
     pub(super) async fn apply_selected_page_main_document_runtime_turn(
         &mut self,
         task: RendererPageMainDocumentRuntimeTask,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<PageMainDocumentRuntimeTurnOutcome> {
         let owner = task.owner();
         let kind = task.action_kind();
@@ -90,14 +89,8 @@ impl PageVm {
         let action = if current_owner == Some(owner) {
             let action = match queued_action {
                 RendererPageMainDocumentRuntimeAction::AdmitRuntimeScript(admission) => {
-                    let document_loader = self.main_document_resource_loader();
-                    let request_client = document_loader.request_client().clone();
-                    let task_runner = document_loader.task_runner();
-                    self.vm_mut().admit_main_document_runtime_script_task(
-                        &request_client,
-                        task_runner,
-                        admission,
-                    );
+                    self.vm_mut()
+                        .admit_main_document_runtime_script_task(admission);
                     PageMainDocumentRuntimeTurnAction::runtime_script_admission(
                         owner,
                         PageRuntimeScriptAdmissionTargetEffect::AdmittedToCurrentOwner,
@@ -140,7 +133,7 @@ impl PageVm {
                     self.vm_mut()
                         .begin_runtime_owned_module_continuation_turn(owner.document_owner());
                     let made_progress = self
-                        .run_ready_runtime_owned_module_script_continuation(loader)
+                        .run_ready_runtime_owned_module_script_continuation()
                         .await?;
                     PageMainDocumentRuntimeTurnAction::remaining_or_runtime_owned(
                         owner,
@@ -156,7 +149,7 @@ impl PageVm {
                     self.vm_mut()
                         .begin_parser_owned_module_continuation_turn(owner.document_owner());
                     let task_effect = self
-                        .run_next_ready_parser_owned_document_script_action(loader)
+                        .run_next_ready_parser_owned_document_script_action()
                         .await?;
                     PageMainDocumentRuntimeTurnAction::parser_owned_module_continuation(
                         owner,
@@ -183,7 +176,7 @@ impl PageVm {
                             .begin_main_document_completion_recheck_turn();
                     }
                     match self
-                        .execute_post_parse_page_owned_task_on_named_owner_lane(loader, work)
+                        .execute_post_parse_page_owned_task_on_named_owner_lane(work)
                         .await?
                     {
                         super::parser_completion::SelectedPostParsePageOwnedCompletion::Ordinary => {
@@ -301,13 +294,12 @@ impl PageVm {
     #[cfg(test)]
     pub(in crate::runtime) async fn run_page_main_document_runtime_body_for_test(
         &mut self,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<Option<PageMainDocumentRuntimeTurnOutcome>> {
         let task_sources = self.page_task_executor_sources_for_test();
         let Some(task) = task_sources.take_main_document_runtime_for_executor_test() else {
             return Ok(None);
         };
-        self.apply_selected_page_main_document_runtime_turn(task, loader)
+        self.apply_selected_page_main_document_runtime_turn(task)
             .await
             .map(Some)
     }

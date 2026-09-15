@@ -758,7 +758,6 @@ impl PagePreparedOutputs {
             vec![event],
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             security_origin,
             secure_context_type,
         );
@@ -794,7 +793,6 @@ impl PagePreparedOutputs {
             Vec::new(),
             vec![event],
             Vec::new(),
-            Vec::new(),
             security_origin,
             secure_context_type,
         );
@@ -806,48 +804,29 @@ impl PagePreparedOutputs {
         }
     }
 
-    pub(crate) fn from_browser_child_document_network(
+    pub(crate) fn from_renderer_child_frame_navigation_started(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
-        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
-        committed: &moli_core::page::RendererCommittedNetworkObservation,
+        source_document: RendererDocumentLifecycleIdentity,
+        frame_id: String,
+        loader_id: String,
+        url: String,
     ) -> Self {
-        if !conn.accepts_browser_network_observation_for_owner(
-            owner,
-            source_renderer_page,
-            committed,
-        ) {
-            return Self::default();
-        }
-        let occurrence = committed.occurrence();
-        let moli_core::page::RendererNetworkOutputItem::ChildDocument(event) = &occurrence.item
+        let Some(binding) = conn
+            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_owner(
-            owner,
-            occurrence
-                .source
-                .document()
-                .expect("validated child Document source")
-                .1,
-        ) else {
-            return Self::default();
+        let document = PagePreparedChildFrameDocumentActivity {
+            navigation_starts: vec![
+                child_frame_activity::PagePreparedChildFrameNavigationStart {
+                    frame_id,
+                    loader_id,
+                    url,
+                },
+            ],
+            ..Default::default()
         };
-        let Some((_, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity_for_owner(owner)
-        else {
-            return Self::default();
-        };
-        let document = PagePreparedChildFrameDocumentActivity::from_parts(
-            monotonic_timestamp_seconds(),
-            Vec::new(),
-            Vec::new(),
-            vec![(**event).clone()],
-            Vec::new(),
-            security_origin,
-            secure_context_type,
-        );
         Self {
             child_frame_activities: vec![PagePreparedChildFrameActivity::from_document(
                 binding, document,
@@ -861,8 +840,6 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
-        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
-        network: Option<&moli_core::page::RendererCommittedNetworkObservation>,
     ) -> Self {
         let Some(binding) = conn
             .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
@@ -878,30 +855,8 @@ impl PagePreparedOutputs {
             event.parent_frame_id = Some(root_frame_id);
         }
         let timestamp = monotonic_timestamp_seconds();
-        let network = network
-            .filter(|committed| {
-                conn.accepts_browser_network_observation_for_owner(
-                    owner,
-                    source_renderer_page,
-                    committed,
-                ) && committed
-                    .occurrence()
-                    .source
-                    .document()
-                    .is_some_and(|(_, document)| document == source_document)
-            })
-            .and_then(|committed| match &committed.occurrence().item {
-                moli_core::page::RendererNetworkOutputItem::ChildDocument(response)
-                    if response.frame_id == event.frame_id
-                        && event.loader_id.as_deref() == Some(response.loader_id.as_str()) =>
-                {
-                    Some(response.as_ref())
-                }
-                _ => None,
-            });
         let mut document = PagePreparedChildFrameDocumentActivity::from_parts(
             timestamp,
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -910,7 +865,7 @@ impl PagePreparedOutputs {
         );
         document.loads.push(
             child_frame_activity::PagePreparedChildFrameLoadActivity::from_snapshot(
-                event, timestamp, network,
+                event, timestamp,
             ),
         );
         Self {
@@ -1101,7 +1056,6 @@ impl PagePreparedOutputs {
                 frame_id: "CHILD-FRAME-1".to_owned(),
                 parent_frame_id: "TID-1".to_owned(),
             }],
-            Vec::new(),
             Vec::new(),
             vec![ChildFrameNavigationSnapshot {
                 frame_id: "CHILD-FRAME-1".to_owned(),
@@ -2429,10 +2383,9 @@ pub(in crate::domains) fn emit_same_document_navigation_activity_background_even
 mod producer_tests {
     use moli_core::RendererDocumentTitleChanged;
     use moli_core::page::{
-        ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkResponse,
-        ChildFrameDocumentNetworkSnapshot, ChildFrameNavigationSnapshot,
-        RENDERER_BACKEND_NODE_ID_START, RendererDocumentLifecycleIdentity,
-        RendererDocumentLifecycleSnapshot, RendererDocumentSourcedSameDocumentNavigation,
+        ChildFrameNavigationSnapshot, RENDERER_BACKEND_NODE_ID_START,
+        RendererDocumentLifecycleIdentity, RendererDocumentLifecycleSnapshot,
+        RendererDocumentSourcedSameDocumentNavigation,
         RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentToken,
         RendererFrameToken, RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
         RendererJavaScriptDialogSource, RendererLifecycleEpoch, RendererLifecycleEventStamp,
@@ -3901,10 +3854,11 @@ mod producer_tests {
             message["method"] == json!("Page.frameStoppedLoading")
                 && message["params"]["frameId"] == json!("CHILD-FRAME-1")
         }));
-        assert!(out.iter().any(|message| {
-            message["method"] == json!("Page.frameStartedNavigating")
-                && message["params"]["frameId"] == json!("CHILD-FRAME-1")
-        }));
+        assert!(
+            !out.iter()
+                .any(|message| message["method"] == json!("Page.frameStartedNavigating")),
+            "completion must not re-announce the navigation producer's start: {out:?}"
+        );
         assert!(
             !out.iter().any(|message| matches!(
                 message["method"].as_str(),
@@ -4080,7 +4034,6 @@ mod producer_tests {
                 parent_frame_id: "TID-1".to_owned(),
             }],
             Vec::new(),
-            Vec::new(),
             vec![ChildFrameNavigationSnapshot {
                 frame_id: "CHILD-FRAME-1".to_owned(),
                 parent_frame_id: Some("TID-1".to_owned()),
@@ -4122,8 +4075,80 @@ mod producer_tests {
         );
     }
 
+    fn project_child_network_for_test(
+        conn: &mut CdpConnection,
+        events: &mut Vec<BackgroundProtocolEvent>,
+        source_document: RendererDocumentLifecycleIdentity,
+        frame: &str,
+        loader: &str,
+        url: &str,
+        result: Result<(Vec<u8>, bool), &str>,
+    ) {
+        use moli_core::page::{
+            ScriptNetworkOutputItem, SubresourceBodyFinished, SubresourceNetworkRequestHandle,
+            SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+            SubresourceResponseStarted,
+        };
+        let handle = SubresourceNetworkRequestHandle::allocate();
+        let url = url::Url::parse(url).unwrap();
+        let mut items = vec![ScriptNetworkOutputItem::SubresourceRequestStarted(
+            std::sync::Arc::new(
+                SubresourceRequestStarted::new(
+                    handle,
+                    Some(frame.into()),
+                    url.clone(),
+                    url.clone(),
+                    "GET".into(),
+                    vec![("Accept".into(), "text/html".into())].into(),
+                    None,
+                    SubresourceResourceType::Document,
+                    SubresourceRequestInitiatorType::Parser,
+                    None,
+                )
+                .with_navigation_loader_id(loader.into()),
+            ),
+        )];
+        let terminal = match result {
+            Ok((body, cached)) => {
+                items.push(ScriptNetworkOutputItem::SubresourceResponseStarted(
+                    std::sync::Arc::new(
+                        SubresourceResponseStarted::new(
+                            handle,
+                            Vec::new(),
+                            url,
+                            200,
+                            vec![("Content-Type".into(), "text/html".into())],
+                            Vec::new(),
+                        )
+                        .with_from_cache(cached),
+                    ),
+                ));
+                SubresourceBodyFinished::ready(handle, SubresourceResponseBody::from_bytes(body))
+            }
+            Err(error) => SubresourceBodyFinished::failed(handle, error.to_owned()),
+        };
+        items.push(ScriptNetworkOutputItem::SubresourceBodyFinished(
+            std::sync::Arc::new(terminal),
+        ));
+        for item in items {
+            let mut delivery = conn
+                .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
+                    Some("SID-1"),
+                    source_document,
+                    &item,
+                )
+                .unwrap();
+            crate::domains::network::emit_prepared_renderer_network_live_background_events(
+                conn,
+                events,
+                &CommandOwnerScope::for_session("SID-1"),
+                &mut delivery,
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
+    async fn child_network_stages_preserve_frame_loader_cache_and_attached_body_access() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
@@ -4144,7 +4169,6 @@ mod producer_tests {
             }],
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             "https://example.test".to_owned(),
             "Secure".to_owned(),
         );
@@ -4161,30 +4185,16 @@ mod producer_tests {
                     security_origin_opaque: false,
                 },
                 12.5,
-                Some(&ChildFrameDocumentNetworkActivitySnapshot {
-                    frame_id: "CHILD-FRAME-1".into(),
-                    parent_frame_id: Some("TID-1".into()),
-                    loader_id: "LID-CHILD-1".into(),
-                    snapshot: ChildFrameDocumentNetworkSnapshot {
-                        request_url: "https://example.test/child".to_owned(),
-                        request_method: "GET".to_owned(),
-                        request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
-                        response: Ok(ChildFrameDocumentNetworkResponse {
-                            final_url: "https://example.test/child".to_owned(),
-                            status: 200,
-                            response_headers: vec![(
-                                "Content-Type".to_owned(),
-                                "text/html".to_owned(),
-                            )],
-                            encoded_data_length: 3,
-                            response_body: Some(SubresourceResponseBody::from_bytes(vec![
-                                0x00, 0xff, b'a',
-                            ])),
-                            from_cache: true,
-                        }),
-                    },
-                }),
             ),
+        );
+        project_child_network_for_test(
+            &mut conn,
+            &mut background_events,
+            source_document,
+            "CHILD-FRAME-1",
+            "LID-CHILD-1",
+            "https://example.test/child",
+            Ok((vec![0x00, 0xff, b'a'], true)),
         );
         let activity =
             prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
@@ -4299,45 +4309,16 @@ mod producer_tests {
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
-        let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
-            19.25,
-            Vec::new(),
-            Vec::new(),
-            vec![ChildFrameDocumentNetworkActivitySnapshot {
-                frame_id: "RETIRED-CHILD-FRAME".to_owned(),
-                parent_frame_id: Some("TID-1".to_owned()),
-                loader_id: "LID-RETIRED-CHILD".to_owned(),
-                snapshot: ChildFrameDocumentNetworkSnapshot {
-                    request_url: "https://example.test/retired-child".to_owned(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    response: Ok(ChildFrameDocumentNetworkResponse {
-                        final_url: "https://example.test/retired-child".to_owned(),
-                        status: 200,
-                        response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
-                        encoded_data_length: 21,
-                        response_body: Some(SubresourceResponseBody::from_bytes(
-                            b"historical child body".to_vec(),
-                        )),
-                        from_cache: false,
-                    }),
-                },
-            }],
-            Vec::new(),
-            "https://example.test".to_owned(),
-            "Secure".to_owned(),
-        );
-        let activity =
-            prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
         let mut background_events = Vec::new();
-
-        super::emit_prepared_child_frame_activity(
+        project_child_network_for_test(
             &mut conn,
             &mut background_events,
-            activity,
-            None,
-        )
-        .await;
+            source_document,
+            "RETIRED-CHILD-FRAME",
+            "LID-RETIRED-CHILD",
+            "https://example.test/retired-child",
+            Ok((b"historical child body".to_vec(), false)),
+        );
         let out = protocol_messages_from_background_events(background_events);
 
         assert_eq!(
@@ -4410,51 +4391,38 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn child_document_network_without_body_records_known_no_data() {
+    async fn child_document_failure_before_headers_records_known_no_data() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
-        let snapshot = ChildFrameDocumentNetworkSnapshot {
-            request_url: "https://example.test/legacy-child".to_owned(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
-            response: Ok(ChildFrameDocumentNetworkResponse {
-                final_url: "https://example.test/legacy-child".to_owned(),
-                status: 200,
-                response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
-                encoded_data_length: 0,
-                response_body: None,
-                from_cache: false,
-            }),
-        };
+        let source_document = renderer_document_identity_for_test(1, 1);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
-
-        crate::domains::network::emit_child_document_navigation_network_background_events(
+        project_child_network_for_test(
             &mut conn,
             &mut background_events,
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            "CHILD-FRAME-LEGACY",
-            "LID-CHILD-LEGACY",
-            "LID-CHILD-LEGACY",
-            12.5,
-            &snapshot,
+            source_document,
+            "CHILD-FRAME-FAILED",
+            "LID-CHILD-FAILED",
+            "https://example.test/failed-child",
+            Err("connection closed before headers"),
         );
 
         let messages = protocol_messages_from_background_events(background_events);
         assert!(
             messages
                 .iter()
-                .any(|message| message["method"] == json!("Network.loadingFinished"))
+                .any(|message| message["method"] == json!("Network.loadingFailed"))
         );
         let mut ctx = TestContext::from_conn(conn);
         ctx.process_async(json!({
             "id": 7_503,
             "method": "Network.getResponseBody",
             "sessionId": "SID-1",
-            "params": { "requestId": "LID-CHILD-LEGACY" }
+            "params": { "requestId": "LID-CHILD-FAILED" }
         }))
         .await;
         ctx.expect_error(
@@ -4484,7 +4452,6 @@ mod producer_tests {
                 frame_id: "CHILD-FRAME-ATTACH-ONLY".to_owned(),
                 parent_frame_id: "TID-1".to_owned(),
             }],
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             "https://example.test".to_owned(),

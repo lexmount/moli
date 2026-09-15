@@ -4248,10 +4248,9 @@ impl RendererOwnerHandle {
             RendererOutputPublicationOrdering::Unconstrained
         };
         let executor = entry.page_vm().local_executor.clone();
-        let loader = entry.page_vm().request_client.clone();
+
         let (mut entry, advance_result) =
-            advance_page_owner_one_turn_via_local_task(executor, entry, scheduled_task, loader)
-                .await;
+            advance_page_owner_one_turn_via_local_task(executor, entry, scheduled_task).await;
         let parser_continuation_admitted = entry
             .page_vm()
             .vm()

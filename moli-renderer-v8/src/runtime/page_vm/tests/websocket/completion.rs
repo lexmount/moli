@@ -72,9 +72,8 @@ async fn drive_websocket_until_open(
                     .expect("exact WebSocket claim must expose its owner")
                     .socket_id(),
             );
-            let loader = page_vm.request_client.clone();
             page_vm
-                .run_claimed_selected_page_task_for_test(claimed, &loader)
+                .run_claimed_selected_page_task_for_test(claimed)
                 .await?;
             continue;
         }
@@ -219,9 +218,8 @@ globalThis.__webSocketInternalStateSocket = new WebSocket({url_literal});
                     "internal-state selected task",
                 )
                 .await?;
-                let loader = page_vm.request_client.clone();
                 page_vm
-                    .run_claimed_selected_page_task_for_test(claimed, &loader)
+                    .run_claimed_selected_page_task_for_test(claimed)
                     .await?;
                 assert_eq!(
                     page_vm
@@ -270,9 +268,8 @@ async fn websocket_missing_current_target_has_no_completion_authority() {
         )
         .await
         .expect("missing-target task should become ready");
-        let loader = page_vm.request_client.clone();
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await
             .expect("missing-target task should settle through the selected dispatcher");
         assert_eq!(
@@ -330,9 +327,8 @@ async fn websocket_stale_root_task_cannot_complete_in_replacement_page_vm() {
                 .root_document(),
             stale_document
         );
-        let loader = page_vm.request_client.clone();
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await
             .expect("stale-root task should retire through the selected dispatcher");
         assert_eq!(
@@ -383,9 +379,8 @@ async fn websocket_selected_dispatcher_owns_checkpoint_and_runtime_follow_up() {
                     1,
                     "the setup must leave one unrelated runtime residence pending"
                 );
-                let loader = page_vm.request_client.clone();
                 page_vm
-                    .run_claimed_selected_page_task_for_test(claimed, &loader)
+                    .run_claimed_selected_page_task_for_test(claimed)
                     .await?;
                 assert_eq!(
                     page_vm.vm_mut().eval("__webSocketTaskBoundary.join('|')")?,
@@ -435,8 +430,7 @@ async fn websocket_stream_send_completion_body_defers_write_reactions() {
                 &mut page_vm, claim_ready_websocket_selected_task, "stream open",
             ).await?;
             let socket_id = opened.websocket_owner().unwrap().socket_id();
-            let loader = page_vm.request_client.clone();
-            page_vm.run_claimed_selected_page_task_for_test(opened, &loader).await?;
+            page_vm.run_claimed_selected_page_task_for_test(opened).await?;
             page_vm.vm_mut().eval(r#"
                 __completionWriter.write("").then(() => __completionEvents.push("resolved"));
                 __completionEvents.push("after-write");
@@ -486,8 +480,7 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
                 &mut page_vm, claim_ready_websocket_selected_task, "stream open",
             ).await?;
             let socket_id = opened.websocket_owner().unwrap().socket_id();
-            let loader = page_vm.request_client.clone();
-            page_vm.run_claimed_selected_page_task_for_test(opened, &loader).await?;
+            page_vm.run_claimed_selected_page_task_for_test(opened).await?;
             let connection = page_vm.vm().context_host_weak_for_test().upgrade().unwrap()
                 .borrow().websocket_connection_for_test(socket_id).unwrap();
             page_vm.vm_mut().eval(r#"
@@ -511,14 +504,14 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
                     tokio::task::yield_now().await;
                 }
             }).await?;
-            page_vm.run_claimed_selected_page_task_for_test(sent, &loader).await?;
+            page_vm.run_claimed_selected_page_task_for_test(sent).await?;
             assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
                 "goodbye|write:InvalidStateError:true",
                 "the queued write must fail before the Close task is dispatched");
             let closed = wait_for_websocket_candidate(
                 &mut page_vm, claim_ready_websocket_selected_task, "peer Close",
             ).await?;
-            page_vm.run_claimed_selected_page_task_for_test(closed, &loader).await?;
+            page_vm.run_claimed_selected_page_task_for_test(closed).await?;
             page_vm.vm_mut().eval(r#"
                 __closeWriter.closed.catch(error => __closeEvents.push(`writer:${error === __interruptedWrite}`));
                 __closeWriter.write('later').catch(error => __closeEvents.push(`later:${error === __interruptedWrite}`));

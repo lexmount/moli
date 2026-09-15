@@ -62,7 +62,7 @@ pub(super) fn spawn_shared_worker_loading_task(
             params.reserved_service_worker_client_id,
             cancel_handle,
             cancel_wait,
-            network.as_ref(),
+            &network,
         )
         .await;
         if let Err(message) = &result {

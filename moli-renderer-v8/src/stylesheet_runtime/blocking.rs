@@ -418,7 +418,6 @@ impl DocumentRuntime {
                     blocking_operation: result.blocking_operation,
                     source_operation: None,
                     import_roots: Vec::new(),
-                    document_url: result.document_url,
                     request_url: result.request_url,
                     source_owners: result
                         .owner_node_ids

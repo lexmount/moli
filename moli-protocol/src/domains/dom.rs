@@ -55,7 +55,7 @@ pub(crate) fn try_start_dom_command_dispatch(
 ) -> Option<DomCommandDispatchStep> {
     let Some(action) = cmd.parse_action::<DomAction>() else {
         let plan = if conn.browser_context.is_none() {
-            CommandOutputPlan::error_without_session(-31998, "BrowserContextNotLoaded")
+            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
         } else {
             CommandOutputPlan::error(-32601, "UnknownMethod")
         };

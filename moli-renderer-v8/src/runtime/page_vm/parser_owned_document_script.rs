@@ -14,7 +14,6 @@ use crate::module_script_continuation::{
     MainParserOwnedDocumentScriptWork, MainParserOwnedModuleScriptEvaluation,
     MainParserOwnedModuleScriptFailure, ModuleScriptContinuation,
 };
-use crate::network::ResourceRequestClient;
 use crate::parser_script::action::ParserClassicScriptNextOwnerAction;
 use crate::script_vm::{
     ParserModuleTerminalDisposition, ParserOwnedModuleSuccessTerminal, PreparedScriptBodyActivity,
@@ -28,9 +27,8 @@ use super::{
     parser_task_completion::MainParserContinuationTaskEffect,
 };
 
-pub(super) struct MainParserOwnedDocumentScriptOwner<'page, 'loader> {
+pub(super) struct MainParserOwnedDocumentScriptOwner<'page> {
     page_vm: &'page mut PageVm,
-    loader: &'loader ResourceRequestClient,
 }
 
 type MainParserOwnedModuleReadyInput = DocumentModuleScriptReadyWork<
@@ -39,9 +37,8 @@ type MainParserOwnedModuleReadyInput = DocumentModuleScriptReadyWork<
     MainParserOwnedModuleScriptEvaluation,
 >;
 
-struct MainParserOwnedModuleExecutionHooks<'page, 'loader> {
+struct MainParserOwnedModuleExecutionHooks<'page> {
     page_vm: &'page mut PageVm,
-    loader: &'loader ResourceRequestClient,
     terminal_disposition: ParserModuleTerminalDisposition,
 }
 
@@ -76,9 +73,9 @@ impl MainParserModuleExecution {
     }
 }
 
-impl<'page, 'loader> MainParserOwnedDocumentScriptOwner<'page, 'loader> {
-    pub(super) fn new(page_vm: &'page mut PageVm, loader: &'loader ResourceRequestClient) -> Self {
-        Self { page_vm, loader }
+impl<'page> MainParserOwnedDocumentScriptOwner<'page> {
+    pub(super) fn new(page_vm: &'page mut PageVm) -> Self {
+        Self { page_vm }
     }
 
     /// Consume at most one exact ready parser-owned module action.
@@ -145,7 +142,6 @@ impl<'page, 'loader> MainParserOwnedDocumentScriptOwner<'page, 'loader> {
     ) -> Result<MainParserModuleExecution> {
         let hooks = MainParserOwnedModuleExecutionHooks {
             page_vm: self.page_vm,
-            loader: self.loader,
             terminal_disposition,
         };
         let mut runner = DocumentScriptExecutionRunner::new(hooks);
@@ -190,7 +186,7 @@ impl<'page, 'loader> MainParserOwnedDocumentScriptOwner<'page, 'loader> {
     }
 }
 
-impl MainParserOwnedModuleExecutionHooks<'_, '_> {
+impl MainParserOwnedModuleExecutionHooks<'_> {
     fn complete_graph_failure(
         &mut self,
         owned_failure: MainParserOwnedModuleScriptFailure,
@@ -225,7 +221,7 @@ impl MainParserOwnedModuleExecutionHooks<'_, '_> {
     }
 }
 
-impl DocumentScriptExecutionHooks for MainParserOwnedModuleExecutionHooks<'_, '_> {
+impl DocumentScriptExecutionHooks for MainParserOwnedModuleExecutionHooks<'_> {
     type Ready = MainParserOwnedModuleReadyInput;
     type PreparedWork = MainParserOwnedModuleReadyInput;
     type PrepareFollowup = DocumentScriptExecutionOutcome;
@@ -253,7 +249,6 @@ impl DocumentScriptExecutionHooks for MainParserOwnedModuleExecutionHooks<'_, '_
                 DocumentModuleScriptReadyWork::GraphReady(graph_ready) => {
                     self.page_vm
                         .finish_ready_completed_module_script(
-                            self.loader,
                             ModuleScriptContinuation::from_main_document_graph_ready_work(
                                 graph_ready,
                             ),
@@ -267,7 +262,6 @@ impl DocumentScriptExecutionHooks for MainParserOwnedModuleExecutionHooks<'_, '_
                 DocumentModuleScriptReadyWork::EvaluationCompleted(owned_evaluation) => {
                     self.page_vm
                         .run_ready_module_evaluation_completion(
-                            self.loader,
                             Some(owned_evaluation.into_action()),
                             self.terminal_disposition,
                         )
@@ -299,14 +293,14 @@ impl DocumentScriptExecutionHooks for MainParserOwnedModuleExecutionHooks<'_, '_
     }
 }
 
-impl<'page, 'loader>
+impl<'page>
     DocumentScriptReadyWorkOwner<
         MainDocumentModuleGraphReadyTarget,
         MainParserOwnedModuleScriptEvaluation,
         MainParserOwnedModuleScriptFailure,
         Infallible,
         Infallible,
-    > for MainParserOwnedDocumentScriptOwner<'page, 'loader>
+    > for MainParserOwnedDocumentScriptOwner<'page>
 {
     type Output<'owner>
         = Pin<Box<dyn Future<Output = Result<MainParserModuleExecution>> + 'owner>>

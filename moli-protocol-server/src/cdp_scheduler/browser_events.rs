@@ -461,7 +461,15 @@ mod tests {
                 }) && messages.iter().any(|message| {
                     message["method"] == terminal_method
                         && message["params"]["requestId"] == request["params"]["requestId"]
-                }) {
+                }) && (!child_document
+                    || failed
+                    || messages.iter().any(|message| {
+                        message["method"] == "Page.frameNavigated"
+                            && message["params"]["frame"]["id"] == request["params"]["frameId"]
+                            && message["params"]["frame"]["loaderId"]
+                                == request["params"]["loaderId"]
+                    }))
+                {
                     break;
                 }
                 let publication = receivers.renderer_publication_rx.recv().await.unwrap();

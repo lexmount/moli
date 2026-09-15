@@ -51,27 +51,26 @@ use super::{
         ServiceWorkerClientNavigate, ServiceWorkerClientNavigateError,
         ServiceWorkerClientNavigateResult, ServiceWorkerClientsOpenWindow,
         ServiceWorkerClientsOpenWindowError, ServiceWorkerClientsOpenWindowResult,
-        ServiceWorkerCloseNotification, ServiceWorkerDirectFetchResult,
-        ServiceWorkerFetchCompletion, ServiceWorkerFetchDispatch, ServiceWorkerFetchEvent,
-        ServiceWorkerFetchResponse, ServiceWorkerFetchResult, ServiceWorkerFetchStreamChunk,
-        ServiceWorkerFetchStreamStarted, ServiceWorkerGetNotifications,
-        ServiceWorkerGetNotificationsResult, ServiceWorkerLifecycleCompletion,
-        ServiceWorkerLifecycleEvent, ServiceWorkerLifecycleEventKind,
-        ServiceWorkerMessageCompletion, ServiceWorkerMessageEvent, ServiceWorkerNotificationAction,
-        ServiceWorkerNotificationCompletion, ServiceWorkerNotificationEvent,
-        ServiceWorkerNotificationEventKind, ServiceWorkerNotificationMetadata,
-        ServiceWorkerNotificationSnapshot, ServiceWorkerPeriodicSyncCompletion,
-        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPeriodicSyncGetTags,
-        ServiceWorkerPeriodicSyncGetTagsResult, ServiceWorkerPeriodicSyncRegistration,
-        ServiceWorkerPeriodicSyncRegistrationResult, ServiceWorkerPeriodicSyncUnregistration,
-        ServiceWorkerPeriodicSyncUnregistrationResult, ServiceWorkerPushCompletion,
-        ServiceWorkerPushEvent, ServiceWorkerPushGetSubscription,
+        ServiceWorkerCloseNotification, ServiceWorkerFetchCompletion, ServiceWorkerFetchDispatch,
+        ServiceWorkerFetchEvent, ServiceWorkerFetchResponse, ServiceWorkerFetchResult,
+        ServiceWorkerFetchStreamChunk, ServiceWorkerFetchStreamStarted,
+        ServiceWorkerGetNotifications, ServiceWorkerGetNotificationsResult,
+        ServiceWorkerLifecycleCompletion, ServiceWorkerLifecycleEvent,
+        ServiceWorkerLifecycleEventKind, ServiceWorkerMessageCompletion, ServiceWorkerMessageEvent,
+        ServiceWorkerNotificationAction, ServiceWorkerNotificationCompletion,
+        ServiceWorkerNotificationEvent, ServiceWorkerNotificationEventKind,
+        ServiceWorkerNotificationMetadata, ServiceWorkerNotificationSnapshot,
+        ServiceWorkerPeriodicSyncCompletion, ServiceWorkerPeriodicSyncEvent,
+        ServiceWorkerPeriodicSyncGetTags, ServiceWorkerPeriodicSyncGetTagsResult,
+        ServiceWorkerPeriodicSyncRegistration, ServiceWorkerPeriodicSyncRegistrationResult,
+        ServiceWorkerPeriodicSyncUnregistration, ServiceWorkerPeriodicSyncUnregistrationResult,
+        ServiceWorkerPushCompletion, ServiceWorkerPushEvent, ServiceWorkerPushGetSubscription,
         ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
         ServiceWorkerPushSubscribeResult, ServiceWorkerPushSubscriptionSnapshot,
         ServiceWorkerPushUnsubscribe, ServiceWorkerPushUnsubscribeResult,
-        ServiceWorkerShowNotification, ServiceWorkerShowNotificationResult,
-        ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent, ServiceWorkerSyncGetTags,
-        ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,
+        ServiceWorkerResourceFetchResult, ServiceWorkerShowNotification,
+        ServiceWorkerShowNotificationResult, ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent,
+        ServiceWorkerSyncGetTags, ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,
         ServiceWorkerSyncRegistrationResult, ServiceWorkerWorkerMessage,
     },
     functional_events::{
@@ -683,11 +682,11 @@ mod tests {
     }
 
     fn expect_direct_fetch_fallback(
-        receiver: &mut tokio::sync::oneshot::Receiver<ServiceWorkerDirectFetchResult>,
+        receiver: &mut tokio::sync::oneshot::Receiver<ServiceWorkerResourceFetchResult>,
     ) {
         assert!(matches!(
             receiver.try_recv(),
-            Ok(ServiceWorkerDirectFetchResult::Fallback)
+            Ok(ServiceWorkerResourceFetchResult::Fallback)
         ));
     }
 
@@ -1772,7 +1771,7 @@ mod tests {
             queue.sender(),
             cancel.clone(),
         );
-        job.result_tx = ServiceWorkerFetchResultSender::Direct(completion_tx);
+        job.result_tx = ServiceWorkerFetchResultSender::Resource(completion_tx);
         job.navigation_preload_cancel_handle = Some(preload_cancel.clone());
         service
             .inner
@@ -1787,8 +1786,8 @@ mod tests {
         assert!(preload_cancel.is_cancelled());
         assert!(matches!(
             completion_rx.try_recv(),
-            Ok(ServiceWorkerDirectFetchResult::Failure(message))
-                if message == SERVICE_WORKER_JOB_ABORTED_ERROR
+            Ok(ServiceWorkerResourceFetchResult::Failure(message))
+                if message.to_string() == SERVICE_WORKER_JOB_ABORTED_ERROR
         ));
         assert!(service.inner.state.lock().pending_fetch_jobs.is_empty());
         assert!(!queue.has_ready_completion());
@@ -7558,7 +7557,7 @@ self.addEventListener("message", event => {
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
                 },
-                result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                 request_client: test_request_client(&second_service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
@@ -9238,7 +9237,7 @@ self.addEventListener("message", event => {
             .pending_fetch_jobs
             .get_mut(&event_id)
             .expect("pending navigation preload fetch job")
-            .result_tx = ServiceWorkerFetchResultSender::Direct(direct_completion_tx);
+            .result_tx = ServiceWorkerFetchResultSender::Resource(direct_completion_tx);
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
@@ -9644,7 +9643,7 @@ self.addEventListener("message", event => {
                 completion_queue.sender(),
                 cancel_handle.clone(),
             );
-            job.result_tx = ServiceWorkerFetchResultSender::Direct(direct_completion_tx);
+            job.result_tx = ServiceWorkerFetchResultSender::Resource(direct_completion_tx);
             state.pending_fetch_jobs.insert(event_id, job);
         }
 
@@ -9860,7 +9859,7 @@ self.addEventListener("message", event => {
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
                 },
-                result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                 request_client: test_request_client(&service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
@@ -9952,7 +9951,7 @@ self.addEventListener("message", event => {
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
                 },
-                result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                 request_client: test_request_client(&service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
@@ -9998,7 +9997,7 @@ self.addEventListener("message", event => {
         }
         assert!(matches!(
             main_resource_completion_rx.try_recv(),
-            Ok(ServiceWorkerDirectFetchResult::Fallback)
+            Ok(ServiceWorkerResourceFetchResult::Fallback)
         ));
         assert!(!completion_queue.has_ready_completion());
     }
@@ -10123,7 +10122,7 @@ self.addEventListener("message", event => {
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
                 },
-                result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                 request_client: test_request_client(&service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
@@ -10150,13 +10149,14 @@ self.addEventListener("message", event => {
             .await
             .expect("timed out waiting for direct service worker fetch completion")
             .expect("direct service worker fetch channel closed");
-        let ServiceWorkerDirectFetchResult::Response(response) = direct_result else {
+        let ServiceWorkerResourceFetchResult::Response(response) = direct_result else {
             panic!("expected direct service worker response, got {direct_result:?}");
         };
-        assert_eq!(response.response.status, 209);
+        assert_eq!(response.response.response().status, 209);
         assert_eq!(
             response
                 .response
+                .response()
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("x-service-worker"))
@@ -10164,7 +10164,13 @@ self.addEventListener("message", event => {
             Some(b"worker-client".as_slice())
         );
         assert_eq!(
-            response.response.body_text(),
+            response
+                .response
+                .into_response()
+                .into_lossy_materialized_text_response()
+                .await
+                .unwrap()
+                .body_text(),
             format!(
                 r#"{{"url":"https://example.test/app/data.txt","clientId":"client-{client_id:016x}","destination":"","mode":"cors","credentials":"same-origin","redirect":"follow","header":"dedicated"}}"#,
                 client_id = client_id.as_u64()
@@ -10231,7 +10237,7 @@ self.addEventListener("message", event => {
                     resource_type: crate::types::SubresourceResourceType::Fetch,
                     policy_context: Default::default(),
                 },
-                result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                 request_client: test_request_client(&service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
@@ -10337,7 +10343,7 @@ self.addEventListener("message", event => {
                         resource_type: crate::types::SubresourceResourceType::Fetch,
                         policy_context: Default::default(),
                     },
-                    result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
+                    result_tx: ServiceWorkerFetchResultSender::Resource(direct_completion_tx),
                     request_client: test_request_client(&service),
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),

@@ -724,7 +724,6 @@ fn complete_page_owned_prepared_script_execution_failure_body(
 
 async fn execute_prepared_script_on_script_execution_lane(
     local_executor: &JsLocalExecutor,
-    loader: &ResourceRequestClient,
     vm: &mut ScriptVm,
     script: PreparedScript,
     mut runtime_script_claim: Option<DynamicScriptPageTaskClaim>,
@@ -763,7 +762,7 @@ async fn execute_prepared_script_on_script_execution_lane(
         ModuleScriptCompletionOwner::Parser
     };
     let execution_result = vm
-        .run_prepared_script(loader, &script, dynamic_script_owner_id)
+        .run_prepared_script(&script, dynamic_script_owner_id)
         .await;
 
     match execution_result {
@@ -867,7 +866,6 @@ async fn execute_main_document_post_parse_body_on_owner_local_task(
 }
 
 async fn execute_connected_style_load_task_on_owner_local_task(
-    loader: &ResourceRequestClient,
     page_vm: &mut PageVm,
     ready: crate::document_runtime::ReadyConnectedStyleLoad,
 ) -> Result<PageOwnedConnectedStyleLoadTaskRun> {
@@ -875,7 +873,6 @@ async fn execute_connected_style_load_task_on_owner_local_task(
     // fresh owner-local task so V8 does not inherit deep lifecycle poll stacks.
     let local_executor = page_vm.local_executor.clone();
     let mut page_vm_ref = AwaitedOwnerLocalPageVm::new(page_vm);
-    let loader = loader.clone();
     run_named_owner_local_task(
         local_executor,
         "page-owned connected style load local task channel closed",
@@ -886,7 +883,7 @@ async fn execute_connected_style_load_task_on_owner_local_task(
             let dispatched = page_vm.vm_mut().dispatch_connected_style_load(ready);
             page_vm.vm_mut().settle_connected_style_load(binding);
             if dispatched {
-                page_vm.finish_selected_page_callback_task(&loader).await?;
+                page_vm.finish_selected_page_callback_task().await?;
             } else {
                 page_vm.finish_selected_page_task_checkpoint()?;
             }
@@ -908,7 +905,6 @@ async fn execute_connected_style_load_task_on_owner_local_task(
 }
 
 async fn execute_page_owned_work_on_script_execution_lane(
-    loader: &ResourceRequestClient,
     page_vm: &mut PageVm,
     work: PostParsePageOwnedWork,
 ) -> Result<parser_continuation::PostParsePageOwnedExecution> {
@@ -921,7 +917,7 @@ async fn execute_page_owned_work_on_script_execution_lane(
         PostParsePageOwnedWork::DocumentScript(work)
         | PostParsePageOwnedWork::DocumentScriptWithStylesheetSnapshot { work, .. } => {
             let execution =
-                page_owned_document_script::MainPageOwnedDocumentScriptOwner::new(page_vm, loader)
+                page_owned_document_script::MainPageOwnedDocumentScriptOwner::new(page_vm)
                     .run_work(*work)
                     .await?;
             return Ok(
@@ -974,9 +970,7 @@ async fn execute_page_owned_work_on_script_execution_lane(
             owner,
             initial_count: _,
         } => {
-            let execution = page_vm
-                .run_next_main_parser_deferred_script(loader, owner)
-                .await?;
+            let execution = page_vm.run_next_main_parser_deferred_script(owner).await?;
             return Ok(
                 parser_continuation::PostParsePageOwnedExecution::main_parser_continuation(
                     execution,
@@ -992,8 +986,7 @@ async fn execute_page_owned_work_on_script_execution_lane(
             "executing page-owned connected style load task"
         );
         let run =
-            execute_connected_style_load_task_on_owner_local_task(loader, page_vm, ready.clone())
-                .await?;
+            execute_connected_style_load_task_on_owner_local_task(page_vm, ready.clone()).await?;
         tracing::debug!(
             phase = task_phase,
             total_elapsed_ms = task_started.elapsed().as_millis(),
@@ -1220,12 +1213,6 @@ impl PageVmRuntimeHooks {
         self.owner_wake.clone()
     }
 
-    pub(crate) fn resource_task_runner(
-        &self,
-    ) -> Option<crate::network::RendererResourceTaskRunner> {
-        self.resource_task_runner.clone()
-    }
-
     #[cfg(test)]
     /// Builds a low-level test PageVm with a private document isolate.
     ///
@@ -1429,6 +1416,75 @@ impl PageVmRuntimeHooks {
 
     fn has_renderer_page_script_environment(&self) -> bool {
         self.renderer_page_script_environment.is_some()
+    }
+
+    fn page_runtime_task_source(&self) -> crate::page_task_queue::PageRuntimeTaskSource {
+        let source = self
+            .renderer_page_script_environment
+            .as_ref()
+            .map(|environment| environment.page_runtime_task_source());
+        #[cfg(test)]
+        let source = source.or_else(|| {
+            self.standalone_page_task_residence()
+                .map(crate::page_task_queue::RendererPageTaskTestResidence::runtime_source)
+        });
+        source.unwrap_or_else(|| {
+            crate::page_task_queue::PageRuntimeTaskSource::new(self.owner_wake.clone())
+        })
+    }
+
+    pub(super) fn prepare_main_document(
+        &mut self,
+        page_id: PageId,
+        dom: &DomHost,
+        loader: &ResourceRequestClient,
+    ) -> Result<crate::script_vm::MainDocumentBootstrap> {
+        let (_, document) = self.install_document_lifecycle(page_id)?;
+        let source = self.page_runtime_task_source();
+        if self.renderer_page_script_environment.is_none()
+            && self.renderer_document_isolate_allocator.is_some()
+        {
+            let prepared = self.create_renderer_document_isolate_bootstrap(source.clone())?;
+            self.prepared_renderer_document_isolate_bootstrap = Some(Rc::new(
+                std::cell::RefCell::new(Some(prepared.renderer_document_isolate_bootstrap)),
+            ));
+        }
+        let owner =
+            self.renderer_page_script_environment.as_ref().and_then(
+                |environment| match environment.output_journal().stream().residence() {
+                    super::RendererOutputResidenceIdentity::Page {
+                        owner_local_host_id,
+                        ..
+                    } => Some(owner_local_host_id),
+                    _ => None,
+                },
+            );
+        #[cfg(test)]
+        let owner = owner.or_else(|| {
+            self.standalone_page_task_residence()
+                .map(|_| super::RendererOwnerLocalHostId::new_for_testing(1))
+        });
+        let owner =
+            owner.ok_or_else(|| anyhow!("Document bootstrap requires a Page output source"))?;
+        let (_, _, completion, _, _, _) = source
+            .bound_task_producer_senders(document.document)
+            .ok_or_else(|| anyhow!("Document bootstrap requires its typed Page resource route"))?
+            .into_parts();
+        let mut document_bootstrap = crate::script_vm::MainDocumentBootstrap::new(
+            dom,
+            loader.clone(),
+            self.resource_task_runner.clone().ok_or_else(|| {
+                anyhow!("Document bootstrap requires its Context resource executor")
+            })?,
+            &self.browser_context_runtime,
+        );
+        document_bootstrap.resource_loader.bind_network(
+            self.browser_context_runtime
+                .network_for_document(owner, document),
+            RendererResourceCompletionSender::for_page_scheduler(completion, document.document),
+            None,
+        );
+        Ok(document_bootstrap)
     }
 
     fn create_renderer_document_isolate_bootstrap(
@@ -2479,11 +2535,9 @@ impl PageVm {
 
     async fn execute_post_parse_page_owned_task_on_named_owner_lane(
         &mut self,
-        loader: &ResourceRequestClient,
         work: PostParsePageOwnedWork,
     ) -> Result<parser_completion::SelectedPostParsePageOwnedCompletion> {
         let local_executor = self.local_executor.clone();
-        let loader = loader.clone();
         let page_vm_ptr: *mut PageVm = self;
         run_named_owner_local_task(
             local_executor,
@@ -2493,7 +2547,8 @@ impl PageVm {
                 // again, and the task stays on the same render thread/local runtime.
                 let page_vm = unsafe { &mut *page_vm_ptr };
                 let execution =
-                    execute_page_owned_work_on_script_execution_lane(&loader, page_vm, work)
+                    execute_page_owned_work_on_script_execution_lane(page_vm,
+work)
                         .await?;
                 let completion = match execution {
                     parser_continuation::PostParsePageOwnedExecution::Ordinary(run) => {
@@ -2539,11 +2594,10 @@ impl PageVm {
     #[cfg(test)]
     async fn execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
         &mut self,
-        loader: &ResourceRequestClient,
         work: PostParsePageOwnedWork,
     ) -> Result<()> {
         match self
-            .execute_post_parse_page_owned_task_on_named_owner_lane(loader, work)
+            .execute_post_parse_page_owned_task_on_named_owner_lane(work)
             .await?
         {
             parser_completion::SelectedPostParsePageOwnedCompletion::Ordinary => Ok(()),
@@ -2795,10 +2849,7 @@ impl PageVm {
                 || self.has_pending_runtime_owned_module_evaluation())
     }
 
-    async fn run_ready_runtime_owned_module_script_continuation(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> Result<bool> {
+    async fn run_ready_runtime_owned_module_script_continuation(&mut self) -> Result<bool> {
         let Some(continuation) = self.take_ready_runtime_owned_module_script_continuation() else {
             return Ok(false);
         };
@@ -2807,7 +2858,6 @@ impl PageVm {
             RuntimeOwnedModuleScriptContinuation::Graph(script_continuation) => {
                 let _ = self
                     .finish_ready_completed_module_script(
-                        loader,
                         script_continuation,
                         ParserModuleTerminalDisposition::CompleteWithinModuleSettlement,
                     )
@@ -2816,7 +2866,6 @@ impl PageVm {
             RuntimeOwnedModuleScriptContinuation::Evaluation(evaluation) => {
                 let _ = self
                     .run_ready_module_evaluation_completion(
-                        loader,
                         Some(evaluation),
                         ParserModuleTerminalDisposition::CompleteWithinModuleSettlement,
                     )
@@ -2932,8 +2981,7 @@ impl PageVm {
                 action.target_effect,
                 crate::page_task_queue::PageWebSocketTargetEffect::ParkedForReadableBackpressure
             );
-            let loader = self.request_client.clone();
-            self.finish_selected_page_task_completion(action.into_page_task_completion(), &loader)
+            self.finish_selected_page_task_completion(action.into_page_task_completion())
                 .await?;
             return Ok(produced_output.then_some(RendererOwnerResourceActivitySource::WebSocket));
         }
@@ -2955,10 +3003,7 @@ impl PageVm {
     /// does not compare timers with another source or participate in lifecycle
     /// task selection.
     #[cfg(test)]
-    async fn run_one_due_timer_selected_task_for_test(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> Result<bool> {
+    async fn run_one_due_timer_selected_task_for_test(&mut self) -> Result<bool> {
         let Some(crate::page_task_queue::RendererPageReadyDescriptor::Timer {
             deadline,
             selection,
@@ -2973,7 +3018,6 @@ impl PageVm {
                 deadline,
                 selection,
             },
-            loader,
         ))
         .await?;
         Ok(true)
@@ -2986,8 +3030,6 @@ impl PageVm {
         &mut self,
     ) -> Option<crate::frame_owner_model::ChildFrameSemanticTurnKind> {
         use crate::frame_owner_model::ChildFrameSemanticTurnKind;
-
-        let loader = self.request_client.clone();
 
         if self
             .run_child_realm_materialization_body_for_test()
@@ -3006,7 +3048,6 @@ impl PageVm {
         if self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildDocumentLifecycle,
-                &loader,
             )
             .await
             .expect("typed child lifecycle executor turn should succeed")
@@ -3016,7 +3057,6 @@ impl PageVm {
         if self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                &loader,
             )
             .await
             .expect("typed child DocumentScriptReady executor turn should succeed")
@@ -3024,10 +3064,7 @@ impl PageVm {
             return Some(ChildFrameSemanticTurnKind::DocumentScriptReady);
         }
         if self
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ChildHostLoad,
-                &loader,
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildHostLoad)
             .await
             .expect("typed child HostLoad selected task should succeed")
         {
@@ -3036,7 +3073,6 @@ impl PageVm {
         if self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildParserModuleRootStart,
-                &loader,
             )
             .await
             .expect("typed child parser module root selected task should succeed")
@@ -3046,7 +3082,6 @@ impl PageVm {
         if self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildClassicScriptSourceLoad,
-                &loader,
             )
             .await
             .expect("typed child classic source-load selected task should succeed")
@@ -3211,9 +3246,7 @@ impl PageVm {
     ) -> Result<PostParseLifecycleLoopAdvance> {
         match advance {
             PostParseLifecycleAdvance::PageOwnedTask(mut task) => {
-                let request_client = self.request_client.clone();
                 self.execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
-                    &request_client,
                     task.take_work_for_execution(),
                 )
                 .await?;
@@ -3233,9 +3266,9 @@ impl PageVm {
                 let wait_for_runtime_owned_work =
                     !matches!(stage, PageVmInitStage::DomContentLoaded);
                 self.admit_ready_parser_owned_document_script_action();
-                let request_client = self.request_client.clone();
+
                 if self
-                    .run_one_oldest_ready_page_task_on_owner_lane_for_test(&request_client)
+                    .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                     .await?
                 {
                     return Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)));
@@ -3335,7 +3368,6 @@ impl PageVm {
                     .await;
                 continue;
             }
-            let request_client = self.request_client.clone();
             let advance = {
                 let PageVm {
                     vm,
@@ -3346,7 +3378,6 @@ impl PageVm {
                 vm.as_mut()
                     .expect("PageVm must retain a live ScriptVm until drop")
                     .advance_post_parse_lifecycle(
-                        &request_client,
                         page_task_queue,
                         report,
                         lifecycle_driver,
@@ -3438,7 +3469,6 @@ impl PageVm {
 
     async fn execute_parser_owned_classic_script_body_on_current_lane(
         &mut self,
-        loader: &ResourceRequestClient,
         execution_context: ParserOwnedClassicScriptExecutionContext,
         script: Box<PreparedScript>,
     ) -> parser_deferred_classic::MainParserDeferredClassicBodyExecution {
@@ -3465,11 +3495,7 @@ impl PageVm {
         } else {
             let execution_report = self
                 .vm_mut()
-                .run_parser_owned_classic_script_without_blocker_wait(
-                    loader,
-                    &script,
-                    &execution_context,
-                )
+                .run_parser_owned_classic_script_without_blocker_wait(&script, &execution_context)
                 .await;
             let (execution_result, script_element_event, evaluation, body_activity) =
                 execution_report.into_parts();
@@ -3528,16 +3554,11 @@ impl PageVm {
 
     pub(super) async fn execute_parser_owned_classic_script_on_current_lane(
         &mut self,
-        loader: &ResourceRequestClient,
         execution_context: ParserOwnedClassicScriptExecutionContext,
         script: Box<PreparedScript>,
     ) -> (ScriptRun, bool, ParserOwnedClassicScriptCompletion) {
         let execution = self
-            .execute_parser_owned_classic_script_body_on_current_lane(
-                loader,
-                execution_context,
-                script,
-            )
+            .execute_parser_owned_classic_script_body_on_current_lane(execution_context, script)
             .await;
         self.vm_mut()
             .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
@@ -3547,11 +3568,9 @@ impl PageVm {
 
     async fn execute_main_parser_deferred_classic_script_body_on_current_lane(
         &mut self,
-        loader: &ResourceRequestClient,
         script: Box<PreparedScript>,
     ) -> parser_deferred_classic::MainParserDeferredClassicBodyExecution {
         self.execute_parser_owned_classic_script_body_on_current_lane(
-            loader,
             ParserOwnedClassicScriptExecutionContext::Deferred,
             script,
         )
@@ -3567,7 +3586,6 @@ impl PageVm {
         &mut self,
         execution: ParseTimeLiveExecution,
     ) -> Result<ParseTimeLiveExecutionOutcome> {
-        let request_client = self.request_client.clone();
         debug_assert!(
             is_on_named_owner_execution_lane_for(&self.local_executor),
             "parse-time bridge execution must stay on the matching named owner lane"
@@ -3599,11 +3617,8 @@ impl PageVm {
                         script,
                     } => {
                         let (run, navigation_triggered, completion) = page_vm
-                            .execute_parser_owned_classic_script_on_current_lane(
-                                &request_client,
-                                execution_context,
-                                script,
-                            )
+                            .execute_parser_owned_classic_script_on_current_lane(execution_context,
+script)
                             .await;
                         (
                             Some(run),
@@ -3619,7 +3634,7 @@ impl PageVm {
                         page_vm.vm_mut().settle_connected_style_load(binding);
                         if dispatched {
                             page_vm
-                                .finish_selected_page_callback_task(&request_client)
+                                .finish_selected_page_callback_task()
                                 .await?;
                         } else {
                             page_vm.finish_selected_page_task_checkpoint()?;
@@ -3634,10 +3649,7 @@ impl PageVm {
                         load_delay_binding,
                     } => {
                         let execution =
-                            page_owned_document_script::MainPageOwnedDocumentScriptOwner::new(
-                                page_vm,
-                                &request_client,
-                            )
+                            page_owned_document_script::MainPageOwnedDocumentScriptOwner::new(page_vm)
                             .run_work(
                                 crate::document_script_scheduler::PageOwnedDocumentScriptWork::parser_async_script(
                                     lane,
@@ -3653,11 +3665,8 @@ impl PageVm {
                         (Some(run), navigation_triggered, None, None)
                     }
                     ParseTimeLiveExecution::PageOwnedWork { work } => {
-                        let execution = execute_page_owned_work_on_script_execution_lane(
-                            &request_client,
-                            page_vm,
-                            *work,
-                        )
+                        let execution = execute_page_owned_work_on_script_execution_lane(page_vm,
+*work)
                         .await?;
                         let (run, parser_completion) = match execution {
                             parser_continuation::PostParsePageOwnedExecution::Ordinary(
@@ -3845,16 +3854,13 @@ impl PageVm {
     }
 
     #[cfg(test)]
-    pub(crate) async fn advance_timers_until_deadline_for_test(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> Result<()> {
+    pub(crate) async fn advance_timers_until_deadline_for_test(&mut self) -> Result<()> {
         let executor = self.local_executor.clone();
         debug_assert!(
             is_on_named_owner_execution_lane_for(&executor),
             "test deadline timer advance must execute on the matching named owner lane"
         );
-        let loader = loader.clone();
+
         let mut page_vm_ref = AwaitedOwnerLocalPageVm::new(self);
         run_named_owner_local_task(
             executor,
@@ -3865,10 +3871,7 @@ impl PageVm {
                     .checked_add(std::time::Duration::from_millis(3_200))
                     .unwrap_or_else(std::time::Instant::now);
                 for _ in 0..10_000 {
-                    if page_vm
-                        .run_one_due_timer_selected_task_for_test(&loader)
-                        .await?
-                    {
+                    if page_vm.run_one_due_timer_selected_task_for_test().await? {
                         continue;
                     }
                     let Some(ms_to_next) = page_vm.vm().ms_to_next_timeout() else {
@@ -4172,6 +4175,7 @@ impl PageVm {
             env,
             runtime_hooks,
             bootstrap_document,
+            None,
             started,
         )
         .map_err(|error| {
@@ -4194,24 +4198,13 @@ impl PageVm {
         env: &PageVmEnvConfig,
         mut runtime_hooks: PageVmRuntimeHooks,
         bootstrap_document: DomHost,
+        initial_document: Option<crate::script_vm::MainDocumentBootstrap>,
         started: Instant,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
         let (document_lifecycle, document_lifecycle_identity) = runtime_hooks
             .install_document_lifecycle(page_id)
             .map_err(|error| Box::new((error, bootstrap_document.clone())))?;
-        let page_runtime_task_source = runtime_hooks
-            .renderer_page_script_environment
-            .as_ref()
-            .map(|environment| environment.page_runtime_task_source());
-        #[cfg(test)]
-        let page_runtime_task_source = page_runtime_task_source.or_else(|| {
-            runtime_hooks
-                .standalone_page_task_residence()
-                .map(crate::page_task_queue::RendererPageTaskTestResidence::runtime_source)
-        });
-        let page_runtime_task_source = page_runtime_task_source.unwrap_or_else(|| {
-            crate::page_task_queue::PageRuntimeTaskSource::new(runtime_hooks.owner_wake.clone())
-        });
+        let page_runtime_task_source = runtime_hooks.page_runtime_task_source();
         let page_task_queue =
             PageTaskQueue::new_with_page_runtime_task_source(page_runtime_task_source.clone());
         let page_vm_isolate_bootstrap = match runtime_hooks
@@ -4277,11 +4270,14 @@ impl PageVm {
             renderer_document_isolate_bootstrap,
         } = page_vm_isolate_bootstrap;
         let backend_node_registry = new_shared_renderer_backend_node_registry();
-        let initial_document_loader_bootstrap =
-            crate::network::context::DocumentResourceLoaderBootstrap::new(
+        let initial_document_loader_bootstrap = initial_document.unwrap_or_else(|| {
+            crate::script_vm::MainDocumentBootstrap::new(
+                &bootstrap_document,
                 loader.clone(),
                 resource_task_runner,
-            );
+                &runtime_hooks.browser_context_runtime,
+            )
+        });
         let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_document,
             env.bypass_content_security_policy,
@@ -4460,6 +4456,7 @@ impl PageVm {
         env: &PageVmEnvConfig,
         runtime_hooks: PageVmRuntimeHooks,
         parser_session: &mut DocumentParserSession,
+        initial_document: crate::script_vm::MainDocumentBootstrap,
         started: Instant,
         before_document_start: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<(Self, bool)> {
@@ -4470,6 +4467,7 @@ impl PageVm {
             env,
             runtime_hooks,
             parser_session,
+            initial_document,
             started,
         )?;
         page_vm.install_stored_runtime_isolated_worlds_on_named_owner_lane()?;
@@ -4633,6 +4631,7 @@ impl PageVm {
         env: &PageVmEnvConfig,
         runtime_hooks: PageVmRuntimeHooks,
         parser_session: &mut DocumentParserSession,
+        initial_document: crate::script_vm::MainDocumentBootstrap,
         started: Instant,
     ) -> Result<PageVm> {
         let mut page_vm =
@@ -4644,6 +4643,7 @@ impl PageVm {
                     env,
                     runtime_hooks,
                     bootstrap_document,
+                    Some(initial_document),
                     started,
                 )
             })?;

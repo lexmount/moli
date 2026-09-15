@@ -5332,7 +5332,7 @@ defaultFocus.addEventListener("focus", () => {
             RendererPageRenderingUpdateTaskKind::PostParseAutofocus
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__autofocusOrder.join('|')")?,
@@ -5444,7 +5444,7 @@ document.close();
         assert_ne!(retired_owner, replacement_owner);
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(__retiredAutofocusEvents)")?,
@@ -5516,7 +5516,7 @@ scrollTo(0, 10);
         );
 
         page_vm
-            .finish_selected_page_task_completion(body.action.into_page_task_completion(), &loader)
+            .finish_selected_page_task_completion(body.action.into_page_task_completion())
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__renderingTaskBoundary.join('|')")?,
@@ -5570,7 +5570,7 @@ removed.remove();
             PageRenderingUpdateTargetEffect::CurrentOwnerHadNoEventTarget
         );
         page_vm
-            .finish_selected_page_task_completion(body.action.into_page_task_completion(), &loader)
+            .finish_selected_page_task_completion(body.action.into_page_task_completion())
             .await?;
         assert_eq!(
             page_vm
@@ -5639,7 +5639,7 @@ document.close();
             "the claimed task must retain the retired exact Document"
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(page_vm.vm_mut().eval("String(__retiredScrollEvents)")?, "0");
 
@@ -5668,7 +5668,7 @@ scrollTo(0, 20);
             RendererPageRenderingUpdateTaskKind::DocumentScrollEvents
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(current, &loader)
+            .run_claimed_selected_page_task_for_test(current)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__currentScrollEvents.join('|')")?,
@@ -5733,7 +5733,7 @@ document.close();
             "the claimed task must retain the retired exact Document"
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(__retiredAnimationEvents)")?,
@@ -5772,7 +5772,7 @@ document.getElementById("current-animation").addEventListener(
             crate::native_bridge::WindowDocumentOwner::Frame(after_document)
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(current, &loader)
+            .run_claimed_selected_page_task_for_test(current)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(__currentAnimationEvents)")?,
@@ -5835,7 +5835,7 @@ staleFrame.remove();
             page_vm.document_lifecycle.identity().document
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(
             page_vm
@@ -5931,7 +5931,7 @@ scrollTo(0, 20);
                         RendererPageRenderingUpdateTaskKind::DocumentScrollEvents
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
 
                     let current = page_vm
@@ -5950,7 +5950,7 @@ scrollTo(0, 20);
                         "fresh PageVm counters should naturally reuse the local Document target"
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current, &loader)
+                        .run_claimed_selected_page_task_for_test(current)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -5999,7 +5999,7 @@ scrollTo(0, 15);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
                 .await?,
             "the exact rendering update should run through the selected dispatcher"
         );

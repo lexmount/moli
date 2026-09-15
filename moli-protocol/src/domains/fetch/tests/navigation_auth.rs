@@ -284,13 +284,15 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     assert_eq!(response["params"]["requestId"], LOADER_ID);
     assert_eq!(response["params"]["response"]["status"], 200);
 
+    let data = ctx.take_one();
+    assert_eq!(data["method"], "Network.dataReceived");
+    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Page.frameNavigated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "Page.domContentEventFired");
-    let data = ctx.take_one();
-    assert_eq!(data["method"], "Network.dataReceived");
-    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Network.loadingFinished");
     assert_eq!(ctx.take_one()["method"], "Page.loadEventFired");
     assert_eq!(ctx.take_one()["method"], "Page.frameStoppedLoading");

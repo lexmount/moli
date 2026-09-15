@@ -290,7 +290,15 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .flatten()
         .map(string_charge)
         .sum(),
-        RendererOwnerAction::ChildFrameLoad { event, network, .. } => [
+        RendererOwnerAction::ChildFrameNavigationStarted {
+            frame_id,
+            loader_id,
+            url,
+            ..
+        } => string_charge(frame_id)
+            .saturating_add(string_charge(loader_id))
+            .saturating_add(string_charge(url)),
+        RendererOwnerAction::ChildFrameLoad { event, .. } => [
             Some(event.frame_id.as_str()),
             event.parent_frame_id.as_deref(),
             event.loader_id.as_deref(),
@@ -300,13 +308,7 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .into_iter()
         .flatten()
         .map(string_charge)
-        .sum::<usize>()
-        .saturating_add(
-            network
-                .as_ref()
-                .map(|network| network.activity().renderer_transport_charge_bytes())
-                .unwrap_or(0),
-        ),
+        .sum(),
         RendererOwnerAction::SameDocumentNavigation(event) => {
             let navigation = event.navigation();
             string_charge(&navigation.url)

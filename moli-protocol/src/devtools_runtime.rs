@@ -2243,6 +2243,7 @@ impl DevToolsNetworkResourceType {
 impl From<SubresourceResourceType> for DevToolsNetworkResourceType {
     fn from(value: SubresourceResourceType) -> Self {
         match value {
+            SubresourceResourceType::Document => Self::Document,
             SubresourceResourceType::Script => Self::Script,
             SubresourceResourceType::Stylesheet => Self::Stylesheet,
             SubresourceResourceType::Image => Self::Image,

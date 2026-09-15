@@ -44,15 +44,9 @@ impl PageVm {
             RendererPageResourceTerminal::DocumentWriteExternalScript { completion } => {
                 self.apply_document_write_external_script_terminal(source, owner, completion)?
             }
-            RendererPageResourceTerminal::MainParserDeferredClassicSource {
-                completion,
-                network_attribution,
-            } => self.apply_main_parser_deferred_classic_source_terminal(
-                source,
-                owner,
-                completion,
-                network_attribution,
-            )?,
+            RendererPageResourceTerminal::MainParserDeferredClassicSource { completion } => {
+                self.apply_main_parser_deferred_classic_source_terminal(source, owner, completion)?
+            }
             RendererPageResourceTerminal::MainParserModuleGraphFetch { completion } => {
                 self.apply_main_parser_module_graph_fetch_terminal(source, owner, *completion)?
             }

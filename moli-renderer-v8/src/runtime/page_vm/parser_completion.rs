@@ -13,7 +13,6 @@ use anyhow::Result;
 
 use crate::PageVmInitStage;
 use crate::frame_owner_model::FrameDocumentTaskOwner;
-use crate::network::ResourceRequestClient;
 use crate::page_task_queue::{PostParseLifecycleWork, PostParsePageOwnedWork};
 use crate::runtime::{PendingDocumentLifecycleTurn, RendererDocumentLifecycleIdentity};
 use crate::script_vm::{
@@ -246,7 +245,6 @@ impl PageVm {
 
     pub(super) async fn execute_and_complete_selected_post_parse_page_owned_task(
         &mut self,
-        loader: &ResourceRequestClient,
         pending_document_lifecycle_turn: &mut Option<PendingDocumentLifecycleTurn>,
         document: RendererDocumentLifecycleIdentity,
         stage: PageVmInitStage,
@@ -254,10 +252,7 @@ impl PageVm {
     ) -> Result<DocumentLifecycleTurnOutcome> {
         let replacement_lifecycle_snapshot = self.document_replacement_lifecycle_action_snapshot();
         let execution = self
-            .execute_post_parse_page_owned_task_on_named_owner_lane(
-                loader,
-                task.take_work_for_execution(),
-            )
+            .execute_post_parse_page_owned_task_on_named_owner_lane(task.take_work_for_execution())
             .await;
         // Generic post-parse callbacks must finish their old-realm task before
         // a synchronous `document.open()` replacement is admitted. MainParser

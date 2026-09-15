@@ -307,7 +307,9 @@ impl NavigationController {
         ));
         for response in &mut self.native_responses {
             if response.request.navigation == navigation {
-                response.body = Some(Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.into()));
+                response.body = Some(Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT
+                    .to_owned()
+                    .into()));
             }
         }
         self.retain_native_responses();
@@ -532,7 +534,7 @@ impl NavigationController {
     pub(in crate::browser) fn complete_native_response(
         &mut self,
         request: crate::browser::NavigationRequest,
-        body: Result<crate::browser::CapturedBody, String>,
+        body: Result<crate::browser::CapturedBody, crate::browser::NavigationBodyFailure>,
     ) -> bool {
         let Some(response) = self
             .native_responses
@@ -542,6 +544,28 @@ impl NavigationController {
             return false;
         };
         response.body = Some(body);
+        true
+    }
+
+    pub(in crate::browser) fn record_native_response_data(
+        &mut self,
+        request: crate::browser::NavigationRequest,
+        bytes: usize,
+    ) -> bool {
+        let Some(response) = self
+            .native_responses
+            .iter_mut()
+            .find(|response| response.request == request && response.body.is_none())
+        else {
+            return false;
+        };
+        if bytes == 0 {
+            return false;
+        }
+        response.received_bytes = response
+            .received_bytes
+            .checked_add(bytes)
+            .expect("navigation response byte count exhausted");
         true
     }
 
@@ -1165,6 +1189,7 @@ mod tests {
                     negotiated_http_version: None,
                 }),
                 observations: Default::default(),
+                received_bytes: 0,
                 body: None,
             }
         };
@@ -1187,12 +1212,18 @@ mod tests {
             Ok(CapturedBody::from_string("current".into()))
         ));
         assert!(
-            !controller.complete_native_response(first_response.request, Err("duplicate".into()))
+            !controller.complete_native_response(
+                first_response.request,
+                Err("duplicate".to_owned().into())
+            )
         );
         assert!(controller.record_native_response(response(&controller)));
         assert!(controller.commit_pending_document_navigation_if_matches(&replacement));
         assert_eq!(controller.response_snapshots().len(), 1);
-        assert!(!controller.complete_native_response(first_response.request, Err("late".into())));
+        assert!(
+            !controller
+                .complete_native_response(first_response.request, Err("late".to_owned().into()))
+        );
         controller.clear_document_navigation_state();
         assert!(controller.response_snapshots().is_empty());
     }

@@ -3147,7 +3147,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
     assert_eq!(fetch_requests[1]["params"]["request"]["url"], final_url);
     assert_eq!(
         fetch_requests[1]["params"]["redirectHasExtraInfo"],
-        json!(false)
+        json!(true)
     );
     assert_eq!(
         fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["cookie"]["name"],
@@ -3230,10 +3230,27 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(fetch_extra_infos.len(), 2);
-    let redirected_fetch_extra_info = fetch_extra_infos
+    let hosts = fetch_extra_infos
         .iter()
-        .find(|message| message["params"]["requestId"] == fetch_requests[1]["params"]["requestId"])
-        .expect("redirected fetch should emit requestWillBeSentExtraInfo");
+        .map(|message| {
+            message["params"]["headers"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("host"))
+                .expect("ExtraInfo retains the physical Host header")
+                .1
+                .as_str()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hosts,
+        [format!("localhost:{}", addr.port()), addr.to_string()]
+    );
+    // Redirect hops share a request ID; their ordered transport observations
+    // distinguish the original request from the cross-site request.
+    let redirected_fetch_extra_info = &fetch_extra_infos[1];
     assert_eq!(
         redirected_fetch_extra_info["params"]["requestId"],
         fetch_requests[1]["params"]["requestId"]
@@ -3257,13 +3274,22 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .expect("fetch should emit responseReceived");
     assert_eq!(response["params"]["hasExtraInfo"], json!(true));
 
-    let response_extra_info = messages
+    let response_extra_infos = messages
         .iter()
-        .find(|message| {
+        .filter(|message| {
             message["method"] == json!("Network.responseReceivedExtraInfo")
                 && message["params"]["requestId"] == response["params"]["requestId"]
         })
-        .expect("fetch should emit responseReceivedExtraInfo");
+        .collect::<Vec<_>>();
+    assert_eq!(
+        response_extra_infos
+            .iter()
+            .map(|message| message["params"]["statusCode"].clone())
+            .collect::<Vec<_>>(),
+        [json!(307), json!(200)],
+        "both physical responses have ExtraInfo, even without a Set-Cookie header"
+    );
+    let response_extra_info = response_extra_infos[1];
     assert_eq!(
         response_extra_info["params"]["cookieReports"][0]["status"]["kind"],
         json!("Rejected")

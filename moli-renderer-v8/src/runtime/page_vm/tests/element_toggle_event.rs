@@ -56,7 +56,7 @@ details.open = true;
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm.vm_mut().eval("__elementToggleBoundary.join('|')")?,
             "callback|microtask|runtime-script",
@@ -98,10 +98,7 @@ details.open = true;
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::ElementToggle),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::ElementToggle))
                 .await?,
             "the exact element-toggle task should run through the selected dispatcher"
         );
@@ -176,7 +173,6 @@ first.open = false;
         page_vm
             .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
                 crate::page_task_queue::RendererPageDomManipulationTask::ElementToggle(first),
-                &loader,
             )
             .await?;
 
@@ -193,7 +189,6 @@ first.open = false;
         page_vm
             .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
                 crate::page_task_queue::RendererPageDomManipulationTask::ElementToggle(second),
-                &loader,
             )
             .await?;
         assert_eq!(
@@ -314,7 +309,6 @@ childDetails.open = true;
         page_vm
             .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
                 crate::page_task_queue::RendererPageDomManipulationTask::ElementToggle(current),
-                &loader,
             )
             .await?;
         assert_eq!(
@@ -447,12 +441,9 @@ currentDetails.open = true;
                         "fresh PageVm Host counters should naturally reuse the local task id"
                     );
                     page_vm
-                        .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
-                            crate::page_task_queue::RendererPageDomManipulationTask::ElementToggle(
+                        .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(crate::page_task_queue::RendererPageDomManipulationTask::ElementToggle(
                                 current,
-                            ),
-                            &loader,
-                        )
+                            ))
                         .await?;
                     assert_eq!(
                         page_vm

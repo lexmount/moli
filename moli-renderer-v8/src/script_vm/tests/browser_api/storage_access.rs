@@ -378,7 +378,6 @@ frame.src = {outer_url_literal};
     drain_service_worker_test_until_eval_equals(
         &mut vm,
         &browser_context_runtime,
-        &loader,
         "String(globalThis.__storageAccessDefaultRequest !== null)",
         "true",
     )
@@ -454,13 +453,10 @@ frame.src = {outer_url_literal};
     )
     .expect("top frame should notify the granted third-party frame");
 
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "String(globalThis.__storageAccessOpfsFrameResult !== null && globalThis.__ordinaryOpfsCloneResult !== null)",
-        "true",
-    )
+    drain_service_worker_test_until_eval_equals(&mut vm,
+&browser_context_runtime,
+"String(globalThis.__storageAccessOpfsFrameResult !== null && globalThis.__ordinaryOpfsCloneResult !== null)",
+"true")
     .await;
     assert_eq!(
         vm.eval("globalThis.__storageAccessOpfsFrameResult")

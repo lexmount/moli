@@ -2182,6 +2182,7 @@ pub(super) fn publish_worker_request_failure(
     }
     let message = match &mut error {
         ResourceResponseFailure::Request(message)
+        | ResourceResponseFailure::Network { message, .. }
         | ResourceResponseFailure::PartialBody { message, .. } => message,
     };
     if is_cors_policy_failure_message(message) {

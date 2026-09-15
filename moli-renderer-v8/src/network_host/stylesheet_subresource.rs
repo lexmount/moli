@@ -142,27 +142,15 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         } else {
             StylesheetSubresourceFetchStart::Settled
         };
-        let result = Ok(response);
-        if let Some(encoded) = encoded {
-            host.record_get_subresource_network_result_with_body_and_initiator(
-                frame_id,
-                document_url,
-                request_url,
-                resource_type,
-                SubresourceRequestInitiatorType::Css,
-                &result,
-                crate::types::SubresourceResponseBody::from_parkable_image(encoded),
-            );
-        } else {
-            host.record_get_subresource_network_result_with_initiator(
-                frame_id,
-                document_url,
-                request_url,
-                resource_type,
-                SubresourceRequestInitiatorType::Css,
-                &result,
-            );
-        }
+        host.record_local_subresource_response(
+            frame_id,
+            document_url,
+            request_url,
+            resource_type,
+            SubresourceRequestInitiatorType::Css,
+            &response,
+            encoded.map(crate::types::SubresourceResponseBody::from_parkable_image),
+        );
         host.settle_stylesheet_subresource_load_delay(binding);
         return Ok(terminal);
     }

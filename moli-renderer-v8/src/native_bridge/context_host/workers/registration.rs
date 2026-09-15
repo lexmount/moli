@@ -898,12 +898,14 @@ async fn fetch_worker_script_source(
     }
     if let Some(client_id) = reserved_service_worker_client_id
         && let Some(response) = browser_context_runtime
-            .fetch_service_worker_main_resource_for_worker(
+            .service_worker_runtime()
+            .fetch_main_resource_for_worker_client(
                 client_id,
                 &request,
                 request_client,
                 resource_task_runner,
                 ServiceWorkerRequestDestination::Worker,
+                cancel_handle.clone(),
             )
             .await
             .map_err(|error| {
@@ -912,6 +914,16 @@ async fn fetch_worker_script_source(
                 )
             })?
     {
+        let resource = crate::network::ResourceResponseStream::with_disk_pool(
+            network.clone(),
+            request_client.disk_pool(),
+        );
+        let response = resource
+            .collect(response)
+            .await
+            .inspect_err(|error| network.failed(error))
+            .map_err(|error| format!("failed to fetch worker script `{script_url}`: {error}"))?
+            .into_navigation_response()?;
         return loaded_worker_script_from_navigation_response(
             response,
             network,

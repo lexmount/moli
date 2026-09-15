@@ -198,7 +198,10 @@ impl Page {
         })
     }
 
-    fn start_full_page_command(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
+    pub(crate) fn start_full_page_command(
+        &self,
+        command: RendererPageCommand,
+    ) -> Result<PendingPageCommand> {
         Ok(PendingPageCommand {
             pending: self.handle.enqueue_async_command(command)?,
             renderer_agent_attachment_id: None,

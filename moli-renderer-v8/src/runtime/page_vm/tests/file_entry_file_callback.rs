@@ -99,12 +99,9 @@ async fn file_entry_file_uses_webidl_conversion_and_the_shared_dom_task_source()
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the earlier BroadcastChannel task must remain the shared FIFO head"
         );
@@ -117,12 +114,9 @@ async fn file_entry_file_uses_webidl_conversion_and_the_shared_dom_task_source()
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::FileEntryFileCallback,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "file() must run through the production selected-task dispatcher"
         );
@@ -135,12 +129,9 @@ async fn file_entry_file_uses_webidl_conversion_and_the_shared_dom_task_source()
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::FileEntryFileCallback,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "failed callback conversions must not manufacture hidden tasks"
         );
@@ -216,12 +207,9 @@ crossRealmTransfer.items
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::FileEntryFileCallback,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the cross-Realm callback task should run"
         );
@@ -273,7 +261,7 @@ Promise.resolve().then(() => { __fileEntryRetiredCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -339,7 +327,7 @@ Promise.resolve().then(() => { __fileEntryStaleTargetCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(

@@ -212,24 +212,6 @@ impl CdpConnection {
                     moli_core::page::RendererNetworkOutputItem::WorkerFetch { .. } => unreachable!(
                         "pause snapshots are independent from Network request snapshots"
                     ),
-                    moli_core::page::RendererNetworkOutputItem::ChildDocument(response) => {
-                        let Some(binding) = self
-                            .target_root_document_protocol_attachment_identity_for_owner(
-                                &owner,
-                                renderer_document,
-                            )
-                        else {
-                            continue;
-                        };
-                        let mut recovered = Vec::new();
-                        crate::domains::network::emit_child_document_navigation_network_background_events(
-                            self, &mut recovered, &owner, &response.frame_id, &response.loader_id,
-                            &response.loader_id, crate::conn::monotonic_timestamp_seconds(), &response.snapshot,
-                        );
-                        events.extend(recovered.into_iter().filter_map(|event| {
-                            event.bind_to_root_document_route(self, &owner, binding.root_document())
-                        }));
-                    }
                     moli_core::page::RendererNetworkOutputItem::Resource(item) => {
                         if let Some(mut delivery) = self.project_network_output_item_for_owner(
                             &owner,

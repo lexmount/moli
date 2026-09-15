@@ -81,9 +81,13 @@ impl<'a> NetworkBacklogRequestIdPlan<'a> {
         {
             return request_id.to_owned();
         }
-        let request_id = self
-            .preferred_request_id
-            .take_for_new_subresource(output.request_handle())
+        let request_id = output
+            .navigation_request_id()
+            .map(str::to_owned)
+            .or_else(|| {
+                self.preferred_request_id
+                    .take_for_new_subresource(output.request_handle())
+            })
             .unwrap_or_else(|| self.request_id_allocator.allocate_request_id());
         if let Some(handle) = output.request_handle() {
             self.subresource_artifacts
@@ -2618,6 +2622,63 @@ mod tests {
     }
 
     #[test]
+    fn document_subresources_do_not_claim_the_containing_navigation_request_id() {
+        let mut agent = TargetNetworkAgentState::default();
+        let mut allocator = ConnectionNetworkRequestIdAllocator::default();
+        agent.enable_primary_events();
+        let mut identities = Vec::new();
+        for raw_handle in [51, 52] {
+            let handle = SubresourceNetworkRequestHandle::new(raw_handle);
+            let url = url::Url::parse("https://example.test/popup").unwrap();
+            let request = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+                moli_core::page::SubresourceRequestStarted::new(
+                    handle,
+                    None,
+                    url.clone(),
+                    url,
+                    "GET".into(),
+                    Vec::new().into(),
+                    None,
+                    moli_core::page::SubresourceResourceType::Document,
+                    moli_core::page::SubresourceRequestInitiatorType::Script,
+                    None,
+                ),
+            ));
+            let mut delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+                &request,
+                "LOADER-containing-document",
+                None,
+                None,
+                None,
+                &mut allocator,
+            );
+            let snapshot = agent
+                .pending_network_backlog_delivery_snapshot_from_backlog(&mut delivery)
+                .expect("admitted document request has its own delivery");
+            let id = agent.request_id_for_subresource_handle(handle, &mut allocator);
+            assert_ne!(id, "LOADER-containing-document");
+            agent.mark_network_backlog_delivery_snapshot_emitted(&snapshot);
+            agent.ingest_renderer_output_item_and_prepare_live_delivery(
+                &request,
+                "LOADER-containing-document",
+                None,
+                None,
+                None,
+                &mut allocator,
+            );
+            assert_eq!(
+                agent.request_id_for_subresource_handle(handle, &mut allocator),
+                id
+            );
+            identities.push(id);
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "two physical loads keep distinct request identities"
+        );
+    }
+
+    #[test]
     fn renderer_outputs_without_network_listeners_are_not_retained() {
         let mut agent = TargetNetworkAgentState::default();
         let mut request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -2637,6 +2698,67 @@ mod tests {
         assert!(!delivery.has_output());
         assert_eq!(agent.output_queue.subresource_record_count(), 1);
         assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
+
+        let url = url::Url::parse("https://example.test/child").unwrap();
+        let request = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+            moli_core::page::SubresourceRequestStarted::new(
+                SubresourceNetworkRequestHandle::new(53),
+                Some("FRAME-child".into()),
+                url.clone(),
+                url,
+                "GET".into(),
+                Vec::new().into(),
+                None,
+                moli_core::page::SubresourceResourceType::Document,
+                moli_core::page::SubresourceRequestInitiatorType::Parser,
+                None,
+            )
+            .with_navigation_loader_id("LOADER-child".into()),
+        ));
+        let delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+            &request,
+            "LOADER-containing-document",
+            None,
+            None,
+            None,
+            &mut request_id_allocator,
+        );
+        assert!(!delivery.has_output());
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
+        assert!(
+            agent
+                .artifacts
+                .subresource_network_artifacts
+                .request_ids_by_handle
+                .is_empty(),
+            "an unobserved native navigation must not allocate a protocol request identity"
+        );
+
+        agent.enable_primary_events();
+        let failed = ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(
+            moli_core::page::SubresourceBodyFinished::failed(
+                SubresourceNetworkRequestHandle::new(53),
+                "connection refused".into(),
+            ),
+        ));
+        let delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+            &failed,
+            "LOADER-containing-document",
+            None,
+            None,
+            None,
+            &mut request_id_allocator,
+        );
+        assert!(delivery.has_output());
+        assert_eq!(
+            agent
+                .artifacts
+                .subresource_network_artifacts
+                .request_id_for_handle(SubresourceNetworkRequestHandle::new(53)),
+            Some("LOADER-child"),
+            "enabling Network during a request must preserve its native navigation identity"
+        );
+        assert!(agent.renderer_subresources_are_idle());
     }
 
     #[test]

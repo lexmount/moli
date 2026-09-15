@@ -37,10 +37,7 @@ use crate::{
         slot::ParserClassicScriptRunnerSlot,
     },
     planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
-    types::{
-        ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution, ScriptKind,
-        ScriptMode, ScriptSourceKind,
-    },
+    types::{ChildClassicScriptLoadCompletion, ScriptKind, ScriptMode, ScriptSourceKind},
 };
 use url::Url;
 
@@ -825,12 +822,6 @@ fn child_pending_external_load_completion_carries_owner_and_record() {
         handle: child_handle,
         script_handle,
         result: Ok("globalThis.__complete = true".to_owned()),
-        network_result: None,
-        network_attribution: ChildClassicScriptNetworkAttribution {
-            frame_id: Some("child-frame".to_owned()),
-            document_url: Url::parse("https://child-classic-source-load.test/document").unwrap(),
-            request_url: script_url.clone(),
-        },
     };
 
     completion.owner = FrameDocumentTaskOwner::new(
@@ -857,7 +848,15 @@ fn child_pending_external_load_completion_carries_owner_and_record() {
     );
     assert_eq!(record.source_identity().metadata().start_line(), 19);
     assert_eq!(record.source_identity().load_id(), Some(21));
-    assert_eq!(completion.network_attribution.request_url, script_url);
+    assert_eq!(
+        queue
+            .runner
+            .current_parser_blocking_script()
+            .unwrap()
+            .runner_external_load_identity()
+            .map(|(_, url)| url),
+        Some(script_url)
+    );
 }
 
 #[test]

@@ -172,7 +172,11 @@ impl CdpConnection {
                 if request == response.request)
         });
         let mut out = Vec::new();
-        if ((head.is_some() && !matches!(&response.body, Some(Err(_))))
+        // An empty HTTP error response becomes an error Document. Publishing
+        // its real head must not settle Page.navigate before that decision.
+        let reply_at_head = head
+            .is_some_and(|head| !(400..600).contains(&head.status) || response.received_bytes != 0);
+        if ((reply_at_head && !matches!(&response.body, Some(Err(_))))
             || committed.is_some()
             || download
             || failed)
@@ -197,7 +201,7 @@ impl CdpConnection {
                     .body
                     .as_ref()
                     .and_then(|body| body.as_ref().err())
-                    .cloned()
+                    .map(|failure| failure.error_text.clone())
                     .unwrap_or_else(|| "Navigation aborted".into()))
             } else {
                 state.native_result_payload(url, error, download)
@@ -239,9 +243,10 @@ impl CdpConnection {
                     &target,
                     response.request.navigation,
                     completed,
+                    response.received_bytes,
                 )
             });
-        let Some((pending, emit_response, metadata_emitted)) = observed else {
+        let Some((pending, emit_response, metadata_emitted, received_bytes)) = observed else {
             return out;
         };
         let mut visible = response.clone();
@@ -254,6 +259,7 @@ impl CdpConnection {
             &visible,
             emit_response,
             metadata_emitted,
+            received_bytes,
             out,
         );
         if completed

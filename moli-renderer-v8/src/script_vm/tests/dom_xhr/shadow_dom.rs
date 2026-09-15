@@ -2381,7 +2381,7 @@ async fn focused_display_none_shadow_host_blurs_on_timer_task() {
         .expect("plain display:none focus setup should evaluate");
 
     assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
+        vm.run_next_due_timer_callback_for_test()
             .await
             .expect("plain display:none focus blur timer should run")
     );
@@ -2424,7 +2424,7 @@ async fn focused_display_none_shadow_host_blurs_on_timer_task() {
         .expect("delegated display:none focus setup should evaluate");
 
     assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
+        vm.run_next_due_timer_callback_for_test()
             .await
             .expect("delegated display:none focus blur timer should run")
     );
@@ -2499,7 +2499,7 @@ async fn focused_display_none_blur_listener_sees_updated_focus_state() {
         "the inline setup stylesheet queues its own event body before focus-update work"
     );
     assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
+        vm.run_next_due_timer_callback_for_test()
             .await
             .expect("exact display-none focus blur timer should run")
     );
@@ -4870,8 +4870,7 @@ async fn toggle_and_interest_events_follow_reference_target_source_path() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("first queued reference-target toggle task should run")
@@ -4890,8 +4889,7 @@ async fn toggle_and_interest_events_follow_reference_target_source_path() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("second queued reference-target toggle task should run")
@@ -4917,16 +4915,14 @@ lose-target:true:true:true:targetDiv,#document-fragment,middleJ,#document-fragme
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("third queued reference-target toggle task should run")
     );
     assert!(
         !vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("reference-target toggle source should then be drained")

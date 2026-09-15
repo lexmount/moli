@@ -188,7 +188,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("the old-root task must remain in the stable source");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm

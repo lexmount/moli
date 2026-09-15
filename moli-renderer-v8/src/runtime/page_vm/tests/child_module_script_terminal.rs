@@ -36,6 +36,7 @@ pub(super) async fn queue_real_child_module_terminal(
     );
 
     super::child_document_completion::wait_for_page_resource_completion(
+        page_vm,
         resource_source,
         owner_wake_rx,
         "child module root completion",

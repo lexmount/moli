@@ -15,12 +15,15 @@ impl ConcurrentParseTimeRuntime {
         local_executor: JsLocalExecutor,
         loader: ResourceRequestClient,
         env: PageVmEnvConfig,
-        runtime_hooks: PageVmRuntimeHooks,
+        mut runtime_hooks: PageVmRuntimeHooks,
         mut state: ParseTimeDriverState,
         started: Instant,
         closed_message: &'static str,
     ) -> Result<(ParseTimeDriverState, PageVm, bool)> {
         let bootstrap_executor = local_executor.clone();
+        if state.initial_document.is_none() {
+            state.prepare_main_document(page_id, &mut runtime_hooks, &loader)?;
+        }
         let bootstrap = Box::pin(async move {
             let (page_vm, triggered_navigation) = {
                 let buffered_document_preloads = &mut state.buffered_document_preloads;
@@ -32,12 +35,15 @@ impl ConcurrentParseTimeRuntime {
                     &env,
                     runtime_hooks,
                     &mut state.parser_session,
+                    state
+                        .initial_document
+                        .take()
+                        .expect("parser must own its admitted main Document"),
                     started,
                     |page_vm| {
                         admit_pending_preloads(
                             page_vm,
                             buffered_document_preloads,
-                            &loader,
                             service_worker_preload_context,
                         );
                         Ok(())
@@ -59,7 +65,7 @@ impl ConcurrentParseTimeRuntime {
         local_executor: JsLocalExecutor,
         loader: &ResourceRequestClient,
         env: &PageVmEnvConfig,
-        runtime_hooks: PageVmRuntimeHooks,
+        mut runtime_hooks: PageVmRuntimeHooks,
         final_url: Url,
         stage: PageVmInitStage,
         html: String,
@@ -69,6 +75,7 @@ impl ConcurrentParseTimeRuntime {
             final_url.clone(),
             main_document_parser_scripting_enabled(env),
         );
+        state.prepare_main_document(page_id, &mut runtime_hooks, loader)?;
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -81,17 +88,11 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let service_worker_preload_context =
             env.reserved_service_worker_client_id.map(|client_id| {
                 ServiceWorkerScriptPreloadContext::new(
                     runtime_hooks.browser_context_runtime.clone(),
                     client_id,
-                    final_url.clone(),
-                    runtime_hooks.owner_wake(),
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
@@ -100,7 +101,6 @@ impl ConcurrentParseTimeRuntime {
             .append_to_main_document_scan_with_service_worker_context(
                 &final_url,
                 &html,
-                loader,
                 service_worker_preload_context.as_ref(),
             );
         state.parser_session.queue_arrived_chunk(html);
@@ -135,7 +135,7 @@ impl ConcurrentParseTimeRuntime {
         local_executor: JsLocalExecutor,
         loader: &ResourceRequestClient,
         env: &PageVmEnvConfig,
-        runtime_hooks: PageVmRuntimeHooks,
+        mut runtime_hooks: PageVmRuntimeHooks,
         final_url: Url,
         document_content_type: String,
         stage: PageVmInitStage,
@@ -143,6 +143,7 @@ impl ConcurrentParseTimeRuntime {
         started: Instant,
     ) -> Result<ParseTimePageVmCreationOutcome> {
         let mut state = ParseTimeDriverState::new_xml(final_url.clone());
+        state.prepare_main_document(page_id, &mut runtime_hooks, loader)?;
         state
             .parser_session
             .set_xml_document_content_type(document_content_type);
@@ -158,17 +159,11 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let service_worker_preload_context =
             env.reserved_service_worker_client_id.map(|client_id| {
                 ServiceWorkerScriptPreloadContext::new(
                     runtime_hooks.browser_context_runtime.clone(),
                     client_id,
-                    final_url.clone(),
-                    runtime_hooks.owner_wake(),
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
@@ -177,7 +172,6 @@ impl ConcurrentParseTimeRuntime {
             .append_to_main_document_scan_with_service_worker_context(
                 &final_url,
                 &source,
-                loader,
                 service_worker_preload_context.as_ref(),
             );
         state.parser_session.queue_arrived_chunk(source);

@@ -79,13 +79,14 @@ pub(crate) fn start_text_track_resource_fetch(
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
         let result = text_track_response_result(response.status, response.body_text());
-        host.record_get_subresource_network_result_with_initiator(
+        host.record_local_subresource_response(
             frame_id,
             document_url,
             request_url,
             SubresourceResourceType::TextTrack,
             SubresourceRequestInitiatorType::Other,
-            &Ok(response),
+            &response,
+            None,
         );
         return Ok(TextTrackResourceFetchStart::Local(result));
     }

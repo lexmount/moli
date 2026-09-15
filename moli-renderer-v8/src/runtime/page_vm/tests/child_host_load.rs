@@ -139,10 +139,7 @@ async fn selected_child_host_load_completes_reactions_and_runtime_followup() {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildHostLoad,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildHostLoad)
                 .await?,
             "the exact HostLoad task should run through the selected dispatcher"
         );
@@ -198,10 +195,7 @@ document.getElementById("host-load-selected-replacement").onload = function () {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildHostLoad,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildHostLoad)
                 .await?,
             "the replacing HostLoad callback should run through the selected dispatcher"
         );
@@ -255,10 +249,7 @@ document.getElementById("host-load-child-source").onload = () => {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildHostLoad,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildHostLoad)
                 .await?,
             "the exact HostLoad task should run through the selected dispatcher"
         );
@@ -321,7 +312,7 @@ Promise.resolve().then(() => {
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
         page_vm
-            .run_claimed_selected_page_task_for_test(retired, &loader)
+            .run_claimed_selected_page_task_for_test(retired)
             .await?;
         assert_eq!(
             page_vm
@@ -357,10 +348,7 @@ Promise.resolve().then(() => {
         }
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildHostLoad,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildHostLoad)
                 .await?,
             "discarding the retired claim must not consume the replacement HostLoad"
         );

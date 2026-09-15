@@ -30,13 +30,8 @@ impl PageVm {
     /// use `finish_selected_page_task_checkpoint()`; routing it here could
     /// consume unrelated runtime work while performing callback
     /// reconciliation.
-    pub(super) async fn finish_selected_page_callback_task(
-        &mut self,
-        loader: &crate::network::ResourceRequestClient,
-    ) -> Result<()> {
-        self.vm_mut()
-            .finish_selected_page_callback_task(loader)
-            .await?;
+    pub(super) async fn finish_selected_page_callback_task(&mut self) -> Result<()> {
+        self.vm_mut().finish_selected_page_callback_task().await?;
         self.absorb_parser_no_execution_runs();
         Ok(())
     }

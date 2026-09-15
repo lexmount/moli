@@ -137,7 +137,7 @@ async fn dialog_form_submission_closes_with_submitter_result_and_queues_reentran
         "dialog close must not create a synthetic Page timer"
     );
     assert!(
-        vm.run_one_user_interaction_executor_turn(&loader)
+        vm.run_one_user_interaction_executor_turn()
             .await
             .expect("first queued dialog close event should run")
     );
@@ -156,7 +156,7 @@ async fn dialog_form_submission_closes_with_submitter_result_and_queues_reentran
     );
 
     assert!(
-        vm.run_one_user_interaction_executor_turn(&loader)
+        vm.run_one_user_interaction_executor_turn()
             .await
             .expect("second queued dialog close event should run")
     );

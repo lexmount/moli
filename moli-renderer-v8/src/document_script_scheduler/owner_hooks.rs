@@ -26,11 +26,11 @@ pub(crate) trait PageOwnedDocumentScriptHooks {
 
     fn set_loading_ready_state(&mut self) -> Result<()>;
 
-    fn record_script_source_network_result(
+    fn record_script_resource_timing(
         &mut self,
-        initiator_url: Url,
+
         script_url: Url,
-        request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+
         network_result: &std::result::Result<NavigationResponse, String>,
     );
 

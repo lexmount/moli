@@ -25,9 +25,11 @@ impl ResourceResponseObserver for ScriptProgressObserver {
         let _ = self.0.send(ScriptProgress::Head(response));
     }
 
-    fn data_received(&self, bytes: usize) {
-        let _ = self.0.send(ScriptProgress::Data(bytes));
+    fn data_received(&self, bytes: &[u8]) {
+        let _ = self.0.send(ScriptProgress::Data(bytes.len()));
     }
+
+    fn cancelled(&self, _: &crate::network::ResourceResponseFailure) {}
 }
 
 fn start_observed_script(
@@ -254,13 +256,11 @@ async fn streaming_script_owner_cancellation_preserves_shared_callback() -> Resu
     let url = format!("http://{}/script.js", listener.local_addr()?);
     let owner = ResourceRequestClient::new(&FetchConfig::default())?;
     let document = document_loader((*owner).clone(), 1, &url);
-    let client = document.request_client();
     let request = Request::get(&url)?
         .with_request_origin(moli_url::WebOrigin::from_url(&url::Url::parse(&url)?))
         .with_page_network_policy()
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
-    let mut first =
-        Box::pin(client.fetch_cacheable_script_text_stream(request, resource_task_runner()));
+    let mut first = Box::pin(document.fetch_script_for_test(request));
     let (mut stream, _) = tokio::select! {
         biased;
         result = &mut first => panic!("the fixture still owns the response: {result:?}"),
@@ -303,15 +303,13 @@ async fn assert_streaming_script_last_consumer_cancels_held_transport(
     let url = format!("http://{}/script.js", listener.local_addr()?);
     let owner = ResourceRequestClient::new(&FetchConfig::default())?;
     let document = document_loader((*owner).clone(), 1, &url);
-    let client = document.request_client();
     let mut request = Request::get(&url)?
         .with_request_origin(moli_url::WebOrigin::from_url(&url::Url::parse(&url)?))
         .with_page_network_policy();
     if cacheable {
         request = request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
     }
-    let mut first =
-        Box::pin(client.fetch_cacheable_script_text_stream(request, resource_task_runner()));
+    let mut first = Box::pin(document.fetch_script_for_test(request));
     let (mut stream, _) = tokio::select! {
         biased;
         result = &mut first => panic!("the fixture still owns the response: {result:?}"),
@@ -324,6 +322,93 @@ async fn assert_streaming_script_last_consumer_cancels_held_transport(
         timeout(Duration::from_secs(3), stream.read(&mut byte)).await??,
         0
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_script_future_drop_cancels_held_transport() -> Result<()> {
+    native_resource_future_drop(crate::types::SubresourceResourceType::Script, false, false).await
+}
+
+#[tokio::test]
+async fn native_stylesheet_future_drop_cancels_held_transport() -> Result<()> {
+    native_resource_future_drop(
+        crate::types::SubresourceResourceType::Stylesheet,
+        false,
+        false,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn native_script_future_drop_preserves_other_cache_consumer() -> Result<()> {
+    native_resource_future_drop(crate::types::SubresourceResourceType::Script, true, false).await
+}
+
+#[tokio::test]
+async fn native_script_fallback_drop_preserves_other_cache_consumer() -> Result<()> {
+    native_resource_future_drop(crate::types::SubresourceResourceType::Script, true, true).await
+}
+
+async fn native_resource_future_drop(
+    resource_type: crate::types::SubresourceResourceType,
+    surviving_consumer: bool,
+    service_worker_fallback: bool,
+) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/script.js", listener.local_addr()?);
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let mut document = document_loader(owner.handle(), 1, &url);
+    if service_worker_fallback {
+        document.service_worker = Some(std::sync::Arc::new(|_, _, _, _| {
+            Some(Box::pin(async { Ok(None) }))
+        }));
+    }
+    let request = Request::get(&url)?
+        .with_page_network_policy()
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let mut first = Box::pin(document.fetch_resource(
+        request,
+        resource_type,
+        crate::types::SubresourceRequestInitiatorType::Parser,
+    ));
+    let (mut stream, _) = timeout(Duration::from_secs(3), async {
+        tokio::select! {
+            biased;
+            result = &mut first => panic!("fixture still owns the response: {result:?}"),
+            accepted = listener.accept() => accepted,
+        }
+    })
+    .await??;
+    read_request(&mut stream).await?;
+    let second = surviving_consumer.then(|| {
+        start_script(
+            document
+                .register_load(
+                    ResourceLoadKind::Script,
+                    ResourceLoadDisposition::Ordinary,
+                    None,
+                )
+                .unwrap(),
+            &url,
+        )
+        .unwrap()
+    });
+    drop(first);
+    if let Some(second) = second {
+        respond(&mut stream, "surviving-consumer").await?;
+        let response = timeout(Duration::from_secs(3), second).await???;
+        assert_eq!(response.body_text(), "surviving-consumer");
+        assert_eq!(document.load_diagnostics().active_ordinary_load_count, 0);
+    } else {
+        let mut byte = [0];
+        let closed = timeout(Duration::from_secs(3), stream.read(&mut byte)).await;
+        document.begin_detach();
+        assert_eq!(
+            closed??, 0,
+            "dropping the caller must release its original transport"
+        );
+    }
     Ok(())
 }
 
@@ -405,7 +490,6 @@ async fn check_loading_context(change: ContextChange) -> Result<()> {
         )
     }
     .unwrap();
-    let client = load.request_client();
     let second = start_script(load, &url)?;
     if foreign_context {
         let second = timeout(Duration::from_secs(3), second)
@@ -429,13 +513,12 @@ async fn check_loading_context(change: ContextChange) -> Result<()> {
     if foreign_context {
         // A late completion from the old context must neither overwrite the
         // winning response nor prevent the streaming consumer from reusing it.
-        let response = client
-            .fetch_cacheable_script_text_stream(
+        let response = document
+            .fetch_script_for_test(
                 Request::get(&url)?
                     .with_request_origin(moli_url::WebOrigin::from_url(&url::Url::parse(&url)?))
                     .with_page_network_policy()
                     .with_script_fetch_metadata(ScriptFetchRequestMetadata::default()),
-                resource_task_runner(),
             )
             .await?;
         assert_eq!(response.body_text(), "second");

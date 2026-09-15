@@ -54,10 +54,7 @@ async fn selected_child_classic_script_ready_completes_reaction_and_runtime_foll
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildDocumentScriptReady)
                 .await?,
             "the exact classic-script task should run through the production selected dispatcher"
         );
@@ -126,7 +123,7 @@ Promise.resolve().then(() => {
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
         page_vm
-            .run_claimed_selected_page_task_for_test(retired, &loader)
+            .run_claimed_selected_page_task_for_test(retired)
             .await?;
         assert_eq!(
             page_vm

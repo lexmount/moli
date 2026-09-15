@@ -888,7 +888,7 @@ fn set_discover_targets(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
     let params: SetDiscoverTargetsParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => {
-            return CommandOutputPlan::error_without_session(-32602, "InvalidParams");
+            return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
     if !params.discover
@@ -897,7 +897,7 @@ fn set_discover_targets(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
             .as_ref()
             .is_some_and(|filter| !filter.is_empty())
     {
-        return CommandOutputPlan::error_without_session(
+        return CommandOutputPlan::error(
             -32602,
             "Filter should not be present with `discover` is off",
         );

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use moli_page_types::{ChildFrameDocumentNetworkActivitySnapshot, ScriptNetworkOutputItem};
+use moli_page_types::ScriptNetworkOutputItem;
 use parking_lot::Mutex;
 use tokio::sync::watch;
 
@@ -80,7 +80,6 @@ impl RendererNetworkSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererNetworkOutputItem {
     Resource(Arc<ScriptNetworkOutputItem>),
-    ChildDocument(Arc<ChildFrameDocumentNetworkActivitySnapshot>),
     WorkerFetch {
         policy_document: Option<(
             super::RendererOwnerLocalHostId,
@@ -100,7 +99,6 @@ impl RendererNetworkOutputItem {
     pub fn renderer_transport_charge_bytes(&self) -> usize {
         match self {
             Self::Resource(item) => item.renderer_transport_charge_bytes(),
-            Self::ChildDocument(item) => item.renderer_transport_charge_bytes(),
             Self::WorkerFetch { pause, .. } => pause.renderer_transport_charge_bytes(),
         }
     }
@@ -310,57 +308,9 @@ impl RendererNetworkObservation {
     pub(crate) fn item(&self) -> &RendererNetworkOutputItem {
         &self.occurrence.item
     }
-}
 
-/// The fetch result and its native receipt travel together through child
-/// completion and load delivery, without a second raw protocol result.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RendererChildDocumentNetworkObservation(RendererNetworkObservation);
-
-impl RendererChildDocumentNetworkObservation {
-    pub(crate) fn new(
-        runtime: &super::RendererBrowserContextRuntime,
-        source: (
-            super::RendererOwnerLocalHostId,
-            RendererDocumentLifecycleIdentity,
-        ),
-        activity: ChildFrameDocumentNetworkActivitySnapshot,
-    ) -> Self {
-        Self(runtime.report_network(
-            source.0,
-            source.1,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(activity)),
-        ))
-    }
-
-    pub(crate) fn activity(&self) -> &ChildFrameDocumentNetworkActivitySnapshot {
-        let RendererNetworkOutputItem::ChildDocument(activity) = self.0.item() else {
-            unreachable!("child network constructor fixes its payload kind");
-        };
-        activity
-    }
-
-    pub(crate) fn into_observation(self) -> RendererNetworkObservation {
-        self.0
-    }
-
-    pub async fn committed(self) -> Option<RendererCommittedNetworkObservation> {
-        self.0.committed().await
-    }
-
-    #[cfg(test)]
-    pub(crate) fn unobserved_for_test(response: ChildFrameDocumentNetworkActivitySnapshot) -> Self {
-        let reporter =
-            RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(1));
-        let document = super::RendererDocumentLifecycleJournalHandle::new_initial(
-            super::PageId::new_for_testing(1),
-        )
-        .identity();
-        Self(reporter.report(
-            super::RendererOwnerLocalHostId::new_for_testing(1),
-            document,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(response)),
-        ))
+    pub(crate) fn source(&self) -> &RendererNetworkSource {
+        &self.occurrence.source
     }
 }
 

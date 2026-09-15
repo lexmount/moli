@@ -396,11 +396,6 @@ impl TargetRuntimeSlot {
             .request_id_for_subresource_handle(handle, request_id_allocator)
     }
 
-    pub(crate) fn claim_completed_subresource_request_id(&mut self, request_id: &str) -> bool {
-        self.network_agent
-            .claim_completed_subresource_request_id(request_id)
-    }
-
     fn transition_renderer_channel_for_page_absence(&mut self, reason: TargetPageAbsenceReason) {
         match reason {
             TargetPageAbsenceReason::TargetClosed => {

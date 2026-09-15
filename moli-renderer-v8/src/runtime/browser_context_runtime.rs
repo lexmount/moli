@@ -11,7 +11,6 @@ use std::{
 use crate::planning::{
     PreparedScript, SharedScriptSourceLoadCompleter,
     external_script_source_load_outcome_from_result,
-    load_prepared_script_source_outcome_with_document_character_set,
 };
 use crate::shared_worker_runtime::RendererSharedWorkerRuntimeDiagnostics;
 use moli_fetch::{ResponseBody, ResponseHead};
@@ -234,12 +233,13 @@ impl Drop for WorkerServiceTask {
     }
 }
 
-#[derive(Debug)]
 struct DetachedParserScriptFetchContinuationInner {
     script: PreparedScript,
-    request_origin: moli_url::WebOrigin,
-    request_client: crate::network::ResourceRequestClient,
-    task_runner: crate::network::RendererResourceTaskRunner,
+    loader: crate::network::context::DocumentResourceLoader,
+    request: (
+        crate::network::loads::ResourceLoadLease,
+        Arc<crate::network::ResourceTransfer>,
+    ),
     document_character_set: Option<String>,
     completer: SharedScriptSourceLoadCompleter,
 }
@@ -255,31 +255,19 @@ impl PartialEq for DetachedParserScriptFetchContinuation {
     }
 }
 
-impl DetachedParserScriptFetchContinuation {
-    fn new(
-        script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
-        request_client: crate::network::ResourceRequestClient,
-        task_runner: crate::network::RendererResourceTaskRunner,
-        document_character_set: Option<String>,
-        completer: SharedScriptSourceLoadCompleter,
-    ) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Some(
-                DetachedParserScriptFetchContinuationInner {
-                    script,
-                    request_origin,
-                    request_client,
-                    task_runner,
-                    document_character_set,
-                    completer,
-                },
-            ))),
-        }
+impl std::fmt::Debug for DetachedParserScriptFetchContinuationInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DetachedParserScriptFetchContinuation")
+            .field("script", &self.script.url)
+            .finish_non_exhaustive()
     }
+}
 
+impl DetachedParserScriptFetchContinuation {
     fn take(&self) -> Option<DetachedParserScriptFetchContinuationInner> {
-        self.inner.lock().take()
+        let inner = self.inner.lock().take()?;
+        inner.request.0.release_consumer_cancel();
+        Some(inner)
     }
 
     pub fn fail(&self, error_text: String) -> bool {
@@ -287,10 +275,17 @@ impl DetachedParserScriptFetchContinuation {
             return false;
         };
         inner
+            .request
+            .1
+            .failed(&crate::network::ResourceResponseFailure::Request(
+                error_text.clone(),
+            ));
+        inner.request.0.finish();
+        inner
             .completer
             .finish(external_script_source_load_outcome_from_result(
                 &inner.script,
-                &inner.request_origin,
+                &inner.loader.fetch_context().request_origin(),
                 Err(error_text),
                 inner.document_character_set.as_deref(),
             ));
@@ -321,11 +316,14 @@ impl DetachedParserScriptFetchContinuation {
             },
             ResponseBody::materialized_text(text, response_body),
         );
+        crate::network::ResourceBodyResponse::from(response.clone())
+            .publish(&inner.request.1, None);
+        inner.request.0.finish();
         inner
             .completer
             .finish(external_script_source_load_outcome_from_result(
                 &inner.script,
-                &inner.request_origin,
+                &inner.loader.fetch_context().request_origin(),
                 Ok(response),
                 inner.document_character_set.as_deref(),
             ));
@@ -336,21 +334,46 @@ impl DetachedParserScriptFetchContinuation {
         let Some(mut inner) = self.take() else {
             return false;
         };
+        let changed = url.as_ref().is_some_and(|url| url != &inner.script.url);
         if let Some(url) = url {
             inner.script.url = url;
         }
-        let task_runner = inner.task_runner.clone();
+        let request = crate::planning::external_script_request(
+            &inner.script,
+            &inner.loader.fetch_context().request_origin(),
+            Some(moli_fetch::RequestResourceType::ParserBlockingScript),
+        );
+        if changed {
+            inner.request.1.update_request(|network| {
+                inner.loader.resource_request_started(
+                    network,
+                    &request,
+                    crate::types::SubresourceResourceType::Script,
+                    crate::types::SubresourceRequestInitiatorType::Parser,
+                )
+            });
+        }
+        let task_runner = inner.loader.task_runner();
         task_runner.spawn(async move {
-            let outcome = load_prepared_script_source_outcome_with_document_character_set(
-                &inner.script,
-                &inner.request_origin,
-                &inner.request_client,
-                inner.document_character_set.as_deref(),
-                Some(moli_fetch::RequestResourceType::ParserBlockingScript),
-                inner.task_runner.clone(),
-            )
-            .await;
-            inner.completer.finish(outcome);
+            let result = inner
+                .loader
+                .fetch_started_resource(
+                    request,
+                    crate::types::SubresourceResourceType::Script,
+                    inner.request.0,
+                    inner.request.1,
+                )
+                .await
+                .map(|(response, _)| response)
+                .map_err(|error| error.to_string());
+            inner
+                .completer
+                .finish(external_script_source_load_outcome_from_result(
+                    &inner.script,
+                    &inner.loader.fetch_context().request_origin(),
+                    result,
+                    inner.document_character_set.as_deref(),
+                ));
         });
         true
     }
@@ -923,9 +946,11 @@ impl RendererBrowserContextRuntime {
         &self,
         mut info: crate::protocol_types::PendingSubresourceFetchInfo,
         script: PreparedScript,
-        request_origin: moli_url::WebOrigin,
-        request_client: crate::network::ResourceRequestClient,
-        task_runner: crate::network::RendererResourceTaskRunner,
+        loader: crate::network::context::DocumentResourceLoader,
+        request: (
+            crate::network::loads::ResourceLoadLease,
+            Arc<crate::network::ResourceTransfer>,
+        ),
         document_character_set: Option<String>,
         completer: SharedScriptSourceLoadCompleter,
     ) -> (
@@ -937,17 +962,26 @@ impl RendererBrowserContextRuntime {
             .next_detached_parser_script_fetch_id
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
-        (
-            info,
-            DetachedParserScriptFetchContinuation::new(
-                script,
-                request_origin,
-                request_client,
-                task_runner,
-                document_character_set,
-                completer,
-            ),
-        )
+        let load = request.0.clone();
+        let continuation = DetachedParserScriptFetchContinuation {
+            inner: Arc::new(Mutex::new(Some(
+                DetachedParserScriptFetchContinuationInner {
+                    script,
+                    loader,
+                    request,
+                    document_character_set,
+                    completer,
+                },
+            ))),
+        };
+        let pending = Arc::downgrade(&continuation.inner);
+        load.attach_consumer_cancel(move || {
+            if let Some(inner) = pending.upgrade() {
+                DetachedParserScriptFetchContinuation { inner }
+                    .fail("Document resource load cancelled".into());
+            }
+        });
+        (info, continuation)
     }
 
     pub fn set_javascript_dialog_handler_enabled(&self, enabled: bool) {

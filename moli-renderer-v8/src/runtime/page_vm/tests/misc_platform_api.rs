@@ -98,20 +98,14 @@ async fn deprecated_storage_quota_uses_typed_async_misc_platform_tasks() {
         for _ in 0..4 {
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::MiscPlatformApi,
-                        &loader,
-                    )
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MiscPlatformApi)
                     .await?,
                 "each admitted callback must run through the production selected dispatcher"
             );
         }
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MiscPlatformApi,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MiscPlatformApi)
                 .await?,
             "failed conversions and a missing optional quota callback must publish no tasks"
         );
@@ -195,10 +189,7 @@ navigator.webkitTemporaryStorage.queryUsageAndQuota(
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MiscPlatformApi,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MiscPlatformApi)
                 .await?
         );
         assert_eq!(
@@ -242,7 +233,7 @@ Promise.resolve().then(() => { __legacyQuotaRetiredCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -303,7 +294,7 @@ Promise.resolve().then(() => { __legacyQuotaStaleCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -354,7 +345,7 @@ Promise.resolve().then(() => {
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -446,10 +437,7 @@ JSON.stringify(__legacyQuotaOpaqueEvents)
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MiscPlatformApi,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MiscPlatformApi)
                 .await?
         );
         assert_eq!(

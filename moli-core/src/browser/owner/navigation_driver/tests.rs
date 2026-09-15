@@ -27,8 +27,17 @@ async fn streaming_body_failure_preserves_source_for_renderer_and_navigation() {
             );
             let (body_tx, mut body_rx) = tokio::sync::mpsc::channel(1);
             let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-            let capture =
-                super::spawn_streaming_body_capture(response, None, body_tx, completion_tx);
+            let (owner, _operations) = tokio::sync::mpsc::unbounded_channel();
+            let request = crate::browser::NavigationRequest {
+                web_contents: crate::browser::WebContentsHandle::new(
+                    crate::browser::BrowserContextId::allocate(),
+                    crate::browser::WebContentsId::allocate(),
+                ),
+                navigation: crate::browser::NavigationId::allocate(),
+                document: crate::browser::DocumentId::allocate(),
+            };
+            let writer = std::rc::Rc::new(super::NativeBodyWriter::new(&owner, request, response));
+            let capture = super::spawn_streaming_body_capture(writer, None, body_tx, completion_tx);
             assert_eq!(body_rx.recv().await.unwrap(), b"partial body");
             assert!(body_rx.recv().await.is_none());
             let navigation_error = capture
@@ -60,10 +69,13 @@ async fn streaming_body_failure_preserves_source_for_renderer_and_navigation() {
 async fn cancelled_body_capture_retains_join_error() {
     let task = tokio::spawn(std::future::pending::<anyhow::Result<super::CapturedBody>>());
     task.abort();
-    let error = super::NativeBodyCapture(Some(task))
-        .finish()
-        .await
-        .expect_err("cancelled capture must fail");
+    let error = super::NativeBodyCapture {
+        pump: Some(task),
+        writer: None,
+    }
+    .finish()
+    .await
+    .expect_err("cancelled capture must fail");
     assert!(
         error
             .downcast_ref::<tokio::task::JoinError>()

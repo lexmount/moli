@@ -37,20 +37,14 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            return Ok(self.discard_stale_child_module_terminal(
+            return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                completion.network_attribution(),
-                completion.network_result(),
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
-        self.vm_mut()
-            .record_current_child_module_fetch_network_result(
-                completion.network_attribution(),
-                completion.network_result(),
-            );
         let _followup = self
             .vm_mut()
             .apply_current_child_parser_module_root_fetch_completion(
@@ -71,20 +65,14 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            return Ok(self.discard_stale_child_module_terminal(
+            return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                completion.network_attribution(),
-                completion.network_result(),
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
-        self.vm_mut()
-            .record_current_child_module_fetch_network_result(
-                completion.network_attribution(),
-                completion.network_result(),
-            );
         let _followup = self
             .vm_mut()
             .apply_current_child_module_dependency_fetch_completion(
@@ -105,22 +93,14 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            return Ok(self.discard_stale_child_module_terminal(
+            return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                completion.network_attribution(),
-                completion.network_result(),
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
-        let output_effect = PageResourceCompletionOutputEffect::capture_if(
-            self.vm_mut()
-                .record_current_child_module_fetch_network_result(
-                    completion.network_attribution(),
-                    completion.network_result(),
-                ),
-        );
         let _followup = self
             .vm_mut()
             .apply_current_child_dynamic_import_fetch_completion(
@@ -129,7 +109,7 @@ impl PageVm {
         Ok(PageResourceCompletionTurnAction::applied(
             source,
             owner,
-            output_effect,
+            PageResourceCompletionOutputEffect::None,
         ))
     }
 
@@ -141,22 +121,14 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            return Ok(self.discard_stale_child_module_terminal(
+            return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                completion.network_attribution(),
-                completion.network_result(),
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
-        let output_effect = PageResourceCompletionOutputEffect::capture_if(
-            self.vm_mut()
-                .record_current_child_module_fetch_network_result(
-                    completion.network_attribution(),
-                    completion.network_result(),
-                ),
-        );
         let _followup = self
             .vm_mut()
             .apply_current_child_modulepreload_fetch_completion(
@@ -165,30 +137,7 @@ impl PageVm {
         Ok(PageResourceCompletionTurnAction::applied(
             source,
             owner,
-            output_effect,
+            PageResourceCompletionOutputEffect::None,
         ))
-    }
-
-    fn discard_stale_child_module_terminal(
-        &mut self,
-        source: RendererOwnerResourceActivitySource,
-        owner: RendererPageResourceCompletionOwner,
-        current_owner: Option<RendererPageResourceCompletionOwner>,
-        network_attribution: &crate::types::ChildModuleFetchNetworkAttribution,
-        network_result: Option<&crate::types::SharedNavigationResponseResult>,
-    ) -> PageResourceCompletionTurnAction {
-        let output_effect = PageResourceCompletionOutputEffect::capture_if(
-            self.vm_mut()
-                .record_historical_child_module_fetch_network_result(
-                    network_attribution,
-                    network_result,
-                ),
-        );
-        PageResourceCompletionTurnAction::discarded_stale(
-            source,
-            owner,
-            current_owner,
-            output_effect,
-        )
     }
 }

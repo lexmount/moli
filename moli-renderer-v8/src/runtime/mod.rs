@@ -44,10 +44,9 @@ mod access;
 mod browser_context_runtime;
 mod network_observation;
 pub use network_observation::{
-    RendererChildDocumentNetworkObservation, RendererCommittedNetworkObservation,
-    RendererNetworkInput, RendererNetworkObservation, RendererNetworkOccurrence,
-    RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
-    RendererWorkerIdentity,
+    RendererCommittedNetworkObservation, RendererNetworkInput, RendererNetworkObservation,
+    RendererNetworkOccurrence, RendererNetworkOutputItem, RendererNetworkSource,
+    RendererNetworkSourceIdentity, RendererWorkerIdentity,
 };
 pub(crate) use network_observation::{
     RendererDocumentNetworkReporter, RendererNetworkReporter, RendererNetworkRequest,
@@ -106,8 +105,7 @@ mod script_preloads;
 mod service_worker_run;
 
 pub(crate) use self::script_preloads::{
-    BufferedScriptPreloadKey, BufferedScriptPreloadRequest, DocumentScriptPreloadStore,
-    IncrementalBufferedScriptPreloadScanner,
+    DocumentScriptPreloadStore, IncrementalBufferedScriptPreloadScanner,
 };
 
 pub use self::page_creation_progress::{RendererPageCreationPhase, RendererPageCreationProgress};

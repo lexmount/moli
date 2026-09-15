@@ -316,19 +316,19 @@ impl ResourcePerformanceEntry {
         }
     }
 
-    pub(crate) fn from_child_frame_document_network(
+    pub(crate) fn from_child_document_response(
         name: impl Into<String>,
         initiator_type: &'static str,
         start_unix_millis: Option<f64>,
-        network: &crate::protocol_types::ChildFrameDocumentNetworkResponse,
+        network: &crate::types::ChildDocumentResponseMetadata,
     ) -> Self {
-        let body_size = network.encoded_data_length as f64;
+        let body_size = network.body_size as f64;
         let header_size = network
-            .response_headers
+            .headers
             .iter()
             .map(|(name, value)| name.len() + value.len() + 4)
             .sum::<usize>() as f64;
-        let content_type = moli_web_mime::response_content_type(&network.response_headers)
+        let content_type = moli_web_mime::response_content_type(&network.headers)
             .and_then(|value| moli_web_mime::mime_essence(&value))
             .unwrap_or_default();
         Self {

@@ -13,7 +13,6 @@ use crate::dynamic_script_owner::{DynamicScriptOwnerPoll, DynamicScriptRunnable}
 use crate::exception_reporting::{
     V8ExceptionReport, build_event_handler_exception_report, uncaught_script_error,
 };
-use crate::network::ResourceRequestClient;
 use crate::script_provenance::CompiledStringProvenance;
 use crate::style_engine::StyleInvalidationTurnExitBoundary;
 use crate::util::{
@@ -857,24 +856,21 @@ impl ScriptVm {
 
     pub(super) async fn flush_pending_work(
         &mut self,
-        loader: &ResourceRequestClient,
         wait_for_dynamic_loads: bool,
     ) -> std::result::Result<(), String> {
         let _ = self
-            .flush_pending_work_with_turn_budget(loader, wait_for_dynamic_loads, false)
+            .flush_pending_work_with_turn_budget(wait_for_dynamic_loads, false)
             .await?;
         Ok(())
     }
 
     pub(super) async fn flush_pending_work_with_turn_budget(
         &mut self,
-        loader: &ResourceRequestClient,
         wait_for_dynamic_loads: bool,
         yield_after_one_runnable: bool,
     ) -> std::result::Result<RuntimePendingWorkFlushOutcome, String> {
         let result = self
             .flush_pending_work_with_turn_budget_inner(
-                loader,
                 wait_for_dynamic_loads,
                 yield_after_one_runnable,
             )
@@ -887,7 +883,6 @@ impl ScriptVm {
 
     async fn flush_pending_work_with_turn_budget_inner(
         &mut self,
-        loader: &ResourceRequestClient,
         wait_for_dynamic_loads: bool,
         yield_after_one_runnable: bool,
     ) -> std::result::Result<RuntimePendingWorkFlushOutcome, String> {
@@ -956,8 +951,7 @@ impl ScriptVm {
                         }
                         if script.kind == crate::types::ScriptKind::Module {
                             if let Some(network_result) = source_network_result.as_deref() {
-                                self.record_script_subresource_network_result(
-                                    script.initiator_url.clone(),
+                                self.record_script_resource_timing(
                                     script.url.clone(),
                                     network_result,
                                 );
@@ -978,17 +972,13 @@ impl ScriptVm {
                             "flush_pending_work executing ready dynamic script"
                         );
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_resource_timing(script.url.clone(), network_result);
                         }
                         let document_owner_before_run =
                             self.current_main_document_task_owner().expect(
                                 "runtime script execution requires a current main Document owner",
                             );
-                        match self.execute_prepared_script_once(loader, &script).await {
+                        match self.execute_prepared_script_once(&script).await {
                             Ok(true) => {
                                 if self.script_run_replaced_document(
                                     document_owner_before_run,
@@ -1136,11 +1126,7 @@ impl ScriptVm {
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_resource_timing(script.url.clone(), network_result);
                         }
                         self.record_runtime_warning(format_args!(
                             "dynamic script load failed for `{}`: {message}",

@@ -6596,7 +6596,7 @@ async fn document_open_keeps_already_queued_window_timer_task() {
 
     for _ in 0..4 {
         let _ = vm
-            .run_next_due_timer_callback_for_test(&loader)
+            .run_next_due_timer_callback_for_test()
             .await
             .expect("the exact timer body should advance the pre-open Window timer");
         if vm

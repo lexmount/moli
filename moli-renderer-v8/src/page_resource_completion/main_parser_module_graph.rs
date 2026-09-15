@@ -3,7 +3,7 @@ use crate::{
     module_script_continuation::MainParserDocumentOwner, types::SharedNavigationResponseResult,
 };
 
-use super::MainModuleFetchNetworkAttribution;
+use url::Url;
 
 /// Exact PageVm-local owner of one main-Document parser module fetch.
 ///
@@ -47,7 +47,7 @@ pub(crate) struct MainParserModuleGraphFetchCompletion {
     target: MainParserModuleGraphFetchTarget,
     result: std::result::Result<ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: MainModuleFetchNetworkAttribution,
+    request_url: Url,
 }
 
 impl MainParserModuleGraphFetchCompletion {
@@ -55,13 +55,13 @@ impl MainParserModuleGraphFetchCompletion {
         target: MainParserModuleGraphFetchTarget,
         result: std::result::Result<ModuleGraphFetchedSource, String>,
         network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: MainModuleFetchNetworkAttribution,
+        request_url: Url,
     ) -> Self {
         Self {
             target,
             result,
             network_result,
-            network_attribution,
+            request_url,
         }
     }
 
@@ -73,8 +73,8 @@ impl MainParserModuleGraphFetchCompletion {
         self.network_result.as_ref()
     }
 
-    pub(crate) fn network_attribution(&self) -> &MainModuleFetchNetworkAttribution {
-        &self.network_attribution
+    pub(crate) fn request_url(&self) -> &Url {
+        &self.request_url
     }
 
     pub(crate) fn into_result(self) -> std::result::Result<ModuleGraphFetchedSource, String> {

@@ -57,7 +57,7 @@ async fn check_no_cors_redirect_before_interception(worker: bool) {
             if vm.eval("redirectFilterResult === 'pending'").unwrap() != "true" {
                 break;
             }
-            wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
+            wait_for_one_selected_page_task_executor_test_turn(&mut vm)
                 .await
                 .unwrap();
         }

@@ -51,7 +51,6 @@ pub(crate) trait RendererPageResourceCompletionTestSource {
         RendererPageTaskReadyMetadata,
         RendererPageResourceCompletion,
     )>;
-    fn has_ready_completion(&mut self) -> bool;
 }
 
 #[cfg(test)]
@@ -73,9 +72,5 @@ impl RendererPageResourceCompletionTestSource
         RendererPageResourceCompletion,
     )> {
         crate::page_task_queue::RendererPageNetworkingSource::pop_front(self)
-    }
-
-    fn has_ready_completion(&mut self) -> bool {
-        crate::page_task_queue::RendererPageNetworkingSource::has_ready_completion(self)
     }
 }

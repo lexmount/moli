@@ -1,10 +1,315 @@
 use super::*;
 use crate::runtime::{RendererNetworkInput, RendererNetworkOutputItem};
 use crate::types::{ScriptNetworkOutputItem, SubresourceBodyFinishedResult};
+use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
+#[derive(Clone, Copy)]
+enum MaterializedConsumer {
+    SynchronousXhr,
+    Manifest,
+    Popup,
+}
+
+#[derive(Clone, Copy)]
+enum MaterializedFinish {
+    Complete,
+    Partial,
+    Cancelled,
+}
+
+macro_rules! materialized_consumer_stage_tests {
+    ($($name:ident: $consumer:ident, $finish:ident;)*) => {
+        $(#[tokio::test(flavor = "multi_thread")]
+        async fn $name() -> anyhow::Result<()> {
+            materialized_consumer_stages(MaterializedConsumer::$consumer, MaterializedFinish::$finish).await
+        })*
+    };
+}
+
+materialized_consumer_stage_tests! {
+    popup_document_publishes_head_and_data_before_eof: Popup, Complete;
+    popup_document_retains_partial_native_body: Popup, Partial;
+    synchronous_window_xhr_publishes_head_and_data_before_eof: SynchronousXhr, Complete;
+    synchronous_window_xhr_retains_partial_native_body: SynchronousXhr, Partial;
+    synchronous_window_xhr_cancellation_closes_original_body: SynchronousXhr, Cancelled;
+    manifest_retirement_closes_original_body_without_vm_result_publication: Manifest, Cancelled;
+    manifest_publishes_stages_without_vm_result_publication: Manifest, Complete;
+    manifest_retains_partial_native_body_without_vm_result_publication: Manifest, Partial;
+}
+
+async fn materialized_consumer_stages(
+    consumer: MaterializedConsumer,
+    finish: MaterializedFinish,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let complete = matches!(finish, MaterializedFinish::Complete);
+    let cancelled = matches!(finish, MaterializedFinish::Cancelled);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let origin = format!("http://{}", listener.local_addr()?);
+    let request_url = format!("{origin}/held");
+    let payload: &[u8] = match consumer {
+        MaterializedConsumer::SynchronousXhr | MaterializedConsumer::Popup => b"body",
+        MaterializedConsumer::Manifest => br#"{"name":"native manifest"}"#,
+    };
+    let (arrived, request_arrived) = tokio::sync::oneshot::channel();
+    let (prefix, release_prefix) = tokio::sync::oneshot::channel();
+    let (tail, release_tail) = tokio::sync::oneshot::channel();
+    let mut server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+        }
+        let head = String::from_utf8(head).unwrap();
+        let length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).await.unwrap();
+        match consumer {
+            MaterializedConsumer::SynchronousXhr => {
+                assert!(head.starts_with("POST /held HTTP/1.1\r\n"));
+                assert_eq!(body, [0, 128, 255, 65]);
+            }
+            MaterializedConsumer::Manifest | MaterializedConsumer::Popup => {
+                assert!(head.starts_with("GET /held HTTP/1.1\r\n"));
+                assert!(body.is_empty());
+            }
+        }
+        let content_type = if matches!(consumer, MaterializedConsumer::Popup) {
+            "text/html"
+        } else {
+            "application/json"
+        };
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", payload.len()).as_bytes()).await.unwrap();
+        let _ = arrived.send(());
+        if release_prefix.await.is_err() {
+            return;
+        }
+        stream.write_all(&payload[..2]).await.unwrap();
+        if cancelled {
+            let read = tokio::time::timeout(Duration::from_secs(5), stream.read_u8())
+                .await
+                .unwrap();
+            assert_eq!(
+                read.unwrap_err().kind(),
+                std::io::ErrorKind::UnexpectedEof,
+                "retirement must close the original physical response while its tail is withheld"
+            );
+            return;
+        }
+        if release_tail.await.is_err() {
+            return;
+        }
+        if complete {
+            stream.write_all(&payload[2..]).await.unwrap();
+        }
+    });
+    let (send, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (cancel_send, cancel_receive) = tokio::sync::oneshot::channel();
+    let vm_task = tokio::task::spawn_blocking(move || {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+            Url::parse(&format!("{origin}/page")).unwrap(),
+            &loader,
+        );
+        vm._context_host
+            .borrow()
+            .browser_context_runtime()
+            .install_network_handler(move |input| {
+                if let RendererNetworkInput::Observation(input) = input {
+                    let _ = send.send(input.occurrence.clone());
+                }
+            });
+        let document = vm
+            ._context_host
+            .borrow()
+            .current_main_document_resource_loader()
+            .unwrap();
+        cancel_send
+            .send((vm.page_context_cancel_sender(), document.clone()))
+            .unwrap();
+        match consumer {
+            MaterializedConsumer::SynchronousXhr => {
+                let expected = match finish {
+                    MaterializedFinish::Complete => "body",
+                    MaterializedFinish::Partial => "NetworkError",
+                    MaterializedFinish::Cancelled => "aborted",
+                };
+                let actual = vm.eval("(()=>{const xhr=new XMLHttpRequest();xhr.open('POST','/held',false);try{xhr.send(new Uint8Array([0,128,255,65]));return xhr.readyState===0&&xhr.status===0?'aborted':xhr.responseText}catch(e){return e.name}})()").unwrap();
+                assert_eq!(
+                    actual, expected,
+                    "physical result must preserve synchronous XHR behavior"
+                );
+            }
+            MaterializedConsumer::Popup => {
+                assert_eq!(vm.eval("globalThis.nativePopup=open('/held','native-popup');String(nativePopup!==null)").unwrap(), "true");
+                tokio::runtime::Handle::current().block_on(async {
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while vm.has_pending_lightweight_popup_document_loads() {
+                            if !vm
+                                .run_one_oldest_ready_page_task_executor_turn()
+                                .await
+                                .unwrap()
+                            {
+                                assert!(vm.wait_for_task_executor_work_arrival().await);
+                            }
+                        }
+                    })
+                    .await
+                    .unwrap();
+                });
+                if complete {
+                    assert_eq!(
+                        vm.eval("nativePopup.document.body.textContent").unwrap(),
+                        "body"
+                    );
+                }
+            }
+            MaterializedConsumer::Manifest => {
+                vm.exec("const link=document.createElement('link');link.rel='manifest';link.href='/held';document.head.appendChild(link)", None).unwrap();
+                let crate::RendererAppManifestLoadPreparation::Ready(pending) =
+                    vm.prepare_app_manifest_load()
+                else {
+                    panic!("manifest must admit its original resource load")
+                };
+                let (result, _publication) = tokio::runtime::Handle::current()
+                    .block_on(pending.execute())
+                    .into_parts();
+                assert_eq!(
+                    result.manifest.name.as_deref(),
+                    complete.then_some("native manifest")
+                );
+                // The query result never re-enters the VM: network ownership
+                // must remain with the admitted resource, independently of cache publication.
+            }
+        }
+    });
+    let mut prefix = Some(prefix);
+    let mut tail = Some(tail);
+    let mut request_seen = false;
+    let mut cancellation = Some(cancel_receive);
+    let evidence = async {
+        tokio::time::timeout(Duration::from_secs(5), request_arrived).await??;
+        request_seen = true;
+        let start = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(occurrence) = events.recv().await {
+                if let RendererNetworkOutputItem::Resource(item) = &occurrence.item
+                    && let ScriptNetworkOutputItem::SubresourceRequestStarted(start) = item.as_ref()
+                    && start.url().as_str() == request_url
+                {
+                    return Some(start.clone());
+                }
+            }
+            None
+        })
+        .await
+        .context("native request must precede its held response body")?
+        .context("native source closed before request admission")?;
+        for stage in 0..3 {
+            let item = tokio::time::timeout(Duration::from_secs(2), async {
+                while let Some(occurrence) = events.recv().await {
+                    let RendererNetworkOutputItem::Resource(item) = &occurrence.item else {
+                        continue;
+                    };
+                    let matches = match item.as_ref() {
+                        ScriptNetworkOutputItem::SubresourceResponseStarted(head) => {
+                            stage == 0 && head.handle() == start.handle()
+                        }
+                        ScriptNetworkOutputItem::SubresourceDataReceived(data) => {
+                            stage == 1 && data.handle() == start.handle()
+                        }
+                        ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                            body.handle() == start.handle()
+                        }
+                        _ => false,
+                    };
+                    if matches {
+                        return Some(item.clone());
+                    }
+                }
+                None
+            })
+            .await
+            .with_context(|| format!("native stage {stage} must precede the next body gate"))?
+            .context("native source closed before terminal")?;
+            match (stage, item.as_ref()) {
+                (0, ScriptNetworkOutputItem::SubresourceResponseStarted(head)) => {
+                    anyhow::ensure!(head.status() == 200);
+                    prefix.take().unwrap().send(()).unwrap();
+                }
+                (1, ScriptNetworkOutputItem::SubresourceDataReceived(data)) => {
+                    anyhow::ensure!(data.data_length() == 2);
+                    if cancelled {
+                        let (page_cancel, document) = cancellation.take().unwrap().await?;
+                        match consumer {
+                            MaterializedConsumer::SynchronousXhr => page_cancel.cancel(
+                                crate::runtime::RendererPageContextCancelReason::PageClosed,
+                            ),
+                            MaterializedConsumer::Popup => {
+                                unreachable!("popup retirement uses its navigation owner")
+                            }
+                            MaterializedConsumer::Manifest => {
+                                assert!(document.begin_detach());
+                                document.finish_detach();
+                            }
+                        }
+                    } else {
+                        tail.take().unwrap().send(()).unwrap();
+                    }
+                }
+                (2, ScriptNetworkOutputItem::SubresourceBodyFinished(body)) => {
+                    match body.result() {
+                        SubresourceBodyFinishedResult::Ready(body) if complete => {
+                            anyhow::ensure!(body.clone_body_bytes() == payload)
+                        }
+                        SubresourceBodyFinishedResult::FailedWithPartialBody {
+                            partial_body,
+                            error_text,
+                        } if !complete => {
+                            anyhow::ensure!(partial_body.clone_body_bytes() == payload[..2]);
+                            anyhow::ensure!(!error_text.is_empty());
+                        }
+                        other => anyhow::bail!(
+                            "original physical result must survive materialization: {other:?}"
+                        ),
+                    }
+                }
+                other => anyhow::bail!("native terminal overtook a held stage: {other:?}"),
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Some(prefix) = prefix {
+        let _ = prefix.send(());
+    }
+    if let Some(tail) = tail {
+        let _ = tail.send(());
+    }
+    if !request_seen {
+        server.abort();
+    }
+    let server_result = tokio::time::timeout(Duration::from_secs(5), &mut server).await;
+    if server_result.is_err() {
+        server.abort();
+    }
+    let vm_result = tokio::time::timeout(Duration::from_secs(5), vm_task).await;
+    evidence?;
+    server_result??;
+    vm_result??;
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Resource {

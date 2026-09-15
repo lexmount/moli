@@ -33,10 +33,7 @@ impl Browser {
             .and_then(|key| context.network_requests.get(key));
         let admitted = match (admitted, input.parent_request()) {
             (None, Some(parent)) => {
-                let key = (
-                    occurrence.source.identity(),
-                    crate::browser::network::NetworkRequestIdentity::Resource(parent.get()),
-                );
+                let key = (occurrence.source.identity(), parent);
                 let Some(parent) = context.network_requests.get(&key).filter(|parent| {
                     parent.renderer_source == occurrence.source
                         && matches!(
@@ -147,9 +144,6 @@ impl Browser {
         let event = NetworkOccurrence { owner, renderer };
         let event = match &occurrence.item {
             RendererNetworkOutputItem::WorkerFetch { .. } => unreachable!("pause committed above"),
-            RendererNetworkOutputItem::ChildDocument(_) => {
-                BrowserEvent::NetworkRequestCompleted(event)
-            }
             RendererNetworkOutputItem::Resource(item) => match item.as_ref() {
                 ScriptNetworkOutputItem::SubresourceRequestStarted(_) => {
                     BrowserEvent::NetworkRequestStarted(event)

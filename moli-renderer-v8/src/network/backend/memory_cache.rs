@@ -183,7 +183,7 @@ enum ScriptTextLoadPhase {
     Pending,
     Responding {
         response: Arc<ResourceResponseHead>,
-        received: usize,
+        body: Vec<u8>,
     },
     Finished(Box<ScriptTextLoadResult>),
 }
@@ -244,12 +244,12 @@ impl ScriptTextLoad {
             callback(result);
             return None;
         }
-        if let (Some(observer), ScriptTextLoadPhase::Responding { response, received }) =
+        if let (Some(observer), ScriptTextLoadPhase::Responding { response, body }) =
             (&observer, &state.phase)
         {
             observer.response_started(response.clone());
-            if *received != 0 {
-                observer.data_received(*received);
+            if !body.is_empty() {
+                observer.data_received(body);
             }
         }
         state.next_consumer_id = state
@@ -291,7 +291,7 @@ impl ScriptTextLoad {
     }
 
     fn cancel_consumer(&self, consumer_id: u64) {
-        let (consumer, transport_cancel) = {
+        let (consumer, failure, transport_cancel) = {
             let mut state = self.state.lock();
             let consumer = state.consumers.shift_remove(&consumer_id);
             let cancel = if consumer.is_some()
@@ -302,10 +302,35 @@ impl ScriptTextLoad {
             } else {
                 None
             };
-            (consumer, cancel)
+            let failure = consumer
+                .as_ref()
+                .and_then(|consumer| consumer.observer.as_ref())
+                .map(|_| {
+                    let message = "Resource load cancelled".to_owned();
+                    match &state.phase {
+                        ScriptTextLoadPhase::Responding { response, body } => {
+                            crate::network::ResourceResponseFailure::PartialBody {
+                                message,
+                                response: response.clone(),
+                                body: moli_page_types::SubresourceResponseBody::from_bytes(
+                                    body.clone(),
+                                ),
+                            }
+                        }
+                        _ => crate::network::ResourceResponseFailure::Request(message),
+                    }
+                });
+            (consumer, failure, cancel)
         };
-        // Completion closures can release their own load lease. Never destroy
-        // one while holding the shared cache's consumer mutex.
+        // Preserve native response facts without delivering a script completion
+        // into the cancelled consumer. Neither callback release nor observation
+        // may re-enter the cache while its consumer mutex is held.
+        if let Some(consumer) = &consumer
+            && let Some(observer) = &consumer.observer
+            && let Some(failure) = failure
+        {
+            observer.cancelled(&failure);
+        }
         drop(consumer);
         if let Some(transport_cancel) = transport_cancel {
             transport_cancel.cancel();
@@ -340,7 +365,7 @@ impl ResourceResponseObserver for ScriptTextLoad {
         );
         state.phase = ScriptTextLoadPhase::Responding {
             response: response.clone(),
-            received: 0,
+            body: Vec::new(),
         };
         for consumer in state.consumers.values() {
             if let Some(observer) = &consumer.observer {
@@ -349,19 +374,21 @@ impl ResourceResponseObserver for ScriptTextLoad {
         }
     }
 
-    fn data_received(&self, bytes: usize) {
+    fn data_received(&self, bytes: &[u8]) {
         let mut state = self.state.lock();
-        let ScriptTextLoadPhase::Responding { received, .. } = &mut state.phase else {
+        let ScriptTextLoadPhase::Responding { body, .. } = &mut state.phase else {
             panic!("script data must follow its response head");
         };
-        *received = received
-            .checked_add(bytes)
-            .expect("script response length exhausted");
+        body.extend_from_slice(bytes);
         for consumer in state.consumers.values() {
             if let Some(observer) = &consumer.observer {
                 observer.data_received(bytes);
             }
         }
+    }
+
+    fn cancelled(&self, failure: &crate::network::ResourceResponseFailure) {
+        self.finish(Err(failure.clone()));
     }
 }
 

@@ -399,6 +399,7 @@ impl JsContextHost {
             .current_main_document_task_owner()
             .expect("main Document must have an owner before its resource loader is installed");
         let owner = crate::native_bridge::WindowDocumentOwner::Frame(owner);
+        let loader = self.document_resource_loader_with_network(loader);
         self.document_resource_loaders.register(owner, loader);
         unsafe { &mut *self.runtime }
             .bind_document_resource_loader(self.document_resource_loaders.clone(), owner);
@@ -418,7 +419,7 @@ impl JsContextHost {
         let owner = self
             .current_main_document_task_owner()
             .expect("main Document must retain an owner while replacing its resource transport");
-        self.document_resource_loaders.replace_transport_view(
+        self.document_resource_loaders.replace_view(
             crate::native_bridge::WindowDocumentOwner::Frame(owner),
             loader,
         );
@@ -570,9 +571,63 @@ impl JsContextHost {
     ) -> DocumentResourceLoader {
         let owner = context.owner();
         let document_loader = DocumentResourceLoader::for_committed_document(context, source);
+        let document_loader = self.document_resource_loader_with_network(document_loader);
         self.document_resource_loaders
             .register(owner, document_loader.clone());
         document_loader
+    }
+
+    fn document_resource_loader_with_network(
+        &self,
+        mut loader: DocumentResourceLoader,
+    ) -> DocumentResourceLoader {
+        let child = loader.owner().frame_document_owner().and_then(|owner| {
+            self.child_browsing_contexts
+                .iter()
+                .find_map(|(handle, context)| {
+                    (self.current_child_document_task_owner(*handle) == Some(owner))
+                        .then(|| (*handle, context.frame_id().to_owned()))
+                })
+        });
+        let dispatch_scope = match loader.owner() {
+            crate::native_bridge::WindowDocumentOwner::LightweightPopup(owner) => {
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(owner.popup_id())
+            }
+            _ => child.as_ref().map_or(
+                crate::native_bridge::OwnerDispatchScope::Top,
+                |(handle, _)| crate::native_bridge::OwnerDispatchScope::Child(*handle),
+            ),
+        };
+        loader.bind_service_worker(
+            self.browser_context_runtime(),
+            self.service_worker_client_id_for_subresource_owner(dispatch_scope),
+        );
+        let Some(reporter) = self.document_network_reporter() else {
+            return loader;
+        };
+        let frame_id = child.map(|(_, frame_id)| frame_id);
+        loader.bind_network(reporter, self.resource_completion_sender(), frame_id);
+        loader
+    }
+
+    pub(super) fn bind_child_document_resource_context(&self, handle: DomHandle) {
+        if let Some(owner) = self.current_child_document_task_owner(handle)
+            && let Some(loader) = self.document_resource_loader_for_owner(owner)
+        {
+            self.document_resource_loaders.replace_view(
+                loader.owner(),
+                self.document_resource_loader_with_network(loader),
+            );
+        }
+    }
+
+    pub(super) fn bind_main_document_resource_network(&self) {
+        if let Some(loader) = self.current_main_document_resource_loader() {
+            self.document_resource_loaders.replace_view(
+                loader.owner(),
+                self.document_resource_loader_with_network(loader),
+            );
+        }
     }
 
     pub(crate) fn retire_document_resource_loader(
@@ -626,6 +681,12 @@ impl JsContextHost {
             .get(retired_owner)
             .expect("document.open() requires its exact source resource authority");
         let replacement = DocumentResourceLoader::for_committed_document(context, source);
+        let replacement =
+            if current_owner.frame_document_owner() != self.current_main_document_task_owner() {
+                self.document_resource_loader_with_network(replacement)
+            } else {
+                replacement
+            };
         let transferred_loads = retired.transfer_existing_loads_to(&replacement);
         self.retire_document_resource_loader(retired_owner)
             .expect("a committed Document transition must retire its exact resource authority");

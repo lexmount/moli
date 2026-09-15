@@ -517,7 +517,6 @@ impl PageVm {
     pub(in crate::runtime) async fn apply_selected_page_child_frame_task_turn(
         &mut self,
         task: RendererPageChildFrameTask,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
         match task.owner().target() {
             RendererPageChildFrameTaskTarget::RealmMaterialization(_) => {
@@ -529,7 +528,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_document_lifecycle_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -540,7 +538,7 @@ impl PageVm {
                     .await?;
                 match outcome.action.into_completion_boundary() {
                     PageChildDocumentScriptReadyCompletionBoundary::Complete(completion) => {
-                        self.finish_selected_page_task_completion(completion, loader)
+                        self.finish_selected_page_task_completion(completion)
                             .await?;
                     }
                     PageChildDocumentScriptReadyCompletionBoundary::DiscardedStale => {}
@@ -551,7 +549,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_host_load_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -560,7 +557,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_parser_module_root_start_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -569,7 +565,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_classic_source_load_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())

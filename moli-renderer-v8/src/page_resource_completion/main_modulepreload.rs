@@ -3,7 +3,7 @@ use crate::{
     types::SharedNavigationResponseResult,
 };
 
-use super::MainModuleFetchNetworkAttribution;
+use url::Url;
 
 /// Exact PageVm-local owner of one main-Document modulepreload network fetch.
 ///
@@ -37,7 +37,7 @@ pub(crate) struct MainModulepreloadFetchCompletion {
     target: MainModulepreloadFetchTarget,
     result: std::result::Result<ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: MainModuleFetchNetworkAttribution,
+    request_url: Url,
 }
 
 impl MainModulepreloadFetchCompletion {
@@ -45,13 +45,13 @@ impl MainModulepreloadFetchCompletion {
         target: MainModulepreloadFetchTarget,
         result: std::result::Result<ModuleGraphFetchedSource, String>,
         network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: MainModuleFetchNetworkAttribution,
+        request_url: Url,
     ) -> Self {
         Self {
             target,
             result,
             network_result,
-            network_attribution,
+            request_url,
         }
     }
 
@@ -63,8 +63,8 @@ impl MainModulepreloadFetchCompletion {
         self.network_result.as_ref()
     }
 
-    pub(crate) fn network_attribution(&self) -> &MainModuleFetchNetworkAttribution {
-        &self.network_attribution
+    pub(crate) fn request_url(&self) -> &Url {
+        &self.request_url
     }
 
     pub(crate) fn into_result(self) -> std::result::Result<ModuleGraphFetchedSource, String> {

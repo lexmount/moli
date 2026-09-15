@@ -45,10 +45,6 @@ pub struct PreparedNavigationResponse {
 }
 
 impl PreparedNavigationResponse {
-    pub fn renderer_devtools_agent_token(&self) -> crate::page::RendererDevToolsAgentToken {
-        self.page.renderer_devtools_agent_token()
-    }
-
     pub fn inspection_configuration_endpoint(
         &self,
     ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {

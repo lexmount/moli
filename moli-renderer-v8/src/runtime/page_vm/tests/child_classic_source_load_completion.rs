@@ -26,15 +26,11 @@ document.body.appendChild(frame);
     Ok(())
 }
 
-async fn advance_to_child_classic_source_load(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-) -> anyhow::Result<()> {
+async fn advance_to_child_classic_source_load(page_vm: &mut PageVm) -> anyhow::Result<()> {
     anyhow::ensure!(
         page_vm
             .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ChildNavigationCommit,
-                loader,
+                PageSelectedTaskTestSelector::ChildNavigationCommit
             )
             .await?,
         "child srcdoc must publish one exact navigation commit",
@@ -75,7 +71,7 @@ async fn child_classic_source_load_body_does_not_checkpoint_or_evaluate_script()
             "classic-source-body-child",
             &format!("{base_url}/body-only-classic.js"),
         )?;
-        advance_to_child_classic_source_load(&mut page_vm, &loader).await?;
+        advance_to_child_classic_source_load(&mut page_vm).await?;
         page_vm
             .vm_mut()
             .eval_without_microtask_checkpoint_for_test(
@@ -135,7 +131,7 @@ async fn selected_child_classic_source_load_submits_task_end_checkpoint() {
             "selected-classic-source-child",
             &format!("{base_url}/selected-classic.js"),
         )?;
-        advance_to_child_classic_source_load(&mut page_vm, &loader).await?;
+        advance_to_child_classic_source_load(&mut page_vm).await?;
         page_vm
             .vm_mut()
             .eval_without_microtask_checkpoint_for_test(
@@ -149,8 +145,7 @@ Promise.resolve().then(() => __selectedChildClassicSourceCheckpoint += 1);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildClassicScriptSourceLoad,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildClassicScriptSourceLoad
                 )
                 .await?,
             "one exact classic source-start task must enter the production selected dispatcher",
@@ -195,7 +190,7 @@ async fn stale_claimed_child_classic_source_load_does_not_checkpoint_current_doc
             "stale-classic-source-child",
             "/retired-classic.js",
         )?;
-        advance_to_child_classic_source_load(&mut page_vm, &loader).await?;
+        advance_to_child_classic_source_load(&mut page_vm).await?;
         let claimed = page_vm
             .claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildClassicScriptSourceLoad,
@@ -212,8 +207,7 @@ document.getElementById("stale-classic-source-child").srcdoc =
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildNavigationCommit,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildNavigationCommit
                 )
                 .await?,
             "replacement navigation must install a new exact child Document",
@@ -229,7 +223,7 @@ Promise.resolve().then(() => __staleChildClassicSourceCheckpoint += 1);
             )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm

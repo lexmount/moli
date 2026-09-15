@@ -35,7 +35,6 @@ impl PageVm {
     pub(super) async fn finish_selected_page_task_completion(
         &mut self,
         completion: PageTaskCompletion,
-        loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         match completion {
             PageTaskCompletion::NoCompletion => {}
@@ -43,7 +42,7 @@ impl PageVm {
                 self.finish_selected_page_task_checkpoint()?;
             }
             PageTaskCompletion::CallbackCompletion => {
-                self.finish_selected_page_callback_task(loader).await?;
+                self.finish_selected_page_callback_task().await?;
             }
         }
         Ok(())

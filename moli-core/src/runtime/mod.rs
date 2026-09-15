@@ -14,10 +14,7 @@ use crate::{
 use anyhow::Result;
 use anyhow::{Context, anyhow};
 use moli_cookie_jar::StoredCookie;
-use moli_fetch::{
-    FetchCancelHandle, RawResponse, Request, StreamingRawResponse, ensure_http_status_success,
-};
-use moli_page_types::NavigationResponse;
+use moli_fetch::{RawResponse, Request, StreamingRawResponse, ensure_http_status_success};
 use moli_renderer_v8::network::{
     BrowserResourceRuntime, BrowserResourceRuntimeOwner, PageNetworkPolicy,
 };
@@ -562,10 +559,10 @@ impl Browser {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
+            let response = response.into_response();
             if response_headers_indicate_raw_document(&response.headers) {
                 ensure_raw_document_materialization_allowed(raw_document_policy)?;
-                let raw_response =
-                    RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
+                let raw_response = response.into_materialized_raw_response().await?;
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
                     raw_response,
                 ))));
@@ -588,7 +585,7 @@ impl Browser {
                         stage,
                         reply_boundary,
                         lifecycle_decider,
-                        streaming_raw_response_from_navigation_response(response)?,
+                        response,
                         document_fetch_context_seed,
                         reserved_client,
                         page_creation_progress,
@@ -879,9 +876,9 @@ impl Browser {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
+            let response = response.into_response();
             let document_fetch_context_seed =
                 navigation_loader.commit(response.final_url.clone())?;
-            let response = streaming_raw_response_from_navigation_response(response)?;
             let page = self
                 .materialize_streaming_raw_response_page(
                     &raw_url,
@@ -949,6 +946,7 @@ impl Browser {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
+            let response = response.into_response();
             let document_fetch_context_seed =
                 navigation_loader.commit(response.final_url.clone())?;
             return self
@@ -958,7 +956,7 @@ impl Browser {
                     stage,
                     RendererReplyBoundary::Stage,
                     None,
-                    streaming_raw_response_from_navigation_response(response)?,
+                    response,
                     document_fetch_context_seed,
                     reserved_client,
                 )
@@ -1015,11 +1013,11 @@ impl Browser {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
+            let response = response.into_response();
             let document_fetch_context_seed =
                 navigation_loader.commit(response.final_url.clone())?;
             if response_headers_indicate_raw_document(&response.headers) {
-                let raw_response =
-                    RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
+                let raw_response = response.into_materialized_raw_response().await?;
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
                     raw_response,
                 ))));
@@ -1031,7 +1029,7 @@ impl Browser {
                     stage,
                     reply_boundary,
                     None,
-                    streaming_raw_response_from_navigation_response(response)?,
+                    response,
                     document_fetch_context_seed,
                     reserved_client,
                 )
@@ -1428,28 +1426,6 @@ fn external_raw_document_body_from_streaming_response_with_observer_and_progress
         let _ = completion_tx.send(result);
     });
     body_stream
-}
-
-fn streaming_raw_response_from_navigation_response(
-    response: NavigationResponse,
-) -> Result<StreamingRawResponse> {
-    let head = response.head();
-    let body = response.clone_body_bytes();
-    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
-    if !body.is_empty() {
-        body_tx
-            .send(body)
-            .map_err(|_| anyhow!("failed to enqueue service worker main resource body"))?;
-    }
-    drop(body_tx);
-    let (completion_tx, completion_rx) = oneshot::channel();
-    let _ = completion_tx.send(Ok(()));
-    Ok(StreamingRawResponse::new_with_head(
-        head,
-        body_rx,
-        FetchCancelHandle::new(),
-        completion_rx,
-    ))
 }
 
 #[derive(Debug, Clone)]

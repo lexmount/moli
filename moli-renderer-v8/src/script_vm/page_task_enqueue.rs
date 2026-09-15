@@ -96,13 +96,10 @@ impl ScriptVm {
     /// checkpoint has run, while `finish_host_task_turn()` owns the final
     /// runtime/style turn-exit cleanup. No borrow or V8 scope crosses the
     /// asynchronous runtime follow-up.
-    pub(crate) async fn finish_selected_page_callback_task(
-        &mut self,
-        loader: &crate::network::ResourceRequestClient,
-    ) -> Result<()> {
+    pub(crate) async fn finish_selected_page_callback_task(&mut self) -> Result<()> {
         self.perform_owner_lane_task_microtask_checkpoints()?;
         self.sync_child_browsing_context_records();
-        self.finish_host_task_turn(loader, false).await
+        self.finish_host_task_turn(false).await
     }
 
     /// Dispatch one Document lifecycle event body without ending its HTML task.

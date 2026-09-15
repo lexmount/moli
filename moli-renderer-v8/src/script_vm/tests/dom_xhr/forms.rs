@@ -2311,16 +2311,13 @@ async fn iso_2022_jp_get_form_data_url_target_posts_stateful_values() {
         "unexpected form target URL: {url}"
     );
 
-    vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_child_frame_task_executor_turns_for_setup(128)
         .await
         .expect("form target setup should use only child selected tasks");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__iso2022FormMessages.length) + ':' + String(globalThis.__iso2022FormLoads.length)",
-        "1:2",
-        "form target message work should advance",
-    )
+    advance_page_task_executor_until_eval_equals(&mut vm,
+"String(globalThis.__iso2022FormMessages.length) + ':' + String(globalThis.__iso2022FormLoads.length)",
+"1:2",
+"form target message work should advance")
     .await;
 
     let result = vm
@@ -2417,7 +2414,6 @@ async fn formdata_event_appended_entries_are_submitted_to_named_iframe() {
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "__formdataSubmitLoads.join('|')",
         expected_url.as_str(),
         "formdata target navigation should complete",
@@ -2481,7 +2477,6 @@ async fn child_click_uses_pre_dispatch_button_activation_target_after_dom_remova
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "__buttonChildSubmitLoads.join('|')",
         expected_url.as_str(),
         "button child-submit navigation should complete",
@@ -2551,7 +2546,6 @@ async fn submit_button_click_supersedes_programmatic_submit_after_target_change(
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "__doubleSubmitLoads.join('|')",
         &expected_log,
         "button double-submit navigation should complete",
@@ -2622,7 +2616,6 @@ async fn distinct_forms_keep_distinct_pending_child_target_submissions() {
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "__parallelFormLoads.slice().sort().join('|')",
         &expected_log,
         "parallel form submissions should complete",
@@ -2727,7 +2720,7 @@ async fn programmatic_form_submit_keeps_successive_distinct_child_targets() {
     )
     .expect("multi-target form submit setup should evaluate");
 
-    vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_child_frame_task_executor_turns_for_setup(128)
         .await
         .expect("form target setup should use only child selected tasks");
     let expected = ["frame1", "frame2", "frame3"]
@@ -2735,7 +2728,6 @@ async fn programmatic_form_submit_keeps_successive_distinct_child_targets() {
         .join("|");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "globalThis.__multiTargetFormLoads.slice().sort().join('|')",
         &expected,
         "all distinct form targets should complete through the wait driver",
@@ -4658,8 +4650,7 @@ async fn summary_activation_toggles_details_and_queues_toggle_event() {
     assert!(!vm.has_ready_timeout());
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("details toggle event task should advance")

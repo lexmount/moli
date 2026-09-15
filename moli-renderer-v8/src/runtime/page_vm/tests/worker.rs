@@ -884,9 +884,9 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
                 .drain_service_worker_service_lane();
             admit_additional_producer_work(page_vm);
         }
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             page_vm
@@ -895,9 +895,7 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
                 .drain_service_worker_service_lane();
             admit_additional_producer_work(page_vm);
         }
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         if page_vm.vm_mut().eval(done_expression)? == "true" {
             return Ok(());
         }
@@ -1432,14 +1430,12 @@ async fn drive_shared_worker_probe(page_vm: &mut PageVm, context: &str) -> anyho
             .await?
             .is_some()
         {}
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         if page_vm
             .vm_mut()
             .eval("String(globalThis.__sharedWorkerDone === true)")?
@@ -1489,19 +1485,16 @@ async fn wait_for_shared_worker_client_count(
             .await?
             .is_some()
         {}
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         let actual = page_vm.vm().shared_worker_client_count_for_test();
         if actual == expected {
             return Ok(());
         }
-        let loader = page_vm.main_document_resource_loader();
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         let _ = tokio::time::timeout(
             Duration::from_millis(100),
             page_vm.wait_for_page_work_arrival_without_timeout(false),
@@ -1517,9 +1510,9 @@ async fn wait_for_shared_worker_client_count(
         .await?
         .is_some()
     {}
-    let loader = page_vm.main_document_resource_loader();
+
     while page_vm
-        .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
         .await?
     {}
     let actual = page_vm.vm().shared_worker_client_count_for_test();
@@ -1565,9 +1558,9 @@ async fn wait_for_child_shared_worker_owner_probe(
                 return Ok(());
             }
         }
-        let loader = page_vm.main_document_resource_loader();
+
         if page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             continue;
@@ -1579,12 +1572,8 @@ async fn wait_for_child_shared_worker_owner_probe(
         {
             continue;
         }
-        let loader = page_vm.main_document_resource_loader();
         if page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WindowMessage,
-                loader.request_client(),
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
             .await?
         {
             if page_vm.vm_mut().eval(done_expression)? == "true" {
@@ -1611,9 +1600,9 @@ async fn wait_for_child_shared_worker_owner_probe(
         .await?
         .is_some()
     {}
-    let loader = page_vm.main_document_resource_loader();
+
     while page_vm
-        .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
         .await?
     {}
     let diagnostics = page_vm
@@ -1697,12 +1686,8 @@ async fn drain_until_shared_worker_console_activity(
     let mut last_snapshot = None;
 
     while Instant::now() < deadline {
-        let loader = page_vm
-            .main_document_resource_loader()
-            .request_client()
-            .clone();
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         let snapshot = page_vm.page_diagnostics_snapshot()?;
@@ -1730,10 +1715,7 @@ async fn drain_until_shared_worker_console_activity(
         }
         last_snapshot = Some(snapshot);
 
-        let loader = page_vm.main_document_resource_loader();
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         let _ = tokio::time::timeout(
             Duration::from_millis(100),
             page_vm.wait_for_page_work_arrival_without_timeout(false),
@@ -1754,12 +1736,8 @@ async fn drain_until_websocket_trace_output(
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        let loader = page_vm
-            .main_document_resource_loader()
-            .request_client()
-            .clone();
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         items.extend(page_vm.vm_mut().take_network_output().into_items());
@@ -1773,10 +1751,7 @@ async fn drain_until_websocket_trace_output(
         .await
         .unwrap_or(false);
         if !arrived {
-            let loader = page_vm.main_document_resource_loader();
-            page_vm
-                .advance_timers_until_deadline_for_test(loader.request_client())
-                .await?;
+            page_vm.advance_timers_until_deadline_for_test().await?;
         }
     }
 }
@@ -1820,7 +1795,6 @@ async fn drive_until_worker_completion_observed(
     context: &str,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let loader = page_vm.main_document_resource_loader();
     let mut progress_sources = Vec::new();
 
     while Instant::now() < deadline {
@@ -1839,7 +1813,7 @@ async fn drive_until_worker_completion_observed(
                 .map(|(_, event_kind)| event_kind)
                 .expect("DedicatedWorker selector must retain its event kind");
             page_vm
-                .run_claimed_selected_page_task_for_test(claimed, loader.request_client())
+                .run_claimed_selected_page_task_for_test(claimed)
                 .await?;
             progress_sources.push(format!("typed:{event_kind:?}"));
             if event_kind == crate::page_task_queue::RendererDedicatedWorkerClientEventKind::Message
@@ -1876,7 +1850,7 @@ async fn drive_window_message_until(
     context: &str,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let loader = page_vm.main_document_resource_loader();
+
     let mut progress_sources = Vec::new();
 
     while Instant::now() < deadline {
@@ -1890,7 +1864,7 @@ async fn drive_window_message_until(
             }
         }
         if page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             progress_sources.push("typed:PageEvent".to_owned());
@@ -2225,7 +2199,7 @@ async fn worker_message_commits_child_navigation_before_document_script_ready() 
                             .map(|(_, event_kind)| event_kind)
                             .expect("DedicatedWorker selector must retain its event kind");
                         page_vm
-                            .run_claimed_selected_page_task_for_test(claimed, &loader)
+                            .run_claimed_selected_page_task_for_test(claimed)
                             .await?;
                         completion_sources.push(RendererOwnerResourceActivitySource::Worker);
                         let events = page_vm.vm_mut().eval("__workerReadyEvents.join('|')")?;
@@ -2404,12 +2378,8 @@ async fn shared_worker_error_commits_child_navigation_before_document_script_rea
                         .runtime_hooks
                         .browser_context_runtime
                         .drain_shared_worker_service_lane();
-                    let loader = page_vm.main_document_resource_loader();
                     let shared_worker_event_ran = page_vm
-                        .run_exact_selected_page_task_for_test(
-                            PageSelectedTaskTestSelector::SharedWorkerClientEvent,
-                            loader.request_client(),
-                        )
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::SharedWorkerClientEvent)
                         .await?;
                     if !shared_worker_event_ran
                         && page_vm.has_ready_page_websocket_task_for_test()
@@ -2417,7 +2387,7 @@ async fn shared_worker_error_commits_child_navigation_before_document_script_rea
                         let _ = page_vm.run_exact_page_websocket_selected_task_for_test().await?;
                     } else if !shared_worker_event_ran {
                         page_vm
-                            .advance_timers_until_deadline_for_test(loader.request_client())
+                            .advance_timers_until_deadline_for_test()
                             .await?;
                         let _ = tokio::time::timeout(
                             Duration::from_millis(100),
@@ -3102,16 +3072,14 @@ async fn service_worker_register_starts_module_worker_global() {
                     )
                 );
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-                let loader = page_vm.main_document_resource_loader();
+
                 while tokio::time::Instant::now() < deadline {
                     page_vm
                         .runtime_hooks
                         .browser_context_runtime
                         .drain_service_worker_service_lane();
                     while page_vm
-                        .run_one_oldest_ready_page_task_on_owner_lane_for_test(
-                            loader.request_client(),
-                        )
+                        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                         .await?
                     {
                         page_vm

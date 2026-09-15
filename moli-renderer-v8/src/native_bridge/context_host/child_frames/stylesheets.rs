@@ -7,10 +7,7 @@ use crate::{
         RendererStylesheetFetcher, ServiceWorkerStylesheetFetchContext, StylesheetFetchOptions,
         StylesheetFetcher,
     },
-    types::{
-        ChildBlockingStylesheetLoadCompletion, ChildBlockingStylesheetNetworkResult,
-        SubresourceResourceType,
-    },
+    types::{ChildBlockingStylesheetLoadCompletion, ChildStylesheetResponse},
 };
 
 impl JsContextHost {
@@ -97,43 +94,30 @@ impl JsContextHost {
         signature: DocumentBlockingStylesheetSignature,
         fetcher: RendererStylesheetFetcher,
     ) {
-        let requests = match &signature {
-            DocumentBlockingStylesheetSignature::Link { url, options } => vec![(
-                url.clone(),
-                options.clone(),
-                crate::types::SubresourceRequestInitiatorType::Parser,
-            )],
-            DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => urls
-                .iter()
-                .cloned()
-                .map(|url| {
-                    (
-                        url,
-                        StylesheetFetchOptions::default(),
-                        crate::types::SubresourceRequestInitiatorType::Css,
-                    )
-                })
-                .collect(),
+        let (fetcher, requests) = match &signature {
+            DocumentBlockingStylesheetSignature::Link { url, options } => {
+                (fetcher, vec![(url.clone(), options.clone())])
+            }
+            DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => (
+                fetcher.for_css_imports(),
+                urls.iter()
+                    .cloned()
+                    .map(|url| (url, StylesheetFetchOptions::default()))
+                    .collect(),
+            ),
         };
         let completion_tx = self.resource_completion_tx.clone();
-        let frame_id = self
-            .child_browsing_contexts
-            .get(&child_handle)
-            .map(|entry| entry.frame_id().to_owned());
         let resource_loader = self
             .document_resource_loader_for_owner(owner)
             .expect("accepted child stylesheet requires its Document authority");
         resource_loader.spawn_resource_task(async move {
             let mut network_results = Vec::with_capacity(requests.len());
-            for (request_url, options, initiator_type) in requests {
+            for (request_url, options) in requests {
                 let terminal = fetcher
                     .fetch_stylesheet_resource(document_url.clone(), request_url.clone(), options)
                     .await;
-                network_results.push(ChildBlockingStylesheetNetworkResult {
-                    frame_id: frame_id.clone(),
-                    document_url: document_url.clone(),
+                network_results.push(ChildStylesheetResponse {
                     request_url,
-                    initiator_type,
                     terminal,
                 });
             }
@@ -153,17 +137,6 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         completion: ChildBlockingStylesheetLoadCompletion,
     ) {
-        for network_result in &completion.network_results {
-            let physical_result = network_result.terminal.physical().as_result();
-            self.record_get_subresource_network_result_with_initiator(
-                network_result.frame_id.clone(),
-                network_result.document_url.clone(),
-                network_result.request_url.clone(),
-                SubresourceResourceType::Stylesheet,
-                network_result.initiator_type,
-                &physical_result,
-            );
-        }
         if !self
             .frame_owner_store
             .child_document_task_owner_is_current(completion.child_handle, completion.owner)
@@ -386,22 +359,5 @@ impl JsContextHost {
             successful,
             "child parser stylesheet terminal applied without an immediately runnable script head"
         );
-    }
-
-    pub(crate) fn record_historical_child_blocking_stylesheet_network_results(
-        &mut self,
-        completion: &ChildBlockingStylesheetLoadCompletion,
-    ) {
-        for network_result in &completion.network_results {
-            let physical_result = network_result.terminal.physical().as_result();
-            self.record_historical_get_subresource_network_result_with_initiator(
-                network_result.frame_id.clone(),
-                network_result.document_url.clone(),
-                network_result.request_url.clone(),
-                SubresourceResourceType::Stylesheet,
-                network_result.initiator_type,
-                &physical_result,
-            );
-        }
     }
 }

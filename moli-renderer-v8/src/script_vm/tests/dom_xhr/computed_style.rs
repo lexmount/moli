@@ -1762,7 +1762,7 @@ setTimeout(() => {
         "the inline setup stylesheet queues its own event body before the timer"
     );
     assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
+        vm.run_next_due_timer_callback_for_test()
             .await
             .expect("exact timer task should run")
     );
@@ -6937,7 +6937,6 @@ fn isolated_document_open_replacement_clears_inline_style_state() {
 
 #[tokio::test]
 async fn document_open_replacement_clears_timer_mutated_inline_style_state() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://document-open-timer-style-state.test/");
 
     vm.exec(
@@ -6951,7 +6950,7 @@ setTimeout(() => { document.getElementById('before').style.display = 'block'; },
     )
     .expect("initial document replacement should run");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("timer style mutation should drain");
 
@@ -8987,7 +8986,6 @@ async fn popup_held_computed_style_wrapper_is_empty_after_loaded_navigation() {
     assert_eq!(setup, "rgb(11, 22, 33)|true|false|true");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__popupLoadedComputedReady)",
         "true",
         "loaded popup document should run",
@@ -10520,7 +10518,6 @@ fn tab_key_respects_reading_flow_display_contents_items() {
 }
 #[tokio::test]
 async fn css_transition_state_uses_final_values_without_runtime_events() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm(
         "https://move-before-transition-state.test/",
         r#"<html><head></head><body></body></html>"#,
@@ -10567,7 +10564,7 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
     )
     .expect("transition setup should evaluate");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("transition timers should drain");
 
@@ -10604,7 +10601,6 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
 }
 #[tokio::test]
 async fn invalid_move_before_does_not_run_plain_transition_runtime() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm(
         "https://move-before-invalid-transition.test/",
         r#"<html><head></head><body></body></html>"#,
@@ -10633,7 +10629,7 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
     )
     .expect("plain transition setup should evaluate");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("plain transition timers should drain");
 
@@ -10663,7 +10659,6 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
 }
 #[tokio::test]
 async fn zero_duration_transform_transition_applies_final_layout_geometry() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm(
         "https://zero-duration-transform-transition.test/",
         r#"<html><head></head><body></body></html>"#,
@@ -10694,7 +10689,7 @@ async fn zero_duration_transform_transition_applies_final_layout_geometry() {
     )
     .expect("zero-duration transform transition setup should evaluate");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("zero-duration transform transition timers should drain");
 
@@ -10716,7 +10711,6 @@ async fn zero_duration_transform_transition_applies_final_layout_geometry() {
 }
 #[tokio::test]
 async fn child_content_document_created_elements_use_transition_final_state() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://child-created-transition.test/");
 
     vm.eval(
@@ -10754,7 +10748,7 @@ async fn child_content_document_created_elements_use_transition_final_state() {
     )
     .expect("child document transition setup should evaluate");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("child document transition timers should drain");
 
@@ -10793,7 +10787,7 @@ async fn child_content_document_animation_start_scans_child_stylesheets() {
     )
     .expect("child document frame setup should evaluate");
     while vm
-        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .run_one_oldest_ready_page_task_executor_turn()
         .await
         .expect("child frame setup task should run")
     {}
@@ -10829,7 +10823,7 @@ async fn child_content_document_animation_start_scans_child_stylesheets() {
         "child animationstart must not manufacture a PageTimer"
     );
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("child animation rendering update should run")
     );
@@ -10888,7 +10882,7 @@ async fn css_animation_start_and_midpoint_style_are_observable() {
         "animationstart must not manufacture a PageTimer"
     );
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("animation rendering update should run")
     );
@@ -11118,7 +11112,7 @@ async fn css_animation_start_and_zero_timeout_use_distinct_task_sources() {
         "the explicit setTimeout must remain a real PageTimer"
     );
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("animation rendering update should run")
     );
@@ -11128,7 +11122,7 @@ async fn css_animation_start_and_zero_timeout_use_distinct_task_sources() {
         "animation"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("the genuine zero timeout should drain");
 
@@ -11172,7 +11166,7 @@ async fn css_animation_commit_styles_commits_midpoint_transform() {
 
     assert!(!vm.has_ready_timeout());
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("animation rendering update should run")
     );
@@ -11231,7 +11225,7 @@ async fn css_animation_start_capture_and_bubble_listeners_share_queued_event() {
 
     assert!(!vm.has_ready_timeout());
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("animation rendering update should run")
     );
@@ -11279,7 +11273,7 @@ async fn css_animation_start_listener_removed_before_queued_event_still_deduplic
 
     assert!(!vm.has_ready_timeout());
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("animation rendering update should run")
     );
@@ -11324,7 +11318,7 @@ async fn css_animation_start_later_listener_gets_own_retroactive_scan() {
 
     assert!(!vm.has_ready_timeout());
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("initial animation rendering update should run")
     );
@@ -11347,7 +11341,7 @@ document.getElementById('item').addEventListener('animationstart', () => {
 
     assert!(!vm.has_ready_timeout());
     assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
+        vm.run_one_rendering_update_executor_turn()
             .await
             .expect("later animation rendering update should run")
     );

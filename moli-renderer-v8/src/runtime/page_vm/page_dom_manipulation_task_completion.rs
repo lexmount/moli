@@ -15,7 +15,6 @@ impl PageVm {
     pub(super) async fn finish_selected_page_dom_manipulation_task(
         &mut self,
         action: PageDomManipulationTurnAction,
-        loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         let completion = match action {
             PageDomManipulationTurnAction::BroadcastChannel(action) => {
@@ -39,7 +38,7 @@ impl PageVm {
             }
             PageDomManipulationTurnAction::ConnectedStyleEvent(action) => {
                 return self
-                    .finish_selected_page_connected_style_event_task(action, loader)
+                    .finish_selected_page_connected_style_event_task(action)
                     .await;
             }
             PageDomManipulationTurnAction::TextTrackDefaultMode(action) => {
@@ -52,7 +51,6 @@ impl PageVm {
                 action.into_page_task_completion()
             }
         };
-        self.finish_selected_page_task_completion(completion, loader)
-            .await
+        self.finish_selected_page_task_completion(completion).await
     }
 }

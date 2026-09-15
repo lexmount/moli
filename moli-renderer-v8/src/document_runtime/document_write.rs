@@ -10,7 +10,6 @@ use crate::parser::{
     DocumentStream, ParserPumpStep, ParserScriptHandoff, ParserYield, PreparedImportMap,
     PreparedImportMapSource,
 };
-use crate::planning::SharedScriptSourceLoad;
 use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
 use crate::types::{ScriptKind, ScriptMode};
 use html5ever::tree_builder::QuirksMode;
@@ -1014,10 +1013,6 @@ impl DocumentRuntime {
         target: crate::types::DocumentWriteExternalScriptFetchTarget,
     ) -> bool {
         self.document_write_external_script_fetch_target() == Some(target)
-            || self
-                .document_write_script_preloads
-                .values()
-                .any(|preload| preload.target == target)
     }
 
     pub(crate) fn has_pending_document_write_parser_blocking_work(&self) -> bool {
@@ -1065,7 +1060,6 @@ impl DocumentRuntime {
         let Some(resource_loader) = self.current_document_resource_loader() else {
             return;
         };
-        let request_client = resource_loader.request_client().clone();
         if reset_scanner || self.document_write_script_preload_scanner.is_none() {
             let initiator_url = self
                 .dom_host
@@ -1080,12 +1074,7 @@ impl DocumentRuntime {
             .as_mut()
             .expect("document-write preload scanner must be installed")
             .push_html(html);
-        let completion_tx = unsafe { &*host_ptr }.resource_completion_sender();
         let document_character_set = self.document_character_set().to_owned();
-        let Some(task_owner) = unsafe { &*host_ptr }.current_main_document_task_owner() else {
-            return;
-        };
-        let document_url = self.document_url().clone();
         for request in requests {
             if !request.is_parser_blocking_classic() {
                 continue;
@@ -1105,66 +1094,13 @@ impl DocumentRuntime {
                 // violation reporting and its eventual error transition.
                 continue;
             }
-            let key = request.cache_key();
-            if self.document_write_script_preloads.contains_key(&key) {
-                continue;
-            }
-            let load_id = self.allocate_document_write_external_script_load_id();
-            let target =
-                crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id);
-            let script = request.to_preload_script();
-            let resource_type_hint = request.resource_type_hint();
-            self.document_write_script_preloads.insert(
-                key,
-                DocumentWriteScriptPreload {
-                    request,
-                    target,
-                    ready_completion: None,
-                },
+            self.main_document_script_preloads.load_classic_script(
+                &request.to_preload_script(),
+                resource_loader.clone(),
+                document_character_set.clone(),
+                request.resource_type_hint(),
+                None,
             );
-            let request_client = request_client.clone();
-            let completion_tx = completion_tx.clone();
-            let document_character_set = document_character_set.clone();
-            let network_attribution =
-                crate::types::DocumentWriteExternalScriptNetworkAttribution::new(
-                    document_url.clone(),
-                    script.url.clone(),
-                );
-            let request_origin = resource_loader.fetch_context().request_origin();
-            let fetch_task_runner = resource_loader.task_runner();
-            resource_loader.spawn_resource_task(async move {
-                let outcome = crate::planning::load_prepared_script_source_outcome_with_document_character_set(
-                    &script,
-&request_origin,
-                    &request_client,
-                    Some(&document_character_set),
-                    Some(resource_type_hint),
-                    fetch_task_runner,
-                )
-                .await;
-                let _ = completion_tx.send_document_write_external_script(
-                    crate::types::DocumentWriteExternalScriptLoadCompletion::new(
-                        target,
-                        outcome.source_result,
-                        outcome.network_result,
-                        network_attribution,
-                    ),
-                );
-            });
-        }
-    }
-
-    fn take_matching_document_write_script_preload(
-        &mut self,
-        script: &PreparedScript,
-    ) -> Option<DocumentWriteScriptPreload> {
-        let key = crate::runtime::BufferedScriptPreloadKey::from_script(script)?;
-        let preload = self.document_write_script_preloads.remove(&key)?;
-        if preload.request.matches_script(script) {
-            Some(preload)
-        } else {
-            self.document_write_script_preloads.insert(key, preload);
-            None
         }
     }
 
@@ -1208,72 +1144,57 @@ impl DocumentRuntime {
         else {
             return false;
         };
-        let loader = resource_loader.request_client().clone();
-        let preload = self.take_matching_document_write_script_preload(&start.script);
-        let (target, preload_was_started, ready_completion) = match preload {
-            Some(preload) => (preload.target, true, preload.ready_completion),
-            None => {
-                let Some(task_owner) = unsafe { &*host_ptr }.current_main_document_task_owner()
-                else {
-                    return false;
-                };
-                let load_id = self.allocate_document_write_external_script_load_id();
-                (
-                    crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id),
-                    false,
-                    None,
-                )
-            }
+        let Some(task_owner) = unsafe { &*host_ptr }.current_main_document_task_owner() else {
+            return false;
         };
-        let network_attribution = crate::types::DocumentWriteExternalScriptNetworkAttribution::new(
-            self.document_url().clone(),
-            start.script.url.clone(),
+        let target = crate::types::DocumentWriteExternalScriptFetchTarget::new(
+            task_owner,
+            self.allocate_document_write_external_script_load_id(),
         );
-        let script_for_load = start.script.clone();
-        let source_ready = ready_completion.is_some();
+        let request_url = start.script.url.clone();
+        let source_load = self.main_document_script_preloads.load_classic_script(
+            &start.script,
+            resource_loader.clone(),
+            self.document_character_set().to_owned(),
+            moli_fetch::RequestResourceType::ParserBlockingScript,
+            None,
+        );
+        let completion = move |outcome: crate::planning::PreparedScriptSourceLoadOutcome| {
+            crate::types::DocumentWriteExternalScriptLoadCompletion::new(
+                target,
+                outcome.source_result,
+                outcome.network_result,
+                request_url,
+            )
+        };
         self.install_pending_parser_insertion(PendingParserInsertion {
             insertion,
             blocking_signatures: blocking_signatures_before,
             work: ParserInsertionWork::ExternalScript {
                 target,
                 start,
-                ready_completion: ready_completion.map(Box::new),
+                ready_completion: None,
             },
             resume_after_completion: VecDeque::new(),
         });
-        // Both source and stylesheet completion use the same readiness check.
-        // Take the work before executing; nested writes may install a new one.
-        if source_ready {
-            let _ = self.resume_ready_parser_insertion(scope, host_ptr);
-            return true;
-        }
-        if preload_was_started {
-            return true;
-        }
-        let completion_tx = unsafe { &*host_ptr }.resource_completion_sender();
-        let document_character_set = self.document_character_set().to_owned();
-        let request_origin = resource_loader.fetch_context().request_origin();
-        let fetch_task_runner = resource_loader.task_runner();
-        resource_loader.spawn_resource_task(async move {
-            let outcome =
-                crate::planning::load_prepared_script_source_outcome_with_document_character_set(
-                    &script_for_load,
-                    &request_origin,
-                    &loader,
-                    Some(&document_character_set),
-                    None,
-                    fetch_task_runner,
-                )
-                .await;
-            let _ = completion_tx.send_document_write_external_script(
-                crate::types::DocumentWriteExternalScriptLoadCompletion::new(
-                    target,
-                    outcome.source_result,
-                    outcome.network_result,
-                    network_attribution,
-                ),
+        // A ready source cannot reenter the parser script that called
+        // document.write; after it unwinds, retain normal parser readiness.
+        if self.parser_reentry.script_nesting_level == 0
+            && let Some(outcome) = source_load.try_outcome()
+        {
+            let _ = self.complete_document_write_external_script_load(
+                scope,
+                host_ptr,
+                completion(outcome),
             );
-        });
+        } else {
+            let completion_tx = unsafe { &*host_ptr }.resource_completion_sender();
+            resource_loader.spawn_resource_task(async move {
+                let _ = completion_tx.send_document_write_external_script(completion(
+                    source_load.wait_outcome().await,
+                ));
+            });
+        }
         true
     }
 
@@ -1467,26 +1388,6 @@ impl DocumentRuntime {
         self.has_pending_document_write_parser_blocking_work()
     }
 
-    fn complete_document_write_script_preload(
-        &mut self,
-        completion: crate::types::DocumentWriteExternalScriptLoadCompletion,
-    ) -> bool {
-        let target = completion.target();
-        let Some(preload) = self
-            .document_write_script_preloads
-            .values_mut()
-            .find(|preload| preload.target == target)
-        else {
-            return false;
-        };
-        debug_assert!(
-            preload.ready_completion.is_none(),
-            "one speculative parser-script load must produce exactly one completion"
-        );
-        preload.ready_completion = Some(completion);
-        true
-    }
-
     pub(crate) fn complete_document_write_external_script_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -1495,11 +1396,7 @@ impl DocumentRuntime {
     ) -> super::DocumentWriteExternalScriptLoadApplication {
         let completion_target = completion.target();
         if self.document_write_external_script_fetch_target() != Some(completion_target) {
-            return if self.complete_document_write_script_preload(completion) {
-                super::DocumentWriteExternalScriptLoadApplication::Applied
-            } else {
-                super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget
-            };
+            return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
         }
         if unsafe { &*host_ptr }.current_main_document_task_owner()
             != Some(completion_target.task_owner())
@@ -2003,10 +1900,21 @@ impl DocumentRuntime {
                 );
                 return;
             };
-            let shared_preload = self
-                .main_document_script_preloads
-                .shared_preload_for_script(&script);
             let document_character_set = self.document_character_set().to_owned();
+            let shared_preload = (script.kind == ScriptKind::Classic
+                && matches!(script.source, crate::planning::ScriptSource::External))
+            .then(|| {
+                let resource_loader = (unsafe { &*host_ptr })
+                    .current_main_document_resource_loader()
+                    .expect("parser-deferred script requires its Document resource loader");
+                self.main_document_script_preloads.load_classic_script(
+                    &script,
+                    resource_loader,
+                    document_character_set.clone(),
+                    moli_fetch::RequestResourceType::ClassicAsyncOrDeferScript,
+                    None,
+                )
+            });
             let Some(start) = self.accept_main_parser_deferred_script(
                 task_owner,
                 script,
@@ -2071,12 +1979,11 @@ impl DocumentRuntime {
         let resource_loader = (unsafe { &*host_ptr })
             .current_main_document_resource_loader()
             .expect("document.write async classic requires its exact Document resource loader");
-        let source_load = SharedScriptSourceLoad::spawn_with_request_resource_type(
-            script.clone(),
-            resource_loader.fetch_context().request_origin(),
-            resource_loader.request_client().clone(),
-            resource_loader.task_runner(),
-            Some(self.document_character_set().to_owned()),
+        let source_load = self.main_document_script_preloads.load_classic_script(
+            &script,
+            resource_loader,
+            self.document_character_set().to_owned(),
+            moli_fetch::RequestResourceType::ClassicAsyncOrDeferScript,
             None,
         );
         let work = PostParsePageOwnedWork::document_script_work(

@@ -98,6 +98,24 @@ impl ResourceTransfer {
         }
     }
 
+    pub(crate) fn data_received(&self, bytes: usize) {
+        let state = self.state.lock();
+        match &*state {
+            ResourceTransferState::Responding(network) => self.publish(
+                network,
+                ScriptNetworkOutputItem::SubresourceDataReceived(SubresourceDataReceived::new(
+                    network.handle(),
+                    bytes,
+                    bytes,
+                )),
+            ),
+            ResourceTransferState::Requested(_) => {
+                panic!("resource data must follow its response head")
+            }
+            ResourceTransferState::Finished => {}
+        }
+    }
+
     pub(crate) fn update_request(
         &self,
         request: impl FnOnce(&RendererNetworkRequest) -> SubresourceRequestStarted,
@@ -191,6 +209,13 @@ impl ResourceTransfer {
             Err(ResourceResponseFailure::Request(message)) => {
                 SubresourceBodyFinished::failed(network.handle(), message)
             }
+            Err(ResourceResponseFailure::Network { message, context }) => {
+                SubresourceBodyFinished::failed_with_network_context(
+                    network.handle(),
+                    message,
+                    context,
+                )
+            }
             Err(ResourceResponseFailure::PartialBody {
                 message,
                 response,
@@ -227,22 +252,12 @@ impl ResourceResponseObserver for ResourceTransfer {
         }
     }
 
-    fn data_received(&self, bytes: usize) {
-        let state = self.state.lock();
-        match &*state {
-            ResourceTransferState::Responding(network) => self.publish(
-                network,
-                ScriptNetworkOutputItem::SubresourceDataReceived(SubresourceDataReceived::new(
-                    network.handle(),
-                    bytes,
-                    bytes,
-                )),
-            ),
-            ResourceTransferState::Requested(_) => {
-                panic!("resource data must follow its response head")
-            }
-            ResourceTransferState::Finished => {}
-        }
+    fn data_received(&self, bytes: &[u8]) {
+        ResourceTransfer::data_received(self, bytes.len());
+    }
+
+    fn cancelled(&self, failure: &ResourceResponseFailure) {
+        self.failed(failure);
     }
 }
 

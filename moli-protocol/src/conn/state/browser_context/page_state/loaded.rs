@@ -97,7 +97,9 @@ impl BrowserContext {
     ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
         let document = self.browser_context.selected_document_handle()?;
         self.browser_context
-            .document_renderer_devtools_agent_token_for_test(document)
+            .document_renderer_inspection_endpoint_for_test(document)
+            .ok()
+            .map(|endpoint| endpoint.agent_token())
     }
 
     #[cfg(test)]
@@ -107,7 +109,9 @@ impl BrowserContext {
     ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
         let document = self.document_handle_for_target(target_id)?;
         self.browser_context
-            .document_renderer_devtools_agent_token_for_test(document)
+            .document_renderer_inspection_endpoint_for_test(document)
+            .ok()
+            .map(|endpoint| endpoint.agent_token())
     }
 
     #[cfg(test)]

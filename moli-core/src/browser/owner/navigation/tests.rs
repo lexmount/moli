@@ -13,8 +13,10 @@ use tokio::{
 };
 use url::Url;
 
+mod child_response_stages;
 mod document_network_stages;
 mod late_csp_reports;
+mod navigation_response_stages;
 mod network_stages;
 mod rejected_responses;
 
@@ -134,31 +136,34 @@ async fn native_child_document_network_completes_without_devtools() {
         1,
         "native recovery retains the child response"
     );
-    let crate::browser::NetworkRequestState::ChildDocument(response) = &requests[0].state else {
-        panic!("the recovery record must identify a child Document response");
-    };
-    assert_eq!(response.snapshot.request_url, server.url("/static"));
-    assert_eq!(response.snapshot.response.as_ref().unwrap().status, 200);
-    assert!(
-        String::from_utf8_lossy(
-            &response
-                .snapshot
-                .response
-                .as_ref()
-                .unwrap()
-                .response_body
-                .as_ref()
-                .unwrap()
-                .clone_body_bytes()
-        )
-        .contains("fixture static")
-    );
-    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) =
-        &completed[0].renderer.item
+    let crate::browser::NetworkRequestState::Completed {
+        request,
+        response: Some(response),
+        body,
+    } = &requests[0].state
     else {
-        panic!("the native occurrence must retain the same child response");
+        panic!("the recovery record must retain the child request, real head and terminal");
     };
-    assert!(std::sync::Arc::ptr_eq(response, occurred));
+    assert_eq!(
+        request.resource_type(),
+        crate::page::SubresourceResourceType::Document
+    );
+    assert!(request.frame_id().is_some());
+    assert!(request.navigation_loader_id().is_some());
+    assert_eq!(request.url().as_str(), server.url("/static"));
+    assert_eq!(response.status(), 200);
+    let crate::page::SubresourceBodyFinishedResult::Ready(bytes) = body.result() else {
+        panic!("child body must finish")
+    };
+    assert!(String::from_utf8_lossy(&bytes.clone_body_bytes()).contains("fixture static"));
+    let crate::page::RendererNetworkOutputItem::Resource(item) = &completed[0].renderer.item else {
+        panic!("resource terminal")
+    };
+    let crate::page::ScriptNetworkOutputItem::SubresourceBodyFinished(occurred) = item.as_ref()
+    else {
+        panic!("body terminal")
+    };
+    assert!(std::sync::Arc::ptr_eq(body, occurred));
     browser
         .close_web_contents(contents)
         .unwrap()
@@ -230,21 +235,32 @@ async fn native_child_document_network_failure_completes_without_devtools() {
         1,
         "recovery must retain the failed child request"
     );
-    let crate::browser::NetworkRequestState::ChildDocument(activity) = &requests[0].state else {
-        panic!("the failure must retain its child request identity");
+    let crate::browser::NetworkRequestState::Completed {
+        request,
+        response,
+        body,
+    } = &requests[0].state
+    else {
+        panic!("the failure must retain its original child request identity");
     };
-    assert_eq!(activity.snapshot.request_url, child_url);
-    assert_eq!(activity.snapshot.request_method, "GET");
+    assert_eq!(request.url().as_str(), child_url);
+    assert_eq!(request.method(), "GET");
     assert!(
-        !activity.snapshot.response.as_ref().unwrap_err().is_empty(),
+        response.is_none(),
         "no HTTP response may be fabricated for the failed fetch"
     );
-    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) =
-        &completed[0].renderer.item
-    else {
-        panic!("the event must carry the same failed child request");
+    let crate::page::SubresourceBodyFinishedResult::Failed(error) = body.result() else {
+        panic!("the original request must fail")
     };
-    assert!(std::sync::Arc::ptr_eq(activity, occurred));
+    assert!(!error.is_empty());
+    let crate::page::RendererNetworkOutputItem::Resource(item) = &completed[0].renderer.item else {
+        panic!("resource terminal")
+    };
+    let crate::page::ScriptNetworkOutputItem::SubresourceBodyFinished(occurred) = item.as_ref()
+    else {
+        panic!("body terminal")
+    };
+    assert!(std::sync::Arc::ptr_eq(body, occurred));
     browser
         .close_web_contents(contents)
         .unwrap()
@@ -294,15 +310,41 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
         .await
         .unwrap()
         .unwrap();
+    let mut handle = None;
     let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if let BrowserEvent::NetworkRequestCompleted(occurrence) = events.recv().await.unwrap().event
-                && occurrence.owner == crate::browser::NetworkOwner::Document(document)
-                && matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::ChildDocument(response) if response.snapshot.request_url == child_url) {
-                break occurrence;
+            match events.recv().await.unwrap().event {
+                BrowserEvent::NetworkRequestStarted(occurrence)
+                    if occurrence.owner == crate::browser::NetworkOwner::Document(document) =>
+                {
+                    if let crate::page::RendererNetworkOutputItem::Resource(item) =
+                        &occurrence.renderer.item
+                        && let crate::page::ScriptNetworkOutputItem::SubresourceRequestStarted(
+                            request,
+                        ) = item.as_ref()
+                        && request.url().as_str() == child_url
+                    {
+                        handle = Some(request.handle());
+                    }
+                }
+                BrowserEvent::NetworkRequestCompleted(occurrence)
+                    if occurrence.owner == crate::browser::NetworkOwner::Document(document) =>
+                {
+                    if let crate::page::RendererNetworkOutputItem::Resource(item) =
+                        &occurrence.renderer.item
+                        && let crate::page::ScriptNetworkOutputItem::SubresourceBodyFinished(body) =
+                            item.as_ref()
+                        && Some(body.handle()) == handle
+                    {
+                        break occurrence;
+                    }
+                }
+                _ => {}
             }
         }
-    }).await.expect("the child response commits before its held script can finish");
+    })
+    .await
+    .expect("the child response commits before its held script can finish");
     assert!(
         context
             .document_lifecycle_snapshot(document)
@@ -313,29 +355,22 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
     );
     let snapshot = browser.subscribe().unwrap().0;
     let request = snapshot.network_requests.iter().find(|request| request.owner == crate::browser::NetworkOwner::Document(document)
-        && matches!(&request.state, crate::browser::NetworkRequestState::ChildDocument(response) if response.snapshot.request_url == child_url)).unwrap();
-    let crate::browser::NetworkRequestState::ChildDocument(response) = &request.state else {
+        && matches!(&request.state, crate::browser::NetworkRequestState::Completed { request, .. } if request.url().as_str() == child_url)).unwrap();
+    let crate::browser::NetworkRequestState::Completed { body, .. } = &request.state else {
         unreachable!()
     };
-    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) = &completed.renderer.item
+    let crate::page::RendererNetworkOutputItem::Resource(item) = &completed.renderer.item else {
+        unreachable!()
+    };
+    let crate::page::ScriptNetworkOutputItem::SubresourceBodyFinished(occurred) = item.as_ref()
     else {
         unreachable!()
     };
-    assert!(std::sync::Arc::ptr_eq(response, occurred));
-    assert!(
-        String::from_utf8_lossy(
-            &response
-                .snapshot
-                .response
-                .as_ref()
-                .unwrap()
-                .response_body
-                .as_ref()
-                .unwrap()
-                .clone_body_bytes()
-        )
-        .contains("child body")
-    );
+    assert!(std::sync::Arc::ptr_eq(body, occurred));
+    let crate::page::SubresourceBodyFinishedResult::Ready(bytes) = body.result() else {
+        panic!("ready child body")
+    };
+    assert!(String::from_utf8_lossy(&bytes.clone_body_bytes()).contains("child body"));
     release_script.send(()).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -435,9 +470,8 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkRequestCompleted(occurrence) = event.event
                 && occurrence.owner == crate::browser::NetworkOwner::Document(document)
-                && crate::browser::network::request_key(&occurrence.renderer).is_some_and(|key| {
-                    key.1 == crate::browser::network::NetworkRequestIdentity::Resource(handle.get())
-                })
+                && crate::browser::network::request_key(&occurrence.renderer)
+                    .is_some_and(|key| key.1 == handle)
             {
                 break event.sequence;
             }
@@ -2860,7 +2894,9 @@ async fn assert_native_popup_download(context_override: bool) {
         responses[0].response.as_ref().unwrap().final_url.as_str(),
         url
     );
-    assert!(matches!(&responses[0].body, Some(Err(error)) if error == "net::ERR_ABORTED"));
+    assert!(
+        matches!(&responses[0].body, Some(Err(error)) if error.error_text == "net::ERR_ABORTED")
+    );
     let replacement = context.start_document_navigation(popup).unwrap();
     assert!(context.navigation_responses(popup).unwrap().is_empty());
     release.send(true).unwrap();

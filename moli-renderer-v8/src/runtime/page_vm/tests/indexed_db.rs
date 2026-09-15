@@ -92,7 +92,6 @@ struct IndexedDbSelectedTaskObservation {
 /// shared selected-task harness.
 async fn run_selected_indexed_db_task_for_test(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<Option<IndexedDbSelectedTaskObservation>> {
     let Some(claimed) = page_vm
         .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::IndexedDbTask)
@@ -107,7 +106,7 @@ async fn run_selected_indexed_db_task_for_test(
         .indexed_db_owner_and_kind()
         .expect("exact IndexedDB selector must retain IndexedDB metadata");
     page_vm
-        .run_claimed_selected_page_task_for_test(claimed, loader)
+        .run_claimed_selected_page_task_for_test(claimed)
         .await?;
     Ok(Some(IndexedDbSelectedTaskObservation { owner, kind }))
 }
@@ -176,7 +175,7 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
             "the IndexedDB body must not publish runtime follow-up before selected-task completion"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -245,7 +244,7 @@ async fn indexed_db_current_ticket_without_realm_payload_owns_only_a_checkpoint(
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
 
         assert_eq!(
@@ -299,7 +298,7 @@ async fn indexed_db_selected_callback_completion_reconciles_a_created_child() {
         )?;
 
         assert!(
-            run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+            run_selected_indexed_db_task_for_test(&mut page_vm)
                 .await?
                 .is_some(),
             "one selected IndexedDB task should be ready"
@@ -326,7 +325,7 @@ async fn indexed_db_task_applies_real_producer_work_and_one_microtask_checkpoint
         install_indexed_db_manager(&mut page_vm, &manager);
         schedule_open(&mut page_vm, "current-owner", "__indexedDbOwnerTurn");
 
-        let selected = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        let selected = run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("real producer task should consume one typed Page turn");
         assert!(matches!(
@@ -360,7 +359,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
         schedule_open(&mut page_vm, "first", "__firstIndexedDbTurn");
         schedule_open(&mut page_vm, "second", "__secondIndexedDbTurn");
 
-        let first = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        let first = run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("first IDB task should consume one turn");
 
@@ -371,7 +370,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             r#"[["upgrade","success","microtask"],[]]"#
         );
 
-        let second = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        let second = run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("second IDB task should consume the next turn");
         assert_eq!(second.owner, first.owner);
@@ -405,7 +404,7 @@ async fn indexed_db_task_survives_document_open_in_the_same_window_realm() {
              document.close(); 'replaced'",
         )?;
 
-        run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("same-Window IDB task should remain runnable after document.open()");
 
@@ -484,7 +483,7 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             "__replacementRealmIndexedDbTurn",
         );
 
-        let stale = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        let stale = run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("retired child-realm task should consume one stale discard turn");
 
@@ -497,7 +496,7 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             "discarding the retired realm must not consume the replacement realm's local task"
         );
 
-        let current = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        let current = run_selected_indexed_db_task_for_test(&mut page_vm)
             .await?
             .expect("replacement child-realm task should consume the next turn");
         assert_eq!(
@@ -589,7 +588,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         "__replacementIndexedDbTurn",
                     );
 
-                    let stale = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                    let stale = run_selected_indexed_db_task_for_test(&mut page_vm)
                         .await?
                         .expect("retired PageVm task should consume one stale discard turn");
                     assert_eq!(stale.owner.root_document(), retired_root);
@@ -602,7 +601,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         "discarding the old root namespace must not steal the colliding local task"
                     );
 
-                    let current = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                    let current = run_selected_indexed_db_task_for_test(&mut page_vm)
                         .await?
                         .expect("replacement producer task should consume the next turn");
                     assert_ne!(stale.owner, current.owner);

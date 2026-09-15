@@ -1,7 +1,7 @@
 use crate::document_runtime::DomHandle;
 use crate::parser_script::action::{
-    ParserClassicScriptNetworkRecordUrls, ParserClassicScriptRunnerStep,
-    ParserPendingClassicScriptBeginExecutionAction, ParserPendingClassicScriptDisposedReadyAction,
+    ParserClassicScriptRunnerStep, ParserPendingClassicScriptBeginExecutionAction,
+    ParserPendingClassicScriptDisposedReadyAction,
     ParserPendingClassicScriptFinishedExecutionAction, ParserPendingClassicScriptReadyAction,
     ParserPendingClassicScriptSourceFailureAction, ParserPendingClassicScriptSourceLoadAction,
     ParserPendingClassicScriptSourceLoadCandidate,
@@ -639,13 +639,11 @@ where
             script
                 .context_mut()
                 .clear_parser_classic_source_load_state();
-            let network_record_urls = script
-                .runner_script()
-                .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
+            let request_url = script.runner_script().map(|script| script.url.clone());
             let action = ParserPendingClassicScriptSourceResultAction::new(
                 notification,
                 network_result.as_ref(),
-                network_record_urls,
+                request_url,
             );
             owner.parser_script_source_result_action(action)
         })
@@ -672,14 +670,12 @@ where
                 script
                     .context_mut()
                     .clear_parser_classic_source_load_state();
-                let network_record_urls = script
-                    .runner_script()
-                    .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
+                let request_url = script.runner_script().map(|script| script.url.clone());
                 owner.parser_script_source_result_action(
                     ParserPendingClassicScriptSourceResultAction::new(
                         notification,
                         network_result.as_ref(),
-                        network_record_urls,
+                        request_url,
                     ),
                 )
             },
@@ -701,9 +697,7 @@ where
             let source_identity = script
                 .runner_external_load_identity()
                 .map(|(source_identity, _)| source_identity);
-            let network_record_urls = script
-                .runner_script()
-                .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
+            let request_url = script.runner_script().map(|script| script.url.clone());
             let source_load_outcome =
                 match script.context().parser_classic_source_load_outcome_state() {
                     ParserClassicScriptSourceLoadOutcomeState::NoSourceLoad => {
@@ -726,7 +720,7 @@ where
             let action = ParserPendingClassicScriptSourceResultAction::new(
                 notification,
                 network_result.as_ref(),
-                network_record_urls,
+                request_url,
             );
             Some(ParserClassicScriptSourceResultApplication::Applied(
                 owner.parser_script_source_result_action(action),

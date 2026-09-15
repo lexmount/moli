@@ -2,7 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn idle_callback_timeout_is_a_deadline_not_a_dispatch_delay() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-callback-timeout.test/");
 
     vm.eval(
@@ -27,7 +26,7 @@ async fn idle_callback_timeout_is_a_deadline_not_a_dispatch_delay() {
     )
     .expect("idle callback timeout probe should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("idle callback timeout probe should drain");
 
@@ -62,7 +61,6 @@ child.requestIdleCallback(() => __javascriptUrlIdleOrder.push("idle"));
     .expect("javascript URL and idle callback should queue");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(__javascriptUrlIdleOrder.length)",
         "2",
         "javascript URL must run before the page becomes idle",
@@ -77,7 +75,6 @@ child.requestIdleCallback(() => __javascriptUrlIdleOrder.push("idle"));
 
 #[tokio::test]
 async fn idle_deadline_declared_shape_keeps_state_private() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-deadline-shape.test/");
 
     vm.eval(
@@ -119,7 +116,7 @@ async fn idle_deadline_declared_shape_keeps_state_private() {
     )
     .expect("IdleDeadline probe should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("IdleDeadline callback should drain");
 
@@ -135,7 +132,6 @@ async fn idle_deadline_declared_shape_keeps_state_private() {
 
 #[tokio::test]
 async fn idle_callback_uses_webidl_callback_function_semantics() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-callback-webidl.test/");
     vm.eval(
         r#"
@@ -189,7 +185,7 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
     )
     .expect("idle Web IDL callback should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("idle Web IDL callback should drain");
     assert_eq!(
@@ -201,7 +197,6 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
 
 #[tokio::test]
 async fn idle_callback_exception_and_retirement_use_the_callback_realm() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-callback-lifetime.test/");
     vm.eval(
         r#"
@@ -241,7 +236,7 @@ async fn idle_callback_exception_and_retirement_use_the_callback_realm() {
     )
     .expect("idle callback exception and retirement should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("idle callback exception and retirement should drain");
     assert_eq!(
@@ -255,7 +250,6 @@ async fn idle_callback_exception_and_retirement_use_the_callback_realm() {
 
 #[tokio::test]
 async fn animation_frame_and_idle_callback_cancellation_retire_the_exact_task() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://window-scheduled-callback-cancel.test/");
 
     assert_eq!(
@@ -277,7 +271,7 @@ async fn animation_frame_and_idle_callback_cancellation_retire_the_exact_task() 
         "true"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("cancelled Window callbacks should leave the timer source quiescent");
     assert_eq!(

@@ -48,10 +48,7 @@ async fn window_message_uses_typed_one_turn_execution_and_not_the_legacy_wait_dr
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the first real producer task should consume one selected typed turn"
         );
@@ -66,10 +63,7 @@ async fn window_message_uses_typed_one_turn_execution_and_not_the_legacy_wait_dr
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the second producer task should remain for the next selected turn"
         );
@@ -115,7 +109,7 @@ async fn window_message_completion_syncs_a_microtask_created_child_after_the_che
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the exact Window.postMessage task should run through the selected dispatcher"
         );
@@ -177,10 +171,7 @@ onmessage = event => __documentOpenTypedMessages.push(event.data);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the pre-document.open task should remain scheduler-visible"
         );
@@ -244,19 +235,13 @@ document.getElementById("retired-window-message-target").remove();
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the retired target's stable task should remain drainable"
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "retirement reconsideration must not create a duplicate task"
         );
@@ -328,7 +313,7 @@ postMessage("current", "*");
 
                 assert!(
                     page_vm
-                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage, &loader)
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                         .await?,
                     "the retired PageVm task should consume one stale selected turn"
                 );
@@ -342,7 +327,7 @@ postMessage("current", "*");
 
                 assert!(
                     page_vm
-                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage, &loader)
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                         .await?,
                     "the replacement task must survive the stale local-id collision"
                 );

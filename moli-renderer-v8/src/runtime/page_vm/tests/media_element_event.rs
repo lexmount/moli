@@ -60,7 +60,7 @@ media.currentTime = 2;
         );
 
         page_vm
-            .finish_selected_page_task_completion(body.action.into_page_task_completion(), &loader)
+            .finish_selected_page_task_completion(body.action.into_page_task_completion())
             .await?;
         assert_eq!(
             page_vm
@@ -146,7 +146,7 @@ Promise.resolve().then(() => {
                 expected_kind
             );
             page_vm
-                .run_claimed_selected_page_task_for_test(stale, &loader)
+                .run_claimed_selected_page_task_for_test(stale)
                 .await?;
         }
         assert_eq!(
@@ -223,7 +223,7 @@ currentMedia.currentTime = 2;
             RendererPageMediaElementEventTaskKind::Seeking
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(seeking, &loader)
+            .run_claimed_selected_page_task_for_test(seeking)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("String(currentMedia.seeking)")?,
@@ -242,7 +242,7 @@ currentMedia.currentTime = 2;
             RendererPageMediaElementEventTaskKind::SeekCompletion
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(seeked, &loader)
+            .run_claimed_selected_page_task_for_test(seeked)
             .await?;
         assert_eq!(
             page_vm
@@ -295,7 +295,7 @@ media.currentTime = 3;
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent)
                 .await?,
             "the exact media-element task should run through the selected dispatcher"
         );

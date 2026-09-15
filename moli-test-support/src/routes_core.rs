@@ -2075,11 +2075,16 @@ pub(super) async fn parse_time_async_classic_chunked_page(headers: HeaderMap) ->
         {
             return;
         }
-        let _ = tokio::time::timeout(Duration::from_millis(500), tail_gate.notified()).await;
-        sleep(Duration::from_millis(20)).await;
-        let _ = tx
-            .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from(tail)))
-            .await;
+        // Receipt of the script request does not imply its execution. The
+        // script's load handler acknowledges execution before releasing late DOM.
+        tokio::select! {
+            _ = tail_gate.notified() => {
+                let _ = tx
+                    .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from(tail)))
+                    .await;
+            }
+            _ = tx.closed() => {}
+        }
         if !host_key.is_empty() {
             remove_parse_time_async_chunked_tail_gate(&host_key);
         }
@@ -4341,10 +4346,14 @@ pub(super) async fn asset_parse_time_defer_script() -> Response {
     javascript_response(PARSE_TIME_DEFER_JS)
 }
 
-pub(super) async fn asset_parse_time_async_script(headers: HeaderMap) -> Response {
+pub(super) async fn release_parse_time_async_chunked_tail(headers: HeaderMap) -> StatusCode {
     if let Some(host_key) = request_host_key(&headers) {
         notify_parse_time_async_chunked_tail_gate_if_present(&host_key);
     }
+    StatusCode::NO_CONTENT
+}
+
+pub(super) async fn asset_parse_time_async_script() -> Response {
     javascript_response(PARSE_TIME_ASYNC_JS)
 }
 

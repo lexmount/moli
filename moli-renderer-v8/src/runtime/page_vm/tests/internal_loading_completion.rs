@@ -222,15 +222,13 @@ fn fragment_meta_refresh_stays_in_the_current_document() {
 fn selected_internal_loading_task_checkpoints_without_draining_runtime_work() {
     run_page_vm_large_stack_async_test("selected-internal-loading-completion", || async move {
         let mut page_vm = loaded_page_with_ready_meta_refresh("selected.html").await;
-        let loader = page_vm.request_client.clone();
         queue_checkpoint_marker(&mut page_vm, "__selectedInternalLoadingCheckpoint");
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::InternalLoading,
-                    &loader,
+                    PageSelectedTaskTestSelector::InternalLoading
                 )
                 .await
                 .expect("selected internal-loading dispatcher should succeed"),
@@ -265,7 +263,6 @@ fn selected_internal_loading_task_blocked_by_competing_navigation_still_checkpoi
         "not-activated-internal-loading-completion",
         || async move {
             let mut page_vm = loaded_page_with_ready_meta_refresh("superseded.html").await;
-            let loader = page_vm.request_client.clone();
             page_vm
                 .vm_mut()
                 .eval("location.href = 'competing.html'; 'competing navigation queued'")
@@ -275,8 +272,7 @@ fn selected_internal_loading_task_blocked_by_competing_navigation_still_checkpoi
             assert!(
                 page_vm
                     .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::InternalLoading,
-                        &loader,
+                        PageSelectedTaskTestSelector::InternalLoading
                     )
                     .await
                     .expect("suppressed internal-loading dispatcher should succeed"),
@@ -300,7 +296,6 @@ fn selected_internal_loading_task_blocked_by_competing_navigation_still_checkpoi
 fn stale_claimed_internal_loading_task_does_not_checkpoint_replacement_document() {
     run_page_vm_large_stack_async_test("stale-internal-loading-completion", || async move {
         let mut page_vm = loaded_page_with_ready_meta_refresh("stale.html").await;
-        let loader = page_vm.request_client.clone();
         let claimed = page_vm
             .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::InternalLoading)
             .expect("the old Document should retain one opaque internal-loading claim");
@@ -311,7 +306,7 @@ fn stale_claimed_internal_loading_task_does_not_checkpoint_replacement_document(
             .expect("replace Document before the claimed task executes");
         queue_checkpoint_marker(&mut page_vm, "__staleInternalLoadingCheckpoint");
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await
             .expect("stale internal-loading dispatcher should succeed");
 

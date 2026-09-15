@@ -87,10 +87,6 @@ impl RendererPageChildModuleDependencyFetchStartTask {
         self.owner
     }
 
-    pub(crate) fn task(&self) -> &FrameDocumentModuleDependencyFetchTask {
-        &self.task
-    }
-
     pub(crate) fn into_task(self) -> FrameDocumentModuleDependencyFetchTask {
         self.task
     }

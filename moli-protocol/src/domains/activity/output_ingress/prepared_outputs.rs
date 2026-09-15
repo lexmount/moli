@@ -78,20 +78,6 @@ impl PreparedProtocolOutputs {
         source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
         committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Option<Self> {
-        if matches!(
-            committed.occurrence().item,
-            moli_core::page::RendererNetworkOutputItem::ChildDocument(_)
-        ) {
-            let mut prepared = Self::empty();
-            crate::domains::page::PagePreparedOutputs::from_browser_child_document_network(
-                conn,
-                owner,
-                source_renderer_page,
-                committed,
-            )
-            .append_to_child_frame_output_sink(&mut prepared);
-            return Some(prepared);
-        }
         let renderer_live = conn.ingest_browser_network_observation_for_owner(
             owner,
             source_renderer_page,
@@ -323,7 +309,6 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
-        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
@@ -364,22 +349,25 @@ impl PreparedProtocolOutputs {
                     )
                     .append_to_child_frame_output_sink(&mut prepared);
             }
+            RendererOwnerAction::ChildFrameNavigationStarted {
+                source_document,
+                frame_id,
+                loader_id,
+                url,
+            } => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_navigation_started(
+                    conn, owner, source_document, frame_id, loader_id, url,
+                ).append_to_child_frame_output_sink(&mut prepared);
+            }
             RendererOwnerAction::ChildFrameLoad {
                 source_document,
                 event,
-                network,
             } => {
-                let network = match network {
-                    Some(network) => network.committed().await,
-                    None => None,
-                };
                 crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_load(
                     conn,
                     owner,
                     source_document,
                     event,
-                    source_renderer_page,
-                    network.as_ref(),
                 )
                 .append_to_child_frame_output_sink(&mut prepared);
             }

@@ -48,11 +48,11 @@ pub(super) fn auto_attach_related(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
     let params: AutoAttachRelatedParams = match cmd.get_params() {
         Ok(Some(p)) => p,
         _ => {
-            return CommandOutputPlan::error_without_session(-32602, "InvalidParams");
+            return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
     if cmd.session_id.is_some() && !conn.is_browser_session_id(cmd.session_id) {
-        return CommandOutputPlan::error_without_session(
+        return CommandOutputPlan::error(
             -32000,
             "Target.autoAttachRelated is only supported on the Browser target",
         );
@@ -114,16 +114,13 @@ fn service_worker_auto_attach_related_target(
     target_id: &str,
 ) -> Result<ServiceWorkerAutoAttachRelatedTarget, CommandOutputPlan> {
     if let Err(message) = select_browser_context_for_target(conn, target_id) {
-        return Err(CommandOutputPlan::error_without_session(-31998, message));
+        return Err(CommandOutputPlan::error(-31998, message));
     }
     let Some(browser_context) = conn.browser_context.as_ref() else {
-        return Err(CommandOutputPlan::error_without_session(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
+        return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
     };
     let Some(target) = browser_context.service_worker_target(target_id) else {
-        return Err(CommandOutputPlan::error_without_session(
+        return Err(CommandOutputPlan::error(
             -32000,
             "Target does not support auto-attaching",
         ));

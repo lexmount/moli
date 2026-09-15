@@ -1519,9 +1519,8 @@ async fn websocket_stream_wpt_target_received_messages_observe_backpressure() {
                         .await?
                         .is_some()
                     {}
-                    let loader = page_vm.main_document_resource_loader();
                     page_vm
-                        .advance_timers_until_deadline_for_test(loader.request_client())
+                        .advance_timers_until_deadline_for_test()
                         .await?;
                     if page_vm.vm_mut().eval("String(globalThis.__wsStreamDone === true)")?
                         == "true"

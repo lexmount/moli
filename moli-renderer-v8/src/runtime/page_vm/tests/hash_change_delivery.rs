@@ -53,7 +53,7 @@ location.hash = "#body";
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -94,10 +94,7 @@ location.hash = "#child";
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::HashChange),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::HashChange))
                 .await?,
             "the exact hashchange task should run through the selected dispatcher"
         );
@@ -162,8 +159,7 @@ location.hash = "#second";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the BroadcastChannel head should consume the first shared DOM turn"
@@ -181,8 +177,7 @@ location.hash = "#second";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "hashchange should retain the second shared DOM turn"
@@ -238,8 +233,7 @@ location.hash = "#two";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "first hashchange should consume one selected typed turn"
@@ -256,8 +250,7 @@ location.hash = "#two";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "second hashchange should remain queued"
@@ -271,8 +264,7 @@ location.hash = "#two";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?
         );
@@ -322,8 +314,7 @@ addEventListener("hashchange", event => {
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "old-Document hashchange should retain its LocalWindow target"
@@ -422,12 +413,9 @@ open("about:blank", "hashchange-owner-popup");
         assert_eq!(page_vm.vm_mut().eval("__popupHashChanges.join('|')")?, "");
 
         while page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::DomManipulation(
-                    PageDomManipulationTestFamily::PopupLoadEvent,
-                ),
-                &loader,
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(
+                PageDomManipulationTestFamily::PopupLoadEvent,
+            ))
             .await?
         {}
 
@@ -444,8 +432,7 @@ __hashPopup.location.hash = "#queued-after-replacement";
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::HashChange
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "replacement popup hashchange should remain runnable"
@@ -542,10 +529,7 @@ location.hash = "#current";
                     );
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::HashChange),
-                                &loader,
-                            )
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::HashChange))
                             .await?,
                         "replacement hashchange must survive stale-head discard"
                     );

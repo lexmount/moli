@@ -20,7 +20,6 @@ fn due_timer_deadline(page_vm: &PageVm) -> Instant {
 async fn run_timer_through_selected_dispatcher(
     page_vm: &mut PageVm,
     deadline: Instant,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<()> {
     page_vm
         .apply_selected_page_scheduler_task_on_owner_lane_for_test(
@@ -28,7 +27,6 @@ async fn run_timer_through_selected_dispatcher(
                 deadline,
                 selection: ANY_READY_TIMER,
             },
-            loader.clone(),
         )
         .await?;
     Ok(())
@@ -56,7 +54,7 @@ setTimeout(() => {
         )?;
 
         let first_deadline = due_timer_deadline(&page_vm);
-        run_timer_through_selected_dispatcher(&mut page_vm, first_deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm, first_deadline).await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -66,7 +64,7 @@ setTimeout(() => {
         );
 
         let second_deadline = due_timer_deadline(&page_vm);
-        run_timer_through_selected_dispatcher(&mut page_vm, second_deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm, second_deadline).await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -111,7 +109,7 @@ setTimeout(() => {
             "the timer heap executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm.vm_mut().eval("__timerBodyBoundary.join('|')")?,
             "callback|microtask",
@@ -142,7 +140,7 @@ setTimeout(() => {
         )?;
 
         let deadline = due_timer_deadline(&page_vm);
-        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm, deadline).await?;
         assert_eq!(
             page_vm.vm_mut().eval("__timerErrorBoundary.join('|')")?,
             "callback|microtask",
@@ -185,7 +183,8 @@ setTimeout(() => {
         )?;
 
         let deadline = due_timer_deadline(&page_vm);
-        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm,
+deadline).await?;
         assert_eq!(
             page_vm.vm_mut().eval("__timerChildOrder.join('|')")?,
             "callback|microtask"
@@ -227,7 +226,8 @@ const interval = setInterval(() => {
         )?;
 
         let deadline = due_timer_deadline(&page_vm);
-        run_timer_through_selected_dispatcher(&mut page_vm, deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm,
+deadline).await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -283,7 +283,7 @@ setTimeout(() => {
             "a stale deadline must not enter V8 or checkpoint another task's reactions"
         );
 
-        run_timer_through_selected_dispatcher(&mut page_vm, actual_deadline, &loader).await?;
+        run_timer_through_selected_dispatcher(&mut page_vm, actual_deadline).await?;
         assert_eq!(
             page_vm.vm_mut().eval("__revalidatedTimerOrder.join('|')")?,
             "callback|microtask"

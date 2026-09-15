@@ -2658,7 +2658,7 @@ async fn xhr_load_commits_child_navigation_before_document_script_ready() {
                         .expect("xhr completion should arrive before timeout");
                     }
                     let completion =
-                        run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                        run_next_resource_result_as_typed_page_turn(&mut page_vm).await?;
                     completion_sources.push(completion.action.source());
                     let events = page_vm.vm_mut().eval("__xhrReadyEvents.join('|')")?;
                     if events == "xhr-load:xhr-ok" {
@@ -3913,10 +3913,7 @@ async fn xhr_abort_cancels_inflight_network_request_and_suppresses_late_failure(
                         .await?
                         .is_some()
                     {}
-                    let loader = page_vm.main_document_resource_loader();
-                    page_vm
-                        .advance_timers_until_deadline_for_test(loader.request_client())
-                        .await?;
+                    page_vm.advance_timers_until_deadline_for_test().await?;
                     if Instant::now() >= request_seen_deadline {
                         panic!("timed out waiting for xhr abort server to observe the request");
                     }
@@ -4019,8 +4016,7 @@ async fn xhr_timeout_cancels_inflight_network_request_and_dispatches_timeout() {
                             .run_exact_page_websocket_selected_task_for_test().await?
                             .is_some()
                         {}
-                        let loader = page_vm.main_document_resource_loader();
-                        page_vm.advance_timers_until_deadline_for_test(loader.request_client()).await?;
+                        page_vm.advance_timers_until_deadline_for_test().await?;
                         if Instant::now() >= request_seen_deadline {
                             panic!("timed out waiting for xhr timeout server to observe the request");
                         }

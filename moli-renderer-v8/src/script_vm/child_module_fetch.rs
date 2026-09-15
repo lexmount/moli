@@ -18,8 +18,8 @@ use crate::{
         RendererPageChildFrameTaskTarget, RendererPageChildParserModuleRootStartTarget,
     },
     types::{
-        ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
-        ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
+        ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
+        ChildParserModuleRootFetchCompletion,
     },
 };
 
@@ -137,13 +137,12 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
         else {
             unreachable!("loaded child parser module roots return before external fetch setup");
         };
-        let Some((target, network_attribution)) = context_host
+        let Some(target) = context_host
             .borrow()
             .capture_child_module_fetch_producer_for_child(
                 root.child_handle(),
                 root.owner(),
                 realm_id,
-                root.script().url.clone(),
             )
         else {
             tracing::debug!(
@@ -151,7 +150,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
                 owner = ?root.owner(),
                 realm_id = ?realm_id,
                 script_url = %root.script().url,
-                "failing child parser module root before fetch because its exact producer attribution is unavailable"
+                "failing child parser module root before fetch because its exact target is unavailable"
             );
             let (_child_handle, owner, client, _kind) = root.into_parts();
             let _followup = ChildModuleScriptTerminalOwner::new(self.vm)
@@ -162,7 +161,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
                     client,
                     ModuleLoadError::new(
                         ModuleLoadStage::Fetch,
-                        "child parser module root lost its exact producer attribution before native fetch",
+                        "child parser module root lost its exact target before native fetch",
                     ),
                 );
             return;
@@ -235,19 +234,14 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
         let fetch_start = root.into_external_fetch_start(realm_id, start);
         context_host
             .borrow_mut()
-            .start_child_parser_module_root_fetch(
-                &loader,
-                fetch_start,
-                target,
-                network_attribution,
-            );
+            .start_child_parser_module_root_fetch(&loader, fetch_start, target);
     }
 
     pub(super) fn apply_current_dependency_fetch_start(
         &mut self,
         authorization: crate::runtime::AuthorizedCurrentChildModuleDependencyFetchStart,
     ) -> FrameDocumentModuleDependencyFetchStartOutcome {
-        let (target, task, network_attribution) = authorization.into_parts();
+        let (target, task) = authorization.into_parts();
         let loader = self
             .vm
             ._context_host
@@ -297,13 +291,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
         self.vm
             ._context_host
             .borrow_mut()
-            .start_child_module_dependency_fetch(
-                &loader,
-                start,
-                task,
-                target.child_handle(),
-                network_attribution,
-            );
+            .start_child_module_dependency_fetch(&loader, start, task, target.child_handle());
         FrameDocumentModuleDependencyFetchStartOutcome::ClientAccepted { disposition }
     }
 
@@ -409,19 +397,6 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
 }
 
 impl ScriptVm {
-    pub(crate) fn capture_current_child_module_fetch_producer(
-        &self,
-        child_handle: DomHandle,
-        request_url: url::Url,
-    ) -> Option<(
-        ChildDocumentModuleFetchTarget,
-        ChildModuleFetchNetworkAttribution,
-    )> {
-        self._context_host
-            .borrow()
-            .capture_current_child_module_fetch_producer(child_handle, request_url)
-    }
-
     pub(crate) fn apply_current_child_module_dependency_fetch_start(
         &mut self,
         authorization: crate::runtime::AuthorizedCurrentChildModuleDependencyFetchStart,
@@ -461,40 +436,28 @@ impl FrameDocumentModulepreloadStartActionHooks for ScriptVmChildModulepreloadSt
         load_id: u64,
         request: Box<NativeModuleGraphFetchRequest>,
     ) {
-        let request_url = request.source_url().clone();
-        let fallback_document_url = request.initiator_url().clone();
         let loader = self
             .vm
             ._context_host
             .borrow()
             .document_resource_loader_for_owner(target.task_owner())
             .expect("authorized child modulepreload requires its committed Document authority");
-        let network_attribution = self
+        if self
             .vm
-            ._context_host
-            .borrow()
-            .capture_child_module_fetch_network_attribution(target, request_url.clone());
-        let Some(network_attribution) = network_attribution else {
+            .current_child_document_module_fetch_target(target.child_handle())
+            != Some(target)
+        {
             tracing::debug!(
                 ?target,
                 link_handle = ?link_handle,
                 load_id,
                 url = %key.url(),
-                "failing child modulepreload before fetch because its exact producer attribution is unavailable"
+                "failing child modulepreload before fetch because its exact target is unavailable"
             );
             let completion = ChildModulepreloadFetchCompletion::new(
                 target,
                 load_id,
-                Err(
-                    "child modulepreload lost its exact producer attribution before native fetch"
-                        .to_owned(),
-                ),
-                None,
-                ChildModuleFetchNetworkAttribution::parser(
-                    None,
-                    fallback_document_url,
-                    request_url,
-                ),
+                Err("child modulepreload lost its exact target before native fetch".to_owned()),
             );
             let _ = self
                 .vm
@@ -506,13 +469,7 @@ impl FrameDocumentModulepreloadStartActionHooks for ScriptVmChildModulepreloadSt
         };
         self.vm
             .resource_scheduler()
-            .schedule_child_modulepreload_graph_fetch(
-                loader,
-                target,
-                load_id,
-                *request,
-                network_attribution,
-            );
+            .schedule_child_modulepreload_graph_fetch(loader, target, load_id, *request);
         tracing::debug!(
             ?target,
             link_handle = ?link_handle,

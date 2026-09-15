@@ -361,8 +361,6 @@ impl JsContextHost {
             internal_inspector_value_references: HashMap::new(),
             #[cfg(test)]
             completed_child_browsing_context_loads: Vec::new(),
-            #[cfg(test)]
-            completed_child_document_networks: Vec::new(),
             active_child_subresource_request_scopes: Vec::new(),
             child_window_event_listeners: HashMap::new(),
             next_child_window_event_registration_id: 0,
@@ -477,6 +475,7 @@ impl JsContextHost {
         lifecycle: RendererDocumentLifecycleJournalHandle,
     ) {
         self.root_document_lifecycle = Some(lifecycle);
+        self.bind_main_document_resource_network();
     }
 
     /// Returns the exact root Document that owns Page-scoped protocol
@@ -605,6 +604,7 @@ impl JsContextHost {
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }
+        self.bind_main_document_resource_network();
     }
 
     pub(crate) fn install_page_task_capabilities(

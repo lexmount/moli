@@ -22,7 +22,6 @@ struct PreparedServiceWorkerLifecycleTarget {
 
 async fn prepare_service_worker_lifecycle_target(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<PreparedServiceWorkerLifecycleTarget> {
     page_vm.vm_mut().eval(
         r#"
@@ -54,8 +53,7 @@ navigator.serviceWorker.ready.then(registration => {
     anyhow::ensure!(
         page_vm
             .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ServiceWorkerInternal,
-                loader
+                PageSelectedTaskTestSelector::ServiceWorkerInternal
             )
             .await?,
         "ready completion should return through the production selected dispatcher"
@@ -162,7 +160,7 @@ navigator.serviceWorker.ready.then(registration => {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -187,7 +185,7 @@ async fn service_worker_lifecycle_callback_uses_selected_completion_and_runtime_
             Url::parse("https://service-worker-internal.test/lifecycle-callback").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
 
         page_vm.vm_mut().eval(
             r#"
@@ -243,7 +241,7 @@ __serviceWorkerInternalRegistration.addEventListener("updatefound", () => {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -276,7 +274,7 @@ async fn service_worker_lifecycle_without_callback_is_checkpoint_only() {
             Url::parse("https://service-worker-internal.test/lifecycle-no-callback").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
         send_updatefound(&page_vm, &target);
 
@@ -293,7 +291,7 @@ async fn service_worker_lifecycle_without_callback_is_checkpoint_only() {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -353,7 +351,7 @@ async fn service_worker_internal_action_is_checkpoint_only() {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -456,7 +454,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_document_ow
             let completion = outcome.action.into_page_task_completion();
             assert!(matches!(completion, PageTaskCompletion::NoCompletion));
             page_vm
-                .finish_selected_page_task_completion(completion, &loader)
+                .finish_selected_page_task_completion(completion)
                 .await?;
             assert!(
                 page_vm
@@ -483,7 +481,7 @@ async fn service_worker_lifecycle_completion_reconciles_listener_document_open()
             Url::parse("https://service-worker-internal.test/document-open").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
         let root_document = page_vm.document_lifecycle.identity().document;
         let retired_document_owner = page_vm
             .vm()
@@ -509,8 +507,7 @@ __serviceWorkerInternalRegistration.addEventListener("updatefound", () => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ServiceWorkerInternal,
-                    &loader
+                    PageSelectedTaskTestSelector::ServiceWorkerInternal
                 )
                 .await?,
             "lifecycle callback must return through the production selected dispatcher"
@@ -611,7 +608,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("retired-root internal task should remain a bounded stale turn");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm

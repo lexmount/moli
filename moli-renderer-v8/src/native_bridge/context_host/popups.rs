@@ -2210,18 +2210,17 @@ impl JsContextHost {
         } else {
             (None, moli_url::WebOrigin::Opaque)
         };
-        self.pending_lightweight_popup_document_loads.insert(
-            load_id,
-            PendingLightweightPopupDocumentLoad {
-                target_url: target_url.clone(),
-                previous_url,
-                target,
-                document_state: document_state.clone(),
-                resource_loader: resource_loader.clone(),
-                history_traversal: false,
-            },
-        );
+        let pending = PendingLightweightPopupDocumentLoad {
+            target_url: target_url.clone(),
+            previous_url,
+            target,
+            document_state,
+            resource_loader: resource_loader.clone(),
+            history_traversal: false,
+        };
         if let Some(snapshot) = local_snapshot {
+            self.pending_lightweight_popup_document_loads
+                .insert(load_id, pending);
             let mut policy_container = snapshot.policy_container.clone();
             if policy_container
                 .document_content_security_policies
@@ -2236,7 +2235,7 @@ impl JsContextHost {
                 content_type: snapshot.content_type,
                 character_set: snapshot.character_set,
                 markup: snapshot.markup,
-                document_network: None,
+                resource_timing: None,
             };
             let completion = PopupDocumentLoadCompletion::new(
                 target,
@@ -2256,30 +2255,58 @@ impl JsContextHost {
         let resource_loader =
             resource_loader.expect("remote popup navigation requires its captured loader");
         let completion_tx = self.resource_completion_tx.clone();
+        let request = Request::get_with_url(target_url.clone())
+            .with_request_origin(request_origin)
+            .with_page_network_policy()
+            .with_top_level_navigation_cookie_context();
+        let document_url = self.lightweight_popup_document_url(popup_id)?;
+        let observer = completion_tx.network_observer();
+        let (network, started) = crate::network::ResourceTransfer::start(
+            self.document_network_reporter()?.start_request()?,
+            move |event| observer(event),
+            |network| {
+                crate::types::SubresourceRequestStarted::new(
+                    network.handle(),
+                    None,
+                    document_url,
+                    request.url.clone(),
+                    request.method.clone(),
+                    request.request_headers.clone(),
+                    None,
+                    crate::types::SubresourceResourceType::Document,
+                    crate::types::SubresourceRequestInitiatorType::Script,
+                    None,
+                )
+            },
+        );
+        self.pending_lightweight_popup_document_loads
+            .insert(load_id, pending);
+        self.record_native_resource_observation(started);
+        let stream = crate::network::ResourceResponseStream::with_disk_pool(
+            network,
+            resource_loader.request_client().disk_pool(),
+        );
         let opener_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
             let result = async {
-                let response = task_resource_loader
-                    .fetch(
-                        Request::get_with_url(target_url.clone())
-                            .with_request_origin(request_origin)
-                            .with_page_network_policy()
-                            .with_top_level_navigation_cookie_context(),
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
+                let observed = task_resource_loader
+                    .fetch_raw_stream_with_network_metadata(request)
+                    .await?;
+                let response = stream.collect(observed).await?;
+                let bytes = response.body.materialize_bytes().map_err(|error| {
+                    stream.failure(format!("failed to materialize popup document: {error}"))
+                })?;
                 let head = response.head();
-                if popup_document_response_should_ignore_navigation(response.status, &head.headers)
-                {
+                response.publish(
+                    &stream.network,
+                    stream.head().network_request_headers.clone(),
+                );
+                if popup_document_response_should_ignore_navigation(head.status, &head.headers) {
                     return Ok(PopupDocumentLoadOutcome::IgnoredNavigation);
                 }
-                moli_fetch::ensure_http_status_success(
-                    response.final_url.as_str(),
-                    response.status,
-                    false,
-                )
-                .map_err(|error| error.to_string())?;
+                moli_fetch::ensure_http_status_success(head.final_url.as_str(), head.status, false)
+                    .map_err(|error| error.to_string())?;
                 let content_type =
                     super::child_documents::child_document_content_type_from_headers(&head.headers);
                 let fallback = if content_type
@@ -2290,11 +2317,8 @@ impl JsContextHost {
                 } else {
                     opener_character_set.clone()
                 };
-                let (markup, character_set) = decode_html_document_with_fallback(
-                    response.body_bytes(),
-                    &head.headers,
-                    Some(&fallback),
-                );
+                let (markup, character_set) =
+                    decode_html_document_with_fallback(&bytes, &head.headers, Some(&fallback));
                 let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
                     &head.headers,
                     &head.final_url,
@@ -2306,11 +2330,15 @@ impl JsContextHost {
                         content_type,
                         character_set: character_set.to_owned(),
                         markup,
-                        document_network: None,
+                        resource_timing: None,
                     },
                 )))
             }
-            .await;
+            .await
+            .map_err(|error: crate::network::ResourceResponseFailure| {
+                stream.network.failed(&error);
+                error.to_string()
+            });
             let _ =
                 completion_tx.send_popup_document(PopupDocumentLoadCompletion::new(target, result));
         });

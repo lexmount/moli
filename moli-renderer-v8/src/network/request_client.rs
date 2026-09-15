@@ -292,95 +292,6 @@ impl ResourceRequestClient {
             .await
     }
 
-    pub(crate) async fn fetch_text_stream_with_network_metadata(
-        &self,
-        request: Request,
-    ) -> Result<NetworkFetchResult<Response>> {
-        self.fetch_text_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
-            .await
-    }
-
-    pub(crate) async fn fetch_text_stream_with_cancel_and_network_metadata(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<NetworkFetchResult<Response>> {
-        let request = self.apply_network_policy(request)?;
-        let observed = self
-            .fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel_handle)
-            .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
-        let response = collect_streaming_raw_response_as_text(response).await?;
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
-        ))
-    }
-
-    pub(crate) async fn fetch_cacheable_script_text_stream(
-        &self,
-        request: Request,
-        task_runner: super::RendererResourceTaskRunner,
-    ) -> Result<Response> {
-        let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request) {
-            return result;
-        }
-        if !script_text_request_is_memory_cacheable(&request) {
-            // Before response headers there is no streaming body whose Drop
-            // can cancel transport, so the pending request needs its own guard.
-            struct PendingScriptFetch(FetchCancelHandle);
-            impl Drop for PendingScriptFetch {
-                fn drop(&mut self) {
-                    self.0.cancel();
-                }
-            }
-            let pending = PendingScriptFetch(FetchCancelHandle::new());
-            return self
-                .fetch_text_stream_with_cancel_after_policy(request, pending.0.clone())
-                .await;
-        }
-        let key = script_text_cache_key(&request)
-            .for_page_cache_partition(self.page_network_policy.memory_cache_partition_id());
-        let lookup = {
-            let mut cache = self.resource_runtime.memory_cache().lock();
-            if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone(), self.script_load_scope(), |vary| {
-                    self.resource_runtime
-                        .client()
-                        .cache_vary_headers_match(&request, vary)
-                })
-            } else {
-                cache.replace_script_text(key.clone(), self.script_load_scope())
-            }
-        };
-        let (load, owns_transport) = match lookup {
-            ScriptTextCacheLookup::Owner(load) => (load, true),
-            ScriptTextCacheLookup::PendingWaiter(load) => (load, false),
-            ScriptTextCacheLookup::CompletedHit(result) => {
-                return result
-                    .map(response_with_memory_cache_hit)
-                    .map_err(anyhow::Error::new);
-            }
-        };
-        let (send, receive) = tokio::sync::oneshot::channel();
-        // Both async and callback callers now own the same cancellable cache
-        // registration. Retiring one caller cannot strand a surviving waiter.
-        let _consumer = load.wait_callback(
-            None,
-            Box::new(move |result| {
-                let _ = send.send(result);
-            }),
-        );
-        if owns_transport {
-            self.start_script_text_cache_transport(request, key, load, task_runner);
-        }
-        receive
-            .await
-            .context("script cache producer stopped")?
-            .map_err(anyhow::Error::new)
-    }
-
     pub(crate) fn fetch_cacheable_script_text_callback_with_load<F>(
         &self,
         request: Request,
@@ -752,7 +663,42 @@ impl ResourceRequestClient {
             .client()
             .fetch_raw_stream_with_cancel_and_network_metadata(request.clone(), cancel_handle)
             .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
+        let (mut response, observation_journal) = observed.into_parts_with_observation_journal();
+        let redirect_count = response.redirect_chain.len();
+        for (index, redirect) in response.redirect_chain.iter_mut().enumerate() {
+            if redirect.from_cache {
+                continue;
+            }
+            let Some(exchange) = observation_journal
+                .redirect_exchange_group(redirect_count, index)
+                .and_then(|group| group.last())
+            else {
+                continue;
+            };
+            let Some(observed) = exchange
+                .response()
+                .filter(|head| head.status() == redirect.status)
+            else {
+                continue;
+            };
+            // Preserve the physical hop before consumers keep only the final
+            // response. Cookie lookup alone cannot prove an HTTP exchange.
+            redirect.response_extra_info = Some(moli_fetch::NetworkResponseExtraInfo {
+                request_extra_info: moli_fetch::NetworkRequestExtraInfo {
+                    headers: exchange.request().headers().to_vec(),
+                    cookie_report: exchange
+                        .request()
+                        .cookie_report()
+                        .cloned()
+                        .unwrap_or_default(),
+                },
+                status: observed.status(),
+                headers: observed.headers().to_vec(),
+                cookie_set_reports: redirect.cookie_set_reports.clone(),
+            });
+            redirect.network_extra_info_available = true;
+            redirect.redirect_has_extra_info = true;
+        }
         let response = response.with_lifetime_lease(self.resource_runtime.clone());
         let response = if let Some(cache_key) = cache_key {
             self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
@@ -1087,6 +1033,9 @@ fn streaming_raw_response_from_cached_subresource(
     for redirect in &mut head.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;
+        redirect.request_extra_info = None;
+        redirect.response_extra_info = None;
+        redirect.redirect_has_extra_info = false;
     }
     streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
 }
@@ -1106,6 +1055,9 @@ fn response_with_memory_cache_hit(mut response: Response) -> Response {
     for redirect in &mut response.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;
+        redirect.request_extra_info = None;
+        redirect.response_extra_info = None;
+        redirect.redirect_has_extra_info = false;
     }
     response
 }

@@ -40,8 +40,6 @@ pub(crate) struct ChildFrameNavigationSnapshot {
     pub(crate) security_origin_inherited: bool,
     #[serde(default)]
     pub(crate) security_origin_opaque: bool,
-    #[serde(skip)]
-    pub(crate) document_network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
 }
 
 impl ChildFrameNavigationSnapshot {
@@ -186,13 +184,6 @@ impl JsContextHost {
         &mut self,
     ) -> Vec<ChildFrameNavigationSnapshot> {
         std::mem::take(&mut self.completed_child_browsing_context_loads)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_completed_child_document_networks(
-        &mut self,
-    ) -> Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot> {
-        std::mem::take(&mut self.completed_child_document_networks)
     }
 
     #[cfg(test)]
@@ -510,14 +501,12 @@ impl JsContextHost {
             projected_frame_client_output = navigation_snapshot.is_some(),
             "published typed child frame load finish output"
         );
-        if let Some(mut navigation_snapshot) = navigation_snapshot {
-            let network = navigation_snapshot.document_network.take();
+        if let Some(navigation_snapshot) = navigation_snapshot {
             if let Some(source_document) = self.root_document_lifecycle_identity()
                 && self.append_live_turn_owner_action(
                     crate::runtime::RendererOwnerAction::ChildFrameLoad {
                         source_document,
                         event: navigation_snapshot.clone().into_protocol_snapshot(),
-                        network: network.clone(),
                     },
                 )
             {
@@ -526,7 +515,6 @@ impl JsContextHost {
             } else {
                 #[cfg(test)]
                 {
-                    navigation_snapshot.document_network = network;
                     self.completed_child_browsing_context_loads
                         .push(navigation_snapshot);
                 }
@@ -591,7 +579,6 @@ impl JsContextHost {
             document_open_replacement,
             security_origin_inherited: identity.security_origin_inherited,
             security_origin_opaque,
-            document_network: entry.take_completed_document_network_for_owner(finish.owner),
         })
     }
 

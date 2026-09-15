@@ -79,7 +79,6 @@ setTimeout(() => {
                     deadline,
                     selection: crate::page_task_queue::RendererPageTimerSelection::AnyReady,
                 },
-                loader,
             )
             .await?;
 

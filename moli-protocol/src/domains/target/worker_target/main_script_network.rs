@@ -89,16 +89,15 @@ impl CdpConnection {
                 {
                     return Some(events);
                 }
-                let has_extra = response.network_request_headers().is_some()
-                    || response.request_cookie_report().is_some();
-                if has_extra {
+                let has_extra = response.network_request_headers().is_some();
+                if let Some(headers) = response.network_request_headers() {
                     let empty = moli_cookie_jar::StoredCookieQueryReport::default();
                     for session in &target.owner_network_sessions {
                         network::emit_request_will_be_sent_extra_info(
                             &mut events,
                             session.as_deref(),
                             &target_id,
-                            response.network_request_headers().unwrap_or_default(),
+                            headers,
                             response.request_cookie_report().unwrap_or(&empty),
                             timestamp,
                         );

@@ -811,7 +811,6 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
     local_executor: JsLocalExecutor,
     entry: LivePageEntry,
     task: RendererPageSchedulerTask,
-    loader: ResourceRequestClient,
 ) -> (LivePageEntry, Result<()>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
@@ -830,7 +829,7 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
                 .begin_ordinary_page_turn_navigation_handoff()?;
             let application = entry
                 .page_vm_mut()
-                .apply_selected_page_scheduler_task(task, &loader)
+                .apply_selected_page_scheduler_task(task)
                 .await;
             // Any JavaScript-capable Page action can synchronously replace the
             // main Document through document.open()/document.close(). Reconcile

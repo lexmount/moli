@@ -1922,7 +1922,6 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = timing_enabled.then(std::time::Instant::now);
     let load_count = document.loads.len();
-    let document_network_count = document.document_networks.len();
     let document_opened_count = document.document_opened_events.len();
     let frame_tree_event_count = document.child_frame_tree_events.len();
     let page_event_session_ids = conn.subscribed_page_event_session_ids_for_owner(&owner);
@@ -1940,23 +1939,28 @@ pub(crate) async fn emit_prepared_child_frame_activity(
             target: "moli_cdp_nav_timing",
             stage = "child_frame_activity_opening_events_emitted",
             frame_tree_events = frame_tree_event_count,
-            document_networks = document_network_count,
             document_opened = document_opened_count,
             loads = load_count,
             elapsed_ms = started.elapsed().as_millis(),
         );
     }
-    for document_network in document.document_networks {
-        network::emit_child_document_navigation_network_background_events(
-            conn,
-            &mut activity_events,
-            &owner,
-            &document_network.frame_id,
-            &document_network.loader_id,
-            &document_network.loader_id,
-            document_network.timestamp,
-            &document_network.snapshot,
-        );
+    for start in document.navigation_starts {
+        let navigation_start_initiator =
+            if browser_initiated_frame_id == Some(start.frame_id.as_str()) {
+                NavigationStartInitiator::Browser
+            } else {
+                NavigationStartInitiator::RendererChildFrame
+            };
+        for event_session_id in &page_event_session_ids {
+            emit_navigation_started_background_events(
+                &mut activity_events,
+                event_session_id.as_deref(),
+                &start.frame_id,
+                &start.loader_id,
+                &start.url,
+                navigation_start_initiator,
+            );
+        }
     }
     for load in document.loads {
         if load.document_open_replacement {
@@ -1984,34 +1988,6 @@ pub(crate) async fn emit_prepared_child_frame_activity(
             &document.security_origin,
             &document.secure_context_type,
         );
-        let navigation_start_initiator =
-            if browser_initiated_frame_id == Some(load.navigation_start.frame_id.as_str()) {
-                NavigationStartInitiator::Browser
-            } else {
-                NavigationStartInitiator::RendererChildFrame
-            };
-        for event_session_id in &page_event_session_ids {
-            emit_navigation_started_background_events(
-                &mut activity_events,
-                event_session_id.as_deref(),
-                &load.navigation_start.frame_id,
-                &load.navigation_start.loader_id,
-                &load.navigation_start.url,
-                navigation_start_initiator,
-            );
-        }
-        if let Some(document_network) = load.document_network.as_ref() {
-            network::emit_child_document_navigation_network_background_events(
-                conn,
-                &mut activity_events,
-                &owner,
-                &document_network.frame_id,
-                &document_network.loader_id,
-                &document_network.loader_id,
-                document_network.timestamp,
-                &document_network.snapshot,
-            );
-        }
         for event_session_id in &page_event_session_ids {
             emit_child_frame_navigation_commit(
                 &mut activity_events,

@@ -134,10 +134,11 @@ pub(crate) use cookie_owner::{
 };
 pub use devtools_command::DevToolsCommandDispatchOutcome;
 pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
+#[cfg(test)]
+pub(crate) use dispatch::CdpCommandTaskStep;
 pub use dispatch::{
-    AgentHostDispatchResult, CdpCommandTaskStep, CompletedCdpCommandDispatch,
-    PendingCdpCommandDispatch, RendererDispatch, RendererDispatchBinding, RendererDispatchLane,
-    RendererPageDispatchBinding,
+    AgentHostDispatchResult, CompletedCdpCommandDispatch, PendingCdpCommandDispatch,
+    RendererDispatch, RendererDispatchBinding, RendererDispatchLane, RendererPageDispatchBinding,
 };
 pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
@@ -1064,8 +1065,7 @@ pub struct CdpConnection {
     scheduler_hooks: CdpSchedulerHooks,
     target_host_lifecycle_observer: Option<CdpTargetHostLifecycleObserver>,
 
-    // Scheduler-visible queues that are still stored on the connection while
-    // source-specific queue ownership is being migrated outward.
+    // Connection-local protocol work consumed by the shared DevTools scheduler.
     scheduler_state: CdpConnectionSchedulerState,
 
     // Defaults only. Live engines belong to Core WebContents, never DevTools.
@@ -1499,8 +1499,7 @@ impl CdpConnection {
         let Some((owner_local_host_id, document)) = occurrence.source.document() else {
             return false;
         };
-        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
-        else {
+        let Some((context_id, _)) = self.resolved_page_owner_identity_for_owner(owner) else {
             return false;
         };
         let Some(context) = self.browser_context_by_id(&context_id) else {
@@ -1513,10 +1512,6 @@ impl CdpConnection {
                 // exact admission; current Page membership cannot revoke it.
                 moli_core::page::RendererNetworkOutputItem::Resource(_) => true,
                 moli_core::page::RendererNetworkOutputItem::WorkerFetch { .. } => false,
-                moli_core::page::RendererNetworkOutputItem::ChildDocument(_) => {
-                    context.target_renderer_page_residence_identity(&target_id)
-                        == source_renderer_page
-                }
             }
             && source_renderer_page
                 == Some(RendererPageResidenceIdentity::from_parts(

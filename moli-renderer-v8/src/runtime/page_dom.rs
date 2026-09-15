@@ -1485,13 +1485,6 @@ impl PageVm {
     }
 
     #[cfg(test)]
-    pub(crate) fn take_completed_child_document_networks(
-        &mut self,
-    ) -> Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot> {
-        self.vm_mut().take_completed_child_document_networks()
-    }
-
-    #[cfg(test)]
     pub(crate) fn take_pending_child_frame_tree_events(
         &mut self,
     ) -> Vec<crate::protocol_types::ChildFrameTreeEventSnapshot> {

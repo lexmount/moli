@@ -304,12 +304,11 @@ impl FrameDocumentDynamicImportOwnerActionHooks for ScriptVmChildDynamicImportOw
     ) -> std::result::Result<FrameDocumentDynamicImportWaitingFetchScheduleResult, String> {
         let (owner, realm_id, fetch) = action.into_parts();
         let (load_id, request) = fetch.into_parts();
-        let request_url = request.source_url().clone();
         let producer = {
             let context_host = self.vm._context_host.borrow();
-            context_host.capture_child_dynamic_import_fetch_producer(owner, realm_id, request_url)
+            context_host.capture_child_dynamic_import_fetch_producer(owner, realm_id)
         };
-        let Some((target, network_attribution)) = producer else {
+        let Some(target) = producer else {
             self.vm.record_runtime_warning(format_args!(
                 "child dynamic import waiting fetch {load_id} for {owner:?}/{realm_id:?} lost its exact producer before native fetch"
             ));
@@ -328,13 +327,7 @@ impl FrameDocumentDynamicImportOwnerActionHooks for ScriptVmChildDynamicImportOw
         };
         self.vm
             .resource_scheduler()
-            .schedule_child_dynamic_module_graph_fetch(
-                loader,
-                target,
-                load_id,
-                request,
-                network_attribution,
-            );
+            .schedule_child_dynamic_module_graph_fetch(loader, target, load_id, request);
         Ok(FrameDocumentDynamicImportWaitingFetchScheduleResult::Scheduled)
     }
 

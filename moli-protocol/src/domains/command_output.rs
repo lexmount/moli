@@ -42,7 +42,6 @@ struct RendererOutputBoundary {
 #[derive(Debug)]
 enum CommandOutput {
     Command(CommandResponseOutput),
-    CommandWithoutSession(CommandResponseOutput),
     OwnerEvent(CommandOwnerEvent),
     BackgroundEvent(BackgroundProtocolEvent),
 }
@@ -85,12 +84,6 @@ impl CommandOutputPlan {
     pub(crate) fn error(code: i32, message: impl Into<String>) -> Self {
         let mut plan = Self::default();
         plan.push_error(code, message);
-        plan
-    }
-
-    pub(crate) fn error_without_session(code: i32, message: impl Into<String>) -> Self {
-        let mut plan = Self::default();
-        plan.push_error_without_session(code, message);
         plan
     }
 
@@ -142,16 +135,6 @@ impl CommandOutputPlan {
                 message: message.into(),
                 data,
             }));
-    }
-
-    pub(crate) fn push_error_without_session(&mut self, code: i32, message: impl Into<String>) {
-        self.outputs.push(CommandOutput::CommandWithoutSession(
-            CommandResponseOutput::Error {
-                code,
-                message: message.into(),
-                data: None,
-            },
-        ));
     }
 
     pub(crate) fn extend(&mut self, other: CommandOutputPlan) {
@@ -325,7 +308,7 @@ impl CommandOutputPlan {
         let mut status = None;
         for output in &self.outputs {
             match output {
-                CommandOutput::Command(command) | CommandOutput::CommandWithoutSession(command) => {
+                CommandOutput::Command(command) => {
                     record_command_status(&mut status, command.status());
                 }
                 CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_) => {}
@@ -373,9 +356,6 @@ impl CommandOutputPlan {
         for output in self.outputs {
             match output {
                 CommandOutput::Command(command) => {
-                    record_command_status(&mut status, command.status());
-                }
-                CommandOutput::CommandWithoutSession(command) => {
                     record_command_status(&mut status, command.status());
                 }
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
@@ -428,9 +408,6 @@ impl CommandOutputPlan {
                 CommandOutput::Command(command) => {
                     out.push(command.into_background_event(command_id, session_id));
                 }
-                CommandOutput::CommandWithoutSession(command) => {
-                    out.push(command.into_background_event(command_id, None));
-                }
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
                 CommandOutput::BackgroundEvent(event) => out.push(event),
             }
@@ -456,10 +433,6 @@ impl CommandOutputPlan {
                 CommandOutput::Command(command) => record_runtime_inspector_response(
                     &mut response,
                     command.into_protocol_message(Some(command_id), session_id),
-                ),
-                CommandOutput::CommandWithoutSession(command) => record_runtime_inspector_response(
-                    &mut response,
-                    command.into_protocol_message(Some(command_id), None),
                 ),
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
                 CommandOutput::BackgroundEvent(event) => out.push(event),
@@ -2665,24 +2638,6 @@ mod tests {
                 "id": 15,
                 "error": {"code": -32001, "message": "Unknown sessionId"},
                 "sessionId": "SID-missing"
-            })]
-        );
-    }
-
-    #[test]
-    fn command_output_plan_can_emit_error_without_session_route() {
-        let mut out = Vec::new();
-        CommandOutputPlan::error_without_session(-31998, "TargetNotLoaded").emit_into(
-            &mut out,
-            Some(16),
-            Some("SID-current"),
-        );
-
-        assert_eq!(
-            out,
-            vec![json!({
-                "id": 16,
-                "error": {"code": -31998, "message": "TargetNotLoaded"}
             })]
         );
     }

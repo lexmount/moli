@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use moli_fetch::{BrowserNavigationRequestKind, FetchCancelHandle, Request};
 
 use crate::network::{
@@ -6,13 +6,12 @@ use crate::network::{
 };
 use crate::service_worker_runtime::{
     ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerClientType,
-    ServiceWorkerControlState, ServiceWorkerDirectFetchResponse, ServiceWorkerDirectFetchResult,
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest, ServiceWorkerFetchResultSender,
+    ServiceWorkerControlState, ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest,
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
     ServiceWorkerNotificationAction, ServiceWorkerNotificationMetadata,
     ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerRegistrationSnapshot,
-    ServiceWorkerRequestDestination, ServiceWorkerUnregisterStart, ServiceWorkerVersionId,
-    service_worker_fetch_request_metadata,
+    ServiceWorkerRequestDestination, ServiceWorkerResourceResponse, ServiceWorkerUnregisterStart,
+    ServiceWorkerVersionId, service_worker_fetch_request_metadata,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
@@ -63,7 +62,7 @@ impl Drop for RendererReservedServiceWorkerClient {
 #[derive(Debug)]
 pub struct RendererServiceWorkerMainResourceFetch {
     pub reserved_client: Option<RendererReservedServiceWorkerClient>,
-    pub response: Option<crate::protocol_types::NavigationResponse>,
+    pub response: Option<moli_fetch::NetworkFetchResult<moli_fetch::StreamingRawResponse>>,
 }
 
 impl RendererBrowserContextRuntime {
@@ -144,8 +143,7 @@ impl RendererBrowserContextRuntime {
             .fetch_service_worker_main_resource_for_reserved_client(
                 client_id,
                 request,
-                navigation_loader.request_client(),
-                navigation_loader.task_runner(),
+                navigation_loader,
                 ServiceWorkerRequestDestination::Document,
             )
             .await?;
@@ -159,14 +157,12 @@ impl RendererBrowserContextRuntime {
         &self,
         client_id: ServiceWorkerClientId,
         request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
-    ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
+        navigation_loader: &NavigationResourceLoader,
+    ) -> Result<Option<moli_fetch::NetworkFetchResult<moli_fetch::StreamingRawResponse>>> {
         self.fetch_service_worker_main_resource_for_reserved_client(
             client_id,
             request,
-            request_client,
-            resource_task_runner,
+            navigation_loader,
             ServiceWorkerRequestDestination::Iframe,
         )
         .await
@@ -176,10 +172,9 @@ impl RendererBrowserContextRuntime {
         &self,
         client_id: ServiceWorkerClientId,
         request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
+        navigation_loader: &NavigationResourceLoader,
         destination: ServiceWorkerRequestDestination,
-    ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
+    ) -> Result<Option<moli_fetch::NetworkFetchResult<moli_fetch::StreamingRawResponse>>> {
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(None);
         }
@@ -190,54 +185,39 @@ impl RendererBrowserContextRuntime {
             return Ok(None);
         }
 
-        let (direct_completion_tx, main_resource_completion_rx) = tokio::sync::oneshot::channel();
         let redirect_mode =
             main_resource_fetch_event_redirect_mode(destination, request.redirect_mode);
-        let dispatch = ServiceWorkerFetchDispatch {
-            internal_id: 0,
-            request: ServiceWorkerFetchRequest {
-                client_id,
-                resulting_client_id: Some(client_id),
-                url: request.url.clone(),
-                method: request.method.clone(),
-                headers: request.request_headers.to_byte_strings(),
-                body: request.body.clone(),
-                destination,
-                request_mode: request.request_mode,
-                credentials_mode: request.credentials_mode,
-                redirect_mode,
-                priority: request.priority_hints.fetch_priority,
-                is_reload: request.browser_navigation_kind()
-                    == BrowserNavigationRequestKind::Reload,
-                metadata: service_worker_fetch_request_metadata(request),
-            },
-            cors_preflight_request_headers: Vec::new(),
-            request_cookie_report: None,
-            network_context: AsyncSubresourceNetworkContext {
-                frame_id: None,
-                request_origin: request.browser_origin()?.clone(),
-                document_url: request.url.clone(),
-                resource_type: SubresourceResourceType::Fetch,
-                policy_context: Default::default(),
-            },
-            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
-            request_client: request_client.clone(),
-            resource_task_runner,
-            cancel_handle: FetchCancelHandle::new(),
-        };
-
-        if !self.dispatch_service_worker_fetch(dispatch) {
-            return Ok(None);
-        }
-
-        match main_resource_completion_rx.await {
-            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
-            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
-            Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),
-            Err(_) => Err(anyhow!(
-                "service worker main resource fetch completion channel closed"
-            )),
-        }
+        self.service_worker_runtime()
+            .fetch_resource(
+                ServiceWorkerFetchRequest {
+                    client_id,
+                    resulting_client_id: Some(client_id),
+                    url: request.url.clone(),
+                    method: request.method.clone(),
+                    headers: request.request_headers.to_byte_strings(),
+                    body: request.body.clone(),
+                    destination,
+                    request_mode: request.request_mode,
+                    credentials_mode: request.credentials_mode,
+                    redirect_mode,
+                    priority: request.priority_hints.fetch_priority,
+                    is_reload: request.browser_navigation_kind()
+                        == BrowserNavigationRequestKind::Reload,
+                    metadata: service_worker_fetch_request_metadata(request),
+                },
+                AsyncSubresourceNetworkContext {
+                    frame_id: None,
+                    request_origin: request.browser_origin()?.clone(),
+                    document_url: request.url.clone(),
+                    resource_type: SubresourceResourceType::Fetch,
+                    policy_context: Default::default(),
+                },
+                navigation_loader.request_client(),
+                navigation_loader.task_runner(),
+                navigation_loader.cancellation_handle(),
+            )
+            .await
+            .map(|response| response.map(|response| *response.response))
     }
 
     pub(crate) async fn fetch_service_worker_subresource_for_client_with_metadata(
@@ -249,7 +229,8 @@ impl RendererBrowserContextRuntime {
         resource_task_runner: RendererResourceTaskRunner,
         destination: ServiceWorkerRequestDestination,
         resource_type: SubresourceResourceType,
-    ) -> Result<Option<ServiceWorkerDirectFetchResponse>> {
+        cancel: FetchCancelHandle,
+    ) -> Result<Option<ServiceWorkerResourceResponse>> {
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(None);
         }
@@ -260,51 +241,35 @@ impl RendererBrowserContextRuntime {
             return Ok(None);
         }
 
-        let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
-        let dispatch = ServiceWorkerFetchDispatch {
-            internal_id: 0,
-            request: ServiceWorkerFetchRequest {
-                client_id,
-                resulting_client_id: None,
-                url: request.url.clone(),
-                method: request.method.clone(),
-                headers: request.request_headers.to_byte_strings(),
-                body: request.body.clone(),
-                destination,
-                request_mode: request.request_mode,
-                credentials_mode: request.credentials_mode,
-                redirect_mode: request.redirect_mode,
-                priority: request.priority_hints.fetch_priority,
-                is_reload: false,
-                metadata: service_worker_fetch_request_metadata(request),
-            },
-            cors_preflight_request_headers: Vec::new(),
-            request_cookie_report: None,
-            network_context: AsyncSubresourceNetworkContext {
-                frame_id: None,
-                request_origin: request.browser_origin()?.clone(),
-                document_url,
-                resource_type,
-                policy_context: Default::default(),
-            },
-            result_tx: ServiceWorkerFetchResultSender::Direct(direct_completion_tx),
-            request_client: request_client.clone(),
-            resource_task_runner,
-            cancel_handle: FetchCancelHandle::new(),
-        };
-
-        if !self.dispatch_service_worker_fetch(dispatch) {
-            return Ok(None);
-        }
-
-        match direct_completion_rx.await {
-            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
-            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(response)),
-            Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),
-            Err(_) => Err(anyhow!(
-                "service worker subresource fetch completion channel closed"
-            )),
-        }
+        self.service_worker_runtime()
+            .fetch_resource(
+                ServiceWorkerFetchRequest {
+                    client_id,
+                    resulting_client_id: None,
+                    url: request.url.clone(),
+                    method: request.method.clone(),
+                    headers: request.request_headers.to_byte_strings(),
+                    body: request.body.clone(),
+                    destination,
+                    request_mode: request.request_mode,
+                    credentials_mode: request.credentials_mode,
+                    redirect_mode: request.redirect_mode,
+                    priority: request.priority_hints.fetch_priority,
+                    is_reload: false,
+                    metadata: service_worker_fetch_request_metadata(request),
+                },
+                AsyncSubresourceNetworkContext {
+                    frame_id: None,
+                    request_origin: request.browser_origin()?.clone(),
+                    document_url,
+                    resource_type,
+                    policy_context: Default::default(),
+                },
+                request_client,
+                resource_task_runner,
+                cancel,
+            )
+            .await
     }
 
     fn force_update_service_worker_registration_for_page_load(
@@ -315,27 +280,6 @@ impl RendererBrowserContextRuntime {
             .service_worker_runtime()
             .devtools_force_update_registration_for_page_load(scope_url, self.clone());
         receiver
-    }
-
-    pub(crate) async fn fetch_service_worker_main_resource_for_worker(
-        &self,
-        client_id: ServiceWorkerClientId,
-        request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
-        destination: ServiceWorkerRequestDestination,
-    ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
-        self.service_worker_runtime()
-            .fetch_main_resource_for_worker_client(
-                client_id,
-                request,
-                request_client,
-                resource_task_runner,
-                destination,
-                FetchCancelHandle::new(),
-            )
-            .await
-            .map_err(|message| anyhow!(message))
     }
 
     pub(crate) fn register_service_worker_client(

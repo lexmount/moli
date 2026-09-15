@@ -28,12 +28,15 @@ fn owner_attached_popup_page_vm(
 }
 
 async fn wait_for_popup_terminal(
+    page_vm: &mut PageVm,
     queue: &mut impl crate::page_resource_completion::RendererPageResourceCompletionTestSource,
     wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
     label: &str,
 ) {
-    super::child_document_completion::wait_for_page_resource_completion(queue, wake_rx, label)
-        .await;
+    super::child_document_completion::wait_for_page_resource_completion(
+        page_vm, queue, wake_rx, label,
+    )
+    .await;
 }
 
 fn open_popup(page_vm: &mut PageVm, url: &str, target_name: &str, global_name: &str) -> u64 {
@@ -82,7 +85,7 @@ fn loaded_popup_completion(
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
                 markup: markup.to_owned(),
-                document_network: None,
+                resource_timing: None,
             },
         ))),
     )
@@ -111,7 +114,10 @@ async fn production_popup_fetch_reaches_stable_typed_turn_and_commits() {
             "__typedPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "typed popup fetch").await;
+        wait_for_popup_terminal(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"typed popup fetch").await;
         let target = queued_popup_target(&mut queue);
         assert_eq!(
             page_vm
@@ -179,7 +185,10 @@ Promise.resolve().then(() => opener.__popupResourceBodyEvents.push("microtask"))
             "__bodyOnlyPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "body-only popup fetch").await;
+        wait_for_popup_terminal(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"body-only popup fetch").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("popup resource body should consume one typed terminal");
@@ -233,12 +242,17 @@ Promise.resolve().then(() => opener.__selectedPopupEvents.push("microtask"));
             "__selectedPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "selected popup fetch").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "selected popup fetch",
+        )
+        .await;
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "popup terminal must enter the production selected dispatcher"
@@ -299,7 +313,10 @@ window.open("javascript:window.opener.__popupSelfEvents.push(document.defaultVie
             "__windowOpenSelfPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "window.open _self popup").await;
+        wait_for_popup_terminal(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"window.open _self popup").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("popup document completion should consume one typed Page turn");
@@ -352,7 +369,10 @@ async fn popup_noopener_self_link_stays_in_popup_browsing_context() {
             "__noopenerSelfPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "noopener _self popup link").await;
+        wait_for_popup_terminal(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"noopener _self popup link").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("popup document completion should consume one typed Page turn");
@@ -394,7 +414,13 @@ async fn ignored_popup_response_settles_only_its_exact_current_load() {
         let popup_url = format!("{base_url}/ignored-popup.html");
         let _popup_id = open_popup(&mut page_vm, &popup_url, "ignored-popup", "__ignoredPopup");
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "ignored popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "ignored popup response",
+        )
+        .await;
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("ignored response should still consume its exact terminal turn");
@@ -431,7 +457,7 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
             "__failedPopup",
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "failed popup fetch").await;
+        wait_for_popup_terminal(&mut page_vm, &mut queue, &mut wake_rx, "failed popup fetch").await;
         let target = queued_popup_target(&mut queue);
         assert_eq!(
             page_vm
@@ -494,7 +520,13 @@ async fn queued_popup_response_is_stale_after_newer_navigation_and_cannot_commit
         let older_url = format!("{base_url}/older-popup.html");
         let newer_url = format!("{base_url}/newer-popup.html");
         open_popup(&mut page_vm, &older_url, "reused-popup", "__reusedPopup");
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "older popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "older popup response",
+        )
+        .await;
         let older_target = queued_popup_target(&mut queue);
 
         let reopened = page_vm.vm_mut().eval(&format!(
@@ -528,7 +560,13 @@ async fn queued_popup_response_is_stale_after_newer_navigation_and_cannot_commit
             "null"
         );
 
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "newer popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "newer popup response",
+        )
+        .await;
         let newer_target = queued_popup_target(&mut queue);
         assert_ne!(older_target, newer_target);
         let newer_outcome = page_vm
@@ -570,7 +608,13 @@ async fn queued_popup_response_is_stale_after_browsing_context_close() {
         );
         let popup_url = format!("{base_url}/closed-popup.html");
         open_popup(&mut page_vm, &popup_url, "closed-popup", "__closedPopup");
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "closed popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "closed popup response",
+        )
+        .await;
         let target = queued_popup_target(&mut queue);
         page_vm.vm_mut().eval("__closedPopup.close(); 'closed'")?;
 
@@ -628,7 +672,13 @@ async fn retired_root_namespace_rejects_an_identical_popup_local_target() {
             "namespace-popup",
             "__namespacePopup",
         );
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "namespace popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "namespace popup response",
+        )
+        .await;
         let target = queued_popup_target(&mut queue);
         let current_root = page_vm.document_lifecycle.identity().document;
         let retired_root = current_root.successor_for_testing();
@@ -725,7 +775,13 @@ async fn mismatched_legacy_popup_target_cannot_consume_the_current_pending_load(
             "authorization-popup",
             "__authorizationPopup",
         );
-        wait_for_popup_terminal(&mut queue, &mut wake_rx, "authorization popup response").await;
+        wait_for_popup_terminal(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "authorization popup response",
+        )
+        .await;
         let envelope = queue
             .pop_front()
             .expect("production popup terminal should remain queued")

@@ -51,7 +51,7 @@ navigation.navigate("#replacement");
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -106,19 +106,13 @@ async fn canceled_cross_document_followup_uses_selected_navigation_task_not_time
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::NavigationApi,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::NavigationApi)
                 .await?,
             "Navigation API task-finished turn must use the production selected dispatcher"
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::NavigationApi,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::NavigationApi)
                 .await?,
             "one local payload must produce exactly one scheduler task"
         );
@@ -168,10 +162,7 @@ navigation.navigate("#replacement");
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::NavigationApi,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::NavigationApi)
                 .await?,
             "FinishResult must return through the production selected dispatcher"
         );
@@ -238,7 +229,7 @@ navigation.navigate("#current");
             .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::NavigationApi)
             .expect("the source must retain the task for the retired attempt");
         page_vm
-            .run_claimed_selected_page_task_for_test(retired, &loader)
+            .run_claimed_selected_page_task_for_test(retired)
             .await?;
         assert_eq!(
             page_vm
@@ -261,7 +252,7 @@ navigation.navigate("#current");
             .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::NavigationApi)
             .expect("the current attempt must remain behind the retired task in source FIFO order");
         page_vm
-            .run_claimed_selected_page_task_for_test(current, &loader)
+            .run_claimed_selected_page_task_for_test(current)
             .await?;
         let expected_after_current = if before_stale_turn.is_empty() {
             "success:#current".to_owned()
@@ -368,7 +359,7 @@ currentResult.finished.then(
                         .navigation_api_owner_and_task_id()
                         .expect("exact Navigation API claim must retain its identity");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -399,7 +390,7 @@ currentResult.finished.then(
                         "fresh JsContextHost counters should naturally reuse the local task id"
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current, &loader)
+                        .run_claimed_selected_page_task_for_test(current)
                         .await?;
                     assert!(
                         page_vm

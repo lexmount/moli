@@ -1430,13 +1430,15 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     );
     wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
     assert_eq!(ctx.take_one()["method"], "Network.responseReceived");
+    let data = ctx.take_one();
+    assert_eq!(data["method"], "Network.dataReceived");
+    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Page.frameNavigated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "Page.domContentEventFired");
-    let data = ctx.take_one();
-    assert_eq!(data["method"], "Network.dataReceived");
-    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Network.loadingFinished");
     assert_eq!(ctx.take_one()["method"], "Page.loadEventFired");
     assert_eq!(ctx.take_one()["method"], "Page.frameStoppedLoading");

@@ -1145,6 +1145,10 @@ pub(super) fn build_router() -> Router {
             get(parse_time_async_classic_chunked_page),
         )
         .route(
+            "/compat/parse-time-async-classic-chunked/release-tail",
+            get(release_parse_time_async_chunked_tail),
+        )
+        .route(
             "/compat/parse-time-async-classic-slow-chunked-tail",
             get(parse_time_async_classic_slow_chunked_tail_page),
         )

@@ -27,6 +27,7 @@ enum RequestKind {
     DynamicModule,
     MainScript,
     MainModule,
+    ControlledMainScript,
     CspReport,
     ControlledCspReport,
     ModuleCspReport,
@@ -55,6 +56,7 @@ impl RequestKind {
                 | Self::DynamicModule
                 | Self::MainScript
                 | Self::MainModule
+                | Self::ControlledMainScript
         )
     }
 }
@@ -262,6 +264,14 @@ macro_rules! worker_stage_tests {
 }
 
 worker_stage_tests! {
+    native_worker_controlled_main_stages_dedicated: Dedicated, ControlledMainScript, Complete;
+    native_worker_controlled_main_stages_shared: Shared, ControlledMainScript, Complete;
+    native_worker_controlled_main_stages_dedicated_partial: Dedicated, ControlledMainScript, PartialFailure;
+    native_worker_controlled_main_stages_shared_partial: Shared, ControlledMainScript, PartialFailure;
+    native_worker_controlled_main_stages_dedicated_retirement: Dedicated, ControlledMainScript, RetiredCancellation;
+    native_worker_controlled_main_stages_shared_retirement: Shared, ControlledMainScript, RetiredCancellation;
+    native_worker_controlled_main_stages_dedicated_partial_retirement: Dedicated, ControlledMainScript, RetiredAfterChunk;
+    native_worker_controlled_main_stages_shared_partial_retirement: Shared, ControlledMainScript, RetiredAfterChunk;
     native_worker_main_stages_service: Service, MainScript, Complete;
     native_worker_main_stages_service_module: Service, MainModule, Complete;
     native_worker_main_stages_service_partial_body: Service, MainScript, PartialFailure;
@@ -460,16 +470,21 @@ async fn worker_network_stages_with_preflight_retirement(
     let (headers, release_headers) = oneshot::channel();
     let (chunk, release_chunk) = oneshot::channel();
     let (tail, release_tail) = oneshot::channel();
+    let (peer_closed, upstream_closed) = oneshot::channel();
     let (redirected, redirect_arrived) = oneshot::channel();
     let (redirect, release_redirect) = oneshot::channel();
     let server = tokio::spawn(async move {
-        let controlled_report = matches!(request_kind, RequestKind::ControlledCspReport);
-        let physical_path = if controlled_report {
-            "/upstream"
+        let mut peer_closed = Some(peer_closed);
+        let controlled = matches!(
+            request_kind,
+            RequestKind::ControlledCspReport | RequestKind::ControlledMainScript
+        );
+        let physical_path = if controlled { "/upstream" } else { "/probe" };
+        let controller_script = if matches!(request_kind, RequestKind::ControlledMainScript) {
+            "oninstall=e=>e.waitUntil(skipWaiting());onactivate=e=>e.waitUntil(clients.claim());onfetch=e=>{if(new URL(e.request.url).pathname==='/probe')e.respondWith(fetch('/upstream',{signal:e.request.signal}).then(r=>new Response(r.body,{status:r.status,headers:r.headers})));};"
         } else {
-            "/probe"
+            "oninstall=e=>e.waitUntil(skipWaiting());onactivate=e=>e.waitUntil(clients.claim());onfetch=e=>{if(new URL(e.request.url).pathname==='/probe')e.respondWith((async()=>fetch('/upstream',{method:'POST',headers:e.request.headers,body:await e.request.arrayBuffer()}))());};"
         };
-        let controller_script = "oninstall=e=>e.waitUntil(skipWaiting());onactivate=e=>e.waitUntil(clients.claim());onfetch=e=>{if(new URL(e.request.url).pathname==='/probe')e.respondWith((async()=>fetch('/upstream',{method:'POST',headers:e.request.headers,body:await e.request.arrayBuffer()}))());};";
         let request_script = match request_kind {
             RequestKind::Fetch => format!(
                 "fetch('/probe',{{keepalive:{}}}).then(r=>r.text()).catch(()=>{{}})",
@@ -502,7 +517,9 @@ async fn worker_network_stages_with_preflight_retirement(
             RequestKind::ImportScript => "try{importScripts('/probe')}catch(_){}".into(),
             RequestKind::StaticModule => "import '/probe';".into(),
             RequestKind::DynamicModule => "import('/probe').catch(()=>{})".into(),
-            RequestKind::MainScript | RequestKind::MainModule => String::new(),
+            RequestKind::MainScript
+            | RequestKind::MainModule
+            | RequestKind::ControlledMainScript => String::new(),
             RequestKind::CspReport | RequestKind::ControlledCspReport => {
                 "fetch('/blocked').catch(()=>{})".into()
             }
@@ -518,7 +535,7 @@ async fn worker_network_stages_with_preflight_retirement(
         };
         let main_script = matches!(
             request_kind,
-            RequestKind::MainScript | RequestKind::MainModule
+            RequestKind::MainScript | RequestKind::MainModule | RequestKind::ControlledMainScript
         );
         let worker_script = match kind {
             WorkerKind::Dedicated => request_script.clone(),
@@ -577,7 +594,7 @@ async fn worker_network_stages_with_preflight_retirement(
                 format!("navigator.serviceWorker.register('/worker.js',{options})")
             }
         };
-        let bootstrap = if controlled_report {
+        let bootstrap = if controlled {
             format!(
                 "(async()=>{{await navigator.serviceWorker.register('/controller.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{{once:true}}));{bootstrap}}})()"
             )
@@ -681,6 +698,16 @@ async fn worker_network_stages_with_preflight_retirement(
                     );
                 }
                 requested.send(()).unwrap();
+                if matches!(request_kind, RequestKind::ControlledMainScript)
+                    && matches!(finish, Finish::RetiredCancellation)
+                {
+                    assert_eq!(
+                        stream.read(&mut byte).await.unwrap(),
+                        0,
+                        "retirement must close the controlled script's upstream before headers"
+                    );
+                    peer_closed.take().unwrap().send(()).unwrap();
+                }
                 release_headers.await.unwrap();
                 if matches!(
                     finish,
@@ -711,6 +738,16 @@ async fn worker_network_stages_with_preflight_retirement(
                     .write_all(&response_body.as_bytes()[..2])
                     .await
                     .unwrap();
+                if matches!(request_kind, RequestKind::ControlledMainScript)
+                    && matches!(finish, Finish::RetiredAfterChunk)
+                {
+                    assert_eq!(
+                        stream.read(&mut byte).await.unwrap(),
+                        0,
+                        "retirement must close the controlled script's upstream with the tail held"
+                    );
+                    peer_closed.take().unwrap().send(()).unwrap();
+                }
                 release_tail.await.unwrap();
                 if !matches!(finish, Finish::PartialFailure | Finish::RetiredAfterChunk) {
                     stream
@@ -739,7 +776,7 @@ async fn worker_network_stages_with_preflight_retirement(
                 "/" => ("text/html", html.as_str()),
                 "/worker.js" => ("text/javascript", worker_script.as_str()),
                 "/nested.js" => ("text/javascript", request_script.as_str()),
-                "/controller.js" if controlled_report => ("text/javascript", controller_script),
+                "/controller.js" if controlled => ("text/javascript", controller_script),
                 other => panic!("unexpected Worker fixture request: {other}"),
             };
             let csp = if request_kind.is_report() && matches!(path, "/worker.js" | "/nested.js") {
@@ -826,7 +863,9 @@ async fn worker_network_stages_with_preflight_retirement(
                         request.is_worker_main_script(),
                         matches!(
                             request_kind,
-                            RequestKind::MainScript | RequestKind::MainModule
+                            RequestKind::MainScript
+                                | RequestKind::MainModule
+                                | RequestKind::ControlledMainScript
                         )
                     );
                     assert_eq!(
@@ -854,6 +893,7 @@ async fn worker_network_stages_with_preflight_retirement(
                             | RequestKind::StaticModule
                             | RequestKind::DynamicModule
                             | RequestKind::MainScript
+                            | RequestKind::ControlledMainScript
                             | RequestKind::MainModule =>
                                 crate::page::SubresourceResourceType::Script,
                         }
@@ -1037,6 +1077,17 @@ async fn worker_network_stages_with_preflight_retirement(
     }
     // Only let the server close after observing native cancellation. Otherwise
     // a fixture-induced disconnect could falsely prove retirement cancellation.
+    if matches!(request_kind, RequestKind::ControlledMainScript)
+        && matches!(
+            finish,
+            Finish::RetiredCancellation | Finish::RetiredAfterChunk
+        )
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(5), upstream_closed)
+            .await
+            .expect("the original controlled script must cancel its physical upstream")
+            .unwrap();
+    }
     if let Some(headers) = headers {
         headers.send(()).unwrap();
     }

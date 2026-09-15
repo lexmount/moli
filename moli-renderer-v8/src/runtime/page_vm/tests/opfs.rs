@@ -115,7 +115,7 @@ fn opfs_task_rejects_a_real_page_vm_replacement_identity_collision() {
 
                 assert!(
                     page_vm
-                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::OpfsTask, &loader)
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::OpfsTask)
                         .await?,
                     "the retired OPFS completion should consume the first selected turn"
                 );
@@ -129,7 +129,7 @@ fn opfs_task_rejects_a_real_page_vm_replacement_identity_collision() {
 
                 assert!(
                     page_vm
-                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::OpfsTask, &loader)
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::OpfsTask)
                         .await?,
                     "the replacement OPFS completion should consume the following selected turn"
                 );
@@ -201,10 +201,7 @@ document.close();
             publish_test_opfs_root_completion(producer);
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::OpfsTask,
-                        &loader
-                    )
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::OpfsTask)
                     .await?,
                 "preserved OPFS work should consume one selected Page turn"
             );
@@ -256,10 +253,7 @@ navigator.storage.getDirectory().then(() => {
             "the OPFS body must leave Promise reactions for selected-task completion"
         );
         page_vm
-            .finish_selected_page_task_completion(
-                outcome.action.into_page_task_completion(),
-                &loader,
-            )
+            .finish_selected_page_task_completion(outcome.action.into_page_task_completion())
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__opfsTaskBodyBoundary.join('|')")?,
@@ -295,10 +289,7 @@ navigator.storage.getDirectory().then(() => {
         wait_for_opfs_page_task(&mut owner_wake_rx).await;
         let task = take_opfs_page_task_for_test(&mut page_vm);
         page_vm
-            .apply_selected_page_scheduler_task_on_owner_lane_for_test(
-                crate::page_task_queue::RendererPageSchedulerTask::OpfsTask(task),
-                loader.clone(),
-            )
+            .apply_selected_page_scheduler_task_on_owner_lane_for_test(crate::page_task_queue::RendererPageSchedulerTask::OpfsTask(task))
             .await?;
         assert!(
             page_vm.vm().has_pending_child_navigation_commit_for_test(),
@@ -337,10 +328,7 @@ async fn opfs_task_without_promise_handler_does_not_consume_unrelated_runtime_wo
         wait_for_opfs_page_task(&mut owner_wake_rx).await;
         let task = take_opfs_page_task_for_test(&mut page_vm);
         page_vm
-            .apply_selected_page_scheduler_task_on_owner_lane_for_test(
-                crate::page_task_queue::RendererPageSchedulerTask::OpfsTask(task),
-                loader.clone(),
-            )
+            .apply_selected_page_scheduler_task_on_owner_lane_for_test(crate::page_task_queue::RendererPageSchedulerTask::OpfsTask(task))
             .await?;
         assert_eq!(
             page_vm

@@ -66,7 +66,6 @@ async fn wait_for_and_apply_image_completions(
 
 async fn run_next_image_event_task(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     label: &str,
 ) {
     assert!(
@@ -76,8 +75,7 @@ async fn run_next_image_event_task(
     wait_for_image_event_task(page, label).await;
     assert!(
         page.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .unwrap_or_else(|error| panic!("{label}: {error:#}")),
@@ -146,7 +144,7 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
         )
         .expect("decode gate image should start");
 
-        run_next_image_event_task(&mut vm, &loader, "decode gate image event").await;
+        run_next_image_event_task(&mut vm, "decode gate image event").await;
         assert_eq!(
             vm.eval("globalThis.__decodeGateEvent")
                 .expect("decode gate event should be readable"),
@@ -206,7 +204,7 @@ async fn image_fetch_enabled_queues_empty_source_error_after_microtask_checkpoin
     )
     .expect("empty image source listener should install");
 
-    run_next_image_event_task(&mut vm, &loader, "empty image source error").await;
+    run_next_image_event_task(&mut vm, "empty image source error").await;
     assert_eq!(
         vm.eval("globalThis.__emptySourceResult")
             .expect("empty image source result should evaluate"),
@@ -247,14 +245,14 @@ async fn image_fetch_enabled_discards_stale_queued_terminal_event() {
     )
     .expect("replacement image source should queue its update");
 
-    run_next_image_event_task(&mut vm, &loader, "stale empty-source image event").await;
+    run_next_image_event_task(&mut vm, "stale empty-source image event").await;
     assert_eq!(
         vm.eval("globalThis.__staleImageEvents.join(',')")
             .expect("stale image events should evaluate"),
         ""
     );
 
-    run_next_image_event_task(&mut vm, &loader, "replacement image event").await;
+    run_next_image_event_task(&mut vm, "replacement image event").await;
     assert_eq!(
         vm.eval("globalThis.__staleImageEvents.join(',')")
             .expect("replacement image events should evaluate"),
@@ -306,7 +304,7 @@ async fn image_fetch_enabled_dispatches_http_error_after_resource_timing() {
         "pending",
         "network completion must only enqueue the element event task"
     );
-    run_next_image_event_task(&mut vm, &loader, "HTTP image error event").await;
+    run_next_image_event_task(&mut vm, "HTTP image error event").await;
 
     let after = vm
         .eval("globalThis.__imageNetworkResult")
@@ -360,7 +358,7 @@ async fn image_fetch_enabled_dispatches_load_after_resource_timing() {
         "pending",
         "network completion must only enqueue the element event task"
     );
-    run_next_image_event_task(&mut vm, &loader, "HTTP image load event").await;
+    run_next_image_event_task(&mut vm, "HTTP image load event").await;
 
     assert_eq!(
         vm.eval("globalThis.__imageNetworkResult")
@@ -417,7 +415,7 @@ async fn image_fetch_enabled_rejects_http_success_with_corrupt_image_bytes() {
         "",
         "interception completion must not inline-dispatch the error event"
     );
-    run_next_image_event_task(&mut vm, &loader, "corrupt image error event").await;
+    run_next_image_event_task(&mut vm, "corrupt image error event").await;
 
     assert_eq!(
         vm.eval("__corruptImageEvents.join('|') + ':' + __corruptImage.complete")
@@ -480,7 +478,7 @@ async fn inserting_completed_detached_image_does_not_restart_request() {
         vm.take_pending_subresource_fetch_infos().is_empty(),
         "ordinary insertion must not restart the completed request"
     );
-    run_next_image_event_task(&mut vm, &loader, "detached image load event").await;
+    run_next_image_event_task(&mut vm, "detached image load event").await;
     assert_eq!(
         vm.eval("__completedDetachedImageEvents.join('|')")
             .expect("detached image events should evaluate"),
@@ -530,7 +528,7 @@ async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
     )
     .expect("removed lazy image response should complete");
 
-    run_next_image_event_task(&mut vm, &loader, "removed lazy image terminal").await;
+    run_next_image_event_task(&mut vm, "removed lazy image terminal").await;
 
     assert_eq!(
         vm.eval("__removedLazyImageEvents.join('|')")
@@ -573,7 +571,7 @@ async fn image_fetch_disabled_keeps_synthetic_event_without_network_request() {
         "#,
     )
     .expect("disabled image setup should evaluate");
-    run_next_image_event_task(&mut vm, &loader, "disabled-fetch image event").await;
+    run_next_image_event_task(&mut vm, "disabled-fetch image event").await;
 
     assert_eq!(
         vm.eval("globalThis.__imageDisabledResult")
@@ -667,7 +665,7 @@ async fn replacing_image_source_suppresses_stale_network_completion() {
         "",
         "resource completion must not inline-dispatch the replacement event"
     );
-    run_next_image_event_task(&mut vm, &loader, "replacement network image event").await;
+    run_next_image_event_task(&mut vm, "replacement network image event").await;
     assert_eq!(
         vm.eval("globalThis.__imageReplacementEvents.join('|')")
             .expect("replacement events should evaluate"),
@@ -736,8 +734,7 @@ async fn replacing_image_source_discards_queued_stale_decode_pixels() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("stale image decode task should retire cleanly"),
@@ -767,7 +764,7 @@ async fn replacing_image_source_discards_queued_stale_decode_pixels() {
         crate::runtime::RendererSyntheticResponseBody::from_bytes(new_png.bytes),
     )
     .expect("replacement image response should fulfill");
-    run_next_image_event_task(&mut vm, &loader, "replacement image decode completion").await;
+    run_next_image_event_task(&mut vm, "replacement image decode completion").await;
 
     assert_eq!(
         vm.eval("globalThis.__staleDecodeEvents.join('|')")
@@ -842,7 +839,7 @@ async fn image_request_interception_fulfills_through_image_continuation() {
         "pending",
         "interception completion must only enqueue the element event task"
     );
-    run_next_image_event_task(&mut vm, &loader, "intercepted image event").await;
+    run_next_image_event_task(&mut vm, "intercepted image event").await;
 
     assert_eq!(
         vm.eval("globalThis.__interceptedImageResult")
@@ -893,7 +890,7 @@ async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource()
         one_by_one_gif_response_body(),
     )
     .expect("in-flight image response should fulfill");
-    run_next_image_event_task(&mut vm, &loader, "in-flight image load event").await;
+    run_next_image_event_task(&mut vm, "in-flight image load event").await;
     assert_eq!(
         vm.eval("globalThis.__firstSharedDecode")
             .expect("first image decode result should evaluate"),
@@ -1022,7 +1019,7 @@ async fn changing_image_cross_origin_restarts_intercepted_request() {
             .expect("pre-event replacement image trace should evaluate"),
         ""
     );
-    run_next_image_event_task(&mut vm, &loader, "cross-origin replacement image event").await;
+    run_next_image_event_task(&mut vm, "cross-origin replacement image event").await;
     assert_eq!(
         vm.eval("globalThis.__crossOriginImageEvents.join('|')")
             .expect("replacement image event should evaluate"),
@@ -1087,7 +1084,7 @@ async fn changing_picture_source_restarts_intercepted_image_request() {
             .expect("pre-event picture image trace should evaluate"),
         ""
     );
-    run_next_image_event_task(&mut vm, &loader, "picture replacement image event").await;
+    run_next_image_event_task(&mut vm, "picture replacement image event").await;
     assert_eq!(
         vm.eval("globalThis.__pictureImageEvents.join('|')")
             .expect("replacement picture image event should evaluate"),

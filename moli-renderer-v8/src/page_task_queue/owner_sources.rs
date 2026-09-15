@@ -2397,10 +2397,6 @@ impl crate::page_resource_completion::RendererPageResourceCompletionTestSource
     )> {
         RendererPageResourceCompletionTestSource::pop_front(self)
     }
-
-    fn has_ready_completion(&mut self) -> bool {
-        RendererPageResourceCompletionTestSource::has_ready_completion(self)
-    }
 }
 
 #[cfg(test)]

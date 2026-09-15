@@ -96,7 +96,7 @@ __dedicatedWorkerTaskBoundaryWorker.onmessage = () => {
         );
 
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -139,7 +139,7 @@ async fn dedicated_worker_state_transition_is_checkpoint_only() {
         let completion = body.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -189,7 +189,7 @@ async fn dedicated_worker_message_without_listener_is_checkpoint_only() {
         let completion = body.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -255,10 +255,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
             .expect("bootstrap Worker error should enter its typed source");
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DedicatedWorkerClientEvent)
                 .await?,
             "bootstrap Worker error should consume one selected Page task"
         );
@@ -285,10 +282,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
             .expect("runtime Worker error should enter its typed source");
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DedicatedWorkerClientEvent)
                 .await?,
             "runtime Worker error should consume one selected Page task"
         );
@@ -419,8 +413,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WorkerHostBridge,
-                    &loader,
+                    PageSelectedTaskTestSelector::WorkerHostBridge
                 )
                 .await?,
             "the host terminal must run through the production selected dispatcher"
@@ -436,8 +429,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent
                 )
                 .await?,
             "the earlier client message must consume its selected Page task"
@@ -452,8 +444,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent
                 )
                 .await?,
             "the client terminal must consume the next selected Page task"
@@ -475,8 +466,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent
                 )
                 .await?,
             "the second client terminal must use the same selected dispatcher"
@@ -497,8 +487,7 @@ async fn dedicated_worker_relay_terminal_waits_for_both_selected_source_fifos() 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WorkerHostBridge,
-                    &loader,
+                    PageSelectedTaskTestSelector::WorkerHostBridge
                 )
                 .await?,
             "the second host terminal must use the production selected dispatcher"
@@ -639,7 +628,7 @@ Promise.resolve().then(() => {
             RendererDedicatedWorkerClientEventKind::Message
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm
@@ -708,7 +697,7 @@ async fn successful_script_loaded_worker_event_transitions_through_selected_disp
             RendererDedicatedWorkerClientEventKind::ScriptLoaded
         );
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
 
         let running = page_vm.page_diagnostics_snapshot()?;
@@ -837,7 +826,7 @@ Promise.resolve().then(() => {
                         RendererDedicatedWorkerClientEventKind::ScriptLoadFailed
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale_claim, &loader)
+                        .run_claimed_selected_page_task_for_test(stale_claim)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -868,7 +857,7 @@ Promise.resolve().then(() => {
                         RendererDedicatedWorkerClientEventKind::ScriptLoadFailed
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current_claim, &loader)
+                        .run_claimed_selected_page_task_for_test(current_claim)
                         .await?;
                     assert_eq!(
                         page_vm

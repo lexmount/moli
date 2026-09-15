@@ -467,7 +467,6 @@ async fn external_module_prepared_script_hides_root_graph_fetch_in_owner_state()
 #[tokio::test]
 async fn page_timer_turn_catches_callback_exception_variants_and_continues() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         globalThis.__timerEvents = [];
@@ -498,7 +497,7 @@ async fn page_timer_turn_catches_callback_exception_variants_and_continues() {
 
     for _ in 0..3 {
         assert!(
-            vm.run_next_due_timer_callback_for_test(&loader)
+            vm.run_next_due_timer_callback_for_test()
                 .await
                 .expect("timer turn")
         );
@@ -536,7 +535,6 @@ async fn page_timer_turn_catches_callback_exception_variants_and_continues() {
 #[tokio::test]
 async fn window_timer_uses_webidl_callback_function_semantics() {
     let mut vm = new_storage_test_vm("https://window-timer-webidl-callback.test/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -581,7 +579,7 @@ async fn window_timer_uses_webidl_callback_function_semantics() {
     )
     .expect("Window timer Web IDL callback should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("Window timer Web IDL callback should drain");
     assert_eq!(
@@ -594,7 +592,6 @@ async fn window_timer_uses_webidl_callback_function_semantics() {
 #[tokio::test]
 async fn request_animation_frame_callbacks_share_one_timestamp_per_batch() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         globalThis.__animationFrameTimestamps = [];
@@ -613,7 +610,7 @@ async fn request_animation_frame_callbacks_share_one_timestamp_per_batch() {
     )
     .expect("animation frame setup");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("animation frame callbacks");
 
@@ -643,7 +640,6 @@ async fn request_animation_frame_callbacks_share_one_timestamp_per_batch() {
 #[tokio::test]
 async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         for (let index = 0; index < 3; index++) {
@@ -664,7 +660,7 @@ async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
     )
     .expect("cross-realm animation frame setup");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("cross-realm animation frame callback");
 
@@ -678,7 +674,6 @@ async fn request_animation_frame_reports_exceptions_to_the_callback_realm() {
 #[tokio::test]
 async fn request_animation_frame_uses_webidl_callback_function_semantics() {
     let mut vm = new_storage_test_vm("https://animation-frame-webidl-callback.test/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -728,7 +723,7 @@ async fn request_animation_frame_uses_webidl_callback_function_semantics() {
     )
     .expect("animation frame Web IDL callback should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("animation frame Web IDL callback should drain");
     assert_eq!(
@@ -741,7 +736,6 @@ async fn request_animation_frame_uses_webidl_callback_function_semantics() {
 #[tokio::test]
 async fn request_animation_frame_retires_with_its_callback_realm() {
     let mut vm = new_storage_test_vm("https://animation-frame-callback-retirement.test/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -770,7 +764,7 @@ async fn request_animation_frame_retires_with_its_callback_realm() {
     )
     .expect("retired animation frame callback should schedule");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("retired animation frame callback should leave the timer source quiescent");
     assert_eq!(
@@ -783,7 +777,6 @@ async fn request_animation_frame_retires_with_its_callback_realm() {
 #[tokio::test]
 async fn window_timer_stringifies_non_function_handler_before_queueing() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         globalThis.__timerLog = "";
@@ -801,7 +794,7 @@ async fn window_timer_stringifies_non_function_handler_before_queueing() {
 
     for _ in 0..2 {
         assert!(
-            vm.run_next_due_timer_callback_for_test(&loader)
+            vm.run_next_due_timer_callback_for_test()
                 .await
                 .expect("timer turn")
         );
@@ -1017,7 +1010,6 @@ fn window_string_timer_honors_trusted_types_eval_with_enforced_require() {
 #[tokio::test]
 async fn window_timer_delay_uses_webidl_long_conversion() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.eval(
         r#"
         globalThis.__timeoutFired = false;
@@ -1036,7 +1028,7 @@ async fn window_timer_delay_uses_webidl_long_conversion() {
 
     for _ in 0..2 {
         assert!(
-            vm.run_next_due_timer_callback_for_test(&loader)
+            vm.run_next_due_timer_callback_for_test()
                 .await
                 .expect("timer turn")
         );
@@ -1052,10 +1044,9 @@ async fn window_timer_delay_uses_webidl_long_conversion() {
 #[tokio::test]
 async fn page_timer_turn_propagates_host_driver_failure() {
     let mut vm = new_storage_test_vm("https://example.com/");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     vm.fail_next_timeout_for_testing("host timeout driver failed for test");
 
-    let error = match vm.run_next_due_timer_callback_for_test(&loader).await {
+    let error = match vm.run_next_due_timer_callback_for_test().await {
         Ok(_) => panic!("host timeout driver failure should propagate"),
         Err(error) => error,
     };
@@ -2356,7 +2347,7 @@ async fn pre_domcontentloaded_runtime_source_wait_yields_to_stable_page_continua
     let mut report = ScriptExecutionReport::default();
     let step = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        vm.next_post_parse_processing_step(&loader, &mut page_task_queue, &mut report),
+        vm.next_post_parse_processing_step(&mut page_task_queue, &mut report),
     )
     .await
     .expect("post-parse runtime source wait must not retain the executor")
@@ -2545,7 +2536,6 @@ async fn next_post_parse_lifecycle_advance_from_driver_returns_complete_when_dri
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver = PostParseLifecycleDriver {
         round: PostParseLifecycleRound {
@@ -2556,12 +2546,7 @@ async fn next_post_parse_lifecycle_advance_from_driver_returns_complete_when_dri
     };
 
     let advance = vm
-        .next_post_parse_lifecycle_advance_from_driver(
-            &loader,
-            &mut page_task_queue,
-            &mut report,
-            driver,
-        )
+        .next_post_parse_lifecycle_advance_from_driver(&mut page_task_queue, &mut report, driver)
         .await
         .expect("driver helper should succeed");
 
@@ -2591,7 +2576,6 @@ async fn next_post_parse_lifecycle_advance_from_driver_returns_page_owned_task_f
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver = PostParseLifecycleDriver {
         round: PostParseLifecycleRound {
@@ -2608,12 +2592,7 @@ async fn next_post_parse_lifecycle_advance_from_driver_returns_page_owned_task_f
     )]);
 
     let advance = vm
-        .next_post_parse_lifecycle_advance_from_driver(
-            &loader,
-            &mut page_task_queue,
-            &mut report,
-            driver,
-        )
+        .next_post_parse_lifecycle_advance_from_driver(&mut page_task_queue, &mut report, driver)
         .await
         .expect("driver helper should succeed");
 
@@ -2697,7 +2676,6 @@ async fn advance_post_parse_lifecycle_returns_completion_from_completed_boundary
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver = PostParseLifecycleDriver {
         round: PostParseLifecycleRound {
@@ -2721,7 +2699,6 @@ async fn advance_post_parse_lifecycle_returns_completion_from_completed_boundary
 
     let advance = vm
         .advance_post_parse_lifecycle(
-            &loader,
             &mut page_task_queue,
             &mut report,
             driver,
@@ -2757,7 +2734,6 @@ async fn advance_post_parse_lifecycle_continues_to_driver_after_non_boundary_com
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver = PostParseLifecycleDriver {
         round: PostParseLifecycleRound {
@@ -2785,7 +2761,6 @@ async fn advance_post_parse_lifecycle_continues_to_driver_after_non_boundary_com
 
     let advance = vm
         .advance_post_parse_lifecycle(
-            &loader,
             &mut page_task_queue,
             &mut report,
             driver,
@@ -2824,7 +2799,6 @@ async fn advance_post_parse_lifecycle_restarts_invalidated_round_after_completed
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver = PostParseLifecycleDriver {
         round: PostParseLifecycleRound {
@@ -2848,7 +2822,6 @@ async fn advance_post_parse_lifecycle_restarts_invalidated_round_after_completed
 
     let advance = vm
         .advance_post_parse_lifecycle(
-            &loader,
             &mut page_task_queue,
             &mut report,
             driver,
@@ -2886,7 +2859,6 @@ async fn advance_post_parse_lifecycle_restarts_invalidated_round_before_boundary
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut report = ScriptExecutionReport::default();
     let driver =
         test_post_parse_lifecycle_driver_for(crate::renderer::PageVmInitStage::DomContentLoaded);
@@ -2907,7 +2879,6 @@ async fn advance_post_parse_lifecycle_restarts_invalidated_round_before_boundary
 
     let advance = vm
         .advance_post_parse_lifecycle(
-            &loader,
             &mut page_task_queue,
             &mut report,
             driver,
@@ -3306,16 +3277,11 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
     let document_loader = vm
         .current_main_document_resource_loader()
         .expect("standalone VM should retain its Document resource authority");
-    let loader = document_loader.request_client().clone();
-    let task_runner = document_loader.task_runner();
-    vm.admit_main_document_runtime_script_task(
-        &loader,
-        task_runner.clone(),
-        crate::host::RuntimeScriptAdmission::new(
-            crate::host::RuntimeScriptAdmissionPayload::Script(script),
-            lease,
-        ),
-    );
+
+    vm.admit_main_document_runtime_script_task(crate::host::RuntimeScriptAdmission::new(
+        crate::host::RuntimeScriptAdmissionPayload::Script(script),
+        lease,
+    ));
     let second_script_node = vm.document_runtime.dom_host_mut().create_element("script");
     assert!(
         vm.document_runtime
@@ -3346,11 +3312,6 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
     vm.document_runtime.note_dom_content_loaded_dispatched();
     let runtime_script_work = vm.document_runtime.runtime_script_work_handle();
 
-    let request_origin = vm
-        .current_main_document_resource_loader()
-        .unwrap()
-        .fetch_context()
-        .request_origin();
     let mut emitted = Vec::new();
     assert!(
         vm.emit_ready_runtime_page_owned_work(|work| {
@@ -3358,9 +3319,7 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
                 .borrow_mut()
                 .dynamic_scripts
                 .enqueue_admission(
-                    &loader,
-                    request_origin.clone(),
-                    task_runner.clone(),
+                    &document_loader,
                     reentrant_admission
                         .take()
                         .expect("enqueue callback should admit the second script once"),
@@ -3571,11 +3530,6 @@ fn runtime_dynamic_script_terminal_consumes_its_accepted_document_lease_inline()
     let owner = vm
         .current_main_document_task_owner()
         .expect("main document owner");
-    let document_loader = vm
-        .current_main_document_resource_loader()
-        .expect("standalone VM should retain its Document resource authority");
-    let loader = document_loader.request_client().clone();
-    let task_runner = document_loader.task_runner();
     let lease = vm
         ._context_host
         .borrow_mut()
@@ -3585,14 +3539,10 @@ fn runtime_dynamic_script_terminal_consumes_its_accepted_document_lease_inline()
         )
         .expect("dynamic script should acquire the current main Document lease");
     vm.document_runtime.note_dom_content_loaded_dispatched();
-    vm.admit_main_document_runtime_script_task(
-        &loader,
-        task_runner,
-        crate::host::RuntimeScriptAdmission::new(
-            crate::host::RuntimeScriptAdmissionPayload::Script(script),
-            lease,
-        ),
-    );
+    vm.admit_main_document_runtime_script_task(crate::host::RuntimeScriptAdmission::new(
+        crate::host::RuntimeScriptAdmissionPayload::Script(script),
+        lease,
+    ));
     assert_eq!(
         vm._context_host
             .borrow()

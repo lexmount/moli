@@ -36,7 +36,6 @@ async fn no_cors_header_fill_uses_append_guards_in_window_and_worker() {
         vm.eval(&script).unwrap();
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(headerFillResult !== null)",
             "true",
             "Request header filling should finish",

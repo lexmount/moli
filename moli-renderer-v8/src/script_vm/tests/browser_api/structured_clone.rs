@@ -110,8 +110,7 @@ fn structured_clone_rejects_non_serializable_platform_objects_without_prototype_
 fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
     let document_url = Url::parse("https://performance-entry-clone.test/").expect("document URL");
     let mut vm = new_storage_test_vm(document_url.as_str());
-    vm.record_script_subresource_network_result(
-        document_url.clone(),
+    vm.record_script_resource_timing(
         document_url.join("resource.js").expect("resource URL"),
         &Err("synthetic resource failure".to_owned()),
     );
@@ -399,13 +398,10 @@ async fn blob_iframe_inherits_secure_origin_for_opfs_handle_messages() {
         .expect("blob iframe OPFS clone setup should evaluate");
     assert_eq!(setup, "queued");
 
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__opfsBlobFrameCloneProbe)",
-        r#"{"kind":"result","secure":true,"interfaceExposed":true,"directoryInterfaceExposed":true,"directoryBrand":true,"rootName":""}"#,
-        "blob iframe OPFS clone",
-    )
+    advance_page_task_executor_until_eval_equals(&mut vm,
+"String(globalThis.__opfsBlobFrameCloneProbe)",
+r#"{"kind":"result","secure":true,"interfaceExposed":true,"directoryInterfaceExposed":true,"directoryBrand":true,"rootName":""}"#,
+"blob iframe OPFS clone")
     .await;
 }
 
@@ -498,13 +494,10 @@ async fn sandboxed_blob_iframe_keeps_opaque_storage_context_for_opfs_messages() 
         .expect("sandboxed blob iframe setup should evaluate");
     assert_eq!(setup, "queued");
 
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__sandboxedBlobFrameProbe)",
-        r#"{"rejectionCount":2,"origin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#,
-        "sandboxed blob iframe OPFS rejection",
-    )
+    advance_page_task_executor_until_eval_equals(&mut vm,
+"String(globalThis.__sandboxedBlobFrameProbe)",
+r#"{"rejectionCount":2,"origin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#,
+"sandboxed blob iframe OPFS rejection")
     .await;
 }
 

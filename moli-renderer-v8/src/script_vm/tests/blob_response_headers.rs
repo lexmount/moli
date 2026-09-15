@@ -39,7 +39,7 @@ async fn blob_url_response_headers_match_bytes_and_type_in_window_and_worker() {
         vm.eval(&script).unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while vm.eval("blobHeadersResult === null").unwrap() == "true" {
-                wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
+                wait_for_one_selected_page_task_executor_test_turn(&mut vm)
                     .await
                     .unwrap();
             }

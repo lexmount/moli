@@ -15,29 +15,6 @@ use super::{
     RendererPageResourceCompletionOwner,
 };
 
-#[derive(Clone, Debug)]
-pub(crate) struct MainParserDeferredClassicSourceNetworkAttribution {
-    document_url: url::Url,
-    request_url: url::Url,
-}
-
-impl MainParserDeferredClassicSourceNetworkAttribution {
-    pub(crate) fn new(document_url: url::Url, request_url: url::Url) -> Self {
-        Self {
-            document_url,
-            request_url,
-        }
-    }
-
-    pub(crate) fn document_url(&self) -> &url::Url {
-        &self.document_url
-    }
-
-    pub(crate) fn request_url(&self) -> &url::Url {
-        &self.request_url
-    }
-}
-
 /// A typed native/network terminal whose executable payload is owned by the
 /// Document that created it.
 #[derive(Debug)]
@@ -47,7 +24,6 @@ pub(crate) enum RendererPageResourceTerminal {
     },
     MainParserDeferredClassicSource {
         completion: MainParserDeferredClassicSourceLoadCompletion,
-        network_attribution: MainParserDeferredClassicSourceNetworkAttribution,
     },
     MainParserModuleGraphFetch {
         completion: Box<MainParserModuleGraphFetchCompletion>,
@@ -119,14 +95,10 @@ impl RendererPageResourceCompletion {
     pub(crate) fn main_parser_deferred_classic_source(
         root_document: RendererDocumentToken,
         completion: MainParserDeferredClassicSourceLoadCompletion,
-        network_attribution: MainParserDeferredClassicSourceNetworkAttribution,
     ) -> Self {
         Self {
             root_document,
-            terminal: RendererPageResourceTerminal::MainParserDeferredClassicSource {
-                completion,
-                network_attribution,
-            },
+            terminal: RendererPageResourceTerminal::MainParserDeferredClassicSource { completion },
         }
     }
 

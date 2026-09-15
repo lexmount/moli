@@ -481,14 +481,14 @@ pub(super) fn create_browser_context(conn: &mut CdpConnection, cmd: &Cmd<'_>) ->
             persistent_partition_id: None,
         },
         Err(_) => {
-            return CommandOutputPlan::error_without_session(-32602, "InvalidParams");
+            return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
     if let Some(partition_id) = params.persistent_partition_id.as_deref() {
         let message = validate_persistent_partition_id(partition_id)
             .err()
             .unwrap_or("PersistentBrowserContextNotSupported");
-        return CommandOutputPlan::error_without_session(-32602, message);
+        return CommandOutputPlan::error(-32602, message);
     }
     let id = conn.gen_bc_id();
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());

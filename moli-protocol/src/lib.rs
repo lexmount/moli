@@ -1,9 +1,8 @@
 //! Protocol-neutral DevTools owner and dispatch layer for Moli.
 //!
-//! This crate is being split away from the Chrome DevTools Protocol wire shape.
-//! It still contains transitional CDP-named owner types, but protocol-specific
-//! parsing and Chrome protocol metadata belong in
-//! `moli-protocol-cdp`.
+//! CDP, BiDi and Classic share this dispatch layer. Browser state is owned by
+//! `moli-core::browser::BrowserService`; this crate owns DevTools sessions and
+//! event projection. CDP parsing and protocol metadata belong in `moli-protocol-cdp`.
 
 mod cdp_projection;
 pub mod conn;
@@ -19,7 +18,7 @@ pub use devtools_runtime::*;
 
 pub use conn::{
     AgentHostDispatchResult, BackgroundCommandResponsePayload, BackgroundProtocolEvent,
-    CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition, CdpRendererCommandReplacement,
+    CdpConnection, CdpInitialStoragePartition, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
     CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,

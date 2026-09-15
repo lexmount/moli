@@ -2,7 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn pointer_lock_without_activation_queues_errors_and_rejects_each_promise() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm(
         "https://pointer-lock-no-activation.test/",
         "<!doctype html><html><body></body></html>",
@@ -46,7 +45,7 @@ async fn pointer_lock_without_activation_queues_errors_and_rejects_each_promise(
         r#"{"methodType":"function","methodLength":0,"promises":true,"initialTarget":null,"errorAccessor":true,"changeAccessor":true,"errors":0,"rejections":0}"#,
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("pointer lock error tasks should drain");
 
@@ -69,7 +68,6 @@ JSON.stringify({
 
 #[tokio::test]
 async fn activated_pointer_lock_reports_unsupported_after_observable_option_conversion() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm(
         "https://pointer-lock-unsupported.test/",
         "<!doctype html><html><body></body></html>",
@@ -111,7 +109,7 @@ async fn activated_pointer_lock_reports_unsupported_after_observable_option_conv
         r#"{"optionReads":1,"target":null,"exitUndefined":true}"#,
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("unsupported pointer lock error task should drain");
     assert_eq!(

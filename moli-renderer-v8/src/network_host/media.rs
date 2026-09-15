@@ -84,13 +84,14 @@ pub(crate) fn start_media_element_resource_fetch(
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
         let successful = media_response_status_is_successful(response.status);
-        host.record_get_subresource_network_result_with_initiator(
+        host.record_local_subresource_response(
             frame_id,
             document_url,
             request_url,
             resource_type,
             SubresourceRequestInitiatorType::Other,
-            &Ok(response),
+            &response,
+            None,
         );
         return Ok(MediaElementResourceFetchStart::Local { successful });
     }

@@ -284,24 +284,6 @@ impl BrowserContext {
         Ok(self.document(document)?.page.idle_override())
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub async fn evaluate_document_expression_for_test(
-        &mut self,
-        document: DocumentHandle,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<serde_json::Value, String> {
-        self.document_mut(document)?
-            .page
-            .evaluate_runtime_expression_without_navigation_follow_with_await_async(
-                expression,
-                await_promise,
-            )
-            .await
-            .map_err(|error| format!("runtime evaluation failed: {error}"))
-    }
-
     pub fn document_handle_for_web_contents(
         &self,
         handle: WebContentsHandle,

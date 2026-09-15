@@ -17,7 +17,7 @@ pub(super) fn get_target_info(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comman
         Ok(Some(p)) => p,
         Ok(None) => GetTargetInfoParams { target_id: None },
         Err(e) => {
-            return CommandOutputPlan::error_without_session(-32602, e);
+            return CommandOutputPlan::error(-32602, e);
         }
     };
     if !conn.target_handler_may_get_target_info(cmd.session_id, params.target_id.as_deref()) {
@@ -31,9 +31,7 @@ pub(super) fn get_target_info(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comman
         DevToolsCommand::GetTargetInfo(command),
     ) {
         TargetCommandTaskStep::Complete(plan) => plan,
-        TargetCommandTaskStep::Pending(_) => {
-            CommandOutputPlan::error_without_session(-32000, "UnexpectedPending")
-        }
+        TargetCommandTaskStep::Pending(_) => CommandOutputPlan::error(-32000, "UnexpectedPending"),
     }
 }
 

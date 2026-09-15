@@ -65,7 +65,7 @@ document.getElementById("storage-event-body-source").contentWindow.localStorage
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -120,10 +120,7 @@ document.getElementById("storage-event-child-source").contentWindow.localStorage
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent))
                 .await?,
             "the exact StorageEvent task should run through the selected dispatcher"
         );
@@ -196,8 +193,7 @@ document.getElementById("shared-dom-storage-source").contentWindow.localStorage
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the BroadcastChannel head should consume the first shared DOM turn"
@@ -215,8 +211,7 @@ document.getElementById("shared-dom-storage-source").contentWindow.localStorage
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::StorageEvent
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "StorageEvent should retain the second shared DOM turn"
@@ -289,10 +284,7 @@ localStorage.setItem("typed-storage-key", "value");
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent))
                 .await?,
             "first exact recipient should consume one selected typed turn"
         );
@@ -305,10 +297,7 @@ localStorage.setItem("typed-storage-key", "value");
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent))
                 .await?,
             "second exact recipient should remain queued"
         );
@@ -318,10 +307,7 @@ localStorage.setItem("typed-storage-key", "value");
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent))
                 .await?,
             "global turn readiness may include realm/lifecycle follow-up, but the DOM source must contain exactly two StorageEvent recipients"
         );
@@ -378,8 +364,7 @@ addEventListener("storage", event => __documentOpenStorageEvents.push(event.newV
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::StorageEvent
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the old-Document task should retain its LocalWindow target"
@@ -546,10 +531,7 @@ document.getElementById("current-storage-source").contentWindow.localStorage
                     );
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent),
-                                &loader,
-                            )
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::StorageEvent))
                             .await?,
                         "the replacement delivery must survive the stale-head discard"
                     );

@@ -67,14 +67,7 @@ use crate::page_task_queue::{
     PageModuleReactionApplication, PageModuleReactionFollowup, RendererPageModuleReactionEvent,
 };
 use crate::planning::PreparedScript;
-use crate::types::{
-    ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind, SubresourceRequestInitiatorType,
-    SubresourceResourceType,
-};
-#[cfg(test)]
-use crate::types::{
-    ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
-};
+use crate::types::{ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind};
 use crate::util::{context_host_ptr_from_global_bridge, get_private_value, v8_string, v8str};
 use crate::wasm_module_support::{
     prepare_wasm_module_record, v8_exception_message_or, wasm_evaluation_import_modules,
@@ -878,15 +871,7 @@ impl ScriptVm {
             ParserDeferredScriptStartAction::NoFetch => {}
             ParserDeferredScriptStartAction::ClassicSource(source_load_request) => {
                 if let Some(document_loader) = document_loader.as_ref() {
-                    let (document_url, request_url) =
-                        source_load_request.network_attribution_urls();
-                    let network_attribution = crate::page_resource_completion::
-                        MainParserDeferredClassicSourceNetworkAttribution::new(
-                            document_url,
-                            request_url,
-                        );
-                    let source_load =
-                        source_load_request.start(document_loader, document_loader.task_runner());
+                    let source_load = source_load_request.start(document_loader);
                     let completion_tx = self._context_host.borrow().resource_completion_sender();
                     let (pending_script_id, source_load) = source_load.into_parts();
                     let completed_source_load = source_load.clone();
@@ -899,7 +884,6 @@ impl ScriptVm {
                                 pending_script_id,
                                 outcome,
                             ),
-                            network_attribution,
                         );
                     });
                 } else {
@@ -1189,58 +1173,6 @@ impl ScriptVm {
                 "detached runtime-owned joined module script fetch client from failed owner"
             );
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn complete_native_module_graph_fetch(
-        &mut self,
-        completion: ModuleGraphFetchCompletion,
-    ) -> Result<()> {
-        let load_id = completion.load_id;
-        let has_modulepreload = self.document_runtime.with_native_module_owner(|owner| {
-            owner.has_inflight_native_modulepreload_fetch_for(completion.load_id)
-        });
-        if has_modulepreload {
-            if let Some(network_result) = completion.network_result.as_deref() {
-                self.record_module_graph_subresource_network_result(&completion, network_result);
-                self.record_modulepreload_resource_performance_entry(
-                    &completion.request_url,
-                    network_result,
-                );
-            }
-            self.warn_on_module_graph_fetch_metadata_mismatch(
-                &completion,
-                ModuleGraphFetchRequester::ModulePreload,
-                ModuleGraphFetchOrdering::BackgroundPreload,
-            );
-            if self
-                .apply_main_modulepreload_fetch_result(load_id, completion.result)?
-                .is_none()
-            {
-                return Err(anyhow::anyhow!(
-                    "known legacy modulepreload fetch lost its in-flight request before application"
-                ));
-            }
-            return Ok(());
-        }
-        if matches!(
-            completion.requester,
-            ModuleGraphFetchRequester::ParserOwnedModuleScript
-                | ModuleGraphFetchRequester::RuntimeOwnedModuleScript
-        ) {
-            self.complete_abandoned_module_script_graph_fetch(completion)?;
-            return Ok(());
-        }
-        let result_summary = match &completion.result {
-            Ok(source) => format!("ok({} bytes)", source.len()),
-            Err(error) => format!("error({error})"),
-        };
-        self.record_runtime_warning(format_args!(
-            "native module graph fetch completion {load_id} arrived without an in-flight module graph job: requester={:?} ordering={:?} {result_summary}",
-            completion.requester,
-            completion.ordering
-        ));
-        Ok(())
     }
 
     fn apply_main_modulepreload_fetch_result(
@@ -2105,14 +2037,8 @@ impl ScriptVm {
                 import_owner,
                 load_id,
             );
-            let document_url = self.document_runtime.document_url().clone();
             self.resource_scheduler()
-                .schedule_main_dynamic_import_graph_fetch(
-                    document_loader.clone(),
-                    target,
-                    request,
-                    document_url,
-                );
+                .schedule_main_dynamic_import_graph_fetch(document_loader.clone(), target, request);
         }
     }
 
@@ -2168,33 +2094,6 @@ impl ScriptVm {
             }
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    fn complete_abandoned_module_script_graph_fetch(
-        &mut self,
-        completion: ModuleGraphFetchCompletion,
-    ) -> Result<()> {
-        let load_id = completion.load_id;
-        if !self
-            .document_runtime
-            .has_inflight_native_module_script_fetch(load_id)
-        {
-            let result_summary = match &completion.result {
-                Ok(source) => format!("ok({} bytes)", source.len()),
-                Err(error) => format!("error({error})"),
-            };
-            self.record_runtime_warning(format_args!(
-                "native module script fetch completion {load_id} arrived without an owner or in-flight module map continuation: requester={:?} ordering={:?} {result_summary}",
-                completion.requester,
-                completion.ordering
-            ));
-            return Ok(());
-        }
-        if let Some(network_result) = completion.network_result.as_deref() {
-            self.record_module_graph_subresource_network_result(&completion, network_result);
-        }
-        self.complete_shared_module_map_fetch_result(load_id, completion.result)
     }
 
     fn dynamic_module_fetch_resume_advance_for_owner_with_body<Body>(
@@ -2370,72 +2269,7 @@ impl ScriptVm {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn record_module_graph_subresource_network_result(
-        &mut self,
-        completion: &ModuleGraphFetchCompletion,
-        network_result: &std::result::Result<crate::types::NavigationResponse, String>,
-    ) {
-        let document_url = self.document_runtime.document_url().clone();
-        self._context_host
-            .borrow_mut()
-            .record_staged_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                completion.request_url.clone(),
-                SubresourceResourceType::Script,
-                match completion.requester {
-                    ModuleGraphFetchRequester::DynamicImport => {
-                        SubresourceRequestInitiatorType::Script
-                    }
-                    ModuleGraphFetchRequester::ParserOwnedModuleScript
-                    | ModuleGraphFetchRequester::RuntimeOwnedModuleScript
-                    | ModuleGraphFetchRequester::ModulePreload => {
-                        SubresourceRequestInitiatorType::Parser
-                    }
-                },
-                network_result,
-            );
-    }
-
-    pub(crate) fn record_main_modulepreload_network_result(
-        &mut self,
-        document_url: Url,
-        request_url: Url,
-        network_result: &std::result::Result<crate::types::NavigationResponse, String>,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .record_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url.clone(),
-                SubresourceResourceType::Script,
-                SubresourceRequestInitiatorType::Parser,
-                network_result,
-            );
-        self.record_modulepreload_resource_performance_entry(&request_url, network_result);
-    }
-
-    pub(crate) fn record_historical_main_modulepreload_network_result(
-        &mut self,
-        document_url: Url,
-        request_url: Url,
-        network_result: &std::result::Result<crate::types::NavigationResponse, String>,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .record_historical_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url,
-                SubresourceResourceType::Script,
-                SubresourceRequestInitiatorType::Parser,
-                network_result,
-            );
-    }
-
-    fn record_modulepreload_resource_performance_entry(
+    pub(crate) fn record_modulepreload_resource_performance_entry(
         &mut self,
         request_url: &Url,
         network_result: &std::result::Result<crate::types::NavigationResponse, String>,
@@ -2567,26 +2401,6 @@ impl ScriptVm {
         {
             self.queue_content_security_policy_violation_event_best_effort(&violation);
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn warn_on_module_graph_fetch_metadata_mismatch(
-        &mut self,
-        completion: &ModuleGraphFetchCompletion,
-        expected_requester: ModuleGraphFetchRequester,
-        expected_ordering: ModuleGraphFetchOrdering,
-    ) {
-        if completion.requester == expected_requester && completion.ordering == expected_ordering {
-            return;
-        }
-        self.record_runtime_warning(format_args!(
-            "module graph fetch completion {} metadata mismatch: got requester={:?} ordering={:?}, expected requester={:?} ordering={:?}",
-            completion.load_id,
-            completion.requester,
-            completion.ordering,
-            expected_requester,
-            expected_ordering
-        ));
     }
 
     pub(crate) fn note_module_script_evaluation_suspended_for_owner(
@@ -2812,7 +2626,6 @@ impl ScriptVm {
                                 load_id,
                             ),
                             request,
-                            self.document_runtime.document_url().clone(),
                         );
                 }
                 FetchScheduleOwner::Runtime {
@@ -2828,7 +2641,6 @@ impl ScriptVm {
                                 load_id,
                             ),
                             request,
-                            self.document_runtime.document_url().clone(),
                         );
                 }
             }
@@ -5082,9 +4894,6 @@ mod tests {
     use crate::module_script_continuation::NativeDynamicModuleTerminalFanout;
     use crate::network::ResourceRequestClient;
     use crate::script_vm::{ScriptVm, ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness};
-    use crate::types::{
-        ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
-    };
     use crate::util::v8str;
     use moli_fetch::FetchConfig;
     use url::Url;
@@ -5108,30 +4917,6 @@ mod tests {
             vm
         })
         .expect("script vm finish should succeed")
-    }
-
-    fn dynamic_import_completion(load_id: u64, request_url: &str) -> ModuleGraphFetchCompletion {
-        dynamic_import_completion_with_source(load_id, request_url, "export const value = 1;")
-    }
-
-    fn dynamic_import_completion_with_source(
-        load_id: u64,
-        request_url: &str,
-        source: &str,
-    ) -> ModuleGraphFetchCompletion {
-        let url = Url::parse(request_url).expect("request URL should parse");
-        ModuleGraphFetchCompletion {
-            load_id,
-            requester: ModuleGraphFetchRequester::DynamicImport,
-            ordering: ModuleGraphFetchOrdering::Runtime,
-            request_url: url.clone(),
-            result: Ok(ModuleGraphFetchedSource::new(
-                url,
-                false,
-                ModuleSource::text(source.to_owned()),
-            )),
-            network_result: None,
-        }
     }
 
     fn dynamic_import_reaction_parts_in_vm(
@@ -5435,30 +5220,16 @@ mod tests {
             "dynamic import root fetch should be suspended in owner state"
         );
 
-        vm.complete_native_module_graph_fetch(dynamic_import_completion(
-            0,
-            "https://app.example.test/dynamic.mjs",
-        ))
-        .expect("bare graph completion helper should tolerate stale completions");
-        assert!(
-            vm.has_inflight_dynamic_module_fetch(),
-            "bare graph completion helper must not consume dynamic import owner fetches"
-        );
-        assert!(
-            vm.runtime_observable_lifecycle_errors_for_testing()
-                .iter()
-                .any(|message| message.contains(
-                    "native module graph fetch completion 0 arrived without an in-flight module graph job"
-                )),
-            "bare helper should record the unmatched completion instead of consuming owner state"
-        );
-
         let target = vm
             .current_main_dynamic_import_graph_fetch_target(0)
             .expect("dynamic import must expose its exact resolver target");
-        let completion = dynamic_import_completion(0, "https://app.example.test/dynamic.mjs");
+        let source = ModuleGraphFetchedSource::new(
+            Url::parse("https://app.example.test/dynamic.mjs").unwrap(),
+            false,
+            ModuleSource::text("export const value = 1;".into()),
+        );
         let actions = vm
-            .complete_current_main_dynamic_import_graph_fetch_result(target, completion.result)
+            .complete_current_main_dynamic_import_graph_fetch_result(target, Ok(source))
             .expect("owner facade should complete dynamic import fetch");
         assert!(
             actions.into_parts().0.is_empty(),
@@ -5648,12 +5419,14 @@ import('./dynamic.mjs').then(() => {
         let target = vm
             .current_main_dynamic_import_graph_fetch_target(0)
             .expect("dynamic TLA import must expose its exact resolver target");
-        let completion = dynamic_import_completion_with_source(
-            0,
-            "https://dynamic-reentry.test/dynamic.mjs",
-            "export const value = await globalThis.__dynamicEvaluationGate;",
+        let source = ModuleGraphFetchedSource::new(
+            Url::parse("https://dynamic-reentry.test/dynamic.mjs").unwrap(),
+            false,
+            ModuleSource::text(
+                "export const value = await globalThis.__dynamicEvaluationGate;".into(),
+            ),
         );
-        vm.complete_current_main_dynamic_import_graph_fetch_result(target, completion.result)
+        vm.complete_current_main_dynamic_import_graph_fetch_result(target, Ok(source))
             .expect("dynamic TLA graph completion should start evaluation");
         assert_eq!(
             vm.current_main_document_task_owner(),

@@ -257,10 +257,7 @@ async fn selected_child_realm_materialization_checkpoints_after_all_document_sta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildRealmMaterialization,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildRealmMaterialization)
                 .await?,
             "one exact realm task must enter the production selected dispatcher",
         );
@@ -328,10 +325,7 @@ Promise.resolve().then(() => {
         );
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildRealmMaterialization,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildRealmMaterialization)
                 .await?,
             "the exact realm task must run through the production dispatcher",
         );
@@ -400,7 +394,7 @@ Promise.resolve().then(() => __staleChildRealmCheckpoint = 1);
             )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm

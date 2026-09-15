@@ -1,18 +1,13 @@
-use moli_fetch::{FetchCancelHandle, RequestCredentialsMode};
+use moli_fetch::{FetchCancelHandle, Request};
 use moli_url::{origin_ascii_serialization, same_origin};
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::{
-    network::{
-        RendererNetworkResourceLoadOutcome, RendererPreparedNetworkResourceLoad,
-        context::DocumentResourceLoaderIdentity, loads::ResourceLoadLease,
-    },
-    types::{
-        SubresourceNetworkRecord, SubresourceRequestInitiatorType, SubresourceResourceType,
-        SubresourceResponseBody,
-    },
+use crate::network::{
+    ResourceResponseFailure, ResourceResponseStream, ResourceTransfer,
+    context::DocumentResourceLoaderIdentity, loads::ResourceLoadLease,
 };
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererAppManifestDisplayMode {
@@ -111,13 +106,10 @@ pub struct RendererAppManifestLoadOutcome {
 }
 
 pub struct RendererAppManifestLoadPublication {
-    network_record: SubresourceNetworkRecord,
-    successful_result: Option<RendererAppManifestSuccessfulResult>,
-}
-
-struct RendererAppManifestSuccessfulResult {
-    link_identity: RendererAppManifestLinkIdentity,
-    result: RendererAppManifestQueryResult,
+    successful_result: Option<(
+        RendererAppManifestLinkIdentity,
+        RendererAppManifestQueryResult,
+    )>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,185 +155,131 @@ impl RendererAppManifestLoadOutcome {
 }
 
 impl RendererAppManifestLoadPublication {
-    pub(crate) fn into_parts(
+    pub(crate) fn into_cached_result(
         self,
-    ) -> (
-        SubresourceNetworkRecord,
-        Option<(
-            RendererAppManifestLinkIdentity,
-            RendererAppManifestQueryResult,
-        )>,
-    ) {
-        let successful_result = self
-            .successful_result
-            .map(|successful| (successful.link_identity, successful.result));
-        (self.network_record, successful_result)
+    ) -> Option<(
+        RendererAppManifestLinkIdentity,
+        RendererAppManifestQueryResult,
+    )> {
+        self.successful_result
     }
 }
 
 pub struct RendererPreparedAppManifestLoad {
     document_url: Url,
-    request_origin: moli_url::WebOrigin,
-    requested_manifest_url: Url,
     link_identity: RendererAppManifestLinkIdentity,
-    resource: RendererPreparedNetworkResourceLoad,
-    observation: RendererAppManifestNetworkObservation,
-}
-
-pub(crate) struct RendererAppManifestNetworkObservation {
-    frame_id: Option<String>,
-    request_headers: moli_fetch::RequestHeaders,
-    credentials_mode: RequestCredentialsMode,
+    request: Request,
     load: ResourceLoadLease,
-    cancel_handle: FetchCancelHandle,
-}
-
-impl RendererAppManifestNetworkObservation {
-    pub(crate) fn new(
-        frame_id: Option<String>,
-        request_headers: moli_fetch::RequestHeaders,
-        credentials_mode: RequestCredentialsMode,
-        load: ResourceLoadLease,
-        cancel_handle: FetchCancelHandle,
-    ) -> Self {
-        Self {
-            frame_id,
-            request_headers,
-            credentials_mode,
-            load,
-            cancel_handle,
-        }
-    }
+    response: Arc<ResourceResponseStream>,
 }
 
 impl RendererPreparedAppManifestLoad {
     pub(crate) fn new(
         document_url: Url,
-        request_origin: moli_url::WebOrigin,
-        requested_manifest_url: Url,
         link_identity: RendererAppManifestLinkIdentity,
-        resource: RendererPreparedNetworkResourceLoad,
-        observation: RendererAppManifestNetworkObservation,
+        request: Request,
+        load: ResourceLoadLease,
+        network: Arc<ResourceTransfer>,
     ) -> Self {
         Self {
             document_url,
-            request_origin,
-            requested_manifest_url,
             link_identity,
-            resource,
-            observation,
+            request,
+            response: ResourceResponseStream::for_load(
+                network,
+                &load,
+                crate::types::SubresourceResourceType::Manifest,
+            ),
+            load,
         }
     }
 
     pub async fn execute(self) -> RendererAppManifestLoadOutcome {
-        let Self {
-            document_url,
-            request_origin,
-            requested_manifest_url,
-            link_identity,
-            resource,
-            observation,
-        } = self;
-        let RendererAppManifestNetworkObservation {
-            frame_id,
-            request_headers,
-            credentials_mode,
-            load,
-            cancel_handle,
-        } = observation;
-        let outcome = resource.execute_with_cancel(cancel_handle).await;
-        drop(load);
-        let (result, network_record, cacheable) = match outcome {
-            RendererNetworkResourceLoadOutcome::FailedBeforeResponse(error) => (
-                default_query_result(&document_url, Some(&requested_manifest_url)),
-                SubresourceNetworkRecord::failure(
-                    frame_id,
-                    document_url.clone(),
-                    requested_manifest_url,
-                    "GET".to_owned(),
-                    request_headers,
-                    None,
-                    SubresourceResourceType::Manifest,
-                    error,
-                )
-                .with_request_initiator_type(SubresourceRequestInitiatorType::Other),
-                false,
-            ),
-            RendererNetworkResourceLoadOutcome::Response(response) => {
-                let response = *response;
-                let security_error = response.completion_error.clone().or_else(|| {
-                    crate::network_host::validate_cors_response_chain(
-                        &request_origin,
-                        &response.head(),
-                        credentials_mode,
-                    )
-                    .err()
-                });
-                if let Some(error) = security_error {
+        let document_url = self.document_url.clone();
+        let requested_url = self.request.url.clone();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.load.task_runner().spawn(async move {
+            let Self {
+                document_url,
+                link_identity,
+                request,
+                load,
+                response,
+            } = self;
+            let requested_url = request.url.clone();
+            let request_origin = request
+                .browser_origin()
+                .expect("manifest request origin")
+                .clone();
+            let credentials = request.credentials_mode;
+            let cancel = FetchCancelHandle::new();
+            load.attach_cancel_handle(cancel.clone());
+            let fetched = async {
+                let observed = load
+                    .request_client()
+                    .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel)
+                    .await?;
+                let head = observed.response().head();
+                if let Err(message) = crate::network_host::validate_cors_response_chain(
+                    &request_origin,
+                    &head,
+                    credentials,
+                ) {
+                    return Err(ResourceResponseFailure::from_rejected_response(
+                        observed, message,
+                    ));
+                }
+                let body = response.collect(observed).await?;
+                let bytes = body.body.materialize_bytes().map_err(|error| {
+                    response.failure(format!("failed to materialize app manifest: {error}"))
+                })?;
+                let (result, cacheable) = if (200..400).contains(&body.head.status) {
+                    let source = decode_manifest_source(&bytes, &body.head.headers);
+                    let source = source.strip_prefix('\u{feff}').unwrap_or(&source);
+                    let result = parse_app_manifest(&document_url, &body.head.final_url, source);
+                    let cacheable = result.data.is_some();
+                    (result, cacheable)
+                } else {
                     (
-                        default_query_result(&document_url, Some(&response.final_url)),
-                        SubresourceNetworkRecord::failure(
-                            frame_id,
-                            document_url.clone(),
-                            requested_manifest_url,
-                            "GET".to_owned(),
-                            request_headers,
-                            None,
-                            SubresourceResourceType::Manifest,
-                            error,
-                        )
-                        .with_request_initiator_type(SubresourceRequestInitiatorType::Other),
+                        default_query_result(&document_url, Some(&body.head.final_url)),
                         false,
                     )
-                } else {
-                    let (result, cacheable) = if (200..400).contains(&response.status) {
-                        let source = decode_manifest_source(&response.body, &response.headers);
-                        let source = source.strip_prefix('\u{feff}').unwrap_or(&source);
-                        let result = parse_app_manifest(&document_url, &response.final_url, source);
-                        let cacheable = result.data.is_some();
-                        (result, cacheable)
-                    } else {
-                        (
-                            default_query_result(&document_url, Some(&response.final_url)),
-                            false,
-                        )
-                    };
-                    let response_body = SubresourceResponseBody::from_bytes(response.body);
-                    let record = SubresourceNetworkRecord::success_with_body(
-                        frame_id,
-                        document_url.clone(),
-                        requested_manifest_url,
-                        "GET".to_owned(),
-                        request_headers,
-                        None,
-                        SubresourceResourceType::Manifest,
-                        response.request_cookie_report,
-                        response.redirect_chain,
-                        response.final_url,
-                        response.status,
-                        response.headers,
-                        response_body,
-                        response.cookie_set_reports,
-                    )
-                    .with_from_cache(response.from_cache)
-                    .with_negotiated_http_version(response.negotiated_http_version)
-                    .with_network_request_headers(response.network_request_headers)
-                    .with_request_initiator_type(SubresourceRequestInitiatorType::Other);
-                    (result, record, cacheable)
-                }
+                };
+                body.publish(
+                    &response.network,
+                    response.head().network_request_headers.clone(),
+                );
+                Ok::<_, ResourceResponseFailure>((result, cacheable))
             }
-        };
-        let successful_result = cacheable.then(|| RendererAppManifestSuccessfulResult {
-            link_identity,
-            result: result.clone(),
+            .await;
+            let (result, cacheable) = match fetched {
+                Ok(result) => result,
+                Err(error) => {
+                    response.network.failed(&error);
+                    let url = match &error {
+                        ResourceResponseFailure::PartialBody { response, .. } => {
+                            &response.head.final_url
+                        }
+                        _ => &requested_url,
+                    };
+                    (default_query_result(&document_url, Some(url)), false)
+                }
+            };
+            load.finish();
+            let successful_result = cacheable.then(|| (link_identity, result.clone()));
+            let _ = send.send(RendererAppManifestLoadOutcome {
+                result,
+                publication: RendererAppManifestLoadPublication { successful_result },
+            });
         });
-        RendererAppManifestLoadOutcome {
-            result,
-            publication: RendererAppManifestLoadPublication {
-                network_record,
-                successful_result,
-            },
-        }
+        receive
+            .await
+            .unwrap_or_else(|_| RendererAppManifestLoadOutcome {
+                result: default_query_result(&document_url, Some(&requested_url)),
+                publication: RendererAppManifestLoadPublication {
+                    successful_result: None,
+                },
+            })
     }
 }
 

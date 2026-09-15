@@ -225,17 +225,16 @@ pub(crate) fn start_image_element_resource_fetch(
         );
         let encoded = manager.from_frozen_bytes(response.take_body_bytes());
         let descriptor = image_response_descriptor_from_parkable(&response, &encoded);
-        let result = Ok(response);
-        host.record_get_subresource_network_result_with_body_and_initiator(
+        host.record_local_subresource_response(
             frame_id,
             document_url,
             request_url,
             SubresourceResourceType::Image,
             request_initiator_type,
-            &result,
-            moli_page_types::SubresourceResponseBody::from_parkable_image(encoded.clone()),
+            &response,
+            Some(moli_page_types::SubresourceResponseBody::from_parkable_image(encoded.clone())),
         );
-        return result.map(|_| ImageElementResourceFetchStart::Local {
+        return Ok(ImageElementResourceFetchStart::Local {
             descriptor,
             encoded,
         });

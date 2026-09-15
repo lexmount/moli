@@ -122,7 +122,6 @@ impl DocumentRuntime {
             next_document_write_external_script_load_id: 0,
             document_write_script_preload_scanner: None,
             main_document_script_preloads: Default::default(),
-            document_write_script_preloads: HashMap::new(),
             pending_parser_blocking_work: None,
         }
     }
@@ -243,7 +242,6 @@ impl DocumentRuntime {
             next_document_write_external_script_load_id: _,
             document_write_script_preload_scanner: _,
             main_document_script_preloads: _,
-            document_write_script_preloads: _,
             pending_parser_blocking_work: _,
         } = self;
         dom_host.into_dom_host()

@@ -1,13 +1,12 @@
 use super::*;
 
 use crate::page_resource_completion::{
-    MainModuleFetchNetworkAttribution, MainRuntimeModuleGraphFetchCompletion,
-    MainRuntimeModuleGraphFetchTarget, RendererPageResourceCompletionLocalOwner,
+    MainRuntimeModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchTarget,
+    RendererPageResourceCompletionLocalOwner,
 };
 
 fn runtime_module_completion(
     target: MainRuntimeModuleGraphFetchTarget,
-    document_url: Url,
     request_url: Url,
     source: std::result::Result<&str, &str>,
     network_result: Option<crate::types::SharedNavigationResponseResult>,
@@ -21,12 +20,7 @@ fn runtime_module_completion(
             )
         })
         .map_err(str::to_owned);
-    MainRuntimeModuleGraphFetchCompletion::new(
-        target,
-        result,
-        network_result,
-        MainModuleFetchNetworkAttribution::new(document_url, request_url),
-    )
+    MainRuntimeModuleGraphFetchCompletion::new(target, result, network_result, request_url)
 }
 
 fn enqueue_runtime_module_completion(
@@ -41,7 +35,6 @@ fn enqueue_runtime_module_completion(
 
 async fn start_inline_runtime_module_graph(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
     script_handle: &str,
     source: &str,
 ) -> anyhow::Result<()> {
@@ -63,7 +56,7 @@ async fn start_inline_runtime_module_graph(
     ))?;
 
     for _ in 0..16 {
-        if !run_one_runtime_module_followup_turn(page_vm, loader).await? {
+        if !run_one_runtime_module_followup_turn(page_vm).await? {
             assert!(
                 page_vm.has_pending_runtime_owned_module_graph(),
                 "runtime module owner became idle without installing a graph wait"
@@ -74,29 +67,23 @@ async fn start_inline_runtime_module_graph(
     panic!("runtime module graph did not block on its fetch within sixteen exact owner turns");
 }
 
-async fn run_one_runtime_module_followup_turn(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-) -> anyhow::Result<bool> {
+async fn run_one_runtime_module_followup_turn(page_vm: &mut PageVm) -> anyhow::Result<bool> {
     if page_vm
-        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction, loader)
+        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction)
         .await?
     {
         return Ok(true);
     }
     if page_vm
-        .run_exact_selected_page_task_for_test(
-            PageSelectedTaskTestSelector::MainDocumentRuntime(
-                PageMainDocumentRuntimeActionKind::RuntimeOwnedModuleContinuation,
-            ),
-            loader,
-        )
+        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
+            PageMainDocumentRuntimeActionKind::RuntimeOwnedModuleContinuation,
+        ))
         .await?
     {
         return Ok(true);
     }
     if page_vm
-        .run_page_main_document_runtime_body_for_test(loader)
+        .run_page_main_document_runtime_body_for_test()
         .await?
         .is_some()
     {
@@ -107,20 +94,16 @@ async fn run_one_runtime_module_followup_turn(
 
 async fn run_runtime_owned_module_body_without_selected_completion(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<crate::page_task_queue::PageMainDocumentRuntimeTurnOutcome> {
     for _ in 0..16 {
         if page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ModuleReaction,
-                loader,
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction)
             .await?
         {
             continue;
         }
         let Some(outcome) = page_vm
-            .run_page_main_document_runtime_body_for_test(loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
         else {
             anyhow::bail!("runtime module continuation stalled before its exact body task");
@@ -136,14 +119,10 @@ async fn run_runtime_owned_module_body_without_selected_completion(
 
 async fn run_until_selected_runtime_owned_module_continuation(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<()> {
     for _ in 0..16 {
         if page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ModuleReaction,
-                loader,
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction)
             .await?
         {
             continue;
@@ -153,14 +132,13 @@ async fn run_until_selected_runtime_owned_module_continuation(
                 PageSelectedTaskTestSelector::MainDocumentRuntime(
                     PageMainDocumentRuntimeActionKind::RuntimeOwnedModuleContinuation,
                 ),
-                loader,
             )
             .await?
         {
             return Ok(());
         }
         if page_vm
-            .run_page_main_document_runtime_body_for_test(loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .is_some()
         {
@@ -173,7 +151,6 @@ async fn run_until_selected_runtime_owned_module_continuation(
 
 async fn prepare_runtime_module_style_boundary(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
     queue: &mut crate::page_task_queue::RendererPageResourceCompletionTestSource,
     wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
     dependency_url: &Url,
@@ -200,10 +177,7 @@ async fn prepare_runtime_module_style_boundary(
     );
     assert!(
         page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::StyleElementEvent,
-                loader,
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::StyleElementEvent)
             .await?,
         "the connected <style> terminal must leave the shared Networking FIFO before the module fetch can become its head"
     );
@@ -211,8 +185,9 @@ async fn prepare_runtime_module_style_boundary(
         "import {:?}; globalThis.__runtimeModuleStyleTarget.className = 'runtime-module-active'; globalThis[{applied_global:?}] = true;",
         dependency_url.as_str()
     );
-    start_inline_runtime_module_graph(page_vm, loader, script_handle, &source).await?;
+    start_inline_runtime_module_graph(page_vm, script_handle, &source).await?;
     super::child_document_completion::wait_for_page_resource_completion(
+        page_vm,
         queue,
         wake_rx,
         "runtime module style-boundary dependency",
@@ -244,20 +219,17 @@ async fn runtime_owned_module_body_leaves_style_turn_exit_to_selected_completion
             Url::parse(&format!("{base_url}/body-boundary-dependency.mjs")).unwrap();
         let (mut page_vm, mut queue, mut wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        prepare_runtime_module_style_boundary(
-            &mut page_vm,
-            &loader,
-            &mut queue,
-            &mut wake_rx,
-            &dependency_url,
-            "runtime-module-body-boundary",
-            "rgb(1, 2, 3)",
-            "__runtimeModuleBodyApplied",
-        )
+        prepare_runtime_module_style_boundary(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+&dependency_url,
+"runtime-module-body-boundary",
+"rgb(1, 2, 3)",
+"__runtimeModuleBodyApplied")
         .await?;
 
         let outcome =
-            run_runtime_owned_module_body_without_selected_completion(&mut page_vm, &loader)
+            run_runtime_owned_module_body_without_selected_completion(&mut page_vm)
                 .await?;
         assert_eq!(
             outcome.action.target_effect(),
@@ -307,7 +279,6 @@ async fn selected_runtime_owned_module_continuation_submits_its_style_turn_exit(
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         prepare_runtime_module_style_boundary(
             &mut page_vm,
-            &loader,
             &mut queue,
             &mut wake_rx,
             &dependency_url,
@@ -317,7 +288,7 @@ async fn selected_runtime_owned_module_continuation_submits_its_style_turn_exit(
         )
         .await?;
 
-        run_until_selected_runtime_owned_module_continuation(&mut page_vm, &loader).await?;
+        run_until_selected_runtime_owned_module_continuation(&mut page_vm).await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -372,8 +343,7 @@ Promise.resolve().then(() => __spentRuntimeModuleBoundary.push("microtask"));
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeOwnedModuleContinuation,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the exact spent ticket must still consume one selected turn"
@@ -444,9 +414,7 @@ Promise.resolve().then(() => __staleRuntimeModuleBoundary.push("microtask"));
             page_vm
                 .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                     PageMainDocumentRuntimeActionKind::RuntimeOwnedModuleContinuation,
-                ),
-                    &loader,
-                )
+                ))
                 .await?,
             "the old exact ticket must consume one stale-discard turn"
         );
@@ -508,15 +476,11 @@ export const leaf = true;"#
             "import {:?}; (globalThis.__typedRuntimeModuleEvents ??= []).push('root');",
             dependency_url.as_str()
         );
-        start_inline_runtime_module_graph(
-            &mut page_vm,
-            &loader,
-            "typed-runtime-module",
-            &root_source,
-        )
-        .await?;
+        start_inline_runtime_module_graph(&mut page_vm, "typed-runtime-module", &root_source)
+            .await?;
 
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "main runtime module dependency fetch",
@@ -553,6 +517,7 @@ export const leaf = true;"#
         );
 
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "main runtime module leaf fetch",
@@ -604,7 +569,7 @@ export const leaf = true;"#
                 break;
             }
             assert!(
-                run_one_runtime_module_followup_turn(&mut page_vm, &loader).await?,
+                run_one_runtime_module_followup_turn(&mut page_vm).await?,
                 "runtime module follow-up stalled before evaluation"
             );
         }
@@ -641,15 +606,11 @@ async fn runtime_blob_module_dependency_resolves_through_the_local_url_owner() {
         )?;
         let root_source =
             format!("import {leaf_url:?}; (globalThis.__runtimeModuleEvents ??= []).push('root');");
-        start_inline_runtime_module_graph(
-            &mut page_vm,
-            &loader,
-            "blob-runtime-module",
-            &root_source,
-        )
-        .await?;
+        start_inline_runtime_module_graph(&mut page_vm, "blob-runtime-module", &root_source)
+            .await?;
 
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "blob runtime module dependency fetch",
@@ -672,7 +633,7 @@ async fn runtime_blob_module_dependency_resolves_through_the_local_url_owner() {
                 break;
             }
             assert!(
-                run_one_runtime_module_followup_turn(&mut page_vm, &loader).await?,
+                run_one_runtime_module_followup_turn(&mut page_vm).await?,
                 "blob module graph stalled before module evaluation"
             );
         }
@@ -709,7 +670,9 @@ async fn runtime_module_failure_body_leaves_checkpoint_and_lifecycle_prime_to_ta
             .vm_mut()
             .eval("globalThis.__runtimeModuleEvents = []")?;
         let source = format!("import {:?};", failure_url.as_str());
-        start_inline_runtime_module_graph(&mut page_vm, &loader, "runtime-module-failure", &source)
+        start_inline_runtime_module_graph(&mut page_vm,
+"runtime-module-failure",
+&source)
             .await?;
         page_vm.vm_mut().eval(
             r#"
@@ -720,11 +683,10 @@ document.getElementById("runtime-module-failure").onerror = () => {
 "installed"
 "#,
         )?;
-        super::child_document_completion::wait_for_page_resource_completion(
-            &mut queue,
-            &mut wake_rx,
-            "main runtime module failed fetch",
-        )
+        super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"main runtime module failed fetch")
         .await;
 
         let outcome = page_vm
@@ -802,13 +764,8 @@ async fn selected_runtime_module_failure_checkpoints_and_consumes_exact_load_gat
             .vm_mut()
             .eval("globalThis.__selectedRuntimeModuleEvents = []")?;
         let source = format!("import {:?};", failure_url.as_str());
-        start_inline_runtime_module_graph(
-            &mut page_vm,
-            &loader,
-            "selected-runtime-module-failure",
-            &source,
-        )
-        .await?;
+        start_inline_runtime_module_graph(&mut page_vm, "selected-runtime-module-failure", &source)
+            .await?;
         page_vm.vm_mut().eval(
             r#"
 document.getElementById("selected-runtime-module-failure").onerror = () => {
@@ -819,6 +776,7 @@ document.getElementById("selected-runtime-module-failure").onerror = () => {
 "#,
         )?;
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "selected main runtime module failed fetch",
@@ -828,8 +786,7 @@ document.getElementById("selected-runtime-module-failure").onerror = () => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "the graph failure must enter the production selected dispatcher"
@@ -884,9 +841,9 @@ async fn document_open_discards_queued_runtime_module_terminal_without_current_a
             "import {:?}; globalThis.__oldRuntimeModuleMustNotRun = true;",
             request_url.as_str()
         );
-        start_inline_runtime_module_graph(&mut page_vm, &loader, "old-runtime-module", &source)
-            .await?;
+        start_inline_runtime_module_graph(&mut page_vm, "old-runtime-module", &source).await?;
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "old Document runtime module fetch",
@@ -909,7 +866,8 @@ async fn document_open_discards_queued_runtime_module_terminal_without_current_a
             None,
             "document.open must retire the old dynamic-script fetch target"
         );
-        let _ = page_vm.vm_mut().take_network_output();
+        let (network_records, _, _) =
+            split_network_output_items(page_vm.vm_mut().take_network_output());
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
@@ -920,15 +878,17 @@ async fn document_open_discards_queued_runtime_module_terminal_without_current_a
         ));
         assert_eq!(
             outcome.action.output_effect,
-            PageResourceCompletionOutputEffect::CaptureRequired
+            PageResourceCompletionOutputEffect::None
         );
         assert_eq!(
             page_vm.vm().subresource_activity_epoch(),
             activity_epoch_before,
             "historical runtime module Network output must not become replacement activity"
         );
-        let (network_records, _, _) =
-            split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "the business terminal must not republish its physical response"
+        );
         assert_eq!(network_records.len(), 1);
         assert_eq!(network_records[0].document_url(), &document_url);
         assert_eq!(network_records[0].url(), &request_url);
@@ -995,19 +955,16 @@ fn real_page_vm_replacement_rejects_naturally_colliding_runtime_module_target() 
                         "import {:?}; globalThis.__oldRuntimeModuleMustNotRun = true;",
                         old_dependency_url.as_str()
                     );
-                    start_inline_runtime_module_graph(
-                        &mut page_vm,
-                        &loader,
-                        "old-runtime-module",
-                        &old_source,
-                    )
+                    start_inline_runtime_module_graph(&mut page_vm,
+"old-runtime-module",
+&old_source)
                     .await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "old PageVm runtime module fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"old PageVm runtime module fetch")
                     .await;
+                    let (network_records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
                     let (_, old_envelope) = queue
                         .pop_front()
                         .expect("old PageVm runtime module terminal should remain queued");
@@ -1049,18 +1006,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_runtime_module_target() 
                         "import {:?}; globalThis.__replacementRuntimeModuleRan = true;",
                         replacement_dependency_url.as_str()
                     );
-                    start_inline_runtime_module_graph(
-                        &mut page_vm,
-                        &loader,
-                        "replacement-runtime-module",
-                        &replacement_source,
-                    )
+                    start_inline_runtime_module_graph(&mut page_vm,
+"replacement-runtime-module",
+&replacement_source)
                     .await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "replacement PageVm runtime module fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"replacement PageVm runtime module fetch")
                     .await;
                     let (_, replacement_envelope) = queue
                         .pop_front()
@@ -1099,15 +1052,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_runtime_module_target() 
                     );
                     assert_eq!(
                         stale.action.output_effect,
-                        PageResourceCompletionOutputEffect::CaptureRequired
+                        PageResourceCompletionOutputEffect::None
                     );
                     assert_eq!(
                         page_vm.vm().subresource_activity_epoch(),
                         activity_epoch_before,
                         "historical old-PageVm Network output must not become replacement activity"
                     );
-                    let (network_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "a stale business callback cannot manufacture Network output");
                     assert_eq!(network_records.len(), 1);
                     assert_eq!(network_records[0].document_url(), &initial_url);
                     assert_eq!(network_records[0].url(), &old_dependency_url);
@@ -1137,7 +1089,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_runtime_module_target() 
                             break;
                         }
                         assert!(
-                            run_one_runtime_module_followup_turn(&mut page_vm, &loader).await?,
+                            run_one_runtime_module_followup_turn(&mut page_vm).await?,
                             "replacement runtime module stalled before evaluation"
                         );
                     }
@@ -1185,7 +1137,7 @@ async fn runtime_module_source_consumes_one_terminal_per_turn_in_fifo_order() {
             DynamicScriptOwnerId::from_u64(62),
             702,
         );
-        let document_url = Url::parse("https://example.test/runtime-module-fifo.html").unwrap();
+
         let mut queue = RendererPageNetworkingSource::new_for_test();
         for (target, suffix) in [(first_target, "first"), (second_target, "second")] {
             enqueue_runtime_module_completion(
@@ -1193,7 +1145,6 @@ async fn runtime_module_source_consumes_one_terminal_per_turn_in_fifo_order() {
                 root_document,
                 runtime_module_completion(
                     target,
-                    document_url.clone(),
                     Url::parse(&format!("https://example.test/runtime-module-{suffix}.mjs"))
                         .unwrap(),
                     Err("stale terminal"),

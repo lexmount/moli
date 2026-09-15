@@ -736,10 +736,7 @@ async fn document_preflight_stages(finish: PreflightFinish) {
             {
                 assert_ne!(
                     crate::browser::network::request_key(&occurrence.renderer),
-                    Some((
-                        source.identity(),
-                        crate::browser::network::NetworkRequestIdentity::Resource(handle.get())
-                    )),
+                    Some((source.identity(), handle)),
                     "one admission and terminal per physical preflight"
                 );
             }
@@ -788,10 +785,7 @@ async fn next_preflight_stage(
                 _ => continue,
             };
             if crate::browser::network::request_key(&occurrence.renderer)
-                == Some((
-                    source.identity(),
-                    crate::browser::network::NetworkRequestIdentity::Resource(handle.get()),
-                ))
+                == Some((source.identity(), handle))
                 && let RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
             {
                 return (completed, item.clone());

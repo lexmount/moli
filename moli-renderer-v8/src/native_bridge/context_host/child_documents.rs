@@ -40,17 +40,48 @@ fn configure_child_document_navigation_request(
         .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct PendingChildDocumentNavigation {
     pub(super) admitted_history_entry: Option<moli_session_history::SessionHistoryEntry>,
     pub(super) target: ChildDocumentNavigationFetchTarget,
     pub(super) target_url: Url,
     pub(super) resource_loader: crate::network::navigation::NavigationResourceLoader,
+    pub(super) _load_lifetime: tokio::sync::oneshot::Sender<()>,
     pub(super) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     pub(super) document_credentialless: bool,
     pub(super) credentialless_storage_nonce: Option<OpaqueOriginNonce>,
     pub(super) frame_owner_resource_timing: Option<PendingFrameOwnerResourceTiming>,
+}
+
+impl Drop for PendingChildDocumentNavigation {
+    fn drop(&mut self) {
+        // A committed loader has handed its authority to the new Document.
+        // Otherwise retire both the original transport and its waiting task.
+        self.resource_loader.cancel();
+    }
+}
+
+impl super::JsContextHost {
+    pub(in crate::native_bridge::context_host) fn publish_child_navigation_started(
+        &mut self,
+        handle: crate::document_runtime::DomHandle,
+        loader_id: &str,
+        url: &Url,
+    ) {
+        if let Some(source_document) = self.root_document_lifecycle_identity()
+            && let Some(entry) = self.child_browsing_contexts.get(&handle)
+        {
+            self.append_live_turn_owner_action(
+                crate::runtime::RendererOwnerAction::ChildFrameNavigationStarted {
+                    source_document,
+                    frame_id: entry.frame_id().to_owned(),
+                    loader_id: loader_id.to_owned(),
+                    url: url.to_string(),
+                },
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

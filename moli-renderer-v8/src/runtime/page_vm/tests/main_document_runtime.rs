@@ -41,7 +41,7 @@ document.body.appendChild(staleScript);
         assert_ne!(new_document_owner, old_document_owner);
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("the old runtime task must remain durable until its stale-discard turn");
         assert_eq!(outcome.action.owner().root_document(), old_root);
@@ -104,7 +104,7 @@ async fn document_open_discards_an_already_ready_parser_module_action() {
         );
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("the retired parser action must consume a stale-discard turn");
         assert_eq!(
@@ -165,12 +165,9 @@ async fn document_open_discards_an_already_posted_native_module_owner_event() {
         );
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the retired owner-event token must consume a stale-discard turn"
         );
@@ -282,7 +279,7 @@ document.body.appendChild(replacementScript);
                 )?;
 
                 let stale = page_vm
-                    .run_page_main_document_runtime_body_for_test(&loader)
+                    .run_page_main_document_runtime_body_for_test()
                     .await?
                     .expect("retired PageVm task should consume one stale-discard turn");
                 assert_eq!(stale.action.owner().root_document(), retired_root);
@@ -292,9 +289,8 @@ document.body.appendChild(replacementScript);
                     crate::page_task_queue::PageMainDocumentRuntimeTargetEffect::IgnoredStaleOwner
                 );
 
-
                 let current = page_vm
-                    .run_page_main_document_runtime_body_for_test(&loader)
+                    .run_page_main_document_runtime_body_for_test()
                     .await?
                     .expect("replacement PageVm task must remain behind the retired head");
                 assert_eq!(current.action.owner().root_document(), current_root);

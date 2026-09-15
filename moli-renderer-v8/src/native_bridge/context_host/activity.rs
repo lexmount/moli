@@ -50,6 +50,7 @@ impl JsContextHost {
             return;
         }
         self.output_journal = Some(output_journal);
+        self.bind_main_document_resource_network();
     }
 
     /// Appends a browser-owner action to the one concrete sink for this turn.

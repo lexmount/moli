@@ -18,8 +18,7 @@ use crate::page_resource_completion::{
 use crate::page_task_queue::RendererPageNetworkingSource;
 use crate::types::{
     DocumentWriteExternalScriptFetchTarget, DocumentWriteExternalScriptLoadCompletion,
-    DocumentWriteExternalScriptNetworkAttribution, ScriptNetworkOutputItem,
-    SubresourceNetworkOutcome,
+    ScriptNetworkOutputItem, SubresourceNetworkOutcome,
 };
 
 async fn spawn_document_write_script_server(script: &'static str) -> (Url, JoinHandle<()>) {
@@ -106,6 +105,7 @@ async fn spawn_two_document_write_script_server(
     Url,
     Url,
     tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Sender<()>,
     JoinHandle<(usize, usize)>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -115,9 +115,12 @@ async fn spawn_two_document_write_script_server(
         .local_addr()
         .expect("two-script document.write server should have an address");
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+    let (release_second_tx, release_second_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let mut first_requests = 0;
         let mut second_requests = 0;
+        let mut release_second_rx = Some(release_second_rx);
+        let mut responses = tokio::task::JoinSet::new();
         loop {
             let (mut stream, _) = tokio::select! {
                 biased;
@@ -132,12 +135,19 @@ async fn spawn_two_document_write_script_server(
                 .await
                 .expect("document.write script request should be readable");
             let request = String::from_utf8_lossy(&request[..read]);
-            let script = if request.starts_with("GET /first.js ") {
+            let (script, release) = if request.starts_with("GET /first.js ") {
                 first_requests += 1;
-                first_script
+                (first_script, None)
             } else if request.starts_with("GET /second.js ") {
                 second_requests += 1;
-                second_script
+                (
+                    second_script,
+                    Some(
+                        release_second_rx
+                            .take()
+                            .expect("second script is fetched once"),
+                    ),
+                )
             } else {
                 panic!("unexpected sequential document.write script request: {request}");
             };
@@ -146,14 +156,24 @@ async fn spawn_two_document_write_script_server(
                 script.len(),
                 script,
             );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("document.write script response should be writable");
-            stream
-                .shutdown()
-                .await
-                .expect("document.write script response should close");
+            responses.spawn(async move {
+                if let Some(release) = release {
+                    release
+                        .await
+                        .expect("first script owner turn must release the second response");
+                }
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("document.write script response should be writable");
+                stream
+                    .shutdown()
+                    .await
+                    .expect("document.write script response should close");
+            });
+        }
+        while let Some(result) = responses.join_next().await {
+            result.expect("document.write script response should finish");
         }
         (first_requests, second_requests)
     });
@@ -162,6 +182,7 @@ async fn spawn_two_document_write_script_server(
             .expect("first document.write script URL should parse"),
         Url::parse(&format!("http://{address}/second.js"))
             .expect("second document.write script URL should parse"),
+        release_second_tx,
         shutdown_tx,
         server,
     )
@@ -362,6 +383,27 @@ async fn start_standalone_parser_page(
     }
 }
 
+fn assert_script_network_finished(output: crate::types::ScriptNetworkOutput, url: &Url) {
+    let items = output.into_items().collect::<Vec<_>>();
+    let starts = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptNetworkOutputItem::SubresourceRequestStarted(start) if start.url() == url => {
+                Some(start)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "the original script request must start exactly once: {items:?}"
+    );
+    assert_eq!(items.iter().filter(|item| matches!(item,
+        ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) if terminal.handle() == starts[0].handle()
+    )).count(), 1, "the same script request must finish exactly once");
+}
+
 async fn wait_for_standalone_page_resource(
     pending: &mut PendingStandaloneDocumentWritePage,
 ) -> crate::page_task_queue::RendererPageResourceCompletionTestSource {
@@ -376,10 +418,38 @@ async fn wait_for_standalone_page_resource(
     resource_source
 }
 
-async fn wait_for_standalone_stylesheet_completion(
-    pending: &mut PendingStandaloneDocumentWritePage,
+async fn wait_for_standalone_resource_result(
+    mut pending: PendingStandaloneDocumentWritePage,
+) -> (
+    PendingStandaloneDocumentWritePage,
+    crate::page_task_queue::RendererPageResourceCompletionTestSource,
 ) {
     loop {
+        let source = wait_for_standalone_page_resource(&mut pending).await;
+        if !matches!(source.next_ready_owner().map(|owner| owner.local_owner()),
+            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+                crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork
+            ))) {
+            return (pending, source);
+        }
+        pending = run_standalone_selected_page_task(
+            pending,
+            crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+        )
+        .await;
+    }
+}
+
+async fn wait_for_standalone_stylesheet_completion(
+    mut pending: PendingStandaloneDocumentWritePage,
+) -> PendingStandaloneDocumentWritePage {
+    loop {
+        if matches!(pending.runtime.page_vm.page_resource_completion_queue().next_ready_owner().map(|owner| owner.local_owner()),
+            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))) {
+            pending = run_standalone_selected_page_task(pending,
+                crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion).await;
+            continue;
+        }
         if pending
             .runtime
             .page_vm
@@ -397,7 +467,7 @@ async fn wait_for_standalone_stylesheet_completion(
                 )
             })
         {
-            return;
+            return pending;
         }
         pending
             .owner_wake_rx
@@ -416,12 +486,11 @@ async fn run_standalone_selected_page_task(
         executor,
         "standalone selected Page task channel closed",
         async move {
-            let loader = pending.runtime.loader.clone();
             assert!(
                 pending
                     .runtime
                     .page_vm
-                    .run_exact_selected_page_task_for_test(selector, &loader)
+                    .run_exact_selected_page_task_for_test(selector)
                     .await?,
                 "the fixture should expose one exact {selector:?} task"
             );
@@ -439,7 +508,19 @@ async fn resume_standalone_document_write_page(
     tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
 ) {
     let mut pending = pending;
-    let mut resource_source = wait_for_standalone_page_resource(&mut pending).await;
+    let mut resource_source = if pending
+        .runtime
+        .page_vm
+        .vm()
+        .current_document_write_external_script_fetch_target()
+        .is_some()
+    {
+        let (next, source) = wait_for_standalone_resource_result(pending).await;
+        pending = next;
+        source
+    } else {
+        wait_for_standalone_page_resource(&mut pending).await
+    };
     let PendingStandaloneDocumentWritePage {
         mut runtime,
         started,
@@ -450,7 +531,6 @@ async fn resume_standalone_document_write_page(
     // standalone source heads to the real Page scheduler policy, then execute
     // exactly the selected task. The following phase-one continuation may
     // observe the result, but it never receives dequeue authority itself.
-    let loader = runtime.loader.clone();
     let turn_executor = runtime.page_vm.local_executor.clone();
     runtime = super::access::run_named_owner_local_task(
         turn_executor,
@@ -494,7 +574,6 @@ async fn resume_standalone_document_write_page(
                                 deadline,
                                 selection,
                             },
-                            &loader,
                         )
                         .await?;
                 }
@@ -568,18 +647,10 @@ async fn resume_standalone_main_parser_continuation_if_ready(
         executor,
         "standalone main-parser continuation Page turn channel closed",
         async move {
-            let request_client = runtime
-                .page_vm
-                .main_document_resource_loader()
-                .request_client()
-                .clone();
             assert!(
                 runtime
                     .page_vm
-                    .run_exact_selected_page_task_for_test(
-                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
-                        &request_client,
-                    )
+                    .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation)
                     .await?,
                 "fixture should execute its exact parser continuation through the production dispatcher"
             );
@@ -1037,7 +1108,7 @@ globalThis.__completedPreloadEvents.push('inline-after');
                     .await
                     .expect("the scanned stylesheet preload should reach the local server")
                     .expect("the scanned stylesheet preload server should report completion");
-                wait_for_standalone_stylesheet_completion(&mut pending).await;
+                pending = wait_for_standalone_stylesheet_completion(pending).await;
                 pending = run_standalone_selected_page_task(
                     pending,
                     crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion,
@@ -1054,7 +1125,7 @@ globalThis.__completedPreloadEvents.push('inline-after');
                 script_release
                     .send(())
                     .expect("document.write script response should be released");
-                drop(wait_for_standalone_page_resource(&mut pending).await);
+                (pending, _) = wait_for_standalone_resource_result(pending).await;
                 pending = run_standalone_selected_page_task(
                     pending,
                     crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
@@ -1228,8 +1299,8 @@ fn resident_queue_phase_one_continuation_uses_the_exact_owner_arbiter() {
             let html = format!(
                 r#"<!doctype html><script>document.write(`<script src="{script_url}"><\/script><main id="resident-tail">tail</main>`);</script>"#,
             );
-            let mut pending = start_standalone_document_write_page(html, document_url).await;
-            let resident_queue = wait_for_standalone_page_resource(&mut pending).await;
+            let pending = start_standalone_document_write_page(html, document_url).await;
+            let (pending, resident_queue) = wait_for_standalone_resource_result(pending).await;
             let (outcome, owner_wake_rx) =
                 resume_standalone_document_write_page(pending).await;
             assert!(
@@ -1410,6 +1481,12 @@ document.write(`<script src="{script_url}"><\/script><span id="retired-written-t
                 .current_document_write_external_script_fetch_target()
                 .expect("retired document.write target should exist before document.open");
 
+            // The request must have been admitted, while its typed Page terminal
+            // remains unapplied. Otherwise document.open can retire the producer
+            // before any physical request exists to preserve.
+            server
+                .await
+                .expect("retired document.write script server should finish");
             let executor = pending.runtime.page_vm.local_executor.clone();
             pending = super::access::run_named_owner_local_task(
                 executor,
@@ -1445,15 +1522,7 @@ document.close();
                 None,
                 "replacement must retire the old pending script target"
             );
-            let page_resource_queue =
-                pending.runtime.page_vm.page_resource_completion_queue();
-            while !page_resource_queue.has_ready_completion() {
-                pending
-                    .owner_wake_rx
-                    .recv()
-                    .await
-                    .expect("the retired request should retain its owner wake route");
-            }
+            let (mut pending, page_resource_queue) = wait_for_standalone_resource_result(pending).await;
 
             let activity_epoch_before = pending
                 .runtime
@@ -1492,8 +1561,8 @@ document.close();
             );
             assert_eq!(
                 outcome.action.output_effect,
-                PageResourceCompletionOutputEffect::CaptureRequired,
-                "the completed retired request remains historical Network output"
+                PageResourceCompletionOutputEffect::None,
+                "a retired script result cannot republish its physical request"
             );
 
             assert_eq!(
@@ -1506,13 +1575,7 @@ document.close();
                 "historical Network output must not become replacement Document activity"
             );
             let network_output = pending.runtime.page_vm.vm_mut().take_network_output();
-            assert!(network_output.into_items().into_iter().any(|item| {
-                matches!(
-                    item,
-                    ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                        if record.url() == &script_url
-                )
-            }));
+            assert_script_network_finished(network_output, &script_url);
 
             let ConcurrentParseTimeRuntime { page_vm, .. } = *pending.runtime;
             let result = evaluate_on_owner_local_task(
@@ -1531,9 +1594,6 @@ document.close();
                     r#"{"replacement":true,"retiredScriptRan":false,"writtenTail":false,"parserTail":false}"#,
                 )
             );
-            server
-                .await
-                .expect("retired document.write script server should finish");
         }));
     });
 }
@@ -1575,10 +1635,7 @@ fn load_id_mismatch_is_rejected_by_the_page_arbiter() {
                 stale_target,
                 Ok("globalThis.__staleLoadIdScriptRan = true;".to_owned()),
                 None,
-                DocumentWriteExternalScriptNetworkAttribution::new(
-                    document_url,
-                    script_url.clone(),
-                ),
+                script_url.clone(),
             );
             let mut stale_queue = RendererPageNetworkingSource::new_for_test();
             stale_queue
@@ -1664,12 +1721,12 @@ fn root_document_namespace_rejects_cross_page_target_collision() {
                 let current_html = format!(
                     r#"<!doctype html><script>document.write(`<script src="{current_script_url}"><\/script>`);</script>"#,
                 );
-                let mut retired = start_standalone_document_write_page(
+                let retired = start_standalone_document_write_page(
                     retired_html,
                     retired_script_url.join("page.html").expect("retired page URL"),
                 )
                 .await;
-                let mut current = start_standalone_document_write_page_for_page_id(
+                let current = start_standalone_document_write_page_for_page_id(
                     PageId::new_for_testing(902),
                     current_html,
                     current_script_url.join("page.html").expect("current page URL"),
@@ -1707,8 +1764,10 @@ fn root_document_namespace_rejects_cross_page_target_collision() {
                     retired_root, current_root,
                     "root Document tokens must distinguish the colliding local targets"
                 );
-                let mut retired_queue = wait_for_standalone_page_resource(&mut retired).await;
-                let _current_queue = wait_for_standalone_page_resource(&mut current).await;
+                let (mut retired, mut retired_queue) = wait_for_standalone_resource_result(retired).await;
+                let (mut current, _current_queue) = wait_for_standalone_resource_result(current).await;
+                assert_script_network_finished(retired.runtime.page_vm.vm_mut().take_network_output(), &retired_script_url);
+                assert_script_network_finished(current.runtime.page_vm.vm_mut().take_network_output(), &current_script_url);
                 let activity_epoch_before = current
                     .runtime
                     .page_vm
@@ -1750,7 +1809,7 @@ fn root_document_namespace_rejects_cross_page_target_collision() {
                 );
                 assert_eq!(
                     outcome.action.output_effect,
-                    PageResourceCompletionOutputEffect::CaptureRequired
+                    PageResourceCompletionOutputEffect::None
                 );
 
                 assert_eq!(
@@ -1771,14 +1830,8 @@ fn root_document_namespace_rejects_cross_page_target_collision() {
                     Some(current_target),
                     "a colliding retired terminal must leave the current pending load untouched"
                 );
-                let network_output = current.runtime.page_vm.vm_mut().take_network_output();
-                assert!(network_output.into_items().into_iter().any(|item| {
-                    matches!(
-                        item,
-                        ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                            if record.url() == &retired_script_url
-                    )
-                }));
+                assert!(current.runtime.page_vm.vm_mut().take_network_output().is_empty(),
+                    "cross-Page business completion cannot manufacture or redirect Network output");
 
                 let ConcurrentParseTimeRuntime { page_vm, .. } = *current.runtime;
                 let result = evaluate_on_owner_local_task(
@@ -1810,7 +1863,7 @@ fn sequential_document_write_scripts_require_distinct_fifo_owner_turns() {
             .expect("current-thread runtime should build");
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let _js_runtime = crate::JsRuntime::initialize();
-            let (first_url, second_url, shutdown_server, server) =
+            let (first_url, second_url, release_second, shutdown_server, server) =
                 spawn_two_document_write_script_server(
                     "globalThis.__documentWriteEvents.push('first');",
                     "globalThis.__documentWriteEvents.push('second');",
@@ -1867,6 +1920,7 @@ globalThis.__documentWriteEvents.push('inline-after');
                 "sequential loads need distinct monotonic request identities"
             );
 
+            release_second.send(()).expect("second source must remain pending until its owner turn");
             let (second_outcome, owner_wake_rx) =
                 resume_standalone_document_write_page(second_pending).await;
             let (second_outcome, _) =
@@ -1887,29 +1941,17 @@ globalThis.__documentWriteEvents.push('inline-after');
                 .await
                 .expect("two-script document.write server should finish");
             assert_eq!(first_requests, 1, "the first blocking script loads once");
-            assert!(
-                second_requests >= 1,
-                "the second blocking script must perform or join a real fetch"
-            );
+            assert_eq!(second_requests, 1, "the second blocking script joins its speculative fetch");
             let network_output = page_vm.vm_mut().take_network_output();
-            let network_records = network_output
-                .into_items()
-                .filter_map(|item| match item {
-                    ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => Some(record),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+            let mut report = ScriptExecutionReport::default();
+            report.extend_network_output(network_output);
+            let network_records = report.subresource_network_records();
             assert_eq!(network_records.len(), 2);
-            assert_eq!(network_records[0].url(), &first_url);
-            assert_eq!(network_records[1].url(), &second_url);
-            assert!(matches!(
-                network_records[0].outcome(),
-                SubresourceNetworkOutcome::Success { .. }
-            ));
-            assert!(matches!(
-                network_records[1].outcome(),
-                SubresourceNetworkOutcome::Success { .. }
-            ));
+            for url in [&first_url, &second_url] {
+                let record = network_records.iter().find(|record| record.url() == url)
+                    .expect("each speculative request must retain its own successful result");
+                assert!(matches!(record.outcome(), SubresourceNetworkOutcome::Success { .. }));
+            }
             let result = evaluate_on_owner_local_task(
                 page_vm,
                 r#"JSON.stringify({

@@ -91,36 +91,88 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         let BrowserNavigationOutcome::Document(commit) = navigation.wait().await.unwrap() else {
             panic!("native parent must commit");
         };
-        let (committed, load) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    let moli_core::RendererOutputTransportMessage::Publication(publication) = output.recv().await.unwrap() else { continue; };
-                    for record in publication.into_records() {
-                        let (committed, load) = match record.into_parts().1 {
-                            moli_core::RendererOutputItem::OwnerAction(moli_core::RendererOwnerAction::ChildFrameLoad { event, network: Some(network), .. }) => (network.committed().await.unwrap(), Some(event)),
-                            moli_core::RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(network)) => (network.committed().await.unwrap(), None),
-                            _ => continue,
-                        };
-                        if matches!(&committed.occurrence().item, RendererNetworkOutputItem::ChildDocument(response) if response.snapshot.request_url == child_url) {
-                            return (committed, load);
+        let (receipts, load) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut receipts = Vec::new();
+            let mut handle = None;
+            let mut frame_id = None;
+            let mut terminal = false;
+            let mut load = None;
+            loop {
+                let moli_core::RendererOutputTransportMessage::Publication(publication) = output.recv().await.unwrap() else { continue; };
+                for record in publication.into_records() {
+                    match record.into_parts().1 {
+                        moli_core::RendererOutputItem::OwnerAction(moli_core::RendererOwnerAction::ChildFrameLoad { event, .. })
+                            if Some(event.frame_id.as_str()) == frame_id.as_deref() => { load = Some(event); }
+                        moli_core::RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(network)) => {
+                            let committed = network.committed().await.unwrap();
+                            let RendererNetworkOutputItem::Resource(item) = &committed.occurrence().item else { continue; };
+                            let belongs = match item.as_ref() {
+                                moli_core::page::ScriptNetworkOutputItem::SubresourceRequestStarted(request) if request.url().as_str() == child_url => {
+                                    handle = Some(request.handle()); frame_id = request.frame_id().map(str::to_owned); true
+                                }
+                                moli_core::page::ScriptNetworkOutputItem::SubresourceResponseStarted(response) => Some(response.handle()) == handle,
+                                moli_core::page::ScriptNetworkOutputItem::SubresourceDataReceived(data) => Some(data.handle()) == handle,
+                                moli_core::page::ScriptNetworkOutputItem::SubresourceBodyFinished(body) if Some(body.handle()) == handle => { terminal = true; true }
+                                _ => false,
+                            };
+                            if belongs { receipts.push(committed); }
                         }
+                        _ => {}
                     }
                 }
-            }).await.expect("a completed child fetch retains its native receipt without DevTools");
-        let RendererNetworkOutputItem::ChildDocument(activity) = &committed.occurrence().item
-        else {
+                if terminal && (load.is_some() || !commits_child) { break (receipts, load); }
+            }
+        }).await.expect("the original child request must publish its stages independently of child Load");
+        let committed = receipts.last().unwrap();
+        let RendererNetworkOutputItem::Resource(started) = &receipts[0].occurrence().item else {
             unreachable!()
         };
-        let native_result = activity.snapshot.response.as_ref();
+        let moli_core::page::ScriptNetworkOutputItem::SubresourceRequestStarted(started) =
+            started.as_ref()
+        else {
+            panic!("start first")
+        };
         assert_eq!(
-            native_result.map(|response| response.status).ok(),
-            response.map(|(status, _)| status)
+            started.resource_type(),
+            moli_core::page::SubresourceResourceType::Document
         );
-        let native_error = native_result.err().cloned();
-        if let Some(error) = &native_error {
-            assert!(!error.is_empty());
-        }
-        let loader_id = activity.loader_id.clone();
-        let frame_id = activity.frame_id.clone();
+        let loader_id = started.navigation_loader_id().unwrap().to_owned();
+        let frame_id = started.frame_id().unwrap().to_owned();
+        let RendererNetworkOutputItem::Resource(terminal) = &committed.occurrence().item else {
+            unreachable!()
+        };
+        let moli_core::page::ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) =
+            terminal.as_ref()
+        else {
+            panic!("terminal last")
+        };
+        let native_error = match terminal.result() {
+            moli_core::page::SubresourceBodyFinishedResult::Ready(_) => None,
+            moli_core::page::SubresourceBodyFinishedResult::Failed(error) => {
+                assert!(!error.is_empty());
+                Some(error.clone())
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+        let heads = receipts
+            .iter()
+            .filter_map(|receipt| match &receipt.occurrence().item {
+                RendererNetworkOutputItem::Resource(item) => match item.as_ref() {
+                    moli_core::page::ScriptNetworkOutputItem::SubresourceResponseStarted(head) => {
+                        Some(head.status())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            heads,
+            response
+                .map(|(status, _)| status)
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
         assert_eq!(load.is_some(), commits_child, "response={response:?}");
         let source = RendererPageResidenceIdentity::from_parts(
             committed.occurrence().source.document().unwrap().0,
@@ -160,7 +212,8 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         );
         context.select_web_contents(contents.id());
         let snapshot = browser.subscribe().unwrap().0;
-        assert_eq!(snapshot.network_requests.iter().filter(|request| request.owner == moli_core::browser::NetworkOwner::Document(commit.document) && matches!(&request.state, moli_core::browser::NetworkRequestState::ChildDocument(stored) if std::sync::Arc::ptr_eq(stored, activity))).count(), 1);
+        assert_eq!(snapshot.network_requests.iter().filter(|request| request.owner == moli_core::browser::NetworkOwner::Document(commit.document)
+            && matches!(&request.state, moli_core::browser::NetworkRequestState::Completed { body, .. } if std::sync::Arc::ptr_eq(body, terminal))).count(), 1);
         let mut membership = snapshot.clone();
         membership.network_requests.clear();
         let mut conn = CdpConnection::new(
@@ -194,14 +247,13 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
             (&owner, Some(peer_renderer)),
             (&peer_owner, Some(source)),
         ] {
-            assert!(
-                PagePreparedOutputs::from_browser_child_document_network(
-                    &conn, owner, source, &committed
-                )
-                .child_frame_activities
-                .is_empty(),
-                "a receipt cannot bind through a colliding local Page ID"
-            );
+            for receipt in &receipts {
+                assert!(
+                    conn.ingest_browser_network_observation_for_owner(owner, source, receipt)
+                        .is_none(),
+                    "a receipt cannot bind through a colliding local Page ID"
+                );
+            }
         }
         conn.runtime_session_owner_slot_mut_for_owner(&owner)
             .unwrap()
@@ -211,35 +263,31 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         } else {
             Vec::new()
         };
-        let prepared = match load {
-            Some(load) => PagePreparedOutputs::from_renderer_child_frame_load(
+        for _ in 0..2 {
+            for receipt in &receipts {
+                if let Some(mut delivery) =
+                    conn.ingest_browser_network_observation_for_owner(&owner, Some(source), receipt)
+                {
+                    crate::domains::network::emit_prepared_renderer_network_live_background_events(
+                        &mut conn,
+                        &mut events,
+                        &owner,
+                        &mut delivery,
+                    );
+                }
+            }
+        }
+        if let Some(load) = load {
+            let prepared = PagePreparedOutputs::from_renderer_child_frame_load(
                 &conn,
                 &owner,
                 committed.occurrence().source.document().unwrap().1,
                 load,
-                Some(source),
-                Some(&committed),
-            ),
-            None => PagePreparedOutputs::from_browser_child_document_network(
-                &conn,
-                &owner,
-                Some(source),
-                &committed,
-            ),
-        };
-        assert_eq!(prepared.child_frame_activities.len(), 1);
-        for activity in prepared.child_frame_activities {
-            emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
-        }
-        for activity in PagePreparedOutputs::from_browser_child_document_network(
-            &conn,
-            &owner,
-            Some(source),
-            &committed,
-        )
-        .child_frame_activities
-        {
-            emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+            );
+            assert_eq!(prepared.child_frame_activities.len(), 1);
+            for activity in prepared.child_frame_activities {
+                emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+            }
         }
         assert_eq!(
             events
@@ -305,16 +353,12 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         }
         conn.install_navigation_fixture_for_owner_for_test("data:text/html,replaced", &owner)
             .await;
-        assert!(
-            PagePreparedOutputs::from_browser_child_document_network(
-                &conn,
-                &owner,
-                Some(source),
-                &committed
-            )
-            .child_frame_activities
-            .is_empty()
-        );
+        for receipt in &receipts {
+            assert!(
+                conn.ingest_browser_network_observation_for_owner(&owner, Some(source), receipt)
+                    .is_none()
+            );
+        }
         assert!(
             !conn
                 .project_browser_snapshot(snapshot)

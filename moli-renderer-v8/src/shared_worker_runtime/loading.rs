@@ -403,7 +403,7 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     cancel_handle: FetchCancelHandle,
     cancel_wait: tokio::sync::oneshot::Receiver<()>,
-    network: &crate::network::ResourceTransfer,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
 ) -> Result<SharedWorkerLoadedScript, String> {
     if cancel_handle.is_cancelled() {
         return Err("SharedWorker script load canceled.".to_owned());
@@ -416,26 +416,32 @@ pub(super) async fn fetch_shared_worker_script_source_async(
         reserved_service_worker_client_id,
     ) {
         let response = tokio::select! {
-            _ = cancel_wait => return Err("SharedWorker script load canceled.".into()),
-            response = service_worker_runtime.fetch_main_resource_for_worker_client(
-                client_id, &request, request_client, resource_task_runner,
-                ServiceWorkerRequestDestination::SharedWorker, cancel_handle.clone(),
-            ) => response?,
-        };
+            result = async {
+                let response = service_worker_runtime.fetch_main_resource_for_worker_client(
+                    client_id, &request, request_client, resource_task_runner,
+                    ServiceWorkerRequestDestination::SharedWorker, cancel_handle.clone(),
+                ).await?;
+                let Some(response) = response else { return Ok(None) };
+                let resource = crate::network::ResourceResponseStream::with_disk_pool(network.clone(), request_client.disk_pool());
+                let response = resource.collect(response).await.inspect_err(|error| network.failed(error))
+                    .map_err(|error| format!("Failed to load shared worker script `{request_url}`: {error}"))?
+                    .into_navigation_response()?;
+                let result = loaded_shared_worker_script_from_navigation_response(
+                    &response, initiator_url, script_url,
+                );
+                network.main_script_response(&response, result).map(Some)
+            } => result,
+            _ = cancel_wait => Err("SharedWorker script load canceled.".into()),
+        }?;
         if let Some(response) = response {
-            let result = loaded_shared_worker_script_from_navigation_response(
-                &response,
-                initiator_url,
-                script_url,
-            );
-            return network.main_script_response(&response, result);
+            return Ok(response);
         }
     }
     if cancel_handle.is_cancelled() {
         return Err("SharedWorker script load canceled.".to_owned());
     }
     let response = request_client
-        .fetch_observed_script_text_with_cancel(request, cancel_handle, network)
+        .fetch_observed_script_text_with_cancel(request, cancel_handle, network.as_ref())
         .await
         .map_err(|error| {
             network.failed(&error);
@@ -539,7 +545,7 @@ pub(super) fn shared_worker_script_credentials_mode(
 
 pub(super) fn load_shared_worker_local_script(
     script_url: &Url,
-    network: &crate::network::ResourceTransfer,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);

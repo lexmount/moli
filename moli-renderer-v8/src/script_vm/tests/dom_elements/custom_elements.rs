@@ -60,7 +60,6 @@ async fn assert_popup_custom_element_microtask_order(javascript_url: bool) {
     .expect("host-owned popup execution should queue");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(__popupCeLog.includes('constructor-microtask'))",
         "true",
         "popup custom element constructor microtask",
@@ -8604,7 +8603,6 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
     let expected = r#"{"element1":"test-element","element2":"test-element","element1ProtoAfterUpgrade":true,"element2ProtoAfterUpgrade":true,"log":["constructed:first-element","attribute:first-element:id::first-element:first-element","connected:first-element","constructed:second-element","attribute:second-element:id::second-element:second-element","connected:second-element"]}"#;
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "globalThis.__reactionQueueResult",
         expected,
         "child document.write custom-element reaction queue",

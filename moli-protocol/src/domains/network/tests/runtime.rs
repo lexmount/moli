@@ -86,8 +86,25 @@ async fn runtime_capture_without_network_listener_does_not_advance_subresource_c
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
+    let document = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .document_handle_for_target("TID-1")
+        .unwrap();
+    let script_url = format!("http://{addr}/no-listener.js");
+    ctx.wait_until_scheduler_state("unobserved script's native completion", |conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .document_subresource_network_records(document)
+            .unwrap()
+            .iter()
+            .any(|record| record.url().as_str() == script_url)
+    })
+    .await;
     let context = ctx.conn.browser_context.as_ref().unwrap();
-    let document = context.document_handle_for_target("TID-1").unwrap();
     assert_eq!(
         context
             .document_subresource_network_records(document)

@@ -406,10 +406,6 @@ impl JsContextHost {
                         committed_navigation_entry_seed,
                         cached_snapshot,
                         document_policy_container,
-                        completed_document_network: existing.as_ref().and_then(|entry| {
-                            entry
-                                .completed_document_network_for_refresh(attribute_bootstrap_changed)
-                        }),
                         completed_frame_owner_resource_timing: existing.as_ref().and_then(
                             |entry| {
                                 entry.completed_frame_owner_resource_timing_for_refresh(

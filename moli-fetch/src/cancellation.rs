@@ -36,6 +36,12 @@ impl FetchCancelHandle {
         false
     }
 
+    /// Whether these handles refer to the same request attempt, including
+    /// across a handoff to a controlled response or a redirected fetch.
+    pub fn shares_scope_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     /// A physical attempt can be discarded without cancelling its request
     /// admission. Admission cancellation still reaches every live attempt.
     pub fn child(&self) -> Self {

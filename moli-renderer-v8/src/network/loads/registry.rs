@@ -44,6 +44,7 @@ pub(crate) enum ResourceLoadDisposition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceLoadKind {
+    Document,
     Script,
     Stylesheet,
     Image,
@@ -63,6 +64,7 @@ pub(crate) enum ResourceLoadKind {
 impl From<SubresourceResourceType> for ResourceLoadKind {
     fn from(resource_type: SubresourceResourceType) -> Self {
         match resource_type {
+            SubresourceResourceType::Document => Self::Document,
             SubresourceResourceType::Script => Self::Script,
             SubresourceResourceType::Stylesheet => Self::Stylesheet,
             SubresourceResourceType::Image => Self::Image,
@@ -564,6 +566,13 @@ impl ResourceLoadLease {
 
     pub(crate) fn cancel(&self) {
         self.registration.cancel();
+    }
+
+    /// A claimed pause hands the same consumer to its loading phase. Cancellation
+    /// racing this handoff is retained by the registration and delivered when
+    /// the next phase attaches its hook.
+    pub(crate) fn release_consumer_cancel(&self) {
+        self.registration.lifecycle.lock().consumer_cancel.take();
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {

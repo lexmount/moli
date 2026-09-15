@@ -7,9 +7,7 @@ fn new_broadcast_channel_test_vm(url: &str) -> crate::runtime::PageVmTaskExecuto
 async fn apply_page_broadcast_channel_deliveries(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
 ) {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
-        .expect("BroadcastChannel test loader");
-    page.apply_pending_broadcast_channel_delivery_tasks(&loader, 64)
+    page.apply_pending_broadcast_channel_delivery_tasks(64)
         .await
         .expect("production BroadcastChannel executor tasks should apply");
 }
@@ -1123,7 +1121,7 @@ async fn broadcast_channel_data_iframe_uses_opaque_storage_key() {
     // delivery and the parent WindowMessage are distinct production tasks.
     for _ in 0..16 {
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("opaque BroadcastChannel Page task executor should advance");
         apply_page_broadcast_channel_deliveries(&mut vm).await;

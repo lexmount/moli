@@ -38,8 +38,7 @@ globalThis.__defaultCompletionTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the automatic default-mode task should be selected"
@@ -105,8 +104,7 @@ globalThis.__typedDefaultTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::ElementToggle
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "element toggle should be the shared source head"
@@ -122,8 +120,7 @@ globalThis.__typedDefaultTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "text-track default-mode task should remain at the FIFO tail"
@@ -201,8 +198,7 @@ globalThis.__currentTypedDefaultTrack = currentTrack;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "retired task should settle explicitly"
@@ -220,8 +216,7 @@ globalThis.__currentTypedDefaultTrack = currentTrack;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "replacement task should survive stale-head settlement"

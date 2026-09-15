@@ -87,9 +87,8 @@ impl PageVm {
         &mut self,
         target: PageMainNativeModuleTargetEffect,
         settlement: PageMainNativeModuleSettlement,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
-        self.finish_selected_page_task_completion(completion_for_target(target), loader)
+        self.finish_selected_page_task_completion(completion_for_target(target))
             .await?;
         match settlement {
             PageMainNativeModuleSettlement::Completed => Ok(()),
@@ -102,20 +101,18 @@ impl PageVm {
     pub(super) async fn finish_selected_page_dynamic_module_job(
         &mut self,
         action: PageDynamicModuleJobTurnAction,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
         let (target, settlement) = action.into_parts();
-        self.finish_selected_page_main_native_module_task(target, settlement, loader)
+        self.finish_selected_page_main_native_module_task(target, settlement)
             .await
     }
 
     pub(super) async fn finish_selected_page_native_module_owner_event(
         &mut self,
         action: PageNativeModuleOwnerEventTurnAction,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
         let (target, settlement) = action.into_parts();
-        self.finish_selected_page_main_native_module_task(target, settlement, loader)
+        self.finish_selected_page_main_native_module_task(target, settlement)
             .await
     }
 }

@@ -27,15 +27,11 @@ document.body.appendChild(frame);
     Ok(())
 }
 
-async fn advance_to_child_parser_module_root(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-) -> anyhow::Result<()> {
+async fn advance_to_child_parser_module_root(page_vm: &mut PageVm) -> anyhow::Result<()> {
     anyhow::ensure!(
         page_vm
             .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ChildNavigationCommit,
-                loader,
+                PageSelectedTaskTestSelector::ChildNavigationCommit
             )
             .await?,
         "child srcdoc must publish one exact navigation commit",
@@ -43,8 +39,7 @@ async fn advance_to_child_parser_module_root(
     anyhow::ensure!(
         page_vm
             .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ChildRealmMaterialization,
-                loader,
+                PageSelectedTaskTestSelector::ChildRealmMaterialization
             )
             .await?,
         "the committed child Document must materialize its exact realm",
@@ -59,8 +54,7 @@ async fn advance_to_child_parser_module_root(
         anyhow::ensure!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentLifecycle,
-                    loader,
+                    PageSelectedTaskTestSelector::ChildDocumentLifecycle
                 )
                 .await?,
             "only bounded child lifecycle predecessors may stand before the parser-module root",
@@ -79,7 +73,7 @@ async fn child_parser_module_root_start_body_does_not_checkpoint_or_evaluate_mod
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
 
         queue_inline_child_parser_module_root(&mut page_vm, "parser-root-body-child")?;
-        advance_to_child_parser_module_root(&mut page_vm, &loader).await?;
+        advance_to_child_parser_module_root(&mut page_vm).await?;
         page_vm
             .vm_mut()
             .eval_without_microtask_checkpoint_for_test(
@@ -128,7 +122,7 @@ async fn selected_child_parser_module_root_start_submits_one_task_end_checkpoint
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
 
         queue_inline_child_parser_module_root(&mut page_vm, "selected-parser-root-child")?;
-        advance_to_child_parser_module_root(&mut page_vm, &loader).await?;
+        advance_to_child_parser_module_root(&mut page_vm).await?;
         page_vm
             .vm_mut()
             .eval_without_microtask_checkpoint_for_test(
@@ -142,8 +136,7 @@ Promise.resolve().then(() => __selectedChildParserRootCheckpoint += 1);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildParserModuleRootStart,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildParserModuleRootStart
                 )
                 .await?,
             "one exact root-start task must enter the production selected dispatcher",
@@ -183,7 +176,7 @@ async fn stale_claimed_child_parser_module_root_does_not_checkpoint_current_docu
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
 
         queue_inline_child_parser_module_root(&mut page_vm, "stale-parser-root-child")?;
-        advance_to_child_parser_module_root(&mut page_vm, &loader).await?;
+        advance_to_child_parser_module_root(&mut page_vm).await?;
         let claimed = page_vm
             .claim_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildParserModuleRootStart,
@@ -200,8 +193,7 @@ document.getElementById("stale-parser-root-child").srcdoc =
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildNavigationCommit,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildNavigationCommit
                 )
                 .await?,
             "replacement navigation must install a new exact child Document",
@@ -217,7 +209,7 @@ Promise.resolve().then(() => __staleChildParserRootCheckpoint += 1);
             )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm

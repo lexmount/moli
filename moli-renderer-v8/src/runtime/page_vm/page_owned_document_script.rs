@@ -4,20 +4,19 @@ use crate::document_script_scheduler::{
     PageOwnedDocumentScriptExecution, PageOwnedDocumentScriptRunner, PageOwnedDocumentScriptWork,
 };
 use crate::frame_owner_model::FrameDocumentTaskOwner;
-use crate::network::ResourceRequestClient;
 
 use super::PageVm;
 use super::page_owned_document_script_hooks::MainPageOwnedDocumentScriptHooks;
 
-pub(super) struct MainPageOwnedDocumentScriptOwner<'page, 'loader> {
-    runner: PageOwnedDocumentScriptRunner<MainPageOwnedDocumentScriptHooks<'page, 'loader>>,
+pub(super) struct MainPageOwnedDocumentScriptOwner<'page> {
+    runner: PageOwnedDocumentScriptRunner<MainPageOwnedDocumentScriptHooks<'page>>,
 }
 
-impl<'page, 'loader> MainPageOwnedDocumentScriptOwner<'page, 'loader> {
-    pub(super) fn new(page_vm: &'page mut PageVm, loader: &'loader ResourceRequestClient) -> Self {
+impl<'page> MainPageOwnedDocumentScriptOwner<'page> {
+    pub(super) fn new(page_vm: &'page mut PageVm) -> Self {
         Self {
             runner: PageOwnedDocumentScriptRunner::new(MainPageOwnedDocumentScriptHooks::new(
-                page_vm, loader,
+                page_vm,
             )),
         }
     }

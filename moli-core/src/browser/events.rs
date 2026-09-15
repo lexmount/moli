@@ -129,7 +129,24 @@ pub struct NavigationResponseSnapshot {
     pub request: NavigationRequest,
     pub response: Result<moli_fetch::ResponseHead, NavigationFetchFailure>,
     pub observations: moli_fetch::NetworkObservationJournal,
-    pub body: Option<Result<super::CapturedBody, String>>,
+    pub received_bytes: usize,
+    pub body: Option<Result<super::CapturedBody, NavigationBodyFailure>>,
+}
+
+/// A failed or canceled response retains the bytes received before its terminal.
+#[derive(Clone, Debug)]
+pub struct NavigationBodyFailure {
+    pub error_text: String,
+    pub partial_body: Option<super::CapturedBody>,
+}
+
+impl From<String> for NavigationBodyFailure {
+    fn from(error_text: String) -> Self {
+        Self {
+            error_text,
+            partial_body: None,
+        }
+    }
 }
 
 /// The failed URL remains the history/Target URL while the renderer displays

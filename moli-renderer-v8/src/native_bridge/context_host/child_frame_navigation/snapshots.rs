@@ -32,6 +32,7 @@ impl JsContextHost {
         self.disconnect_shared_worker_clients_for_child_context(handle);
         if let Some(snapshot) = snapshot.as_ref() {
             let loader_id = self.allocate_child_document_loader_id();
+            self.publish_child_navigation_started(handle, &loader_id, &snapshot.url);
             let window_commit = self.plan_child_document_window_commit(
                 handle,
                 snapshot,

@@ -216,6 +216,7 @@ struct NativeNavigationProjection {
     request: crate::conn::PendingFetchNavigation,
     auth_decision: Option<moli_core::browser::web_contents::NavigationInterceptionPermit>,
     response_phase: NativeResponsePhase,
+    received_bytes: usize,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1332,6 +1333,7 @@ impl BrowserContext {
                     request: state,
                     auth_decision: None,
                     response_phase: NativeResponsePhase::Pending,
+                    received_bytes: 0,
                 }));
             }
         } else {
@@ -1343,6 +1345,7 @@ impl BrowserContext {
                         request: state,
                         auth_decision: None,
                         response_phase: NativeResponsePhase::Pending,
+                        received_bytes: 0,
                     })),
                     popup_opening_observed: false,
                 },
@@ -1415,7 +1418,8 @@ impl BrowserContext {
         target_id: &str,
         navigation: NavigationId,
         completed: bool,
-    ) -> Option<(crate::conn::PendingFetchNavigation, bool, bool)> {
+        received_bytes: usize,
+    ) -> Option<(crate::conn::PendingFetchNavigation, bool, bool, usize)> {
         let native = self
             .page_slot_for_target_mut(target_id)?
             .cdp_navigation_loaders
@@ -1429,13 +1433,22 @@ impl BrowserContext {
         } else {
             NativeResponsePhase::Response
         };
-        if phase <= native.response_phase {
+        let new_bytes = received_bytes.saturating_sub(native.received_bytes);
+        if native.response_phase == NativeResponsePhase::Complete
+            || (phase <= native.response_phase && new_bytes == 0)
+        {
             return None;
         }
         let emit_response = native.response_phase < NativeResponsePhase::Response;
         let metadata_emitted = native.response_phase == NativeResponsePhase::Paused;
         native.response_phase = phase;
-        Some((native.request.clone(), emit_response, metadata_emitted))
+        native.received_bytes = native.received_bytes.max(received_bytes);
+        Some((
+            native.request.clone(),
+            emit_response,
+            metadata_emitted,
+            new_bytes,
+        ))
     }
 
     pub(in crate::conn) fn observe_native_navigation_response_pause(
@@ -1465,7 +1478,7 @@ impl BrowserContext {
         let mut pending = self.native_navigation_dispatch(target, navigation)?.clone();
         let command = self.take_native_navigation_command(target, navigation);
         let emit_network = self
-            .observe_native_navigation_response(target, navigation, true)
+            .observe_native_navigation_response(target, navigation, true, 0)
             .is_some();
         pending.navigation.navigate_id = command.and_then(|state| state.navigate_id);
         (emit_network || pending.navigation.navigate_id.is_some())
@@ -2333,9 +2346,18 @@ mod native_navigation_projection_tests {
                             PAGE_SLOT_TEST_TARGET,
                             navigation,
                             phase == NativeResponsePhase::Complete,
+                            0,
                         )
                         .is_some()
                 );
+            }
+
+            if phase == NativeResponsePhase::Response {
+                let (_, emit_head, metadata, bytes) = context
+                    .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, false, 7)
+                    .unwrap();
+                assert!(!emit_head && !metadata);
+                assert_eq!(bytes, 7);
             }
 
             pending.navigation.requested_url =
@@ -2365,15 +2387,33 @@ mod native_navigation_projection_tests {
                 "metadata updates must not re-arm a published command reply"
             );
             assert!(context.popup_navigation_observed(PAGE_SLOT_TEST_TARGET, navigation));
-            let completed =
-                context.observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true);
+            if phase == NativeResponsePhase::Response {
+                assert!(
+                    context
+                        .observe_native_navigation_response(
+                            PAGE_SLOT_TEST_TARGET,
+                            navigation,
+                            false,
+                            7,
+                        )
+                        .is_none(),
+                    "metadata refresh must preserve the delivered byte cursor"
+                );
+            }
+            let completed = context.observe_native_navigation_response(
+                PAGE_SLOT_TEST_TARGET,
+                navigation,
+                true,
+                0,
+            );
             if phase == NativeResponsePhase::Complete {
                 assert!(
                     completed.is_none(),
                     "completed responses must not be republished"
                 );
             } else {
-                let (request, emit_response, metadata_emitted) = completed.unwrap();
+                let (request, emit_response, metadata_emitted, received_bytes) = completed.unwrap();
+                assert_eq!(received_bytes, 0);
                 assert_eq!(
                     request.navigation.requested_url,
                     pending.navigation.requested_url
@@ -2383,7 +2423,7 @@ mod native_navigation_projection_tests {
             }
             assert!(
                 context
-                    .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true)
+                    .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true, 0)
                     .is_none()
             );
             service.shutdown();

@@ -1,9 +1,9 @@
 use crate::{
     network::{ResourceRequestClient, SharedWebStorageStore},
     page::{
-        CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
-        Page, PendingPageCommand, RendererInspectorSessionRestoreSnapshot,
-        RendererMainDocumentCommit, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+        CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, Page,
+        PendingPageCommand, RendererInspectorSessionRestoreSnapshot, RendererMainDocumentCommit,
+        RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
         RendererPendingDownloadActivation, SubresourceAuthCredentials, SubresourceResourceType,
         ViewportSurface,
     },
@@ -70,28 +70,6 @@ struct DocumentPageLoadOptions {
 pub enum CommittedDocumentResourceSource {
     Navigation(Box<DocumentFetchContextSeed>),
     Synthetic,
-}
-
-fn streaming_raw_response_from_navigation_response(
-    response: NavigationResponse,
-) -> Result<StreamingRawResponse> {
-    let head = response.head();
-    let body = response.clone_body_bytes();
-    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
-    if !body.is_empty() {
-        body_tx
-            .send(body)
-            .map_err(|_| anyhow!("failed to enqueue service worker main resource body"))?;
-    }
-    drop(body_tx);
-    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-    let _ = completion_tx.send(Ok(()));
-    Ok(StreamingRawResponse::new_with_head(
-        head,
-        body_rx,
-        FetchCancelHandle::new(),
-        completion_rx,
-    ))
 }
 
 #[derive(Clone)]
@@ -246,10 +224,6 @@ impl PreparedDocumentPage {
 
     pub fn renderer_page_id(&self) -> moli_renderer_v8::PageId {
         self.prepared.token().page_id()
-    }
-
-    pub fn renderer_devtools_agent_token(&self) -> crate::page::RendererDevToolsAgentToken {
-        self.prepared.renderer_devtools_agent_token()
     }
 
     pub fn inspection_configuration_endpoint(
@@ -938,79 +912,6 @@ impl NavigationEngine {
         self.ensure_cookie_store(storage.cookie_store)
     }
 
-    async fn fetch_navigation_response_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        initiator_url: Option<&Url>,
-        browser_navigation_kind: BrowserNavigationRequestKind,
-        infer_referrer_from_initiator: bool,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        request_headers: moli_fetch::RequestHeaders,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<NavigationResponse>> {
-        let mut request = Request::new_browser_bytes(
-            method,
-            raw_url,
-            body,
-            request_headers,
-            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
-        )
-        .map(|request| {
-            let request = request.with_top_level_navigation_cookie_context();
-            let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
-            if !infer_referrer_from_initiator {
-                request = request.without_inferred_referrer();
-            }
-            if let Some(initiator_url) = initiator_url {
-                request
-                    .with_initiator_url(initiator_url)
-                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
-            } else {
-                request
-            }
-        })
-        .context("failed to build request")?;
-        request.set_auth(auth.map(Into::into));
-        let navigation_loader = self.navigation_resource_loader(
-            cookie_store,
-            request.url.clone(),
-            FetchCancelHandle::new(),
-        )?;
-        navigation_loader
-            .fetch_with_network_metadata(request)
-            .await
-            .map(|result| result.map_response(NavigationResponse::from))
-    }
-
-    pub async fn fetch_navigation_response_with_storage_async(
-        &mut self,
-        storage: NavigationResourceStorageHandles,
-        initiator_url: Option<&Url>,
-        browser_navigation_kind: BrowserNavigationRequestKind,
-        infer_referrer_from_initiator: bool,
-        method: &str,
-        raw_url: &str,
-        body: Option<String>,
-        request_headers: moli_fetch::RequestHeaders,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<NavigationResponse>> {
-        let cookie_store = storage.into_cookie_store();
-        self.fetch_navigation_response_async(
-            cookie_store,
-            initiator_url,
-            browser_navigation_kind,
-            infer_referrer_from_initiator,
-            method,
-            raw_url,
-            body.map(String::into_bytes),
-            request_headers,
-            auth,
-        )
-        .await
-    }
-
     async fn fetch_navigation_streaming_raw_response_async(
         &mut self,
         cookie_store: SharedBrowserCookieStore,
@@ -1079,11 +980,9 @@ impl NavigationEngine {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
-            let final_url = response.final_url.clone();
+            let final_url = response.response().final_url.clone();
             return Ok(NavigationStreamingRawResponse {
-                fetch_result: NetworkFetchResult::without_request_observation(
-                    streaming_raw_response_from_navigation_response(response)?,
-                ),
+                fetch_result: response,
                 reserved_service_worker_client: reserved_client,
                 document_fetch_context_seed: navigation_loader.commit(final_url)?,
             });
@@ -1099,35 +998,6 @@ impl NavigationEngine {
         })
     }
 
-    pub async fn fetch_navigation_streaming_raw_response_with_storage_async(
-        &mut self,
-        storage: NavigationResourceStorageHandles,
-        initiator_url: Option<&Url>,
-        browser_navigation_kind: BrowserNavigationRequestKind,
-        infer_referrer_from_initiator: bool,
-        method: &str,
-        raw_url: &str,
-        body: Option<String>,
-        request_headers: moli_fetch::RequestHeaders,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NavigationStreamingRawResponse> {
-        let cookie_store = storage.into_cookie_store();
-        self.fetch_navigation_streaming_raw_response_async(
-            cookie_store,
-            initiator_url,
-            browser_navigation_kind,
-            infer_referrer_from_initiator,
-            method,
-            raw_url,
-            body.map(String::into_bytes),
-            request_headers,
-            auth,
-            FetchCancelHandle::new(),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn fetch_navigation_streaming_raw_response_bytes_with_storage_async(
         &mut self,
         storage: NavigationResourceStorageHandles,

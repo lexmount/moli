@@ -12,7 +12,6 @@ use crate::{
     dynamic_script_owner::DynamicScriptPageTaskClaim,
     frame_owner_model::{FrameDocumentTaskOwner, MainDocumentScriptLoadDelayLease},
     module_script_continuation::ModuleScriptCompletionOwner,
-    network::ResourceRequestClient,
     planning::PreparedScript,
     protocol_types::NavigationResponse,
 };
@@ -24,18 +23,17 @@ use super::{
     execute_prepared_script_on_script_execution_lane,
 };
 
-pub(super) struct MainPageOwnedDocumentScriptHooks<'page, 'loader> {
+pub(super) struct MainPageOwnedDocumentScriptHooks<'page> {
     page_vm: &'page mut PageVm,
-    loader: &'loader ResourceRequestClient,
 }
 
-impl<'page, 'loader> MainPageOwnedDocumentScriptHooks<'page, 'loader> {
-    pub(super) fn new(page_vm: &'page mut PageVm, loader: &'loader ResourceRequestClient) -> Self {
-        Self { page_vm, loader }
+impl<'page> MainPageOwnedDocumentScriptHooks<'page> {
+    pub(super) fn new(page_vm: &'page mut PageVm) -> Self {
+        Self { page_vm }
     }
 }
 
-impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
+impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_> {
     type DocumentOwnerToken = FrameDocumentTaskOwner;
 
     fn current_document_owner_token(&self) -> Option<Self::DocumentOwnerToken> {
@@ -48,21 +46,16 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
             .set_document_ready_state(DocumentReadyState::Loading)
     }
 
-    fn record_script_source_network_result(
+    fn record_script_resource_timing(
         &mut self,
-        initiator_url: Url,
+
         script_url: Url,
-        request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+
         network_result: &std::result::Result<NavigationResponse, String>,
     ) {
         self.page_vm
             .vm_mut()
-            .record_script_subresource_network_result_with_initiator(
-                initiator_url,
-                script_url,
-                request_initiator_type,
-                network_result,
-            );
+            .record_script_resource_timing(script_url, network_result);
     }
 
     fn perform_pre_script_checkpoint(&mut self, script_url: &Url) -> Result<()> {
@@ -81,7 +74,6 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
             let script_execution_disabled = !self.page_vm.main_document_scripting_enabled();
             let outcome = execute_prepared_script_on_script_execution_lane(
                 &local_executor,
-                self.loader,
                 self.page_vm.vm_mut(),
                 script,
                 runtime_script_claim,

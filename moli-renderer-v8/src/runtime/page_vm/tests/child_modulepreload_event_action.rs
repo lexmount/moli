@@ -151,8 +151,7 @@ async fn selected_child_modulepreload_event_completes_reactions_and_runtime_foll
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildModulepreloadEventAction,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildModulepreloadEventAction
                 )
                 .await?,
             "the exact modulepreload event action should run through the selected dispatcher"
@@ -214,8 +213,7 @@ document
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildModulepreloadEventAction,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildModulepreloadEventAction
                 )
                 .await?,
             "the exact modulepreload action should run through the selected dispatcher"

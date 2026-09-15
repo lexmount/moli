@@ -9,7 +9,6 @@ use crate::{
         RendererPageChildModuleDependencyFetchStartOwner,
         RendererPageChildModuleDependencyFetchStartTask,
     },
-    types::ChildModuleFetchNetworkAttribution,
 };
 
 use super::PageVm;
@@ -19,20 +18,14 @@ use super::PageVm;
 pub(crate) struct AuthorizedCurrentChildModuleDependencyFetchStart {
     target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
     task: FrameDocumentModuleDependencyFetchTask,
-    network_attribution: ChildModuleFetchNetworkAttribution,
 }
 
 impl AuthorizedCurrentChildModuleDependencyFetchStart {
     fn new(
         target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
         task: FrameDocumentModuleDependencyFetchTask,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) -> Self {
-        Self {
-            target,
-            task,
-            network_attribution,
-        }
+        Self { target, task }
     }
 
     pub(crate) fn into_parts(
@@ -40,9 +33,8 @@ impl AuthorizedCurrentChildModuleDependencyFetchStart {
     ) -> (
         crate::frame_owner_model::ChildDocumentModuleFetchTarget,
         FrameDocumentModuleDependencyFetchTask,
-        ChildModuleFetchNetworkAttribution,
     ) {
-        (self.target, self.task, self.network_attribution)
+        (self.target, self.task)
     }
 }
 
@@ -52,25 +44,20 @@ impl PageVm {
         start: RendererPageChildModuleDependencyFetchStartTask,
     ) -> Result<PageChildModuleDependencyFetchStartTurnOutcome> {
         let owner = start.owner();
-        let request_url = start.task().fetch_request().source_url().clone();
-        let current_snapshot = self.vm().capture_current_child_module_fetch_producer(
-            owner.target().child_handle(),
-            request_url,
-        );
+        let current_snapshot = self
+            .vm()
+            .current_child_document_module_fetch_target(owner.target().child_handle());
         let root_document = self.document_lifecycle.identity().document;
-        let current_owner = current_snapshot.as_ref().map(|(target, _)| {
-            RendererPageChildModuleDependencyFetchStartOwner::new(root_document, *target)
+        let current_owner = current_snapshot.map(|target| {
+            RendererPageChildModuleDependencyFetchStartOwner::new(root_document, target)
         });
         let target_effect = if current_owner == Some(owner) {
-            let (_, network_attribution) = current_snapshot
-                .expect("matching exact owner must retain its atomic producer snapshot");
             let outcome = self
                 .vm_mut()
                 .apply_current_child_module_dependency_fetch_start(
                     AuthorizedCurrentChildModuleDependencyFetchStart::new(
                         owner.target(),
                         start.into_task(),
-                        network_attribution,
                     ),
                 );
             PageChildModuleDependencyFetchStartTargetEffect::AppliedToCurrentOwner { outcome }

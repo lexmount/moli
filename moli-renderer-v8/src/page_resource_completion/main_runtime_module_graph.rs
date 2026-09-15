@@ -3,7 +3,7 @@ use crate::{
     module_runtime::ModuleGraphFetchedSource, types::SharedNavigationResponseResult,
 };
 
-use super::MainModuleFetchNetworkAttribution;
+use url::Url;
 
 /// Exact PageVm-local owner of one runtime-created main-Document module fetch.
 ///
@@ -49,7 +49,7 @@ pub(crate) struct MainRuntimeModuleGraphFetchCompletion {
     target: MainRuntimeModuleGraphFetchTarget,
     result: std::result::Result<ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: MainModuleFetchNetworkAttribution,
+    request_url: Url,
 }
 
 impl MainRuntimeModuleGraphFetchCompletion {
@@ -57,13 +57,13 @@ impl MainRuntimeModuleGraphFetchCompletion {
         target: MainRuntimeModuleGraphFetchTarget,
         result: std::result::Result<ModuleGraphFetchedSource, String>,
         network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: MainModuleFetchNetworkAttribution,
+        request_url: Url,
     ) -> Self {
         Self {
             target,
             result,
             network_result,
-            network_attribution,
+            request_url,
         }
     }
 
@@ -75,8 +75,8 @@ impl MainRuntimeModuleGraphFetchCompletion {
         self.network_result.as_ref()
     }
 
-    pub(crate) fn network_attribution(&self) -> &MainModuleFetchNetworkAttribution {
-        &self.network_attribution
+    pub(crate) fn request_url(&self) -> &Url {
+        &self.request_url
     }
 
     pub(crate) fn into_result(self) -> std::result::Result<ModuleGraphFetchedSource, String> {

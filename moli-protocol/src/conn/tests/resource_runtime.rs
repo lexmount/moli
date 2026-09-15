@@ -3151,14 +3151,32 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
         .expect("background network target should remain live")
         .runtime_slot;
     assert_eq!(
-        runtime_slot.emitted_subresource_record_count_for_session_for_test(None),
-        1,
-        "background Network.enable should not replay pre-enable subresource records"
-    );
-    assert_eq!(
         runtime_slot.emitted_websocket_event_count_for_session_for_test(None),
         0,
         "background Network.enable should initialize websocket cursor at the loaded target tail"
+    );
+
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 2, "method": "Runtime.evaluate", "sessionId": "SID-background",
+        "params": {
+            "expression": "fetch('data:text/plain,after-enable').then(response => response.text())",
+            "awaitPromise": true, "returnByValue": true
+        }
+    }))
+    .await;
+    let messages = ctx.take_all();
+    assert!(messages.iter().any(|message| {
+        message["id"] == json!(2) && message["result"]["result"]["value"] == json!("after-enable")
+    }));
+    let requests = messages
+        .iter()
+        .filter(|message| message["method"] == json!("Network.requestWillBeSent"))
+        .map(|message| &message["params"]["request"]["url"])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests,
+        vec![&json!("data:text/plain,after-enable")],
+        "the background listener must observe its new request without replaying the loaded script"
     );
 
     server.await.unwrap();

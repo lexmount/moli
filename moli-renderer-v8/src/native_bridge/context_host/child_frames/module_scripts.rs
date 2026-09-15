@@ -19,8 +19,7 @@ use crate::{
     page_task_queue::RendererPageChildParserModuleRootStartTarget,
     planning::PreparedScript,
     types::{
-        ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
-        ChildParserModuleRootFetchCompletion, ScriptMode,
+        ChildModuleDependencyFetchCompletion, ChildParserModuleRootFetchCompletion, ScriptMode,
     },
 };
 
@@ -662,65 +661,10 @@ impl JsContextHost {
         child_handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         realm_id: FrameRealmId,
-        request_url: url::Url,
-    ) -> Option<(
-        ChildDocumentModuleFetchTarget,
-        ChildModuleFetchNetworkAttribution,
-    )> {
+    ) -> Option<ChildDocumentModuleFetchTarget> {
         let expected = ChildDocumentModuleFetchTarget::new(child_handle, owner, realm_id);
-        let (current, network_attribution) =
-            self.capture_current_child_module_fetch_producer(child_handle, request_url)?;
-        (current == expected).then_some((current, network_attribution))
-    }
-
-    /// Captures executable identity and Network attribution from one current
-    /// child snapshot. The Page arbiter may use the target for authorization;
-    /// the attribution remains protocol metadata and never grants execution.
-    pub(crate) fn capture_current_child_module_fetch_producer(
-        &self,
-        child_handle: DomHandle,
-        request_url: url::Url,
-    ) -> Option<(
-        ChildDocumentModuleFetchTarget,
-        ChildModuleFetchNetworkAttribution,
-    )> {
-        let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
-        let target = ChildDocumentModuleFetchTarget::new(
-            child_handle,
-            FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            ),
-            snapshot.realm_id?,
-        );
-        let network_attribution = ChildModuleFetchNetworkAttribution::parser(
-            Some(snapshot.frame_id.0),
-            snapshot.document_url,
-            request_url,
-        );
-        Some((target, network_attribution))
-    }
-
-    pub(crate) fn capture_child_module_fetch_network_attribution(
-        &self,
-        target: ChildDocumentModuleFetchTarget,
-        request_url: url::Url,
-    ) -> Option<ChildModuleFetchNetworkAttribution> {
-        let snapshot = self.frame_owner_current_child_snapshot(target.child_handle())?;
-        let owner = target.task_owner();
-        if snapshot.scheduler_lane_id != owner.scheduler_lane_id
-            || snapshot.local_window_id != owner.local_window_id
-            || snapshot.document_id != owner.document_id
-            || snapshot.realm_id != Some(target.realm_id())
-        {
-            return None;
-        }
-        Some(ChildModuleFetchNetworkAttribution::parser(
-            Some(snapshot.frame_id.0),
-            snapshot.document_url,
-            request_url,
-        ))
+        self.current_child_document_module_fetch_target(child_handle)
+            .filter(|current| *current == expected)
     }
 
     pub(crate) fn current_child_module_fetch_target_for_realm(
@@ -746,11 +690,7 @@ impl JsContextHost {
         &self,
         owner: crate::frame_owner_model::FrameDocumentOwner,
         realm_id: FrameRealmId,
-        request_url: url::Url,
-    ) -> Option<(
-        ChildDocumentModuleFetchTarget,
-        ChildModuleFetchNetworkAttribution,
-    )> {
+    ) -> Option<ChildDocumentModuleFetchTarget> {
         let snapshot = self.frame_owner_current_child_snapshot_for_realm(realm_id)?;
         if snapshot.local_window_id != owner.local_window_id
             || snapshot.document_id != owner.document_id
@@ -762,13 +702,10 @@ impl JsContextHost {
             snapshot.local_window_id,
             snapshot.document_id,
         );
-        Some((
-            ChildDocumentModuleFetchTarget::new(snapshot.owner_handle, task_owner, realm_id),
-            ChildModuleFetchNetworkAttribution::dynamic_import(
-                Some(snapshot.frame_id.0),
-                snapshot.document_url,
-                request_url,
-            ),
+        Some(ChildDocumentModuleFetchTarget::new(
+            snapshot.owner_handle,
+            task_owner,
+            realm_id,
         ))
     }
 
@@ -816,7 +753,6 @@ impl JsContextHost {
         start: FrameDocumentModuleFetchClientStart,
         task: FrameDocumentModuleDependencyFetchTask,
         child_handle: DomHandle,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
         if !matches!(
             start.fetch_disposition(),
@@ -832,28 +768,29 @@ impl JsContextHost {
         debug_assert_eq!(owner.document_owner(), start.owner());
         let request_id = start.request_id();
         let completion_task = task.clone();
-        let completion_network_attribution = network_attribution.clone();
         let completion_tx = self.resource_completion_tx.clone();
         tracing::debug!(
             owner = ?owner,
             realm_id = ?task.realm_id(),
             ?child_handle,
-            url = %network_attribution.request_url(),
+            url = %request.source_url(),
             "starting child module dependency fetch through owner module map"
         );
-        let send_completion = move |result, network_result| {
+        let send_completion = move |result, _network_result| {
             let _ = completion_tx.send_child_module_dependency_fetch(
                 ChildModuleDependencyFetchCompletion::new(
                     child_handle,
                     request_id,
                     completion_task,
                     result,
-                    network_result,
-                    completion_network_attribution,
                 ),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        if let Err(error) = request.fetch_source_for_document(
+            loader,
+            crate::types::SubresourceRequestInitiatorType::Parser,
+            send_completion,
+        ) {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
@@ -862,8 +799,6 @@ impl JsContextHost {
                     request_id,
                     task,
                     Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
                 ));
         }
     }
@@ -873,7 +808,6 @@ impl JsContextHost {
         loader: &crate::network::context::DocumentResourceLoader,
         fetch_start: FrameDocumentParserModuleRootFetchStart,
         target: ChildDocumentModuleFetchTarget,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
         if !matches!(
             fetch_start.start.fetch_disposition(),
@@ -893,28 +827,29 @@ impl JsContextHost {
         let request_id = fetch_start.start.request_id();
         let request_key = fetch_start.start.key().clone();
         let completion_request_key = request_key.clone();
-        let completion_network_attribution = network_attribution.clone();
         tracing::debug!(
             child_handle = ?target.child_handle(),
             script_handle = ?script_handle,
             owner = ?owner,
             realm_id = ?realm_id,
-            url = %network_attribution.request_url(),
+            url = %request.source_url(),
             "starting child parser module root fetch through child document modulator reservation"
         );
-        let send_completion = move |result, network_result| {
+        let send_completion = move |result, _network_result| {
             let _ = completion_tx.send_child_parser_module_root_fetch(
                 ChildParserModuleRootFetchCompletion::new(
                     target,
                     request_id,
                     completion_request_key,
                     result,
-                    network_result,
-                    completion_network_attribution,
                 ),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        if let Err(error) = request.fetch_source_for_document(
+            loader,
+            crate::types::SubresourceRequestInitiatorType::Parser,
+            send_completion,
+        ) {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
@@ -923,8 +858,6 @@ impl JsContextHost {
                     request_id,
                     request_key,
                     Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
                 ));
         }
     }
@@ -960,36 +893,6 @@ impl JsContextHost {
         ) && self
             .frame_owner_store
             .finish_document_request(owner.document_id, completion.request_id())
-    }
-
-    pub(crate) fn record_current_child_module_fetch_network_result(
-        &mut self,
-        attribution: &ChildModuleFetchNetworkAttribution,
-        network_result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        self.record_get_subresource_network_result_with_initiator(
-            attribution.frame_id().map(str::to_owned),
-            attribution.document_url().clone(),
-            attribution.request_url().clone(),
-            crate::types::SubresourceResourceType::Script,
-            attribution.initiator_type(),
-            network_result,
-        );
-    }
-
-    pub(crate) fn record_historical_child_module_fetch_network_result(
-        &mut self,
-        attribution: &ChildModuleFetchNetworkAttribution,
-        network_result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        self.record_historical_get_subresource_network_result_with_initiator(
-            attribution.frame_id().map(str::to_owned),
-            attribution.document_url().clone(),
-            attribution.request_url().clone(),
-            crate::types::SubresourceResourceType::Script,
-            attribution.initiator_type(),
-            network_result,
-        );
     }
 }
 

@@ -105,7 +105,6 @@ async fn worker_xhr_response_type_ignores_invalid_enum_assignments() {
     start_response_type_probe(&mut vm, CONVERSION_PROBE, true);
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "globalThis.__responseTypeResult",
         "ok",
         "Worker enum setter",
@@ -192,7 +191,6 @@ async fn xhr_response_type_checks_state_after_conversion_and_preserves_delivery(
         start_response_type_probe(&mut vm, &probe, worker);
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "globalThis.__responseTypeResult",
             "ok",
             "responseType delivery and reentrancy",

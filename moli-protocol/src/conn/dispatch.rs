@@ -89,14 +89,14 @@ pub enum AgentHostDispatchResult {
     FallThrough(RendererDispatch),
 }
 
-/// Compatibility task step used by direct in-process/test callers. Production
-/// frontend dispatch consumes `AgentHostDispatchResult` so it cannot erase the
-/// service/fallthrough distinction at ingress.
-pub enum CdpCommandTaskStep {
+/// Test shorthand for completing a command without an outer scheduler.
+#[cfg(test)]
+pub(crate) enum CdpCommandTaskStep {
     Pending(Box<PendingCdpCommandDispatch>),
     Complete(CdpRendererOwnerTurnOutcome),
 }
 
+#[cfg(test)]
 impl From<AgentHostDispatchResult> for CdpCommandTaskStep {
     fn from(result: AgentHostDispatchResult) -> Self {
         match result {
@@ -109,8 +109,8 @@ impl From<AgentHostDispatchResult> for CdpCommandTaskStep {
     }
 }
 
+#[cfg(test)]
 impl CdpCommandTaskStep {
-    #[cfg(test)]
     pub fn into_parts(self) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
         match self {
             Self::Complete(outcome) => outcome.into_parts(),
@@ -667,10 +667,7 @@ impl CdpConnection {
                 return self
                     .complete_with_output_plan(
                         &mut command_context,
-                        CommandOutputPlan::error_without_session(
-                            error.response_code(),
-                            error.response_message(),
-                        ),
+                        CommandOutputPlan::error(error.response_code(), error.response_message()),
                         error.command_id(),
                         None,
                     )
@@ -1655,25 +1652,20 @@ impl CdpConnection {
         if let Some(response_delivery) = response_delivery_override {
             command_context.set_terminal_response_delivery_override(response_delivery);
         }
-        let mut step: CdpCommandTaskStep = match command.as_ref() {
-            Ok(command) => self
-                .start_parsed_command_dispatch_with_context(command, &mut command_context)
-                .into(),
-            Err(error) => self
-                .complete_with_output_plan(
-                    &mut command_context,
-                    CommandOutputPlan::error_without_session(
-                        error.response_code(),
-                        error.response_message(),
-                    ),
-                    error.command_id(),
-                    None,
-                )
-                .into(),
+        let mut step = match command.as_ref() {
+            Ok(command) => {
+                self.start_parsed_command_dispatch_with_context(command, &mut command_context)
+            }
+            Err(error) => self.complete_with_output_plan(
+                &mut command_context,
+                CommandOutputPlan::error(error.response_code(), error.response_message()),
+                error.command_id(),
+                None,
+            ),
         };
         loop {
-            match step {
-                CdpCommandTaskStep::Complete(outcome) => {
+            let pending = match step {
+                AgentHostDispatchResult::Complete(outcome) => {
                     let (
                         mut complete_protocol_events,
                         mut complete_post_renderer_output_events,
@@ -1696,16 +1688,16 @@ impl CdpConnection {
                     }
                     break;
                 }
-                CdpCommandTaskStep::Pending(pending) => {
-                    let completed = Box::pin(pending.wait()).await;
-                    step = Box::pin(self.complete_pending_command_dispatch_with_context(
-                        completed,
-                        &mut command_context,
-                    ))
-                    .await
-                    .into();
-                }
-            }
+                AgentHostDispatchResult::PendingService(pending) => pending,
+                AgentHostDispatchResult::FallThrough(dispatch) => dispatch.into_pending(),
+            };
+            let completed = Box::pin(pending.wait()).await;
+            step =
+                Box::pin(self.complete_pending_command_dispatch_with_context(
+                    completed,
+                    &mut command_context,
+                ))
+                .await;
         }
         Box::pin(
             crate::domains::activity::project_protocol_local_command_outputs(

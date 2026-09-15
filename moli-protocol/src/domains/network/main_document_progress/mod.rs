@@ -129,12 +129,9 @@ impl MainDocumentBodyProgressSource {
         let Some(live_source) = self.live_source.as_ref() else {
             return;
         };
-        let final_exchange = navigation_exchange_group(
-            network_observation_journal,
-            redirect_chain.len(),
-            redirect_chain.len(),
-        )
-        .and_then(|group| group.last());
+        let final_exchange = network_observation_journal
+            .redirect_exchange_group(redirect_chain.len(), redirect_chain.len())
+            .and_then(|group| group.last());
         let final_network_extra_info_available =
             final_exchange.is_some_and(|exchange| exchange.response().is_none());
         let final_request_cookie_report = final_exchange
@@ -371,11 +368,11 @@ impl MainDocumentLiveNetworkProgressSource {
         }
         for (index, redirect) in redirect_chain.iter().enumerate() {
             let target = self.progress_target();
-            let observed_response_available =
-                navigation_exchange_group(network_observation_journal, redirect_chain.len(), index)
-                    .and_then(|group| group.last())
-                    .and_then(NetworkExchangeObservation::response)
-                    .is_some();
+            let observed_response_available = network_observation_journal
+                .redirect_exchange_group(redirect_chain.len(), index)
+                .and_then(|group| group.last())
+                .and_then(NetworkExchangeObservation::response)
+                .is_some();
             if observed_response_available && !redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     network_observation_journal,
@@ -680,144 +677,6 @@ fn emit_main_document_initial_request_will_be_sent_for_sessions_into(
     true
 }
 
-pub(crate) fn emit_child_document_navigation_network_background_events(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &crate::conn::CommandOwnerScope,
-    frame_id: &str,
-    loader_id: &str,
-    request_id: &str,
-    timestamp: f64,
-    network: &moli_core::page::ChildFrameDocumentNetworkSnapshot,
-) {
-    let Ok(request_url) = Url::parse(&network.request_url) else {
-        return;
-    };
-    let response = match &network.response {
-        Ok(response) => {
-            let Ok(final_url) = Url::parse(&response.final_url) else {
-                return;
-            };
-            Ok((response, final_url))
-        }
-        Err(error) => Err(error),
-    };
-    let session_ids = conn.network_event_session_ids_for_owner(owner);
-    if session_ids.is_empty() {
-        return;
-    }
-    // The same committed response may be reconstructed by a snapshot-only
-    // observer before its original source FIFO is consumed. Use the existing
-    // request publication claim, not a second child-network cursor.
-    if !conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .is_ok_and(|slot| slot.claim_completed_subresource_request_id(request_id))
-    {
-        return;
-    }
-    let target = MainDocumentProgressEventTarget {
-        session_ids: session_ids.clone(),
-        request_id: request_id.to_owned(),
-        loader_id: loader_id.to_owned(),
-        frame_id: frame_id.to_owned(),
-        timestamp,
-    };
-    let mut output = MainDocumentProgressOutputTarget::background_events(out);
-    output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-        target: target.clone(),
-        url: request_url,
-        method: network.request_method.clone(),
-        request_body: None,
-        request_headers: network.request_headers.clone(),
-        request_initiator_type: SubresourceRequestInitiatorType::Parser,
-        redirect_response: Box::new(None),
-        redirect_has_extra_info: false,
-        cookie_access_report: None,
-    });
-    let (response, final_url) = match response {
-        Ok(response) => response,
-        Err(error) => {
-            record_child_document_response_body(conn, owner, request_id, &session_ids, None);
-            output.emit_event(MainDocumentNavigationProgressEvent::LoadingFailed {
-                target,
-                error_text: error.clone(),
-            });
-            return;
-        }
-    };
-    output.emit_event(MainDocumentNavigationProgressEvent::ResponseReceived {
-        target: target.clone(),
-        final_url,
-        status: response.status,
-        headers: response.response_headers.clone(),
-        cookie_set_reports: Vec::new(),
-        extra_info_status: response.status,
-        extra_info_headers: response.response_headers.clone(),
-        network_extra_info_available: false,
-        emit_extra_info: false,
-        encoded_data_length: 0,
-        from_cache: response.from_cache,
-        negotiated_http_version: None,
-        has_extra_info: false,
-    });
-    record_child_document_response_body(
-        conn,
-        owner,
-        request_id,
-        &session_ids,
-        response.response_body.as_ref(),
-    );
-    output.emit_event(MainDocumentNavigationProgressEvent::LoadingFinished {
-        target,
-        encoded_data_length: response.encoded_data_length,
-    });
-}
-
-fn record_child_document_response_body(
-    conn: &mut CdpConnection,
-    owner: &crate::conn::CommandOwnerScope,
-    request_id: &str,
-    session_ids: &[Option<String>],
-    response_body: Option<&moli_core::page::SubresourceResponseBody>,
-) {
-    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
-    let encoded_data_length = response_body.map_or(0, |body| body.len());
-    let collector_ids =
-        conn.network_data_collector_ids_for_owner_body(owner, data_type, encoded_data_length);
-    let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
-    let captured_body =
-        response_body.map(crate::conn::CapturedBody::from_subresource_response_body);
-    if let Some(captured_body) = captured_body.as_ref() {
-        conn.record_collected_network_data_body(
-            request_id.to_owned(),
-            data_type,
-            captured_body.clone(),
-            collector_ids.iter().cloned(),
-            collection_was_gated,
-        );
-    }
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
-        return;
-    };
-    if let Some(captured_body) = captured_body {
-        runtime_slot.record_captured_response_body_source_with_collector_scope(
-            request_id.to_owned(),
-            captured_body,
-            session_ids.iter().cloned(),
-            collector_ids,
-            collection_was_gated,
-        );
-    } else {
-        runtime_slot.record_failed_response_body_with_collector_scope(
-            request_id.to_owned(),
-            "child document response body unavailable".to_owned(),
-            session_ids.iter().cloned(),
-            collector_ids,
-            collection_was_gated,
-        );
-    }
-}
-
 pub(crate) fn response_stage_main_document_navigation_network_progress(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -908,7 +767,15 @@ impl CompletedMainDocumentProgressContext {
         MainDocumentNavigationProgressEventBatches::new(
             self.request_and_redirect_progress_events(events),
             self.response_received_progress_events(events, final_url, encoded_data_length),
-            self.loading_finished_progress_events(encoded_data_length),
+            self.progress_target()
+                .map(
+                    |target| MainDocumentNavigationProgressEvent::LoadingFinished {
+                        target,
+                        encoded_data_length,
+                    },
+                )
+                .into_iter()
+                .collect(),
         )
     }
 
@@ -960,14 +827,12 @@ impl CompletedMainDocumentProgressContext {
             ));
         }
         for (index, redirect) in events.redirect_chain.iter().enumerate() {
-            let observed_response_available = navigation_exchange_group(
-                &events.network_observation_journal,
-                events.redirect_chain.len(),
-                index,
-            )
-            .and_then(|group| group.last())
-            .and_then(NetworkExchangeObservation::response)
-            .is_some();
+            let observed_response_available = events
+                .network_observation_journal
+                .redirect_exchange_group(events.redirect_chain.len(), index)
+                .and_then(|group| group.last())
+                .and_then(NetworkExchangeObservation::response)
+                .is_some();
             if observed_response_available && !redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     &events.network_observation_journal,
@@ -1092,19 +957,6 @@ impl CompletedMainDocumentProgressContext {
         }]
     }
 
-    fn loading_finished_progress_events(
-        &self,
-        encoded_data_length: usize,
-    ) -> Vec<MainDocumentNavigationProgressEvent> {
-        let Some(target) = self.progress_target() else {
-            return Vec::new();
-        };
-        vec![MainDocumentNavigationProgressEvent::LoadingFinished {
-            target,
-            encoded_data_length,
-        }]
-    }
-
     fn progress_target(&self) -> Option<MainDocumentProgressEventTarget> {
         Some(MainDocumentProgressEventTarget {
             session_ids: self.session_ids.clone(),
@@ -1215,49 +1067,14 @@ fn request_extra_info_event(
     }
 }
 
-fn navigation_exchange_group(
-    journal: &NetworkObservationJournal,
-    redirect_count: usize,
-    hop_index: usize,
-) -> Option<&[NetworkExchangeObservation]> {
-    // A truncated journal still proves that a transport exchange happened, but
-    // no longer provides a trustworthy tail for redirect-hop correlation.
-    if journal.truncated() {
-        return None;
-    }
-    if hop_index > redirect_count {
-        return None;
-    }
-
-    let exchanges = journal.exchanges();
-    let mut group_start = 0;
-    let mut current_hop = 0;
-    for (index, exchange) in exchanges.iter().enumerate() {
-        let ends_redirect_hop = exchange.response().is_some_and(|response| {
-            matches!(response.status(), 301 | 302 | 303 | 307 | 308)
-                || response.headers().iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("critical-ch") && !value.trim_ascii().is_empty()
-                })
-        });
-        if !ends_redirect_hop || current_hop >= redirect_count {
-            continue;
-        }
-        if current_hop == hop_index {
-            return Some(&exchanges[group_start..=index]);
-        }
-        current_hop += 1;
-        group_start = index.saturating_add(1);
-    }
-    (current_hop == hop_index && group_start < exchanges.len()).then_some(&exchanges[group_start..])
-}
-
 fn observed_request_headers(
     journal: &NetworkObservationJournal,
     redirect_count: usize,
     hop_index: usize,
     fallback: &[(String, String)],
 ) -> Vec<(String, String)> {
-    navigation_exchange_group(journal, redirect_count, hop_index)
+    journal
+        .redirect_exchange_group(redirect_count, hop_index)
         .and_then(|group| group.first())
         .map(|exchange| exchange.request().headers().to_vec())
         .unwrap_or_else(|| fallback.to_vec())
@@ -1270,7 +1087,8 @@ fn observed_response_metadata(
     fallback_status: u16,
     fallback_headers: &[(String, Vec<u8>)],
 ) -> (u16, Vec<(String, Vec<u8>)>) {
-    navigation_exchange_group(journal, redirect_count, hop_index)
+    journal
+        .redirect_exchange_group(redirect_count, hop_index)
         .and_then(|group| group.last())
         .and_then(NetworkExchangeObservation::response)
         .map(|response| (response.status(), response.headers().to_vec()))
@@ -1640,6 +1458,7 @@ pub(crate) fn native_navigation_response_events(
     response: &moli_core::browser::NavigationResponseSnapshot,
     emit_response: bool,
     metadata_emitted: bool,
+    received_bytes: usize,
     command_reply: Vec<BackgroundProtocolEvent>,
 ) -> Vec<BackgroundProtocolEvent> {
     let mut out = Vec::new();
@@ -1664,12 +1483,10 @@ pub(crate) fn native_navigation_response_events(
                     let redirects = request
                         .map(|request| request.redirect_chain())
                         .unwrap_or_default();
-                    let final_exchange = navigation_exchange_group(
-                        &response.observations,
-                        redirects.len(),
-                        redirects.len(),
-                    )
-                    .and_then(|group| group.last());
+                    let final_exchange = &response
+                        .observations
+                        .redirect_exchange_group(redirects.len(), redirects.len())
+                        .and_then(|group| group.last());
                     let cookie_report =
                         final_exchange.and_then(|exchange| exchange.request().cookie_report());
                     let events = source.redirect_request_events(
@@ -1757,16 +1574,43 @@ pub(crate) fn native_navigation_response_events(
             event.emit_into(&mut output);
         }
     }
+    if let Some(request_id) = &state.request_id {
+        for session_id in &context.session_ids {
+            super::events::emit_data_received(
+                &mut output,
+                session_id.as_deref(),
+                request_id,
+                state.timestamp,
+                received_bytes,
+                received_bytes,
+            );
+        }
+    }
     match &response.body {
         Some(Ok(body)) => {
             record_completed_main_document_response_body(conn, state, false, body);
-            for event in context.loading_finished_progress_events(body.len()) {
-                event.emit_into(&mut output);
+            if let Some(target) = context.progress_target() {
+                for session_id in &target.session_ids {
+                    super::events::emit_loading_finished(
+                        &mut output,
+                        session_id.as_deref(),
+                        &target.request_id,
+                        &target.frame_id,
+                        &target.loader_id,
+                        target.timestamp,
+                        body.len(),
+                        crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+                    );
+                }
             }
         }
         Some(Err(error)) => {
-            record_failed_main_document_response_body(conn, state, error.clone());
-            if let Some(event) = observed_navigation_failure_event(conn, state, error) {
+            if let Some(body) = &error.partial_body {
+                record_completed_main_document_response_body(conn, state, false, body);
+            } else {
+                record_failed_main_document_response_body(conn, state, error.error_text.clone());
+            }
+            if let Some(event) = observed_navigation_failure_event(conn, state, &error.error_text) {
                 event.emit_into(&mut output);
             }
         }

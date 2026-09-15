@@ -575,9 +575,8 @@ mod tests {
                     .expect("test WebContents")
                     .expect("test Document");
                 assert_eq!(context.document_title(document).unwrap(), title);
-                let result = context
-                    .evaluate_document_expression_for_test(
-                        document,
+                let result = context.document_mut(document).unwrap().page
+                    .evaluate_runtime_expression_without_navigation_follow_with_await_async(
                         "navigator.permissions.query({name:'geolocation'}).then(status => status.state)",
                         true,
                     )

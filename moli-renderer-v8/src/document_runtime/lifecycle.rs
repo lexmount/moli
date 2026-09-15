@@ -285,7 +285,6 @@ impl DocumentRuntime {
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;
         self.main_document_script_preloads = Default::default();
-        self.document_write_script_preloads.clear();
         self.pending_parser_blocking_work = None;
         self.root_document_parser = None;
         self.delivered_meta_content_security_policies

@@ -375,7 +375,7 @@ impl PageVm {
         // Feed the previous exact task result into the driver before other
         // page work is admitted. `AwaitProgress` parks immediately; a producer
         // wake returns to owner arbitration instead of waiting in this method.
-        let request_client = self.request_client.clone();
+
         let (driver, completed_task) = {
             let pending = pending_document_lifecycle_turn
                 .as_mut()
@@ -391,20 +391,13 @@ impl PageVm {
             } = self;
             vm.as_mut()
                 .expect("PageVm must retain a live ScriptVm until drop")
-                .advance_post_parse_lifecycle(
-                    &request_client,
-                    page_task_queue,
-                    report,
-                    driver,
-                    completed_task,
-                )
+                .advance_post_parse_lifecycle(page_task_queue, report, driver, completed_task)
                 .await
                 .map_err(anyhow::Error::msg)?
         };
         match advance {
             PostParseLifecycleAdvance::PageOwnedTask(task) => {
                 self.execute_and_complete_selected_post_parse_page_owned_task(
-                    &request_client,
                     pending_document_lifecycle_turn,
                     document,
                     stage,

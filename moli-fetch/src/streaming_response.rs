@@ -240,13 +240,14 @@ impl StreamingRawResponse {
 
     /// Retains an owning runtime lease until this response finishes or is
     /// dropped. Higher layers use this to keep the exact transport owner alive
-    /// after response headers have been delivered.
+    /// after response headers have been delivered. Additional owners retain
+    /// earlier leases through the same terminal boundary.
     pub fn with_lifetime_lease<T>(mut self, lease: T) -> Self
     where
         T: Any + Send + Sync,
     {
         self.lifetime_lease = Some(StreamingResponseLifetimeLease {
-            _value: Box::new(lease),
+            _value: Box::new((self.lifetime_lease.take(), lease)),
         });
         self
     }
@@ -498,7 +499,13 @@ mod tests {
         .with_lifetime_lease(CompletionOrderLease {
             completion_tx: Some(completion_tx),
             dropped_before_completion_closed: Arc::clone(&dropped_before_completion_closed),
-        });
+        })
+        .with_lifetime_lease(());
+
+        assert!(
+            !dropped_before_completion_closed.load(Ordering::SeqCst),
+            "adding a consumer lease must retain the physical transport owner"
+        );
 
         drop(response);
 

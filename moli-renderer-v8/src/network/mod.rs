@@ -57,7 +57,8 @@ pub(crate) fn request_resource_type_for_subresource(
         SubresourceResourceType::CspReport => Some(RequestResourceType::CspReport),
         SubresourceResourceType::Dictionary => Some(RequestResourceType::Dictionary),
         SubresourceResourceType::Manifest => Some(RequestResourceType::Manifest),
-        SubresourceResourceType::Fetch
+        SubresourceResourceType::Document
+        | SubresourceResourceType::Fetch
         | SubresourceResourceType::EventSource
         | SubresourceResourceType::Xhr
         | SubresourceResourceType::WebSocket => None,

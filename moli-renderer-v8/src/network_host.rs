@@ -33,8 +33,7 @@ use crate::network::ResourceRequestClient;
 pub(crate) use self::async_fetch::{
     CompletedResourceFetch, collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer,
-    fetch_browser_subresource_with_preflight_headers_and_observer, resource_request_started,
-    send_resource_completion, spawn_async_subresource_fetch,
+    resource_request_started, send_resource_completion, spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;

@@ -42,7 +42,12 @@ pub enum RendererOwnerAction {
     ChildFrameLoad {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,
-        network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
+    },
+    ChildFrameNavigationStarted {
+        source_document: RendererDocumentLifecycleIdentity,
+        frame_id: String,
+        loader_id: String,
+        url: String,
     },
     SameDocumentNavigation(RendererDocumentSourcedSameDocumentNavigation),
     SessionHistoryUpdate {

@@ -1,9 +1,9 @@
 use crate::module_script_continuation::MainParserDeferredClassicSourceLoadCompletion;
 use crate::page_resource_completion::{
     MainDynamicImportGraphFetchCompletion, MainModulepreloadFetchCompletion,
-    MainParserDeferredClassicSourceNetworkAttribution, MainParserModuleGraphFetchCompletion,
-    MainRuntimeModuleGraphFetchCompletion, RendererPageResourceCompletion,
-    RendererPageResourceCompletionSender, RendererResourceCompletionRouteClosed,
+    MainParserModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchCompletion,
+    RendererPageResourceCompletion, RendererPageResourceCompletionSender,
+    RendererResourceCompletionRouteClosed,
 };
 use crate::runtime::{
     RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererOwnerRuntimeActivitySource,
@@ -416,13 +416,11 @@ impl RendererResourceCompletionSender {
     pub(crate) fn send_main_parser_deferred_classic_source_load(
         &self,
         completion: MainParserDeferredClassicSourceLoadCompletion,
-        network_attribution: MainParserDeferredClassicSourceNetworkAttribution,
     ) -> Result<(), RendererResourceCompletionRouteClosed> {
         self.send_page_completion(|root_document| {
             RendererPageResourceCompletion::main_parser_deferred_classic_source(
                 root_document,
                 completion,
-                network_attribution,
             )
         })
     }
@@ -732,8 +730,7 @@ mod tests {
     };
     use crate::page_resource_completion::{
         MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
-        MainModuleFetchNetworkAttribution, MainModulepreloadFetchCompletion,
-        MainModulepreloadFetchTarget, MainParserDeferredClassicSourceNetworkAttribution,
+        MainModulepreloadFetchCompletion, MainModulepreloadFetchTarget,
         MainParserModuleGraphFetchCompletion, MainParserModuleGraphFetchTarget,
         MainRuntimeModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchTarget,
         RendererPageResourceCompletionOwner, RendererPageResourceTerminal,
@@ -743,9 +740,8 @@ mod tests {
     use crate::runtime::{RendererDocumentToken, RendererPageToken};
     use crate::types::{
         AsyncSubresourceFetchCompletion, ChildBlockingStylesheetLoadCompletion,
-        ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution,
-        ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, ChildDynamicImportFetchCompletion,
-        ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
+        ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion, ChildDocumentLoadOutcome,
+        ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
         ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
         DocumentWriteExternalScriptLoadCompletion, LoadedChildDocument,
         PopupDocumentLoadCompletion, PopupDocumentLoadOutcome,
@@ -855,15 +851,6 @@ mod tests {
         )
     }
 
-    fn main_parser_deferred_network_attribution(
-        parser_position: usize,
-    ) -> MainParserDeferredClassicSourceNetworkAttribution {
-        MainParserDeferredClassicSourceNetworkAttribution::new(
-            Url::parse("https://example.test/document").unwrap(),
-            Url::parse(&format!("https://example.test/defer-{parser_position}.js")).unwrap(),
-        )
-    }
-
     fn main_parser_module_target(
         owner: FrameDocumentTaskOwner,
         parser_position: usize,
@@ -897,10 +884,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -932,10 +916,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -962,10 +943,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -992,10 +970,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -1031,34 +1006,17 @@ mod tests {
             handle: child_handle,
             script_handle: moli_dom::native::NativeNodeId::new(19),
             result: Ok("globalThis.childClassic = true".to_owned()),
-            network_result: None,
-            network_attribution: ChildClassicScriptNetworkAttribution {
-                frame_id: Some("child-frame".to_owned()),
-                document_url: Url::parse("https://example.test/child").unwrap(),
-                request_url: Url::parse("https://example.test/child.js").unwrap(),
-            },
         }
-    }
-
-    fn child_module_network_attribution(request_url: Url) -> ChildModuleFetchNetworkAttribution {
-        ChildModuleFetchNetworkAttribution::parser(
-            Some("child-module-frame".to_owned()),
-            Url::parse("https://example.test/child-module-document").unwrap(),
-            request_url,
-        )
     }
 
     fn child_modulepreload_completion(
         child_handle: moli_dom::native::NativeNodeId,
         owner: FrameDocumentTaskOwner,
     ) -> ChildModulepreloadFetchCompletion {
-        let request_url = Url::parse("https://example.test/child-modulepreload.js").unwrap();
         ChildModulepreloadFetchCompletion::new(
             ChildDocumentModuleFetchTarget::new(child_handle, owner, FrameRealmId(59)),
             83,
             Err("modulepreload fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(request_url),
         )
     }
 
@@ -1066,17 +1024,10 @@ mod tests {
         child_handle: moli_dom::native::NativeNodeId,
         owner: FrameDocumentTaskOwner,
     ) -> ChildDynamicImportFetchCompletion {
-        let request_url = Url::parse("https://example.test/child-dynamic-import.js").unwrap();
         ChildDynamicImportFetchCompletion::new(
             ChildDocumentModuleFetchTarget::new(child_handle, owner, FrameRealmId(59)),
             89,
             Err("dynamic import fetch failed for route test".to_owned()),
-            None,
-            ChildModuleFetchNetworkAttribution::dynamic_import(
-                Some("child-module-frame".to_owned()),
-                Url::parse("https://example.test/child-module-document").unwrap(),
-                request_url,
-            ),
         )
     }
 
@@ -1090,8 +1041,6 @@ mod tests {
             FrameRequestId(61),
             ModuleMapKey::java_script(request_url.clone()),
             Err("root fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(request_url),
         )
     }
 
@@ -1149,8 +1098,6 @@ mod tests {
             FrameRequestId(89),
             task,
             Err("dependency fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(dependency_url),
         )
     }
 
@@ -1164,7 +1111,7 @@ mod tests {
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
-                    document_network: None,
+                    resource_timing: None,
                     markup: "<!doctype html><main>child</main>".to_owned(),
                 },
             ))),
@@ -1189,7 +1136,7 @@ mod tests {
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
-                    document_network: None,
+                    resource_timing: None,
                     markup: "<!doctype html><main>popup</main>".to_owned(),
                 },
             ))),
@@ -1210,10 +1157,9 @@ mod tests {
         let owner = frame_document_task_owner(7);
 
         sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(owner, 11),
-                main_parser_deferred_network_attribution(11),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                owner, 11,
+            ))
             .expect("typed parser-deferred completion should enqueue");
         let (_, completion) = page_queue
             .pop_front()
@@ -1583,16 +1529,16 @@ mod tests {
         let colliding_local_owner = frame_document_task_owner(0);
 
         replacement_document_sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(colliding_local_owner, 2),
-                main_parser_deferred_network_attribution(2),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                colliding_local_owner,
+                2,
+            ))
             .unwrap();
         old_document_sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(colliding_local_owner, 1),
-                main_parser_deferred_network_attribution(1),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                colliding_local_owner,
+                1,
+            ))
             .unwrap();
 
         let first = page_queue.pop_front().unwrap().1;

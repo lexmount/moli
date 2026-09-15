@@ -6,16 +6,14 @@ use crate::{
     network::context::DocumentResourceLoader,
     page_resource_completion::{
         MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
-        MainModuleFetchNetworkAttribution, MainModulepreloadFetchCompletion,
-        MainModulepreloadFetchTarget, MainParserModuleGraphFetchCompletion,
-        MainParserModuleGraphFetchTarget, MainRuntimeModuleGraphFetchCompletion,
-        MainRuntimeModuleGraphFetchTarget,
+        MainModulepreloadFetchCompletion, MainModulepreloadFetchTarget,
+        MainParserModuleGraphFetchCompletion, MainParserModuleGraphFetchTarget,
+        MainRuntimeModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchTarget,
     },
     page_task_queue::RendererResourceCompletionSender,
     types::{
-        ChildDynamicImportFetchCompletion, ChildModuleFetchNetworkAttribution,
-        ChildModulepreloadFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
-        SharedNavigationResponseResult,
+        ChildDynamicImportFetchCompletion, ChildModulepreloadFetchCompletion,
+        ModuleGraphFetchOrdering, ModuleGraphFetchRequester, SharedNavigationResponseResult,
     },
 };
 use moli_fetch::ScriptFetchSchedulerPriority;
@@ -67,7 +65,7 @@ impl MainModuleFetchSchedule {
         completion_tx: &RendererResourceCompletionSender,
         result: std::result::Result<ModuleGraphFetchedSource, String>,
         network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: MainModuleFetchNetworkAttribution,
+        request_url: url::Url,
     ) {
         match self {
             Self::Parser(target) => {
@@ -76,7 +74,7 @@ impl MainModuleFetchSchedule {
                         target,
                         result,
                         network_result,
-                        network_attribution,
+                        request_url,
                     ),
                 );
             }
@@ -86,7 +84,7 @@ impl MainModuleFetchSchedule {
                         target,
                         result,
                         network_result,
-                        network_attribution,
+                        request_url,
                     ),
                 );
             }
@@ -96,7 +94,7 @@ impl MainModuleFetchSchedule {
                         target,
                         result,
                         network_result,
-                        network_attribution,
+                        request_url,
                     ),
                 );
             }
@@ -106,7 +104,7 @@ impl MainModuleFetchSchedule {
                         target,
                         result,
                         network_result,
-                        network_attribution,
+                        request_url,
                     ),
                 );
             }
@@ -129,14 +127,8 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         target: MainParserModuleGraphFetchTarget,
         request: NativeModuleGraphFetchRequest,
-        document_url: url::Url,
     ) {
-        self.schedule_main_module_fetch(
-            loader,
-            MainModuleFetchSchedule::Parser(target),
-            request,
-            document_url,
-        );
+        self.schedule_main_module_fetch(loader, MainModuleFetchSchedule::Parser(target), request);
     }
 
     pub(crate) fn schedule_main_runtime_module_graph_fetch(
@@ -144,14 +136,8 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         target: MainRuntimeModuleGraphFetchTarget,
         request: NativeModuleGraphFetchRequest,
-        document_url: url::Url,
     ) {
-        self.schedule_main_module_fetch(
-            loader,
-            MainModuleFetchSchedule::Runtime(target),
-            request,
-            document_url,
-        );
+        self.schedule_main_module_fetch(loader, MainModuleFetchSchedule::Runtime(target), request);
     }
 
     pub(crate) fn schedule_main_modulepreload_fetch(
@@ -159,13 +145,11 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         target: MainModulepreloadFetchTarget,
         request: NativeModuleGraphFetchRequest,
-        document_url: url::Url,
     ) {
         self.schedule_main_module_fetch(
             loader,
             MainModuleFetchSchedule::Modulepreload(target),
             request,
-            document_url,
         );
     }
 
@@ -174,13 +158,11 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         target: MainDynamicImportGraphFetchTarget,
         request: NativeModuleGraphFetchRequest,
-        document_url: url::Url,
     ) {
         self.schedule_main_module_fetch(
             loader,
             MainModuleFetchSchedule::DynamicImport(target),
             request,
-            document_url,
         );
     }
 
@@ -189,18 +171,14 @@ impl RendererResourceScheduler {
         loader: DocumentResourceLoader,
         schedule: MainModuleFetchSchedule,
         request: NativeModuleGraphFetchRequest,
-        document_url: url::Url,
     ) {
         let requester = schedule.requester();
         let ordering = schedule.ordering();
         let request = prioritized_module_graph_fetch_request(requester, ordering, request);
         let request_url = request.source_url().clone();
-        let network_attribution =
-            MainModuleFetchNetworkAttribution::new(document_url, request_url.clone());
         trace_module_graph_fetch_scheduled(schedule.load_id(), requester, ordering, &request_url);
 
         let completion_tx = self.completion_tx.clone();
-        let callback_attribution = network_attribution.clone();
         let callback_request_url = request_url.clone();
         let send_completion =
             move |result: std::result::Result<ModuleGraphFetchedSource, String>,
@@ -216,10 +194,19 @@ impl RendererResourceScheduler {
                     &completion_tx,
                     result,
                     network_result,
-                    callback_attribution,
+                    callback_request_url,
                 );
             };
-        if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
+        if let Err(error) = request.fetch_source_for_document(
+            &loader,
+            match requester {
+                ModuleGraphFetchRequester::DynamicImport => {
+                    crate::types::SubresourceRequestInitiatorType::Script
+                }
+                _ => crate::types::SubresourceRequestInitiatorType::Parser,
+            },
+            send_completion,
+        ) {
             let error = error.to_string();
             trace_module_graph_fetch_schedule_error(
                 schedule.load_id(),
@@ -232,7 +219,7 @@ impl RendererResourceScheduler {
                 &self.completion_tx,
                 Err(error.clone()),
                 Some(Arc::new(Err(error))),
-                network_attribution,
+                request_url,
             );
         }
     }
@@ -243,7 +230,6 @@ impl RendererResourceScheduler {
         target: ChildDocumentModuleFetchTarget,
         load_id: u64,
         request: NativeModuleGraphFetchRequest,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
         let requester = ModuleGraphFetchRequester::DynamicImport;
         let ordering = ModuleGraphFetchOrdering::Runtime;
@@ -252,11 +238,10 @@ impl RendererResourceScheduler {
         trace_module_graph_fetch_scheduled(load_id, requester, ordering, &request_url);
 
         let completion_tx = self.completion_tx.clone();
-        let callback_attribution = network_attribution.clone();
         let callback_request_url = request_url.clone();
         let send_completion =
             move |result: std::result::Result<ModuleGraphFetchedSource, String>,
-                  network_result: Option<SharedNavigationResponseResult>| {
+                  _network_result: Option<SharedNavigationResponseResult>| {
                 trace_module_graph_fetch_callback(
                     load_id,
                     requester,
@@ -265,16 +250,19 @@ impl RendererResourceScheduler {
                     result.is_ok(),
                 );
                 let _ = completion_tx.send_child_dynamic_import_fetch(
-                    ChildDynamicImportFetchCompletion::new(
-                        target,
-                        load_id,
-                        result,
-                        network_result,
-                        callback_attribution,
-                    ),
+                    ChildDynamicImportFetchCompletion::new(target, load_id, result),
                 );
             };
-        if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
+        if let Err(error) = request.fetch_source_for_document(
+            &loader,
+            match requester {
+                ModuleGraphFetchRequester::DynamicImport => {
+                    crate::types::SubresourceRequestInitiatorType::Script
+                }
+                _ => crate::types::SubresourceRequestInitiatorType::Parser,
+            },
+            send_completion,
+        ) {
             let error = error.to_string();
             trace_module_graph_fetch_schedule_error(
                 load_id,
@@ -284,13 +272,7 @@ impl RendererResourceScheduler {
                 &error,
             );
             let _ = self.completion_tx.send_child_dynamic_import_fetch(
-                ChildDynamicImportFetchCompletion::new(
-                    target,
-                    load_id,
-                    Err(error.clone()),
-                    Some(Arc::new(Err(error))),
-                    network_attribution,
-                ),
+                ChildDynamicImportFetchCompletion::new(target, load_id, Err(error.clone())),
             );
         }
     }
@@ -301,7 +283,6 @@ impl RendererResourceScheduler {
         target: ChildDocumentModuleFetchTarget,
         load_id: u64,
         request: NativeModuleGraphFetchRequest,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) {
         let requester = ModuleGraphFetchRequester::ModulePreload;
         let ordering = ModuleGraphFetchOrdering::BackgroundPreload;
@@ -310,11 +291,10 @@ impl RendererResourceScheduler {
         trace_module_graph_fetch_scheduled(load_id, requester, ordering, &request_url);
 
         let completion_tx = self.completion_tx.clone();
-        let callback_attribution = network_attribution.clone();
         let callback_request_url = request_url.clone();
         let send_completion =
             move |result: std::result::Result<ModuleGraphFetchedSource, String>,
-                  network_result: Option<SharedNavigationResponseResult>| {
+                  _network_result: Option<SharedNavigationResponseResult>| {
                 trace_module_graph_fetch_callback(
                     load_id,
                     requester,
@@ -323,16 +303,19 @@ impl RendererResourceScheduler {
                     result.is_ok(),
                 );
                 let _ = completion_tx.send_child_modulepreload_fetch(
-                    ChildModulepreloadFetchCompletion::new(
-                        target,
-                        load_id,
-                        result,
-                        network_result,
-                        callback_attribution,
-                    ),
+                    ChildModulepreloadFetchCompletion::new(target, load_id, result),
                 );
             };
-        if let Err(error) = request.fetch_source_for_document(&loader, send_completion) {
+        if let Err(error) = request.fetch_source_for_document(
+            &loader,
+            match requester {
+                ModuleGraphFetchRequester::DynamicImport => {
+                    crate::types::SubresourceRequestInitiatorType::Script
+                }
+                _ => crate::types::SubresourceRequestInitiatorType::Parser,
+            },
+            send_completion,
+        ) {
             let error = error.to_string();
             trace_module_graph_fetch_schedule_error(
                 load_id,
@@ -342,13 +325,7 @@ impl RendererResourceScheduler {
                 &error,
             );
             let _ = self.completion_tx.send_child_modulepreload_fetch(
-                ChildModulepreloadFetchCompletion::new(
-                    target,
-                    load_id,
-                    Err(error.clone()),
-                    Some(Arc::new(Err(error))),
-                    network_attribution,
-                ),
+                ChildModulepreloadFetchCompletion::new(target, load_id, Err(error.clone())),
             );
         }
     }

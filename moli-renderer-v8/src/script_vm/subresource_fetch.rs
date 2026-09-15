@@ -89,7 +89,7 @@ fn pending_subresource_request(
         SubresourceResourceType::Xhr => {
             request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
         }
-        SubresourceResourceType::WebSocket => request,
+        SubresourceResourceType::Document | SubresourceResourceType::WebSocket => request,
     };
     Ok(match pending.continuation.window_fetch() {
         Some(fetch) => fetch.options.apply(request),
@@ -476,8 +476,6 @@ impl ScriptVm {
     pub(crate) fn start_parser_script_source_fetch_interception(
         &mut self,
         script: crate::planning::PreparedScript,
-        request_client: ResourceRequestClient,
-        task_runner: crate::network::RendererResourceTaskRunner,
         browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
         document_character_set: Option<String>,
     ) -> crate::planning::SharedScriptSourceLoad {
@@ -488,10 +486,37 @@ impl ScriptVm {
         // protocol snapshot to rediscover.
         let (load, completer) =
             crate::planning::SharedScriptSourceLoad::pending_with_owner_wake(None);
+        let loader = self
+            .current_main_document_resource_loader()
+            .expect("parser request must retain its active Document resource loader");
+        let request = crate::planning::external_script_request(
+            &script,
+            &loader.fetch_context().request_origin(),
+            Some(moli_fetch::RequestResourceType::ParserBlockingScript),
+        );
+        let Some((request_load, network, started)) = loader.prepare_resource_request(
+            &request,
+            SubresourceResourceType::Script,
+            crate::types::SubresourceRequestInitiatorType::Parser,
+        ) else {
+            completer.finish(
+                crate::planning::external_script_source_load_outcome_from_result(
+                    &script,
+                    &loader.fetch_context().request_origin(),
+                    Err("Document resource owner retired".into()),
+                    document_character_set.as_deref(),
+                ),
+            );
+            return load;
+        };
+        let request_handle = network.handle();
+        self._context_host
+            .borrow_mut()
+            .record_native_resource_observation(started);
         let (info, continuation) = browser_context_runtime.prepare_detached_parser_script_fetch(
             PendingSubresourceFetchInfo {
                 internal_id: 0,
-                network_request_handle: None,
+                network_request_handle: Some(request_handle),
                 frame_id: self.root_frame_id.clone(),
                 document_url: script.initiator_url.clone(),
                 url: script.url.clone(),
@@ -504,12 +529,8 @@ impl ScriptVm {
                 request_cookie_report: None,
             },
             script,
-            self.current_main_document_resource_loader()
-                .expect("parser interception requires its Document authority")
-                .fetch_context()
-                .request_origin(),
-            request_client,
-            task_runner,
+            loader,
+            (request_load, network),
             document_character_set,
             completer,
         );
@@ -2471,7 +2492,8 @@ impl ScriptVm {
                             let message = error.to_string();
                             let body = match error {
                                 ResourceResponseFailure::PartialBody { body, .. } => body,
-                                ResourceResponseFailure::Request(_) => {
+                                ResourceResponseFailure::Request(_)
+                                | ResourceResponseFailure::Network { .. } => {
                                     SubresourceResponseBody::from_bytes(Vec::new())
                                 }
                             };
@@ -3618,15 +3640,11 @@ impl ScriptVm {
                 body_activity,
             } => (followup.map(|application| *application), body_activity),
             crate::native_bridge::ChildDocumentLoadApplication::SupersededDuringApplication {
-                completion,
                 body_activity,
             } => {
-                let historical_network_recorded =
-                    self.record_historical_child_document_load_network(&completion);
                 self.apply_pending_child_document_owner_retirements();
                 return Ok(
                     CurrentChildDocumentLoadApplication::SupersededDuringApplication {
-                        historical_network_recorded,
                         body_activity,
                     },
                 );
@@ -3661,15 +3679,6 @@ impl ScriptVm {
             .current_child_document_navigation_fetch_target(child_handle)
     }
 
-    pub(crate) fn record_historical_child_document_load_network(
-        &mut self,
-        completion: &ChildDocumentLoadCompletion,
-    ) -> bool {
-        self._context_host
-            .borrow_mut()
-            .record_historical_child_document_load_network(completion)
-    }
-
     pub(crate) fn discard_stale_child_document_load_completion(
         &mut self,
         target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
@@ -3690,15 +3699,6 @@ impl ScriptVm {
                 .apply_child_blocking_stylesheet_load_completion(scope, completion);
             Ok(())
         })
-    }
-
-    pub(crate) fn record_historical_child_blocking_stylesheet_network_results(
-        &mut self,
-        completion: &ChildBlockingStylesheetLoadCompletion,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .record_historical_child_blocking_stylesheet_network_results(completion);
     }
 
     pub(crate) fn current_child_document_task_owner(
@@ -3741,15 +3741,6 @@ impl ScriptVm {
             let _ = application.queued_document_lifecycle;
         }
         Ok(())
-    }
-
-    pub(crate) fn record_historical_child_classic_script_network_result(
-        &mut self,
-        completion: &ChildClassicScriptLoadCompletion,
-    ) -> bool {
-        self._context_host
-            .borrow_mut()
-            .record_historical_child_classic_script_network_result(completion)
     }
 
     /// Applies a parser-module terminal only after the Page owner has proved
@@ -3812,37 +3803,6 @@ impl ScriptVm {
             return self.apply_child_module_dependency_fetch_completion_to_owner(completion);
         }
         FrameDocumentModuleTerminalQueueFollowup::none()
-    }
-
-    pub(crate) fn record_current_child_module_fetch_network_result(
-        &mut self,
-        attribution: &crate::types::ChildModuleFetchNetworkAttribution,
-        network_result: Option<&crate::types::SharedNavigationResponseResult>,
-    ) -> bool {
-        let Some(network_result) = network_result else {
-            return false;
-        };
-        self._context_host
-            .borrow_mut()
-            .record_current_child_module_fetch_network_result(attribution, network_result.as_ref());
-        true
-    }
-
-    pub(crate) fn record_historical_child_module_fetch_network_result(
-        &mut self,
-        attribution: &crate::types::ChildModuleFetchNetworkAttribution,
-        network_result: Option<&crate::types::SharedNavigationResponseResult>,
-    ) -> bool {
-        let Some(network_result) = network_result else {
-            return false;
-        };
-        self._context_host
-            .borrow_mut()
-            .record_historical_child_module_fetch_network_result(
-                attribution,
-                network_result.as_ref(),
-            );
-        true
     }
 
     #[cfg(test)]

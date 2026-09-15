@@ -1045,39 +1045,12 @@ impl DocumentWriteExternalScriptFetchTarget {
     }
 }
 
-/// Producer-captured Network attribution for a `document.write()` script.
-///
-/// This describes protocol output only. It must never participate in
-/// executable-owner authorization.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DocumentWriteExternalScriptNetworkAttribution {
-    document_url: Url,
-    request_url: Url,
-}
-
-impl DocumentWriteExternalScriptNetworkAttribution {
-    pub(crate) fn new(document_url: Url, request_url: Url) -> Self {
-        Self {
-            document_url,
-            request_url,
-        }
-    }
-
-    pub(crate) fn document_url(&self) -> &Url {
-        &self.document_url
-    }
-
-    pub(crate) fn request_url(&self) -> &Url {
-        &self.request_url
-    }
-}
-
 #[derive(Debug)]
 pub(super) struct DocumentWriteExternalScriptLoadCompletion {
     target: DocumentWriteExternalScriptFetchTarget,
     result: std::result::Result<String, String>,
     network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: DocumentWriteExternalScriptNetworkAttribution,
+    request_url: Url,
 }
 
 impl DocumentWriteExternalScriptLoadCompletion {
@@ -1085,13 +1058,13 @@ impl DocumentWriteExternalScriptLoadCompletion {
         target: DocumentWriteExternalScriptFetchTarget,
         result: std::result::Result<String, String>,
         network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: DocumentWriteExternalScriptNetworkAttribution,
+        request_url: Url,
     ) -> Self {
         Self {
             target,
             result,
             network_result,
-            network_attribution,
+            request_url,
         }
     }
 
@@ -1103,8 +1076,8 @@ impl DocumentWriteExternalScriptLoadCompletion {
         self.network_result.as_ref()
     }
 
-    pub(crate) fn network_attribution(&self) -> &DocumentWriteExternalScriptNetworkAttribution {
-        &self.network_attribution
+    pub(crate) fn request_url(&self) -> &Url {
+        &self.request_url
     }
 
     pub(crate) fn into_result(self) -> std::result::Result<String, String> {
@@ -1127,19 +1100,9 @@ impl DocumentWriteExternalScriptLoadCompletion {
             DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id),
             Ok("window.documentWriteExternalScriptLoaded = true".to_owned()),
             None,
-            DocumentWriteExternalScriptNetworkAttribution::new(
-                Url::parse("https://document-write.test/document").unwrap(),
-                Url::parse(&format!("https://document-write.test/script-{load_id}.js")).unwrap(),
-            ),
+            Url::parse(&format!("https://document-write.test/script-{load_id}.js")).unwrap(),
         )
     }
-}
-
-#[derive(Debug)]
-pub(super) struct ChildClassicScriptNetworkAttribution {
-    pub(super) frame_id: Option<String>,
-    pub(super) document_url: Url,
-    pub(super) request_url: Url,
 }
 
 #[derive(Debug)]
@@ -1149,16 +1112,11 @@ pub(super) struct ChildClassicScriptLoadCompletion {
     pub(super) handle: NativeNodeId,
     pub(super) script_handle: NativeNodeId,
     pub(super) result: std::result::Result<String, String>,
-    pub(super) network_result: Option<SharedNavigationResponseResult>,
-    pub(super) network_attribution: ChildClassicScriptNetworkAttribution,
 }
 
 #[derive(Debug)]
-pub(super) struct ChildBlockingStylesheetNetworkResult {
-    pub(super) frame_id: Option<String>,
-    pub(super) document_url: Url,
+pub(super) struct ChildStylesheetResponse {
     pub(super) request_url: Url,
-    pub(super) initiator_type: SubresourceRequestInitiatorType,
     pub(super) terminal: crate::stylesheet_blocking::StylesheetFetchTerminal,
 }
 
@@ -1167,7 +1125,7 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
-    pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
+    pub(super) network_results: Vec<ChildStylesheetResponse>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
@@ -1178,68 +1136,12 @@ impl ChildBlockingStylesheetLoadCompletion {
     }
 }
 
-/// Immutable protocol/network attribution captured before an async child
-/// module fetch starts.
-///
-/// This record deliberately contains no executable child/document/realm
-/// identity. Authorization belongs exclusively to
-/// `ChildDocumentModuleFetchTarget`.
-#[derive(Clone, Debug)]
-pub(super) struct ChildModuleFetchNetworkAttribution {
-    frame_id: Option<String>,
-    document_url: Url,
-    request_url: Url,
-    initiator_type: SubresourceRequestInitiatorType,
-}
-
-impl ChildModuleFetchNetworkAttribution {
-    pub(super) fn parser(frame_id: Option<String>, document_url: Url, request_url: Url) -> Self {
-        Self {
-            frame_id,
-            document_url,
-            request_url,
-            initiator_type: SubresourceRequestInitiatorType::Parser,
-        }
-    }
-
-    pub(super) fn dynamic_import(
-        frame_id: Option<String>,
-        document_url: Url,
-        request_url: Url,
-    ) -> Self {
-        Self {
-            frame_id,
-            document_url,
-            request_url,
-            initiator_type: SubresourceRequestInitiatorType::Script,
-        }
-    }
-
-    pub(super) fn frame_id(&self) -> Option<&str> {
-        self.frame_id.as_deref()
-    }
-
-    pub(super) fn document_url(&self) -> &Url {
-        &self.document_url
-    }
-
-    pub(super) fn request_url(&self) -> &Url {
-        &self.request_url
-    }
-
-    pub(super) fn initiator_type(&self) -> SubresourceRequestInitiatorType {
-        self.initiator_type
-    }
-}
-
 #[derive(Debug)]
 pub(super) struct ChildParserModuleRootFetchCompletion {
     target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
     request_id: crate::frame_owner_model::FrameRequestId,
     request_key: crate::module_runtime::ModuleMapKey,
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-    network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: ChildModuleFetchNetworkAttribution,
 }
 
 impl ChildParserModuleRootFetchCompletion {
@@ -1248,16 +1150,12 @@ impl ChildParserModuleRootFetchCompletion {
         request_id: crate::frame_owner_model::FrameRequestId,
         request_key: crate::module_runtime::ModuleMapKey,
         result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-        network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) -> Self {
         Self {
             target,
             request_id,
             request_key,
             result,
-            network_result,
-            network_attribution,
         }
     }
 
@@ -1267,14 +1165,6 @@ impl ChildParserModuleRootFetchCompletion {
 
     pub(super) fn request_id(&self) -> crate::frame_owner_model::FrameRequestId {
         self.request_id
-    }
-
-    pub(super) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
-        self.network_result.as_ref()
-    }
-
-    pub(super) fn network_attribution(&self) -> &ChildModuleFetchNetworkAttribution {
-        &self.network_attribution
     }
 
     pub(super) fn into_module_terminal_parts(
@@ -1294,8 +1184,6 @@ pub(super) struct ChildModuleDependencyFetchCompletion {
     request_id: crate::frame_owner_model::FrameRequestId,
     task: crate::frame_owner_model::FrameDocumentModuleDependencyFetchTask,
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-    network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: ChildModuleFetchNetworkAttribution,
 }
 
 impl ChildModuleDependencyFetchCompletion {
@@ -1304,8 +1192,6 @@ impl ChildModuleDependencyFetchCompletion {
         request_id: crate::frame_owner_model::FrameRequestId,
         task: crate::frame_owner_model::FrameDocumentModuleDependencyFetchTask,
         result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-        network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) -> Self {
         let target = crate::frame_owner_model::ChildDocumentModuleFetchTarget::new(
             child_handle,
@@ -1317,8 +1203,6 @@ impl ChildModuleDependencyFetchCompletion {
             request_id,
             task,
             result,
-            network_result,
-            network_attribution,
         }
     }
 
@@ -1328,14 +1212,6 @@ impl ChildModuleDependencyFetchCompletion {
 
     pub(super) fn request_id(&self) -> crate::frame_owner_model::FrameRequestId {
         self.request_id
-    }
-
-    pub(super) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
-        self.network_result.as_ref()
-    }
-
-    pub(super) fn network_attribution(&self) -> &ChildModuleFetchNetworkAttribution {
-        &self.network_attribution
     }
 
     pub(super) fn into_module_terminal_parts(
@@ -1350,8 +1226,7 @@ impl ChildModuleDependencyFetchCompletion {
 
 /// Completion of one child-document dynamic-import fetch.
 ///
-/// The executable target and protocol attribution are captured independently
-/// before the native fetch starts. The stable Page queue adds the root
+/// The executable target is captured before the native fetch starts. The stable Page queue adds the root
 /// `RendererDocumentToken`; this payload supplies the exact PageVm-local
 /// child/document/realm target.
 #[derive(Debug)]
@@ -1359,8 +1234,6 @@ pub(super) struct ChildDynamicImportFetchCompletion {
     target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
     load_id: u64,
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-    network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: ChildModuleFetchNetworkAttribution,
 }
 
 impl ChildDynamicImportFetchCompletion {
@@ -1368,28 +1241,16 @@ impl ChildDynamicImportFetchCompletion {
         target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
         load_id: u64,
         result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-        network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) -> Self {
         Self {
             target,
             load_id,
             result,
-            network_result,
-            network_attribution,
         }
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {
         self.target
-    }
-
-    pub(super) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
-        self.network_result.as_ref()
-    }
-
-    pub(super) fn network_attribution(&self) -> &ChildModuleFetchNetworkAttribution {
-        &self.network_attribution
     }
 
     pub(super) fn into_terminal_parts(
@@ -1405,8 +1266,7 @@ impl ChildDynamicImportFetchCompletion {
 
 /// Completion of one child-document `modulepreload` fetch.
 ///
-/// The executable target and protocol attribution are captured independently
-/// before the native fetch starts. The stable Page queue adds the root
+/// The executable target is captured before the native fetch starts. The stable Page queue adds the root
 /// `RendererDocumentToken`; this payload supplies the exact PageVm-local
 /// child/document/realm target.
 #[derive(Debug)]
@@ -1414,8 +1274,6 @@ pub(super) struct ChildModulepreloadFetchCompletion {
     target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
     load_id: u64,
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-    network_result: Option<SharedNavigationResponseResult>,
-    network_attribution: ChildModuleFetchNetworkAttribution,
 }
 
 impl ChildModulepreloadFetchCompletion {
@@ -1423,28 +1281,16 @@ impl ChildModulepreloadFetchCompletion {
         target: crate::frame_owner_model::ChildDocumentModuleFetchTarget,
         load_id: u64,
         result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-        network_result: Option<SharedNavigationResponseResult>,
-        network_attribution: ChildModuleFetchNetworkAttribution,
     ) -> Self {
         Self {
             target,
             load_id,
             result,
-            network_result,
-            network_attribution,
         }
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {
         self.target
-    }
-
-    pub(super) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
-        self.network_result.as_ref()
-    }
-
-    pub(super) fn network_attribution(&self) -> &ChildModuleFetchNetworkAttribution {
-        &self.network_attribution
     }
 
     pub(super) fn into_module_terminal_parts(
@@ -1458,6 +1304,14 @@ impl ChildModulepreloadFetchCompletion {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChildDocumentResponseMetadata {
+    pub(crate) status: u16,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body_size: usize,
+    pub(crate) from_cache: bool,
+}
+
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
     pub(super) final_url: Url,
@@ -1465,33 +1319,27 @@ pub(super) struct LoadedChildDocument {
     pub(super) content_type: Option<String>,
     pub(super) character_set: String,
     pub(super) markup: String,
-    pub(super) document_network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
+    pub(super) resource_timing: Option<ChildDocumentResponseMetadata>,
 }
 
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation(crate::runtime::RendererChildDocumentNetworkObservation),
-}
-
-#[derive(Debug)]
-pub(super) enum ChildDocumentLoadFailure {
-    Network(crate::runtime::RendererChildDocumentNetworkObservation),
-    Document(String),
+    IgnoredNavigation,
 }
 
 #[derive(Debug)]
 pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
     loader_id: String,
-    result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
+    result: std::result::Result<ChildDocumentLoadOutcome, String>,
 }
 
 impl ChildDocumentLoadCompletion {
     pub(super) fn new(
         target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
         loader_id: String,
-        result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
+        result: std::result::Result<ChildDocumentLoadOutcome, String>,
     ) -> Self {
         Self {
             target,
@@ -1509,23 +1357,12 @@ impl ChildDocumentLoadCompletion {
         self.target.load_id()
     }
 
-    pub(super) fn document_network(
-        &self,
-    ) -> Option<&crate::runtime::RendererChildDocumentNetworkObservation> {
-        match &self.result {
-            Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network))
-            | Err(ChildDocumentLoadFailure::Network(network)) => Some(network),
-            Err(ChildDocumentLoadFailure::Document(_)) => None,
-        }
-    }
-
     pub(super) fn into_application_parts(
         self,
     ) -> (
         crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
         String,
-        std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
+        std::result::Result<ChildDocumentLoadOutcome, String>,
     ) {
         (self.target, self.loader_id, self.result)
     }
@@ -1551,11 +1388,7 @@ impl ChildDocumentLoadCompletion {
             load_id,
             FrameRequestId(load_id),
         );
-        Self::new(
-            target,
-            format!("TEST-CHILD-LOADER-{load_id}"),
-            result.map_err(ChildDocumentLoadFailure::Document),
-        )
+        Self::new(target, format!("TEST-CHILD-LOADER-{load_id}"), result)
     }
 }
 
@@ -1608,17 +1441,6 @@ pub(super) struct LoadedChildScriptSource {
     pub(super) final_url: Url,
     pub(super) redirected: bool,
     pub(super) source: String,
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-pub(super) struct ModuleGraphFetchCompletion {
-    pub(super) load_id: u64,
-    pub(super) requester: ModuleGraphFetchRequester,
-    pub(super) ordering: ModuleGraphFetchOrdering,
-    pub(super) request_url: Url,
-    pub(super) result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
-    pub(super) network_result: Option<SharedNavigationResponseResult>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

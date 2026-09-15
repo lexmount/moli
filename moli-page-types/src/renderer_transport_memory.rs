@@ -7,43 +7,6 @@
 
 use super::*;
 
-impl ChildFrameDocumentNetworkSnapshot {
-    #[doc(hidden)]
-    pub fn renderer_transport_charge_bytes(&self) -> usize {
-        [&self.request_url, &self.request_method]
-            .into_iter()
-            .map(|value| string_charge(value))
-            .sum::<usize>()
-            .saturating_add(headers_charge(&self.request_headers))
-            .saturating_add(match &self.response {
-                Ok(response) => string_charge(&response.final_url)
-                    .saturating_add(headers_charge(&response.response_headers))
-                    .saturating_add(
-                        response
-                            .response_body
-                            .as_ref()
-                            .map_or(0, |body| body.renderer_transport_retained_memory_bytes()),
-                    ),
-                Err(error) => string_charge(error),
-            })
-    }
-}
-
-impl ChildFrameDocumentNetworkActivitySnapshot {
-    #[doc(hidden)]
-    pub fn renderer_transport_charge_bytes(&self) -> usize {
-        string_charge(&self.frame_id)
-            .saturating_add(
-                self.parent_frame_id
-                    .as_deref()
-                    .map(string_charge)
-                    .unwrap_or(0),
-            )
-            .saturating_add(string_charge(&self.loader_id))
-            .saturating_add(self.snapshot.renderer_transport_charge_bytes())
-    }
-}
-
 impl DocumentNodeSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
@@ -114,7 +77,7 @@ impl ScriptNetworkOutputItem {
             .into_iter()
             .map(string_charge)
             .sum(),
-            Self::SubresourceBodyFinished(finished) => match &finished.result {
+            Self::SubresourceBodyFinished(finished) => (match &finished.result {
                 SubresourceBodyFinishedResult::Ready(body) => {
                     body.renderer_transport_retained_memory_bytes()
                 }
@@ -124,7 +87,13 @@ impl ScriptNetworkOutputItem {
                     partial_body,
                 } => string_charge(error_text)
                     .saturating_add(partial_body.renderer_transport_retained_memory_bytes()),
-            },
+            })
+            .saturating_add(
+                finished
+                    .failure_context()
+                    .map(network_failure_charge)
+                    .unwrap_or(0),
+            ),
             Self::WebSocketNetworkEvent(event) => {
                 url_charge(&event.document_url).saturating_add(url_charge(&event.url))
             }
@@ -316,12 +285,75 @@ fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
     )
 }
 
+fn network_failure_charge(failure: &moli_fetch::NetworkFetchFailureContext) -> usize {
+    let mut total = std::mem::size_of_val(failure).saturating_add(string_charge(failure.reason()));
+    for exchange in failure.observation_journal().exchanges() {
+        total = total
+            .saturating_add(std::mem::size_of_val(exchange))
+            .saturating_add(headers_charge(exchange.request().headers()))
+            .saturating_add(
+                exchange
+                    .request()
+                    .cookie_report()
+                    .map(cookie_query_report_charge)
+                    .unwrap_or(0),
+            );
+        if let Some(response) = exchange.response() {
+            total = total.saturating_add(headers_charge(response.headers()));
+        }
+    }
+    if let Some(request) = failure.request_context() {
+        total = total
+            .saturating_add(url_charge(request.current_url()))
+            .saturating_add(string_charge(request.request_method()))
+            .saturating_add(request_headers_charge(request.request_headers()))
+            .saturating_add(request.request_body().map_or(0, |body| body.len()));
+        for redirect in request.redirect_chain() {
+            total = total
+                .saturating_add(std::mem::size_of_val(redirect))
+                .saturating_add(url_charge(&redirect.from_url))
+                .saturating_add(url_charge(&redirect.to_url))
+                .saturating_add(headers_charge(&redirect.headers))
+                .saturating_add(redirect.cookie_set_reports.len().saturating_mul(256))
+                .saturating_add(
+                    redirect
+                        .request_cookie_report
+                        .as_ref()
+                        .map(cookie_query_report_charge)
+                        .unwrap_or(0),
+                );
+            if let Some(request) = &redirect.request_extra_info {
+                total = total
+                    .saturating_add(headers_charge(&request.headers))
+                    .saturating_add(cookie_query_report_charge(&request.cookie_report));
+            }
+            if let Some(response) = &redirect.response_extra_info {
+                total = total
+                    .saturating_add(headers_charge(&response.headers))
+                    .saturating_add(headers_charge(&response.request_extra_info.headers))
+                    .saturating_add(cookie_query_report_charge(
+                        &response.request_extra_info.cookie_report,
+                    ))
+                    .saturating_add(response.cookie_set_reports.len().saturating_mul(256));
+            }
+        }
+    }
+    total
+}
+
 fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
     request
         .frame_id
         .as_deref()
         .map(string_charge)
         .unwrap_or(0)
+        .saturating_add(
+            request
+                .navigation_loader_id
+                .as_deref()
+                .map(string_charge)
+                .unwrap_or(0),
+        )
         .saturating_add(url_charge(&request.document_url))
         .saturating_add(url_charge(&request.url))
         .saturating_add(string_charge(&request.method))

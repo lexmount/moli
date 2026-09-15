@@ -168,7 +168,6 @@ async fn same_origin_window_fetch_and_xhr_post_send_origin_on_wire() {
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__sameOriginPostOriginProbe)",
         "done",
         "same-origin Fetch/XHR Origin wire probe",
@@ -220,7 +219,6 @@ async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_ini
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__xhrResourceTimingProbe)",
         "done",
         "XHR resource timing probe",
@@ -3306,7 +3304,6 @@ async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
 
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__xhrOpenUrlProbe)",
         "done",
         "XHR open URL probe",

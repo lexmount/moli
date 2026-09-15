@@ -131,8 +131,6 @@ async fn async_subresource_completion_uses_exact_typed_networking_owner() {
 #[tokio::test(flavor = "current_thread")]
 async fn selected_current_async_subresource_terminal_submits_checkpoint_without_runtime_drain() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let request_url = Url::parse("https://typed-subresource.test/selected").unwrap();
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -149,8 +147,7 @@ async fn selected_current_async_subresource_terminal_submits_checkpoint_without_
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "one exact resource terminal must enter the production selected dispatcher",
@@ -189,8 +186,6 @@ async fn selected_current_async_subresource_terminal_submits_checkpoint_without_
 #[tokio::test(flavor = "current_thread")]
 async fn selected_streaming_chunk_settles_reader_reaction_at_its_own_task_end() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let request_url = Url::parse("https://example.com/typed-stream-checkpoint").unwrap();
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -245,8 +240,7 @@ fetch({:?})
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "stream start must enter the production selected dispatcher"
@@ -274,8 +268,7 @@ fetch({:?})
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "stream chunk must enter the production selected dispatcher"

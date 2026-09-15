@@ -58,7 +58,7 @@ impl WorkerFetchPause {
 fn worker_pause_key(pause: &crate::page::RendererWorkerFetchPause) -> NetworkRequestKey {
     (
         RendererNetworkSourceIdentity::Worker(pause.worker().clone()),
-        NetworkRequestIdentity::Resource(pause.handle().get()),
+        pause.handle(),
     )
 }
 
@@ -75,20 +75,15 @@ pub enum NetworkRequestState {
         body: Arc<SubresourceBodyFinished>,
     },
     Recorded(SubresourceNetworkRecord),
-    ChildDocument(Arc<crate::page::ChildFrameDocumentNetworkActivitySnapshot>),
 }
 
 impl NetworkRequestState {
     fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Completed { .. } | Self::Recorded(_) | Self::ChildDocument(_)
-        )
+        matches!(self, Self::Completed { .. } | Self::Recorded(_))
     }
 
     fn retained_bytes(&self) -> usize {
         match self {
-            Self::ChildDocument(response) => response.renderer_transport_charge_bytes(),
             Self::Recorded(record) => record.renderer_transport_charge_bytes(),
             Self::Completed {
                 request,
@@ -127,9 +122,6 @@ pub struct NetworkRequestSnapshot {
 impl NetworkRequestSnapshot {
     pub fn output_items(&self) -> Vec<RendererNetworkOutputItem> {
         let items = match &self.state {
-            NetworkRequestState::ChildDocument(response) => {
-                return vec![RendererNetworkOutputItem::ChildDocument(response.clone())];
-            }
             NetworkRequestState::Started(request) => {
                 vec![ScriptNetworkOutputItem::SubresourceRequestStarted(
                     request.clone(),
@@ -168,13 +160,10 @@ impl NetworkRequestSnapshot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) enum NetworkRequestIdentity {
-    Resource(u64),
-    ChildDocument(String),
-}
-
-pub(super) type NetworkRequestKey = (RendererNetworkSourceIdentity, NetworkRequestIdentity);
+pub(super) type NetworkRequestKey = (
+    RendererNetworkSourceIdentity,
+    moli_page_types::SubresourceNetworkRequestHandle,
+);
 
 pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<NetworkRequestKey> {
     let source = occurrence.source.identity();
@@ -182,12 +171,6 @@ pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<Netw
         RendererNetworkOutputItem::Resource(item) => item,
         RendererNetworkOutputItem::WorkerFetch { pause, .. } => {
             return Some(worker_pause_key(pause));
-        }
-        RendererNetworkOutputItem::ChildDocument(response) => {
-            return Some((
-                source,
-                NetworkRequestIdentity::ChildDocument(response.loader_id.clone()),
-            ));
         }
     };
     let handle = match item.as_ref() {
@@ -201,7 +184,7 @@ pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<Netw
         ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
         | ScriptNetworkOutputItem::WebSocketLifecycleEvent(_) => return None,
     };
-    Some((source, NetworkRequestIdentity::Resource(handle.get())))
+    Some((source, handle))
 }
 
 #[derive(Default)]
@@ -343,9 +326,6 @@ impl NetworkRequests {
             RendererNetworkOutputItem::WorkerFetch { .. } => {
                 unreachable!("decision admission is separate from Network state")
             }
-            RendererNetworkOutputItem::ChildDocument(response) => {
-                NetworkRequestState::ChildDocument(response.clone())
-            }
             RendererNetworkOutputItem::Resource(item) => match item.as_ref() {
                 ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
                     if previous.is_some() {
@@ -389,8 +369,7 @@ impl NetworkRequests {
                             (request.clone(), Some(response.clone()))
                         }
                         NetworkRequestState::Completed { .. }
-                        | NetworkRequestState::Recorded(_)
-                        | NetworkRequestState::ChildDocument(_) => {
+                        | NetworkRequestState::Recorded(_) => {
                             unreachable!()
                         }
                     };
@@ -509,60 +488,83 @@ mod tests {
 
     #[test]
     fn native_child_network_retention_is_shared_bounded_and_scoped_to_its_renderer() {
-        use crate::page::{
-            ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkResponse,
-            ChildFrameDocumentNetworkSnapshot, SubresourceResponseBody,
-        };
+        use crate::page::SubresourceResponseBody;
         let (document, renderer) = source();
-        let response = Arc::new(ChildFrameDocumentNetworkActivitySnapshot {
-            frame_id: "child".into(),
-            parent_frame_id: None,
-            loader_id: "loader".into(),
-            snapshot: ChildFrameDocumentNetworkSnapshot {
-                request_url: "https://example.test/child".into(),
-                request_method: "GET".into(),
-                request_headers: Vec::new(),
-                response: Ok(ChildFrameDocumentNetworkResponse {
-                    final_url: "https://example.test/child".into(),
-                    status: 200,
-                    response_headers: Vec::new(),
-                    encoded_data_length: 4,
-                    response_body: Some(SubresourceResponseBody::from_bytes(b"body".to_vec())),
-                    from_cache: false,
-                }),
-            },
-        });
-        let input = occurrence(
-            renderer,
-            RendererNetworkOutputItem::ChildDocument(response.clone()),
-        );
+        let owner = NetworkOwner::Document(document);
+        let record = |requests: &mut NetworkRequests, host, id, result: Result<Vec<u8>, String>| {
+            let handle = SubresourceNetworkRequestHandle::new(id);
+            let make = |item| {
+                let mut input = occurrence(renderer, item);
+                input.source = RendererNetworkSource::Document {
+                    owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(host),
+                    document: renderer,
+                };
+                input
+            };
+            let start = make(ScriptNetworkOutputItem::SubresourceRequestStarted(
+                Arc::new(
+                    SubresourceRequestStarted::new(
+                        handle,
+                        Some("child".into()),
+                        "https://example.test/".parse().unwrap(),
+                        "https://example.test/child".parse().unwrap(),
+                        "GET".into(),
+                        Vec::new().into(),
+                        None,
+                        SubresourceResourceType::Document,
+                        SubresourceRequestInitiatorType::Parser,
+                        None,
+                    )
+                    .with_navigation_loader_id(format!("loader-{id}")),
+                ),
+            ));
+            assert!(requests.commit(owner, &start, BrowserSequence::allocate()));
+            let body = match result {
+                Ok(bytes) => {
+                    let head = make(ScriptNetworkOutputItem::SubresourceResponseStarted(
+                        Arc::new(SubresourceResponseStarted::new(
+                            handle,
+                            Vec::new(),
+                            "https://example.test/child".parse().unwrap(),
+                            200,
+                            Vec::new(),
+                            Vec::new(),
+                        )),
+                    ));
+                    assert!(requests.commit(owner, &head, BrowserSequence::allocate()));
+                    SubresourceBodyFinished::ready(
+                        handle,
+                        SubresourceResponseBody::from_bytes(bytes),
+                    )
+                }
+                Err(error) => SubresourceBodyFinished::failed(handle, error),
+            };
+            let terminal = make(ScriptNetworkOutputItem::SubresourceBodyFinished(Arc::new(
+                body,
+            )));
+            assert!(requests.commit(owner, &terminal, BrowserSequence::allocate()));
+            terminal
+        };
         let mut requests = NetworkRequests::default();
-        assert!(requests.commit(
-            NetworkOwner::Document(document),
-            &input,
-            BrowserSequence::allocate()
-        ));
-        assert!(!requests.commit(
-            NetworkOwner::Document(document),
-            &input,
-            BrowserSequence::allocate()
-        ));
+        let input = record(&mut requests, 11, 1, Ok(b"body".to_vec()));
+        assert!(!requests.commit(owner, &input, BrowserSequence::allocate()));
         let snapshot = requests.snapshots().next().unwrap();
         let items = snapshot.output_items();
-        let [RendererNetworkOutputItem::ChildDocument(stored)] = items.as_slice() else {
-            panic!("child completion must not fabricate another start");
+        let [_, _, RendererNetworkOutputItem::Resource(stored)] = items.as_slice() else {
+            panic!("recovery retains the original stages")
         };
-        assert!(Arc::ptr_eq(stored, &response));
-        let mut peer = input.clone();
-        peer.source = RendererNetworkSource::Document {
-            owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(12),
-            document: renderer,
+        let RendererNetworkOutputItem::Resource(original) = &input.item else {
+            unreachable!()
         };
-        assert!(requests.commit(
-            NetworkOwner::Document(document),
-            &peer,
-            BrowserSequence::allocate()
-        ));
+        let (
+            ScriptNetworkOutputItem::SubresourceBodyFinished(stored),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(original),
+        ) = (stored.as_ref(), original.as_ref())
+        else {
+            panic!("same body terminal")
+        };
+        assert!(Arc::ptr_eq(stored, original));
+        record(&mut requests, 12, 1, Ok(b"body".to_vec()));
         assert_eq!(
             requests.snapshots().count(),
             2,
@@ -570,72 +572,32 @@ mod tests {
         );
         assert_eq!(
             requests.close_source(&request_key(&input).unwrap().0),
-            Some(NetworkOwner::Document(document))
+            Some(owner)
         );
         assert_eq!(requests.snapshots().count(), 1);
-        for id in 0..258 {
-            let mut response = response.as_ref().clone();
-            response.loader_id = format!("loader-{id}");
-            assert!(requests.commit(
-                NetworkOwner::Document(document),
-                &occurrence(
-                    renderer,
-                    RendererNetworkOutputItem::ChildDocument(Arc::new(response))
-                ),
-                BrowserSequence::allocate()
-            ));
+        for id in 1..=258 {
+            record(&mut requests, 11, id, Ok(b"body".to_vec()));
         }
         assert_eq!(requests.snapshots().count(), 256);
-        let mut large = response.as_ref().clone();
-        large.loader_id = "large".into();
-        large.snapshot.response.as_mut().unwrap().response_body =
-            Some(SubresourceResponseBody::from_bytes(vec![
-                b'x';
-                16 * 1024 * 1024
-                    + 1
-            ]));
-        let large = occurrence(
-            renderer,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(large)),
-        );
-        assert!(requests.commit(
-            NetworkOwner::Document(document),
-            &large,
-            BrowserSequence::allocate()
-        ));
+        let large = record(&mut requests, 11, 300, Ok(vec![b'x'; 16 * 1024 * 1024 + 1]));
         assert!(
             requests.get(&request_key(&large).unwrap()).is_none(),
             "oversized completed response must not escape the retained-byte cap"
         );
-        let mut failed = response.as_ref().clone();
-        failed.loader_id = "failed".into();
-        failed.snapshot.response = Err("connection closed before headers".into());
-        let failure = occurrence(
-            renderer,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(failed.clone())),
+        let failed = record(
+            &mut requests,
+            11,
+            301,
+            Err("connection closed before headers".into()),
         );
-        assert!(requests.commit(
-            NetworkOwner::Document(document),
-            &failure,
-            BrowserSequence::allocate()
-        ));
-        assert!(!requests.commit(
-            NetworkOwner::Document(document),
-            &failure,
-            BrowserSequence::allocate()
-        ));
-        assert!(requests.get(&request_key(&failure).unwrap()).is_some());
-        failed.loader_id = "oversized-failure".into();
-        failed.snapshot.response = Err("x".repeat(16 * 1024 * 1024 + 1));
-        let oversized_failure = occurrence(
-            renderer,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(failed)),
+        assert!(!requests.commit(owner, &failed, BrowserSequence::allocate()));
+        assert!(requests.get(&request_key(&failed).unwrap()).is_some());
+        let oversized_failure = record(
+            &mut requests,
+            11,
+            302,
+            Err("x".repeat(16 * 1024 * 1024 + 1)),
         );
-        assert!(requests.commit(
-            NetworkOwner::Document(document),
-            &oversized_failure,
-            BrowserSequence::allocate()
-        ));
         assert!(
             requests
                 .get(&request_key(&oversized_failure).unwrap())
@@ -848,7 +810,7 @@ mod tests {
                         owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
                         page: renderer.document.page_id
                     },
-                    NetworkRequestIdentity::Resource(1)
+                    moli_page_types::SubresourceNetworkRequestHandle::new(1)
                 ))
                 .is_none()
         );
@@ -859,7 +821,7 @@ mod tests {
                         owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
                         page: renderer.document.page_id
                     },
-                    NetworkRequestIdentity::Resource(258)
+                    moli_page_types::SubresourceNetworkRequestHandle::new(258)
                 ))
                 .is_some()
         );

@@ -2987,15 +2987,15 @@ async fn fulfill_request_completes_navigation_with_synthetic_response() {
     assert_eq!(response["params"]["response"]["status"], 201);
     assert_eq!(response["params"]["response"]["mimeType"], "text/plain");
 
-    assert_eq!(ctx.take_one()["method"], "Page.frameNavigated");
-    assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
-    assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
-    assert_eq!(ctx.take_one()["method"], "Page.domContentEventFired");
-
     let data = ctx.take_one();
     assert_eq!(data["method"], "Network.dataReceived");
     assert_eq!(data["params"]["requestId"], LOADER_ID);
     assert_eq!(data["params"]["dataLength"], json!(9));
+
+    assert_eq!(ctx.take_one()["method"], "Page.frameNavigated");
+    assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
+    assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
+    assert_eq!(ctx.take_one()["method"], "Page.domContentEventFired");
 
     let finished = ctx.take_one();
     assert_eq!(finished["method"], "Network.loadingFinished");
@@ -3342,13 +3342,15 @@ async fn continue_request_applies_url_method_headers_and_post_data() {
     assert_eq!(response["params"]["requestId"], LOADER_ID);
     assert_eq!(response["params"]["response"]["url"], continued_url);
 
+    let data = ctx.take_one();
+    assert_eq!(data["method"], "Network.dataReceived");
+    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Page.frameNavigated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
     assert_eq!(ctx.take_one()["method"], "Page.domContentEventFired");
-    let data = ctx.take_one();
-    assert_eq!(data["method"], "Network.dataReceived");
-    assert_eq!(data["params"]["requestId"], LOADER_ID);
+
     assert_eq!(ctx.take_one()["method"], "Network.loadingFinished");
     assert_eq!(ctx.take_one()["method"], "Page.loadEventFired");
     assert_eq!(ctx.take_one()["method"], "Page.frameStoppedLoading");

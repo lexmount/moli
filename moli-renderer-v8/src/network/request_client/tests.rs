@@ -51,6 +51,17 @@ fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     Ok(())
 }
 
+fn script_document(
+    client: &ResourceRequestClient,
+    url: &str,
+) -> crate::network::context::DocumentResourceLoader {
+    crate::network::context::DocumentResourceLoader::for_test(
+        client.clone(),
+        crate::network::RendererResourceTaskRunner::for_test(),
+        Url::parse(url).expect("script fixture Document URL"),
+    )
+}
+
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -882,6 +893,8 @@ async fn script_stream_preserves_context_http_cache_across_page_partitions() -> 
     config.set_http_cache_dir(Some(cache_dir.display().to_string()));
     let loader = ResourceRequestClient::new(&config)?;
     let peer = loader.fork_with_isolated_page_network_policy();
+    let document = script_document(&loader, &url);
+    let peer_document = script_document(&peer, &url);
     let request = || {
         browser_navigation_request(&url).map(|request| {
             request
@@ -889,21 +902,11 @@ async fn script_stream_preserves_context_http_cache_across_page_partitions() -> 
                 .with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
         })
     };
-    let first = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let first = document.fetch_script_for_test(request()?).await?;
     // The listener has gone away. A different Page partition must reuse the
     // Context HTTP cache, not silently issue another network request.
     server.await??;
-    let second = peer
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let second = peer_document.fetch_script_for_test(request()?).await?;
     assert_eq!(first.body_text(), "context-cache-generation-1");
     assert_eq!(second.body_text(), first.body_text());
     assert!(!first.from_cache);
@@ -940,24 +943,15 @@ async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_he
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/app.js");
+    let document = script_document(&loader, &url);
     let request = || {
         browser_navigation_request(&url).map(|request| {
             request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
         })
     };
 
-    let first = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
-    let second = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let first = document.fetch_script_for_test(request()?).await?;
+    let second = document.fetch_script_for_test(request()?).await?;
 
     assert_eq!(first.body_text(), "window.scriptMemoryCacheHit = true;");
     assert_eq!(second.body_text(), "window.scriptMemoryCacheHit = true;");
@@ -998,6 +992,8 @@ async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let peer = loader.fork_with_isolated_page_network_policy();
     let url = format!("http://{addr}/app.js");
+    let document = script_document(&loader, &url);
+    let peer_document = script_document(&peer, &url);
     let request = || {
         browser_navigation_request(&url).map(|request| {
             request
@@ -1006,38 +1002,13 @@ async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
         })
     };
 
-    let first = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
-    let peer_first = peer
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let first = document.fetch_script_for_test(request()?).await?;
+    let peer_first = peer_document.fetch_script_for_test(request()?).await?;
     loader.set_cache_disabled(true);
-    let bypassed = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let bypassed = document.fetch_script_for_test(request()?).await?;
     loader.set_cache_disabled(false);
-    let restored = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
-    let peer_restored = peer
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let restored = document.fetch_script_for_test(request()?).await?;
+    let peer_restored = peer_document.fetch_script_for_test(request()?).await?;
 
     assert_eq!(first.body_text(), "window.cacheGeneration = 1;");
     assert_eq!(peer_first.body_text(), "window.cacheGeneration = 1;");
@@ -1064,10 +1035,9 @@ async fn transport_replacement_preserves_cache_hits_and_revalidates_request_vari
     ) -> Result<(String, bool)> {
         let request = browser_navigation_request(url)?.with_page_network_policy();
         if script {
-            let response = client
-                .fetch_cacheable_script_text_stream(
+            let response = script_document(client, url)
+                .fetch_script_for_test(
                     request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default()),
-                    crate::network::RendererResourceTaskRunner::for_test(),
                 )
                 .await?;
             Ok((response.body_text().to_owned(), response.from_cache))
@@ -1174,16 +1144,12 @@ async fn unique_script_text_fetches_stay_within_one_loader_memory_budget() -> Re
     });
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document = script_document(&loader, &format!("http://{addr}/page"));
     for index in 0..SCRIPT_COUNT {
         let url = format!("http://{addr}/script-{index}.js");
         let request = browser_navigation_request(&url)?
             .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
-        let response = loader
-            .fetch_cacheable_script_text_stream(
-                request,
-                crate::network::RendererResourceTaskRunner::for_test(),
-            )
-            .await?;
+        let response = document.fetch_script_for_test(request).await?;
         assert_eq!(response.body_bytes().len(), SCRIPT_BYTES);
     }
 
@@ -1291,13 +1257,14 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
         let expected = format!("blob URL fetch requires GET, got `{method}`");
         let error = loader.fetch_text_stream(request.clone()).await.unwrap_err();
         assert_eq!(error.to_string(), expected);
-        let error = loader
-            .fetch_cacheable_script_text_stream(
-                request.clone(),
-                crate::network::RendererResourceTaskRunner::for_test(),
-            )
-            .await
-            .unwrap_err();
+        let error = crate::network::context::DocumentResourceLoader::for_test(
+            loader.handle(),
+            crate::network::RendererResourceTaskRunner::for_test(),
+            Url::parse("https://method.test/page")?,
+        )
+        .fetch_script_for_test(request.clone())
+        .await
+        .unwrap_err();
         assert_eq!(error.to_string(), expected);
         let error = loader
             .fetch_raw_stream_with_cancel(request.clone(), FetchCancelHandle::new())
@@ -1364,6 +1331,7 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = format!("http://{addr}/module.js");
+    let document = script_document(&loader, &url);
     let request = || {
         browser_navigation_request(&url).map(|request| {
             request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
@@ -1372,14 +1340,8 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
 
     let first_request = request()?;
     let second_request = request()?;
-    let first = loader.fetch_cacheable_script_text_stream(
-        first_request,
-        crate::network::RendererResourceTaskRunner::for_test(),
-    );
-    let second = loader.fetch_cacheable_script_text_stream(
-        second_request,
-        crate::network::RendererResourceTaskRunner::for_test(),
-    );
+    let first = document.fetch_script_for_test(first_request);
+    let second = document.fetch_script_for_test(second_request);
     let release = async move {
         sleep(Duration::from_millis(50)).await;
         let _ = release_tx.send(());
@@ -1402,12 +1364,7 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
         "in-flight coalescing should preserve the owner's network provenance"
     );
 
-    let third = loader
-        .fetch_cacheable_script_text_stream(
-            request()?,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        )
-        .await?;
+    let third = document.fetch_script_for_test(request()?).await?;
     assert_eq!(
         third.body_text(),
         "export default function fromCacheCoalescing() {}"
@@ -1450,12 +1407,10 @@ async fn script_text_fetch_respects_configured_request_timeout() -> Result<()> {
     let loader = ResourceRequestClient::new(&config)?;
     let request = browser_navigation_request(&format!("http://{addr}/slow-script.js"))?
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let document = script_document(&loader, request.url.as_str());
     let error = timeout(
         Duration::from_secs(2),
-        loader.fetch_cacheable_script_text_stream(
-            request,
-            crate::network::RendererResourceTaskRunner::for_test(),
-        ),
+        document.fetch_script_for_test(request),
     )
     .await
     .expect("script fetch should complete with the configured request timeout")

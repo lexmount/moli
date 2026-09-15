@@ -1331,21 +1331,25 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
         .expect("response body stream handle")
         .to_owned();
 
-    ctx.process_async(json!({
-        "id": 35_962,
-        "method": "IO.read",
-        "params": { "handle": stream_handle }
-    }))
-    .await;
-    ctx.expect_result(
-        35_962,
-        json!({
-            "base64Encoded": false,
-            "data": "mixed body taken",
-            "eof": true
-        }),
-        None,
-    );
+    let mut body = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            ctx.process_async(json!({
+                "id": 35_962, "method": "IO.read",
+                "params": { "handle": stream_handle }
+            }))
+            .await;
+            let read = take_response_by_id(&mut ctx, 35_962);
+            assert_eq!(read["result"]["base64Encoded"], false, "{read:?}");
+            body.push_str(read["result"]["data"].as_str().expect("stream data"));
+            if read["result"]["eof"].as_bool().expect("stream EOF flag") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the taken stream must reach its physical EOF");
+    assert_eq!(body, "mixed body taken");
 
     ctx.process_async(json!({
         "id": 35_963,
