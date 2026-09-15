@@ -132,7 +132,6 @@ impl ServiceWorkerRegistrationSnapshot {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn registration_id(&self) -> ServiceWorkerRegistrationId {
         self.registration_id
     }
