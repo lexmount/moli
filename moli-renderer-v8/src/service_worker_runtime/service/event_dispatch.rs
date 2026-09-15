@@ -179,9 +179,6 @@ impl ServiceWorkerRuntimeService {
             &mut launch,
             debugger_release_consumed,
         );
-        for notification in launch.lifecycle_notifications {
-            notification.send();
-        }
         launch
             .host
             .start_loading(self.clone(), launch.params, launch.preloaded_script);
@@ -417,7 +414,6 @@ impl ServiceWorkerRuntimeService {
                             Some(ServiceWorkerQueuedLaunch {
                                 params,
                                 host,
-                                lifecycle_notifications: Vec::new(),
                                 preloaded_script: None,
                             }),
                             None,

@@ -363,7 +363,6 @@ impl ServiceWorkerRuntimeService {
                         ServiceWorkerQueuedLaunch {
                             params,
                             host,
-                            lifecycle_notifications: Vec::new(),
                             preloaded_script: None,
                         },
                     )))
@@ -430,7 +429,6 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerMessageStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
-                    lifecycle_notifications: Vec::new(),
                     preloaded_script: None,
                 }))
             }
@@ -492,7 +490,6 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerNotificationStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
-                    lifecycle_notifications: Vec::new(),
                     preloaded_script: None,
                 }))
             }
@@ -556,7 +553,6 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerPushStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
-                    lifecycle_notifications: Vec::new(),
                     preloaded_script: None,
                 }))
             }
@@ -618,7 +614,6 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerSyncStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
-                    lifecycle_notifications: Vec::new(),
                     preloaded_script: None,
                 }))
             }
@@ -680,7 +675,6 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerPeriodicSyncStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
-                    lifecycle_notifications: Vec::new(),
                     preloaded_script: None,
                 }))
             }
