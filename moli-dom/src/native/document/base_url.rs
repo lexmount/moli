@@ -3,11 +3,21 @@ use url::Url;
 use super::Document;
 use crate::native::{NativeDom, NativeNodeId, Node};
 
+/// A newly frozen base URL awaiting the embedding document's policy decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentBaseUrlPolicyCheck {
+    pub document: NativeNodeId,
+    pub element: NativeNodeId,
+    pub url: Url,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct DocumentBaseUrlState {
     fallback_base_url: Url,
     base_url_override: Option<Url>,
     base_element_url: Option<Url>,
+    base_element_input: Option<(NativeNodeId, String)>,
+    pending_policy_check: Option<DocumentBaseUrlPolicyCheck>,
     base_url: Url,
     base_target: Option<Box<str>>,
 }
@@ -18,6 +28,8 @@ impl DocumentBaseUrlState {
             fallback_base_url: document_url.clone(),
             base_url_override: None,
             base_element_url: None,
+            base_element_input: None,
+            pending_policy_check: None,
             base_url: document_url.clone(),
             base_target: None,
         }
@@ -54,15 +66,24 @@ impl DocumentBaseUrlState {
 
     fn process_base_element(
         &mut self,
+        base_element_input: Option<(NativeNodeId, String)>,
         base_element_url: Option<Url>,
+        policy_check: Option<DocumentBaseUrlPolicyCheck>,
         base_target: Option<String>,
         force_base_url_update: bool,
-    ) {
-        if force_base_url_update || self.base_element_url != base_element_url {
+    ) -> bool {
+        // A document URL change must preserve the element's frozen URL,
+        // including the fallback frozen when CSP rejected its href.
+        let changed = self.base_element_input != base_element_input
+            || (force_base_url_update && self.base_element_url.is_none());
+        if changed {
+            self.base_element_input = base_element_input;
             self.base_element_url = base_element_url;
+            self.pending_policy_check = policy_check;
             self.update_base_url();
         }
         self.base_target = base_target.map(String::into_boxed_str);
+        changed
     }
 
     fn update_base_url(&mut self) {
@@ -96,29 +117,73 @@ impl NativeDom {
         else {
             return;
         };
-        let (href, target) = self.first_base_element_attributes(document_node_id);
-        let base_element_url = href.and_then(|href| {
-            let href = trim_html_spaces(&href);
+        let (base_element_input, target) = self.first_base_element_attributes(document_node_id);
+        let mut policy_check = None;
+        let base_element_url = base_element_input.as_ref().and_then(|(element, href)| {
+            let href = trim_html_spaces(href);
             if href.is_empty() {
                 return None;
             }
-            Some(
-                fallback_base_url
-                    .join(href)
-                    .ok()
-                    .filter(|url| !matches!(url.scheme(), "data" | "javascript"))
-                    .unwrap_or_else(|| fallback_base_url.clone()),
-            )
+            let url = fallback_base_url
+                .join(href)
+                .ok()
+                .filter(|url| !matches!(url.scheme(), "data" | "javascript"));
+            if let Some(url) = &url {
+                policy_check = Some(DocumentBaseUrlPolicyCheck {
+                    document: document_node_id,
+                    element: *element,
+                    url: url.clone(),
+                });
+            }
+            Some(url.unwrap_or_else(|| fallback_base_url.clone()))
         });
         if let Some(document) = self
             .node_mut(document_node_id)
             .and_then(|node| node.data_mut().as_document_mut())
         {
-            document.base_url_state.process_base_element(
+            let changed = document.base_url_state.process_base_element(
+                base_element_input,
                 base_element_url,
+                policy_check,
                 target,
                 force_base_url_update,
             );
+            if changed && !self.pending_base_url_documents.contains(&document_node_id) {
+                self.pending_base_url_documents.push(document_node_id);
+            }
+        }
+    }
+
+    pub(crate) fn take_base_url_policy_checks(&mut self) -> Vec<DocumentBaseUrlPolicyCheck> {
+        std::mem::take(&mut self.pending_base_url_documents)
+            .into_iter()
+            .filter_map(|handle| {
+                self.node_mut(handle)
+                    .and_then(|node| node.data_mut().as_document_mut())?
+                    .base_url_state
+                    .pending_policy_check
+                    .take()
+            })
+            .collect()
+    }
+
+    pub(crate) fn reject_base_url_policy_check(&mut self, check: &DocumentBaseUrlPolicyCheck) {
+        let Some(document) = self
+            .node_mut(check.document)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return;
+        };
+        let state = &mut document.base_url_state;
+        if state
+            .base_element_input
+            .as_ref()
+            .map(|(element, _)| *element)
+            == Some(check.element)
+            && state.base_element_url.as_ref() == Some(&check.url)
+        {
+            state.base_element_url = Some(state.fallback_base_url.clone());
+            state.update_base_url();
         }
     }
 
@@ -168,7 +233,7 @@ impl NativeDom {
     fn first_base_element_attributes(
         &self,
         document_node_id: NativeNodeId,
-    ) -> (Option<String>, Option<String>) {
+    ) -> (Option<(NativeNodeId, String)>, Option<String>) {
         let mut href = None;
         let mut target = None;
         let mut current = self.first_child(document_node_id);
@@ -181,7 +246,7 @@ impl NativeDom {
                 if href.is_none()
                     && let Some(value) = element.attribute_ns("", "href")
                 {
-                    href = Some(value.to_owned());
+                    href = Some((node_id, value.to_owned()));
                 }
                 if target.is_none()
                     && let Some(value) = element.attribute_ns("", "target")

@@ -385,6 +385,8 @@ impl JsContextHost {
                     inherited_meta_content_security_policies: refresh_policy_source
                         .map(|policy| policy.inherited_meta_content_security_policies.clone())
                         .unwrap_or_default(),
+                    content_security_policy_self_url: refresh_policy_source
+                        .and_then(|policy| policy.content_security_policy_self_url.clone()),
                     permissions_policy: if is_new {
                         // The synchronous initial about:blank Document is
                         // already subject to the iframe's container policy.

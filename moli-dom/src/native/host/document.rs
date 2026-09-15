@@ -991,6 +991,19 @@ impl DomHost {
         self.document_base_url_for_handle(self.document_handle())
     }
 
+    pub fn take_base_url_policy_checks(
+        &mut self,
+    ) -> Vec<crate::native::DocumentBaseUrlPolicyCheck> {
+        self.dom.take_base_url_policy_checks()
+    }
+
+    pub fn reject_base_url_policy_check(
+        &mut self,
+        check: &crate::native::DocumentBaseUrlPolicyCheck,
+    ) {
+        self.dom.reject_base_url_policy_check(check);
+    }
+
     pub fn document_base_url_for_handle(&self, document_handle: DomHandle) -> Option<Url> {
         self.node(document_handle)
             .and_then(Node::as_document)
