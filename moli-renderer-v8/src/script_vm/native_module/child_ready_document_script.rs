@@ -46,7 +46,8 @@ impl<'vm> ChildReadyDocumentScriptOwner<'vm> {
         work: FrameDocumentScriptReadyTaskWork,
     ) -> ChildReadyDocumentScriptOwnerOutput<'_> {
         Box::pin(async move {
-            match work {
+            let route = work.route();
+            let outcome = match work {
                 FrameDocumentScriptReadyTaskWork::Scheduler(work) => {
                     self.run_ready_work(work).await
                 }
@@ -66,7 +67,14 @@ impl<'vm> ChildReadyDocumentScriptOwner<'vm> {
                         .run_ready_work(work)
                         .await
                 }
-            }
+            };
+            // Execution of a module begins in this task; a top-level await
+            // continuation must not hold later in-order script elements.
+            self.vm
+                ._context_host
+                .borrow_mut()
+                .finish_child_runtime_script(route.task_owner(), route.script_handle());
+            outcome
         })
     }
 

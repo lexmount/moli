@@ -69,16 +69,17 @@ pub(crate) use frame_task_sources::{
     PendingChildJavascriptUrlDocumentScript,
 };
 pub(crate) use lifecycle_tasks::{
-    ChildDocumentAsyncClassicScriptLoadDelay, DocumentLinkEventOwner,
-    FrameDocumentCompleteLifecycleAction, FrameDocumentDomContentLoadedLifecycleAction,
-    FrameDocumentImageLoadEventBinding, FrameDocumentInteractiveLifecycleAction,
-    FrameDocumentLifecycleAction, FrameDocumentLifecycleTaskEffect,
-    FrameDocumentMediaLoadDelayBinding, FrameDocumentUnloadLifecycleAction,
-    MainDocumentCompleteLifecycleAction, MainDocumentDomContentLoadedLifecycleAction,
-    MainDocumentImageLoadDelayBinding, MainDocumentInteractiveLifecycleAction,
-    MainDocumentMediaLoadDelayBinding, MainDocumentScriptLoadDelayKind,
-    MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
-    MainDocumentStyleLoadEventBinding, StylesheetSubresourceLoadDelayBinding,
+    ChildDocumentAsyncClassicScriptLoadDelay, ChildDocumentModuleScriptLoadDelay,
+    DocumentLinkEventOwner, FrameDocumentCompleteLifecycleAction,
+    FrameDocumentDomContentLoadedLifecycleAction, FrameDocumentImageLoadEventBinding,
+    FrameDocumentInteractiveLifecycleAction, FrameDocumentLifecycleAction,
+    FrameDocumentLifecycleTaskEffect, FrameDocumentMediaLoadDelayBinding,
+    FrameDocumentUnloadLifecycleAction, MainDocumentCompleteLifecycleAction,
+    MainDocumentDomContentLoadedLifecycleAction, MainDocumentImageLoadDelayBinding,
+    MainDocumentInteractiveLifecycleAction, MainDocumentMediaLoadDelayBinding,
+    MainDocumentScriptLoadDelayKind, MainDocumentScriptLoadDelayLease,
+    MainDocumentScriptLoadDelayRelease, MainDocumentStyleLoadEventBinding,
+    StylesheetSubresourceLoadDelayBinding,
 };
 pub(crate) use load_delivery_tasks::{
     FrameDocumentLoadDeliveryAction, FrameDocumentLoadDeliveryAdmission,

@@ -113,6 +113,7 @@ pub(crate) enum FrameDocumentRealmBoundScriptWork {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameDocumentScriptWorkAdmission {
     QueuedBehindRealm,
+    QueuedBehindScript,
     Runnable,
 }
 

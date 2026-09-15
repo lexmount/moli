@@ -349,6 +349,8 @@ impl JsContextHost {
                 super::text_track_default_modes::TextTrackDefaultModeState::default(),
             child_document_script_ready_tasks:
                 super::document_script_ready_inputs::ChildDocumentScriptReadyTaskLedger::default(),
+            child_runtime_script_order:
+                super::child_runtime_script_order::ChildRuntimeScriptOrder::default(),
             pending_child_external_classic_document_scripts: HashMap::new(),
             pending_child_modulepreload_work_awaiting_realm: VecDeque::new(),
             active_child_browsing_context_host_loads: Vec::new(),
