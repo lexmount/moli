@@ -737,6 +737,14 @@ pub(super) struct DocumentRuntime {
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies: RefCell<HashMap<DomHandle, Vec<String>>>,
+    local_worker_policy_sources: RefCell<
+        HashMap<
+            DomHandle,
+            std::sync::Weak<
+                parking_lot::RwLock<crate::content_security_policy::InheritedContentSecurityPolicy>,
+            >,
+        >,
+    >,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     document_character_set: String,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
