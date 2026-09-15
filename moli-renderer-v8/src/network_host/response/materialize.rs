@@ -366,7 +366,6 @@ fn build_fetch_response_object_head<'s>(
         let internal_headers = filter_headers_for_guard(&head.headers, HeadersGuard::Response);
         let internal_headers_obj =
             build_headers_object_with_state(scope, &internal_headers, HeadersGuard::Response, true);
-        install_headers_object_methods(scope, internal_headers_obj);
         set_response_slot_value(
             scope,
             obj,
@@ -399,7 +398,6 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     let headers = filter_headers_for_guard(header_entries, HeadersGuard::Response);
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
-    install_headers_object_methods(scope, headers_obj);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
 
     let body_value = if !filtered_response_exposes_body(filter) {
@@ -442,7 +440,6 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     let headers = filter_headers_for_guard(&[], HeadersGuard::Response);
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
-    install_headers_object_methods(scope, headers_obj);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
     set_filtered_response_internal_body_from_bytes(scope, obj, body);
     FetchResponseBodyDeclaration::new(String::new(), v8::null(scope).into())

@@ -102,7 +102,6 @@ pub(crate) fn request_constructor_callback<'s>(
         request_headers_guard_for_mode(&state.mode),
         false,
     );
-    install_headers_object_methods(scope, headers_obj);
 
     let body_value = body_buffer
         .and_then(|buffer| {
