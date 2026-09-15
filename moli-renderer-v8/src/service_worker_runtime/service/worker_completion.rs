@@ -1,6 +1,28 @@
 use super::*;
+use crate::service_worker_runtime::script_loading::ServiceWorkerScriptMapSnapshot;
 
 impl ServiceWorkerRuntimeService {
+    pub(in crate::service_worker_runtime) fn script_resource_map_snapshot(
+        &self,
+        owner: &ServiceWorkerRunOwner,
+    ) -> Option<ServiceWorkerScriptMapSnapshot> {
+        let state = self.inner.state.lock();
+        let version = state.versions.get(&owner.version_id())?;
+        if version.run != owner.cloned_run_identity() {
+            return None;
+        }
+        Some(ServiceWorkerScriptMapSnapshot {
+            main_script: version.main_script_resource.clone(),
+            imported_scripts: version
+                .imported_script_resources
+                .values()
+                .map(ServiceWorkerScriptResource::to_worker_script_resource)
+                .collect(),
+            can_import_new_scripts: version.lifecycle_state
+                == ServiceWorkerVersionLifecycleState::Installing,
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn finish_worker_start_completed(
         &self,
@@ -797,7 +819,7 @@ impl ServiceWorkerRuntimeService {
             }
             version
                 .imported_script_resources
-                .insert(resource.final_url.to_string(), resource);
+                .insert(resource.request_url.to_string(), resource);
             matches!(
                 version.lifecycle_state,
                 ServiceWorkerVersionLifecycleState::Installed

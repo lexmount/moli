@@ -8,6 +8,12 @@ struct ImportScriptHttpServer {
 
 impl ImportScriptHttpServer {
     async fn spawn(response: String) -> Self {
+        Self::spawn_with_response(move |_, _| response.clone()).await
+    }
+
+    async fn spawn_with_response(
+        mut response: impl FnMut(&str, usize) -> String + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -16,7 +22,12 @@ impl ImportScriptHttpServer {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let request = read_http_request_head(&mut stream).await.unwrap();
-                observed.lock().push(request);
+                let count = {
+                    let mut requests = observed.lock();
+                    requests.push(request.clone());
+                    requests.len()
+                };
+                let response = response(&request, count);
                 stream.write_all(response.as_bytes()).await.unwrap();
             }
         });
@@ -32,6 +43,383 @@ impl Drop for ImportScriptHttpServer {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+fn import_script_response(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn service_script_map_options(source: String, script_url: String) -> WorkerSpawnOptions {
+    let scope_url = url::Url::parse(&script_url).unwrap().join(".").unwrap();
+    WorkerSpawnOptions::new(source, script_url).with_global_kind(
+        super::super::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url,
+        },
+    )
+}
+
+async fn import_script_console_and_resources(
+    handle: &mut WorkerHandle,
+) -> (String, Vec<crate::worker::WorkerScriptResource>) {
+    let mut resources = Vec::new();
+    loop {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Console(message) => return (message.message, resources),
+            WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { resource, .. } => {
+                resources.push(resource);
+            }
+            WorkerToParentMessage::Error { message, .. } => panic!("worker error: {message}"),
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_reuses_bytes_but_other_workers_fetch_each_time() {
+    ensure_v8();
+    for kind in ["service", "dedicated", "shared"] {
+        let server = ImportScriptHttpServer::spawn_with_response(|_, count| {
+            import_script_response(&format!("self.versions.push({count});"))
+        })
+        .await;
+        let script_url = format!("{}/sw.js", server.url);
+        let source = r#"
+            self.versions = [];
+            importScripts('./dep.js#same', './dep.js#same');
+            importScripts('./dep.js#same');
+            console.log(JSON.stringify(versions));
+        "#;
+        let mut options = service_script_map_options(source.into(), script_url.clone());
+        if kind == "dedicated" {
+            options = options.with_global_kind(super::super::WorkerGlobalKind::Dedicated {
+                name: String::new(),
+            });
+        } else if kind == "shared" {
+            options = options.with_global_kind(super::super::WorkerGlobalKind::Shared {
+                name: String::new(),
+                storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(
+                    &url::Url::parse(&script_url).unwrap(),
+                    None,
+                ),
+            });
+        }
+        let mut handle = spawn_test_worker_with_options(options);
+        let (console, resources) = import_script_console_and_resources(&mut handle).await;
+        let (expected, requests, imports) = if kind == "service" {
+            ("log: [1,1,1]", 1, 1)
+        } else {
+            ("log: [1,2,3]", 3, 0)
+        };
+        assert_eq!(console, expected, "{kind}");
+        assert_eq!(server.requests.lock().len(), requests, "{kind}");
+        assert_eq!(resources.len(), imports, "{kind}");
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_preserves_fragment_keys_across_restarts() {
+    ensure_v8();
+    let server = ImportScriptHttpServer::spawn_with_response(|_, count| {
+        import_script_response(&format!("self.versions.push({count});"))
+    })
+    .await;
+    let script_url = format!("{}/sw.js", server.url);
+    let source = r#"
+        self.versions = [];
+        importScripts('./dep.js#first', './dep.js#second', './dep.js#first');
+        console.log(JSON.stringify(versions));
+    "#;
+    let mut handle = spawn_test_worker_with_options(service_script_map_options(
+        source.into(),
+        script_url.clone(),
+    ));
+    let (console, resources) = import_script_console_and_resources(&mut handle).await;
+    assert_eq!(console, "log: [1,2,1]");
+    assert_eq!(resources.len(), 2);
+    assert_eq!(resources[0].request_url.fragment(), Some("first"));
+    assert_eq!(resources[1].request_url.fragment(), Some("second"));
+    handle.terminate_and_join();
+    let mut restored = spawn_test_worker_with_options(
+        service_script_map_options(
+            r#"
+        self.versions = [];
+        importScripts('./dep.js#first', './dep.js#second');
+        const errors = [];
+        for (const url of ['./dep.js', './dep.js#third']) {
+            try { importScripts(url); errors.push('ok'); }
+            catch (error) { errors.push(error.name); }
+        }
+        console.log(JSON.stringify([versions, errors]));
+        "#
+            .into(),
+            script_url,
+        )
+        .with_service_worker_script_resources(resources, false),
+    );
+    let (console, _) = import_script_console_and_resources(&mut restored).await;
+    assert_eq!(console, "log: [[1,2],[\"NetworkError\",\"NetworkError\"]]");
+    assert_eq!(server.requests.lock().len(), 2);
+    restored.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_keeps_redirect_aliases_in_separate_map_entries() {
+    ensure_v8();
+    let server = ImportScriptHttpServer::spawn_with_response(|request, count| {
+        if request.starts_with("GET /shared.js ") {
+            import_script_response(&format!("self.versions.push({count});"))
+        } else {
+            "HTTP/1.1 302 Found\r\nLocation: /shared.js\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+        }
+    }).await;
+    let mut handle = spawn_test_worker_with_options(service_script_map_options(
+        r#"
+        self.versions = [];
+        importScripts('./alias-a.js', './alias-b.js', './alias-a.js');
+        console.log(JSON.stringify(versions));
+        "#
+        .into(),
+        format!("{}/sw.js", server.url),
+    ));
+    let (console, resources) = import_script_console_and_resources(&mut handle).await;
+    assert_eq!(console, "log: [2,4,2]");
+    assert_eq!(server.requests.lock().len(), 4);
+    assert_eq!(resources.len(), 2);
+    assert_ne!(resources[0].request_url, resources[1].request_url);
+    assert_eq!(resources[0].final_url, resources[1].final_url);
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_freezes_map_after_install_wait_until() {
+    ensure_v8();
+    let server = ImportScriptHttpServer::spawn(import_script_response("self.count++;")).await;
+    let mut handle = spawn_test_worker_with_options(service_script_map_options(
+        r#"
+        self.count = 0;
+        const data = 'data:text/javascript,self.count++';
+        importScripts(data);
+        addEventListener('install', event => {
+            importScripts('./install.js');
+            event.waitUntil(new Promise((resolve, reject) => setTimeout(() => {
+                try { importScripts('./async-install.js'); resolve(); }
+                catch (error) { reject(error); }
+            }, 0)));
+        });
+        addEventListener('activate', () => {
+            importScripts('./install.js', './async-install.js', data);
+            const errors = [];
+            for (const url of ['./new.js', data + ';']) {
+                try { importScripts(url); errors.push('unexpected success'); }
+                catch (error) { errors.push(error.name); }
+            }
+            console.log(JSON.stringify([count, errors]));
+        });
+        "#
+        .into(),
+        format!("{}/sw.js", server.url),
+    ));
+    let install = dispatch_service_worker_lifecycle_event_for_test(
+        &mut handle,
+        ServiceWorkerLifecycleEventKind::Install,
+        1,
+    )
+    .await;
+    assert_eq!(install.result, Ok(()));
+    handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
+        event_id: ServiceWorkerEventId::from_u64_for_worker(2),
+        owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+            ServiceWorkerVersionId::from_u64_for_test(1),
+            crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        ),
+        kind: ServiceWorkerLifecycleEventKind::Activate,
+    });
+    let (console, _) = import_script_console_and_resources(&mut handle).await;
+    assert_eq!(console, "log: [6,[\"NetworkError\",\"NetworkError\"]]");
+    assert_eq!(
+        server.requests.lock().len(),
+        2,
+        "new URL must never reach the server"
+    );
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_restores_throwing_responses_and_muted_errors() {
+    ensure_v8();
+    for (foreign, source, expected) in [
+        (false, "throw new RangeError('original');", "RangeError"),
+        (false, "const = syntax error", "SyntaxError"),
+        (true, "throw new RangeError('private');", "NetworkError"),
+    ] {
+        let server = ImportScriptHttpServer::spawn_with_response(move |_, count| {
+            import_script_response(if count == 1 {
+                source
+            } else {
+                "self.changed = true;"
+            })
+        })
+        .await;
+        let script_url = if foreign {
+            "http://127.0.0.1/sw.js".to_owned()
+        } else {
+            format!("{}/sw.js", server.url)
+        };
+        let dep_url = serde_json::to_string(&format!("{}/dep.js", server.url)).unwrap();
+        let source = format!(
+            r#"
+            const errors = [];
+            for (let i = 0; i < 2; ++i) {{
+                try {{ importScripts({dep_url}); errors.push('ok'); }}
+                catch (error) {{ errors.push(error.name); }}
+            }}
+            console.log(JSON.stringify(errors));
+        "#
+        );
+        let mut first = spawn_test_worker_with_options(service_script_map_options(
+            source.clone(),
+            script_url.clone(),
+        ));
+        let (console, resources) = import_script_console_and_resources(&mut first).await;
+        assert_eq!(console, format!("log: [\"{expected}\",\"{expected}\"]"));
+        assert_eq!(
+            resources.len(),
+            1,
+            "successful fetch is cached before evaluation"
+        );
+        first.terminate_and_join();
+        let mut restored = spawn_test_worker_with_options(
+            service_script_map_options(source, script_url)
+                .with_service_worker_script_resources(resources, false),
+        );
+        let (restored_console, resources) =
+            import_script_console_and_resources(&mut restored).await;
+        assert_eq!(restored_console, console);
+        assert!(resources.is_empty(), "restored imports must not refetch");
+        assert_eq!(server.requests.lock().len(), 1);
+        restored.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_retries_failed_fetches_during_installation() {
+    ensure_v8();
+    let server = ImportScriptHttpServer::spawn_with_response(|_, count| {
+        if count == 1 {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+        } else {
+            import_script_response("self.count++;")
+        }
+    })
+    .await;
+    let mut handle = spawn_test_worker_with_options(service_script_map_options(
+        r#"
+        self.count = 0;
+        const results = [];
+        for (let i = 0; i < 3; ++i) {
+            try { importScripts('./dep.js'); results.push('ok'); }
+            catch (error) { results.push(error.name); }
+        }
+        console.log(JSON.stringify([count, results]));
+        "#
+        .into(),
+        format!("{}/sw.js", server.url),
+    ));
+    let (console, resources) = import_script_console_and_resources(&mut handle).await;
+    assert_eq!(console, "log: [2,[\"NetworkError\",\"ok\",\"ok\"]]");
+    assert_eq!(resources.len(), 1);
+    assert_eq!(server.requests.lock().len(), 2);
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_importscripts_checks_legacy_resource_hash_before_execution() {
+    ensure_v8();
+    for same_bytes in [true, false] {
+        let server = ImportScriptHttpServer::spawn_with_response(move |_, count| {
+            import_script_response(if count == 1 || same_bytes {
+                "self.installed = true;"
+            } else {
+                "self.changed = true;"
+            })
+        })
+        .await;
+        let script_url = format!("{}/sw.js", server.url);
+        let mut first = spawn_test_worker_with_options(service_script_map_options(
+            "importScripts('./dep.js'); console.log('loaded');".into(),
+            script_url.clone(),
+        ));
+        let (_, mut resources) = import_script_console_and_resources(&mut first).await;
+        first.terminate_and_join();
+        resources[0].classic_script = None;
+        let mut restored = spawn_test_worker_with_options(
+            service_script_map_options(
+                r#"
+            let result = 'ok';
+            try { importScripts('./dep.js'); } catch (error) { result = error.name; }
+            console.log(JSON.stringify([result, self.installed === true, self.changed === true]));
+            "#
+                .into(),
+                script_url,
+            )
+            .with_service_worker_script_resources(resources, false),
+        );
+        let (console, _) = import_script_console_and_resources(&mut restored).await;
+        assert_eq!(
+            console,
+            if same_bytes {
+                "log: [\"ok\",true,false]"
+            } else {
+                "log: [\"NetworkError\",false,false]"
+            }
+        );
+        assert_eq!(server.requests.lock().len(), 2);
+        restored.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn worker_importscripts_fetches_data_urls_in_execution_order() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
+        r#"
+        let result = 'ok';
+        try {
+            importScripts('data:text/javascript,self.first = true', 'data:text/plain,ignored');
+        } catch (error) { result = error.name; }
+        postMessage([self.first === true, result]); close();
+        "#
+        .into(),
+        "https://example.test/worker.js".into(),
+    ));
+    assert_eq!(recv_post_json(&mut handle).await, "[true,\"NetworkError\"]");
+}
+
+#[tokio::test]
+async fn worker_importscripts_validates_captured_blob_entries_in_execution_order() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
+        r#"
+        const badMime = URL.createObjectURL(new Blob(['self.second = true'], {type:'text/plain'}));
+        let result = 'ok';
+        try { importScripts('data:text/javascript,self.first = true', badMime); }
+        catch (error) { result = error.name; }
+        URL.revokeObjectURL(badMime);
+        postMessage([self.first === true, self.second === true, result]); close();
+        "#
+        .into(),
+        "https://example.test/worker.js".into(),
+    ));
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        "[true,false,\"NetworkError\"]"
+    );
 }
 
 #[tokio::test]
