@@ -4179,3 +4179,45 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn prepared_script_can_only_execute_in_its_preparation_document() {
+    let mut vm = new_parsed_test_vm(
+        "https://adopted-script.test/",
+        "<!doctype html><html><body><script id='script' src='/pending.js'></script><iframe id='other'></iframe></body></html>",
+    );
+    let script_node = vm
+        .document_runtime
+        .dom_host()
+        .dom()
+        .script_handles()
+        .first()
+        .copied()
+        .expect("prepared script node");
+    let mut script = ready_dynamic_runtime_script(6);
+    script.node_id = script_node;
+    script.host_script_handle = Some(
+        vm.document_runtime
+            .bind_runtime_owned_script_handle_for_node(script_node, "adopted-script"),
+    );
+    assert!(vm.prepared_script_is_live_for_execution(&script));
+    assert_eq!(
+        vm.eval(
+            r#"
+          globalThis.adoptedScript = document.getElementById('script');
+          const other = document.getElementById('other').contentDocument;
+          other.adoptNode(adoptedScript);
+          adoptedScript.ownerDocument === other;
+        "#
+        )
+        .unwrap(),
+        "true",
+    );
+    assert!(!vm.prepared_script_is_live_for_execution(&script));
+    assert_eq!(
+        vm.eval("document.adoptNode(adoptedScript).ownerDocument === document")
+            .unwrap(),
+        "true",
+    );
+    assert!(vm.prepared_script_is_live_for_execution(&script));
+}
