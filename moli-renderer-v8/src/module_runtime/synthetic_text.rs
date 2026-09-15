@@ -12,7 +12,13 @@ use super::{ModuleIdentityHash, ModuleMapKey, module_identity_hash_from_v8_modul
 pub(crate) struct SyntheticTextModuleSource {
     module: v8::Global<v8::Module>,
     key: ModuleMapKey,
-    source: Arc<str>,
+    value: SyntheticTextModuleValue,
+}
+
+#[derive(Debug)]
+pub(crate) enum SyntheticTextModuleValue {
+    Json(v8::Global<v8::Value>),
+    Css(Arc<str>),
 }
 
 #[derive(Default)]
@@ -25,7 +31,7 @@ impl SyntheticTextModuleSource {
         scope: &mut v8::PinScope<'_, '_>,
         module: v8::Local<'_, v8::Module>,
         key: ModuleMapKey,
-        source: Arc<str>,
+        value: SyntheticTextModuleValue,
     ) -> Rc<Self> {
         let context = scope.get_current_context();
         let sources = context
@@ -38,7 +44,7 @@ impl SyntheticTextModuleSource {
         let record = Rc::new(Self {
             module: v8::Global::new(scope, module),
             key,
-            source,
+            value,
         });
         let mut entries = sources.entries.borrow_mut();
         let candidates = entries
@@ -67,8 +73,8 @@ impl SyntheticTextModuleSource {
         &self.key
     }
 
-    pub(crate) fn source(&self) -> &str {
-        &self.source
+    pub(crate) fn value(&self) -> &SyntheticTextModuleValue {
+        &self.value
     }
 }
 
@@ -101,9 +107,19 @@ mod tests {
             Url::parse("https://example.test/shared.json").unwrap(),
             ModuleAttributesKey::empty(),
         );
+        let value = v8::Number::new(scope, 1.0);
+        let first_value = SyntheticTextModuleValue::Json(v8::Global::new(
+            scope,
+            v8::Local::<v8::Value>::from(value),
+        ));
         let first_source =
-            SyntheticTextModuleSource::register(scope, first, key.clone(), "1".into());
-        let second_source = SyntheticTextModuleSource::register(scope, second, key, "2".into());
+            SyntheticTextModuleSource::register(scope, first, key.clone(), first_value);
+        let value = v8::Number::new(scope, 2.0);
+        let second_value = SyntheticTextModuleValue::Json(v8::Global::new(
+            scope,
+            v8::Local::<v8::Value>::from(value),
+        ));
+        let second_source = SyntheticTextModuleSource::register(scope, second, key, second_value);
 
         // Inject a conflicting candidate deterministically instead of waiting
         // for a random V8 identity-hash collision.
@@ -136,24 +152,25 @@ mod tests {
             Url::parse("https://example.test/value.json").unwrap(),
             ModuleAttributesKey::empty(),
         );
-        let text: Arc<str> = "42".into();
-        let weak_text = Arc::downgrade(&text);
-        let source = SyntheticTextModuleSource::register(scope, module, key.clone(), text);
+        let value = v8::Number::new(scope, 42.0);
+        let value = SyntheticTextModuleValue::Json(v8::Global::new(
+            scope,
+            v8::Local::<v8::Value>::from(value),
+        ));
+        let source = SyntheticTextModuleSource::register(scope, module, key.clone(), value);
         let weak = Rc::downgrade(&source);
         let record = ModuleRecordEntry::new(key, v8::Global::new(scope, module), Vec::new())
             .with_synthetic_text_module_source(source);
         let clone = record.clone();
         drop(record);
-        assert_eq!(weak_text.strong_count(), 1);
-        assert_eq!(
-            SyntheticTextModuleSource::for_module(context, module)
-                .unwrap()
-                .source(),
-            "42"
-        );
+        let retained = SyntheticTextModuleSource::for_module(context, module).unwrap();
+        let SyntheticTextModuleValue::Json(value) = retained.value() else {
+            panic!("expected retained JSON value");
+        };
+        assert_eq!(v8::Local::new(scope, value).number_value(scope), Some(42.0));
+        drop(retained);
         drop(clone);
         assert!(weak.upgrade().is_none());
-        assert!(weak_text.upgrade().is_none());
         assert!(SyntheticTextModuleSource::for_module(context, module).is_none());
     }
 }

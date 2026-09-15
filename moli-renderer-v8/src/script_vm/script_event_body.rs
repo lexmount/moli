@@ -121,7 +121,7 @@ fn dispatch_script_failure_error_body(
         }
         None => window_script_failure_error_value(scope, global, None, message_value),
     };
-    // Retained V8 exceptions already carry engine-owned source information.
+    // Retained exceptions carry V8 or loader-owned source information.
     // Read that metadata, not author-visible stack or location properties, and
     // do not replace a dependency's URL with the root script's fallback URL.
     let location = retained.then(|| {
@@ -129,7 +129,11 @@ fn dispatch_script_failure_error_body(
         let filename = exception_message
             .get_script_resource_name(scope)
             .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                crate::module_runtime::json_module_exception_source_url(scope, error_value)
+            });
         let line = exception_message
             .get_line_number(scope)
             .and_then(|line| u32::try_from(line).ok())
