@@ -12,6 +12,7 @@ const LOG_CALLBACK_CONTEXT_MAX_BYTES: usize = 4 * 1024;
 const VALUE_DEBUG_SUMMARY_MAX_BYTES: usize = 160 * 4;
 const VALUE_DEBUG_OBJECT_SUMMARY_MAX_BYTES: usize = 240 * 4;
 
+#[derive(Clone)]
 pub(super) struct V8ExceptionReport {
     /// Script-origin taint supplied by V8, retained until web-facing reporting.
     pub(super) muted_errors: bool,
@@ -118,7 +119,8 @@ fn exception_stack_property<'s>(
     local_value_to_string(scope, stack).filter(|stack| !stack.is_empty())
 }
 
-/// Build parse-error diagnostics without evaluating author-provided stack hooks.
+/// Module creation must not eagerly read Error.stack or call an author's
+/// Error.prepareStackTrace hook while retaining a parse exception.
 pub(super) fn build_exception_report_without_stack<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: Option<v8::Local<'s, v8::Value>>,
@@ -139,8 +141,16 @@ pub(super) fn build_exception_report_without_stack<'s>(
     };
     let source = message
         .and_then(|message| message.get_script_resource_name(scope))
+        .filter(|value| !value.is_null_or_undefined())
         .and_then(|value| local_value_to_string(scope, value))
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            // A later JavaScript throw has its own V8 source location. Only
+            // fill the missing filename of the original JSON parse failure.
+            exception.and_then(|exception| {
+                crate::module_runtime::json_module_exception_source_url(scope, exception)
+            })
+        });
     let line = message.and_then(|message| message.get_line_number(scope));
     let column = message.and_then(|message| {
         // V8 may report an "unknown" start column via a sentinel that would overflow when turned
