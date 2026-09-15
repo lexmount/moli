@@ -160,11 +160,10 @@ fn worker_timer_callback_from_arg<'s>(
         return Ok(Some(WorkerTimerCallback::webidl_timer(scope, callback)));
     }
 
-    let require_trusted_types_for_script = get_worker_state(scope).is_some_and(|state| {
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        )
-    });
+    let requirements =
+        super::content_security_policy::worker_trusted_types_for_script_requirements(scope)
+            .unwrap_or_default();
+    let requires_trusted_types = requirements.is_enforced();
     let sink = match timer_name {
         "setInterval" => "WorkerGlobalScope setInterval",
         _ => "WorkerGlobalScope setTimeout",
@@ -172,16 +171,14 @@ fn worker_timer_callback_from_arg<'s>(
     let Some(source) = crate::context_bootstrap::trusted_script_string_or_type_error(
         scope,
         value,
-        crate::content_security_policy::TrustedTypesForScriptRequirements::enforced_only(
-            require_trusted_types_for_script,
-        ),
+        requirements,
         sink,
         timer_name,
     ) else {
         return Err(());
     };
-    let allow_trusted_types_eval = require_trusted_types_for_script
-        && worker_allows_trusted_types_eval(scope).unwrap_or(false);
+    let allow_trusted_types_eval =
+        requires_trusted_types && worker_allows_trusted_types_eval(scope).unwrap_or(false);
     if !worker_allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(&source))
         .unwrap_or(true)
     {
