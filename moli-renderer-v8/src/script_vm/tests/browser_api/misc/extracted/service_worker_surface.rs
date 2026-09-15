@@ -2675,3 +2675,75 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
         .await
         .expect("service worker URL argument script server should finish");
 }
+
+#[tokio::test]
+async fn navigator_service_worker_update_check_preserves_mime_security_error() {
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            Vec::new(),
+            r#"
+            self.addEventListener("install", event => {
+              event.waitUntil(Promise.resolve());
+            });
+            self.addEventListener("activate", event => {
+              event.waitUntil(Promise.resolve());
+            });
+            "#,
+        ),
+        (
+            "/app/worker.js",
+            "text/plain",
+            vec![("X-Content-Type-Options", "nosniff")],
+            "not javascript",
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__serviceWorkerUpdateFailureProbe = "pending";
+              (async () => {
+                await navigator.serviceWorker.register("worker.js", { scope: "./" });
+                await navigator.serviceWorker.ready;
+                try {
+                  await navigator.serviceWorker.register("worker.js", { scope: "./" });
+                  globalThis.__serviceWorkerUpdateFailureProbe = "resolved";
+                } catch (error) {
+                  globalThis.__serviceWorkerUpdateFailureProbe = JSON.stringify({
+                    name: error && error.name,
+                    isTypeError: error instanceof TypeError,
+                    isDomException: error instanceof DOMException,
+                    messageIncludesNosniff: String(error && error.message).includes("nosniff")
+                  });
+                }
+              })().catch((error) => {
+                globalThis.__serviceWorkerUpdateFailureProbe =
+                  "setup-error:" + String(error && error.message);
+              });
+            })()
+            "#,
+    )
+    .expect("service worker update failure probe should evaluate");
+
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerUpdateFailureProbe)",
+        r#"{"name":"SecurityError","isTypeError":false,"isDomException":true,"messageIncludesNosniff":true}"#,
+    )
+    .await;
+
+    server
+        .await
+        .expect("service worker update failure server should finish");
+}

@@ -35,6 +35,7 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) current_script_url: Option<Url>,
     /// Version-specific classic ServiceWorker script resources.
     pub(in crate::worker) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(in crate::worker) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     pub(in crate::worker) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
@@ -152,6 +153,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) pending_service_worker_clients_open_windows:
         HashMap<u64, PendingServiceWorkerClientsOpenWindow>,
     /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
+    pub(in crate::worker) pending_service_worker_updates: HashMap<u64, PendingServiceWorkerUpdate>,
+    pub(in crate::worker) service_worker_update_request_ids: WorkerServiceWorkerRequestIdAllocator,
     pub(in crate::worker) pending_service_worker_show_notifications:
         HashMap<u64, PendingServiceWorkerShowNotification>,
     /// In-flight Service Worker `registration.getNotifications()` requests keyed by request id.

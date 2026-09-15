@@ -49,7 +49,7 @@ enum ServiceWorkerRuntimeCompletionKind {
     },
     MainScriptUpdateCheckCompleted {
         registration_id: ServiceWorkerRegistrationId,
-        result: ServiceWorkerScriptUpdateCheckCompletion,
+        result: Box<ServiceWorkerScriptUpdateCheckCompletion>,
     },
     LifecycleEventCompleted {
         completion: ServiceWorkerLifecycleCompletion,
@@ -219,7 +219,7 @@ impl ServiceWorkerRuntimeCompletion {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
-                result,
+                result: Box::new(result),
             },
         }
     }
@@ -637,7 +637,7 @@ impl ServiceWorkerRuntimeCompletion {
                 result,
             } => self
                 .runtime_service
-                .finish_main_script_update_check_completed(registration_id, result),
+                .finish_main_script_update_check_completed(registration_id, *result),
             ServiceWorkerRuntimeCompletionKind::LifecycleEventCompleted { completion } => {
                 self.runtime_service
                     .finish_lifecycle_event_completed(completion);

@@ -334,7 +334,6 @@ impl ServiceWorkerRuntimeService {
                     Some(ServiceWorkerQueuedLaunch {
                         params,
                         host,
-                        lifecycle_notifications: Vec::new(),
                         preloaded_script: None,
                     })
                 }
@@ -481,6 +480,7 @@ impl ServiceWorkerRuntimeService {
             };
             let request_client = newest_version.launch_config.request_client();
             ServiceWorkerQueuedRegisterJob {
+                update_registration_id: None,
                 script_url: newest_version.script_url.clone(),
                 scope_url: registration.scope_url.clone(),
                 document_url: newest_version.launch_config.document_url.clone(),
@@ -493,7 +493,7 @@ impl ServiceWorkerRuntimeService {
                 force_update_page_load_waiter_ids,
                 request_client,
                 network_policy: newest_version.launch_config.network_policy.clone(),
-                browser_context_runtime,
+                worker_context_runtime: browser_context_runtime.worker_context_runtime(),
                 broadcast_channel_top_level_site: newest_version
                     .launch_config
                     .broadcast_channel_top_level_site

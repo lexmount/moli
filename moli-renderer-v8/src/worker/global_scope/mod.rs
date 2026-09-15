@@ -217,6 +217,7 @@ pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
 use performance::monotonic_unix_epoch_millis;
 pub(super) use service_worker_results::{
+    PendingServiceWorkerUpdate, drain_service_worker_update_result,
     PendingServiceWorkerClientFocus, PendingServiceWorkerClientNavigate,
     PendingServiceWorkerClientQuery, PendingServiceWorkerClientQueryType,
     PendingServiceWorkerClientsOpenWindow, PendingServiceWorkerGetNotifications,
