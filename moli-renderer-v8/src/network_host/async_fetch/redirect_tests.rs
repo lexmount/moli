@@ -19,6 +19,131 @@ async fn request_head(socket: &mut tokio::net::TcpStream) -> Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 
+#[tokio::test]
+async fn fetch_redirect_csp_precedes_target_cors_and_reports_every_policy() -> Result<()> {
+    use crate::{
+        document_runtime::DocumentConnectPolicySnapshot, network_host::FetchCspRedirectState,
+    };
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    for enforce in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let initial_url = url::Url::parse(&format!("http://localhost:{port}/start"))?;
+        let blocked_url = url::Url::parse(&format!("http://127.0.0.1:{port}/blocked"))?;
+        let next_url = blocked_url.clone();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            loop {
+                let mut socket = tokio::select! {
+                    accepted = listener.accept() => accepted?.0,
+                    _ = &mut stop_rx => break,
+                };
+                let head = request_head(&mut socket).await?;
+                let line = head.lines().next().unwrap().to_owned();
+                let location = if line.contains(" /start ") {
+                    Some("/middle".to_owned())
+                } else if line.contains(" /middle ") {
+                    Some(next_url.to_string())
+                } else {
+                    None
+                };
+                requests.push(line);
+                let response = if let Some(location) = location {
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else {
+                    // Report-Only must still report before this CORS denial.
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_owned()
+                };
+                socket.write_all(response.as_bytes()).await?;
+            }
+            Ok::<_, anyhow::Error>(requests)
+        });
+        let policies = vec![
+            "connect-src 'self'".to_owned(),
+            "default-src 'self'".to_owned(),
+        ];
+        let policy = if enforce {
+            DocumentConnectPolicySnapshot::from_policies(policies, Vec::new(), Default::default())
+        } else {
+            DocumentConnectPolicySnapshot::from_policies(Vec::new(), policies, Default::default())
+        };
+        let checked = FetchCspRedirectState::new(&policy);
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let captured = reports.clone();
+        let redirect_check = checked
+            .redirect_check(
+                policy,
+                initial_url.clone(),
+                initial_url.clone(),
+                move |violation| {
+                    captured.lock().push(violation);
+                },
+            )
+            .unwrap();
+        let request = Request::new_browser(
+            "GET",
+            initial_url.clone(),
+            None,
+            Vec::new(),
+            (&initial_url).into(),
+        )
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+        .with_redirect_check(redirect_check);
+        let mut config = moli_fetch::FetchConfig::default();
+        config.set_http_no_proxy(Some("*".to_owned()));
+        let owner = ResourceRequestClient::new(&config)?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                &owner.handle(),
+                request,
+                None,
+                Vec::new(),
+            ),
+        )
+        .await?;
+        let _ = stop_tx.send(());
+        let requests = server.await??;
+        let Err(error) = result else {
+            panic!("CSP or CORS must reject this fetch")
+        };
+        assert!(
+            error.contains(if enforce {
+                "Content Security Policy"
+            } else {
+                "CORS check failed"
+            }),
+            "{error}"
+        );
+        assert_eq!(requests.len(), if enforce { 2 } else { 3 });
+        assert_eq!(
+            &requests[..2],
+            ["GET /start HTTP/1.1", "GET /middle HTTP/1.1"]
+        );
+        assert!(checked.was_checked(&blocked_url));
+        let reports = reports.lock();
+        assert_eq!(reports.len(), 2);
+        for violation in reports.iter() {
+            assert_eq!(violation.blocked_uri, initial_url.as_str());
+            assert_eq!(
+                (
+                    &*violation.source_file,
+                    violation.line_number,
+                    violation.column_number
+                ),
+                ("", 0, 0)
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn cors_redirect_referrer_never_recovers_stripped_information() -> Result<()> {
     let source = url::Url::parse("https://origin.test/private?token=secret#fragment")?;

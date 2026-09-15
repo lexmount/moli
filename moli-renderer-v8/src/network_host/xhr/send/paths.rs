@@ -119,6 +119,7 @@ pub(super) fn dispatch_service_worker_xhr(
         crate::service_worker_runtime::service_worker_fetch_request_metadata(&prepared.request()),
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),

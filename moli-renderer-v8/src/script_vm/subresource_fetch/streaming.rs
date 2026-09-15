@@ -402,6 +402,10 @@ impl ScriptVm {
                     Some(completed.network_record),
                 )
             }
+            AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                report_context,
+                violation,
+            } => self.report_async_fetch_csp_violation(&report_context, &violation),
             AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
                 self.apply_async_xhr_upload_event(internal_id, event)
             }
@@ -432,6 +436,36 @@ impl ScriptVm {
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
     }
+    fn report_async_fetch_csp_violation(
+        &mut self,
+        report_context: &crate::network_host::WindowCspReportRequestContext,
+        violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        crate::network_host::send_content_security_policy_violation_report_from_window_context(
+            &mut self._context_host.borrow_mut(),
+            report_context,
+            violation,
+        );
+        let identity = report_context.identity();
+        if !self
+            ._context_host
+            .borrow()
+            .window_document_owner_is_current_for_dispatch_scope(
+                identity.owner(),
+                identity.dispatch_scope(),
+            )
+        {
+            return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+        }
+        self.with_default_context_scope(|scope, host_ptr| {
+            // SAFETY: the default context scope keeps this ScriptVm's host alive.
+            unsafe { &mut *host_ptr }.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
+                scope, host_ptr, identity, violation,
+            );
+            Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+        })
+    }
+
     fn apply_async_xhr_upload_event(
         &mut self,
         internal_id: u64,

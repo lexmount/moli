@@ -336,6 +336,7 @@ impl ScriptVm {
         let request_client = pending.load.request_client();
         let resource_task_runner = pending.load.task_runner();
         let dispatch = crate::service_worker_runtime::ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id,
             request: self._context_host.borrow().service_worker_fetch_request(
                 client_id,
@@ -1104,7 +1105,7 @@ impl ScriptVm {
     pub(in crate::script_vm) fn spawn_running_subresource_fetch(
         &mut self,
         request_client: ResourceRequestClient,
-        request: moli_fetch::Request,
+        mut request: moli_fetch::Request,
         mut state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
@@ -1121,7 +1122,12 @@ impl ScriptVm {
             &request.method,
             state.pending.blob_url_entry.as_ref(),
         );
-        let completion_tx = self._context_host.borrow().resource_completion_sender();
+        let host = self._context_host.borrow();
+        if let Some(check) = host.window_fetch_redirect_check_for_pending(&state.pending) {
+            request = request.with_redirect_check(check);
+        }
+        let completion_tx = host.resource_completion_sender();
+        drop(host);
         let request = crate::network_host::observe_async_xhr_upload(
             request,
             &completion_tx,

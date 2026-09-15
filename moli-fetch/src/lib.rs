@@ -84,7 +84,7 @@ pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
     RequestHeaderOverride, RequestMode, RequestOverrides, RequestPriorityHints,
-    RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
+    RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
     ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
     SubresourceRequestMetadata,
 };
