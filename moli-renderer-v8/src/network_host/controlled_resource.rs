@@ -335,6 +335,8 @@ impl ControlledResourceLoad {
             })
         {
             violation.blocked_uri = self.request.redirect_chain()[0].from_url.to_string();
+            crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+                .apply_to(&mut violation);
             self.csp_violations.push(violation);
         }
         if let Some(policy) = &self.connect_policy
@@ -358,6 +360,8 @@ impl ControlledResourceLoad {
                 "XMLHttpRequest",
             );
             if self.interception.is_worker() {
+                crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+                    .apply_to(&mut violation);
                 self.csp_violations.push(violation);
             }
             return Err(message);
