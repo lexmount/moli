@@ -3576,6 +3576,7 @@ fn maybe_send_service_worker_lifecycle_completion(
         let completion = pending.completion.clone();
         if completion.kind == ServiceWorkerLifecycleEventKind::Install {
             state.service_worker_can_import_new_scripts = false;
+            state.service_worker_updated_script_resources.clear();
         }
         state
             .pending_service_worker_lifecycle_events
