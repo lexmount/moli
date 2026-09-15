@@ -18,7 +18,13 @@ pub(crate) fn ensure_worker_wasm_module_mime(
 pub(crate) fn ensure_worker_json_module_mime(
     response: &moli_fetch::Response,
 ) -> Result<(), String> {
-    crate::module_runtime::validate_json_module_response_mime(&response.headers)
+    ensure_worker_json_module_mime_from_headers(&response.headers)
+}
+
+pub(super) fn ensure_worker_json_module_mime_from_headers(
+    headers: &[(String, Vec<u8>)],
+) -> Result<(), String> {
+    crate::module_runtime::validate_json_module_response_mime(headers)
 }
 
 pub(crate) fn ensure_worker_css_module_mime(response: &moli_fetch::Response) -> Result<(), String> {

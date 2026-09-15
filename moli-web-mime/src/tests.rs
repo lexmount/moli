@@ -317,6 +317,9 @@ fn matches_script_and_form_content_types() {
     assert!(is_json_mime("Application/JSON; charset=utf-8"));
     assert!(is_json_mime("application/manifest+json"));
     assert!(is_json_mime("text/json"));
+    assert!(is_json_mime("Text/JSON; charset=utf-8"));
+    assert!(!is_json_mime("text/json+blah"));
+    assert!(!is_json_mime("image/json"));
 
     assert!(is_media_source_type_supported(
         "video/mp4; codecs=\"avc1.42E01E\""
