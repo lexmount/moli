@@ -67,6 +67,115 @@ fn synthetic_document_context_preserves_its_inherited_origin() {
     assert_eq!(context.origin(), "https://creator.test");
 }
 
+fn duplicate_csp_report_request_count(
+    reports: &crate::content_security_policy::ContentSecurityPolicyReports,
+    blocked_uri: &str,
+) -> usize {
+    let fields = crate::content_security_policy::ContentSecurityPolicyViolationEventFields {
+        document_uri: "https://example.test/page",
+        referrer: "",
+        blocked_uri,
+        effective_directive: "connect-src",
+        violated_directive: "connect-src",
+        original_policy: "connect-src 'none'; report-uri /report",
+        disposition: crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+        source_file: "https://example.test/page",
+        sample: "",
+        line_number: 0,
+        column_number: 0,
+        status_code: 200,
+    };
+    reports
+        .requests(&fields, &["https://example.test/report".to_owned()], &[])
+        .len()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn document_csp_report_history_survives_open_but_not_navigation_or_inheritance() {
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.clone(), 1, "https://example.test/page");
+    let captured = first.clone();
+    assert_eq!(
+        duplicate_csp_report_request_count(first.content_security_policy_reports(), "eval"),
+        1
+    );
+    assert_eq!(
+        duplicate_csp_report_request_count(captured.content_security_policy_reports(), "eval"),
+        0
+    );
+    let replacement_transport = first.with_replacement_transport(transport.handle());
+    assert_eq!(
+        duplicate_csp_report_request_count(
+            replacement_transport.content_security_policy_reports(),
+            "eval"
+        ),
+        0
+    );
+
+    let opened = DocumentResourceLoader::for_document_open(
+        context(2, "https://example.test/page"),
+        super::document::DocumentResourceAuthoritySource::Inherited(first.clone()),
+        &first,
+    );
+    assert_eq!(
+        duplicate_csp_report_request_count(opened.content_security_policy_reports(), "eval"),
+        0
+    );
+    // A late response using the captured source context shares the history
+    // with work started after document.open().
+    assert_eq!(
+        duplicate_csp_report_request_count(
+            captured.content_security_policy_reports(),
+            "https://example.test/late"
+        ),
+        1
+    );
+    assert_eq!(
+        duplicate_csp_report_request_count(
+            opened.content_security_policy_reports(),
+            "https://example.test/late"
+        ),
+        0
+    );
+
+    for document_id in [3, 4] {
+        let next = opened.fork_for_document(context(document_id, "https://example.test/page"));
+        assert_eq!(
+            duplicate_csp_report_request_count(next.content_security_policy_reports(), "eval"),
+            1
+        );
+        assert_eq!(
+            duplicate_csp_report_request_count(next.content_security_policy_reports(), "eval"),
+            0
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn worker_csp_report_history_is_shared_only_within_one_global() {
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    for _ in 0..2 {
+        let worker = WorkerResourceLoader::new(
+            transport.clone(),
+            WorkerResourceOwner::Dedicated {
+                name: "same-worker".into(),
+            },
+            resource_task_runner(),
+        );
+        assert_eq!(
+            duplicate_csp_report_request_count(worker.content_security_policy_reports(), "eval"),
+            1
+        );
+        assert_eq!(
+            duplicate_csp_report_request_count(
+                worker.clone().content_security_policy_reports(),
+                "eval"
+            ),
+            0
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn document_authorities_share_backend_but_not_lifecycle() {
     let transport =

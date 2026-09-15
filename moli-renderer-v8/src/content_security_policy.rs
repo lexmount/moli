@@ -1,3 +1,4 @@
+use std::{collections::{HashSet, hash_map::DefaultHasher}, hash::{Hash, Hasher}};
 //! Connect the standalone CSP engine to V8 events and the renderer loader.
 
 pub(crate) use moli_csp::*;
@@ -26,26 +27,48 @@ pub(crate) fn create_security_policy_violation_event<'s>(
     crate::context_bootstrap::new_event_wrapper(scope, event)
 }
 
-pub(crate) fn content_security_policy_report_requests(
-    fields: &ContentSecurityPolicyViolationEventFields<'_>,
-    report_uri_endpoints: &[String],
-    report_to_endpoints: &[String],
-) -> Vec<Request> {
-    let mut requests = Vec::new();
-    append_content_security_policy_report_requests(
-        &mut requests,
-        &content_security_policy_violation_report_body(fields),
-        "application/csp-report",
-        report_uri_endpoints,
-    );
-    append_content_security_policy_report_requests(
-        &mut requests,
-        &content_security_policy_reporting_api_report_body(fields),
-        "application/reports+json",
-        report_to_endpoints,
-    );
-    requests
+/// Network report history for one Document or WorkerGlobalScope. DOM events
+/// remain independent: every violation still dispatches an event.
+#[derive(Default)]
+pub(crate) struct ContentSecurityPolicyReports {
+    sent: parking_lot::Mutex<HashSet<u64>>,
 }
+
+impl ContentSecurityPolicyReports {
+    pub(crate) fn requests(
+        &self,
+        fields: &ContentSecurityPolicyViolationEventFields<'_>,
+        report_uri_endpoints: &[String],
+        report_to_endpoints: &[String],
+    ) -> Vec<Request> {
+        if report_uri_endpoints.is_empty() && report_to_endpoints.is_empty() {
+            return Vec::new();
+        }
+        let body = content_security_policy_violation_report_body(fields);
+        // Keep a compact fingerprint rather than retaining every report body.
+        // Claim it before dispatch so overlapping requests share the history.
+        let mut hasher = DefaultHasher::new();
+        body.hash(&mut hasher);
+        if !self.sent.lock().insert(hasher.finish()) {
+            return Vec::new();
+        }
+        let mut requests = Vec::new();
+        append_content_security_policy_report_requests(
+            &mut requests,
+            &body,
+            "application/csp-report",
+            report_uri_endpoints,
+        );
+        append_content_security_policy_report_requests(
+            &mut requests,
+            &content_security_policy_reporting_api_report_body(fields),
+            "application/reports+json",
+            report_to_endpoints,
+        );
+        requests
+    }
+}
+
 
 fn append_content_security_policy_report_requests(
     requests: &mut Vec<Request>,
@@ -73,15 +96,14 @@ fn append_content_security_policy_report_requests(
 }
 
 pub(crate) fn send_content_security_policy_reports(
+    reports: &ContentSecurityPolicyReports,
     loader: &ResourceRequestClient,
     origin: moli_url::WebOrigin,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
     report_uri_endpoints: &[String],
     report_to_endpoints: &[String],
 ) {
-    for request in
-        content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
-    {
+    for request in reports.requests(fields, report_uri_endpoints, report_to_endpoints) {
         send_content_security_policy_report_request(
             loader,
             request.with_request_origin(origin.clone()),
@@ -154,7 +176,7 @@ mod tests {
             &ContentSecurityPolicyReportingEndpoints::default(),
         )
         .expect("blocked URL should produce violation");
-        let requests = content_security_policy_report_requests(
+        let requests = ContentSecurityPolicyReports::default().requests(
             &ContentSecurityPolicyViolationEventFields::from_url_violation(&violation),
             &violation.report_uri_endpoints,
             &violation.report_to_endpoints,
@@ -168,4 +190,96 @@ mod tests {
         );
         assert_eq!(requests[0].redirect_mode(), RequestRedirectMode::Error);
     }
+    #[test]
+    fn duplicate_reports_preserve_distinct_violations_and_all_endpoints() {
+        let violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'; report-uri /csp-report".into()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        let endpoints = vec![
+            "https://app.test/report-one".to_owned(),
+            "https://app.test/report-two".to_owned(),
+        ];
+        for use_reporting_api in [false, true] {
+            let reports = ContentSecurityPolicyReports::default();
+            let (legacy, reporting) = if use_reporting_api {
+                (&[][..], endpoints.as_slice())
+            } else {
+                (endpoints.as_slice(), &[][..])
+            };
+            let assert_new_report = |fields: &ContentSecurityPolicyViolationEventFields<'_>| {
+                let requests = reports.requests(fields, legacy, reporting);
+                assert_eq!(
+                    requests.len(),
+                    2,
+                    "every endpoint receives a distinct report"
+                );
+                assert_eq!(requests[0].url.as_str(), endpoints[0]);
+                assert_eq!(requests[1].url.as_str(), endpoints[1]);
+                assert!(reports.requests(fields, legacy, reporting).is_empty());
+            };
+            let mut fields =
+                ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+            assert_new_report(&fields);
+            fields.line_number = 10;
+            assert_new_report(&fields);
+            fields.column_number = 20;
+            assert_new_report(&fields);
+            fields.sample = "different script";
+            assert_new_report(&fields);
+            fields.blocked_uri = "https://api.test/other.json";
+            assert_new_report(&fields);
+            fields.disposition = ContentSecurityPolicyDisposition::Report;
+            assert_new_report(&fields);
+            fields.original_policy = "connect-src https://other.test; report-uri /csp-report";
+            assert_new_report(&fields);
+        }
+    }
+
+    #[test]
+    fn non_url_reports_strip_credentials_and_fragments_before_deduplication() {
+        let reports = ContentSecurityPolicyReports::default();
+        let endpoints = ContentSecurityPolicyReportingEndpoints::default();
+        for (fragment, expected_count) in [("first", 1), ("second", 0)] {
+            let url = Url::parse(&format!(
+                "https://user:password@app.test/page?query=kept#{fragment}"
+            ))
+            .unwrap();
+            let violations = [
+                content_security_policy_non_url_violation_with_source(
+                    &ContentSecurityPolicy::from("script-src 'self'; report-uri /report"), &url, ContentSecurityPolicyNonUrlKind::Eval,
+                    Some("blocked()"), ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                ),
+                content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
+                    &ContentSecurityPolicy::from("script-src 'self'; report-uri /report"), &url, ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
+                    "blocked()", ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                ),
+                content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
+                    &ContentSecurityPolicy::from("require-trusted-types-for 'script'; report-uri /report"), &url, "eval", "blocked()",
+                    ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                ),
+            ];
+            for violation in violations {
+                let violation = violation.unwrap();
+                assert_eq!(violation.document_uri, "https://app.test/page?query=kept");
+                assert_eq!(
+                    reports
+                        .requests(
+                            &ContentSecurityPolicyViolationEventFields::from_url_violation(
+                                &violation
+                            ),
+                            &violation.report_uri_endpoints,
+                            &[],
+                        )
+                        .len(),
+                    expected_count
+                );
+            }
+        }
+    }
+
 }
