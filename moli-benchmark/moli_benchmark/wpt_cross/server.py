@@ -38,6 +38,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from email import policy
 from email.parser import BytesParser
 from email.utils import formatdate
@@ -143,6 +144,11 @@ FETCH_REDIRECT_RESOURCE_PATHS = {
     "/fetch/api/resources/redirect-empty-location.py",
 }
 FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
+SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
+    "/service-workers/service-worker/resources/redirect.py",
+    "/service-workers/service-worker/resources/update-worker.py",
+    "/service-workers/service-worker/resources/import-scripts-version.py",
+}
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
 )
@@ -1606,6 +1612,13 @@ class FetchStash:
         with self._lock:
             return self._values.pop(parsed_key, None)
 
+    def increment(self, key: str, *, path: str) -> int:
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            value = int(self._values.get(parsed_key, 0)) + 1
+            self._values[parsed_key] = value
+            return value
+
 
 class CspReportStore:
     """Thread-safe subset of WPT reporting stash used by CSP report checks."""
@@ -1692,6 +1705,8 @@ def _make_handler(
                     return self._serve_xhr_response_resource
                 if path in FETCH_RANGE_RESOURCE_PATHS:
                     return self._serve_fetch_resource_method
+                if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                    return self._serve_service_worker_script_resource
                 if path in XHR_RESOURCE_PATHS:
                     return self._serve_xhr_method
                 if path in FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_REDIRECT_RESOURCE_PATHS | {
@@ -1724,6 +1739,9 @@ def _make_handler(
             path = unquote(parsed.path)
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
+                return
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
@@ -1760,6 +1778,9 @@ def _make_handler(
             path = unquote(parsed.path)
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
+                return
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
@@ -1841,6 +1862,9 @@ def _make_handler(
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=self.command != "HEAD")
                 return
+            if unquote(parsed.path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
             if unquote(parsed.path) in FETCH_REDIRECT_RESOURCE_PATHS:
                 self._serve_fetch_redirect_resource(parsed.query, emit_body=self.command != "HEAD")
                 return
@@ -1883,6 +1907,9 @@ def _make_handler(
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
+                return
+            if unquote(parsed.path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
@@ -2036,6 +2063,9 @@ def _make_handler(
                 "serve-with-content-type.py"
             ):
                 self._serve_script_with_content_type(parsed.query, emit_body=emit_body)
+                return
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if path == LINK_STYLESHEET_COUNTER_PATH:
                 self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
@@ -3536,6 +3566,86 @@ def _make_handler(
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     return
+
+        def _serve_service_worker_script_resource(self) -> None:
+            if not self._consume_request_body():
+                return
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            headers: list[tuple[str, str]] = []
+            status = 200
+            body = b""
+            try:
+                if path.endswith("/redirect.py"):
+                    status = int(params.get("Status", ["302"])[0])
+                    headers.append(("Location", params["Redirect"][0]))
+                    if "ACAOrigin" in params:
+                        headers.extend(
+                            ("Access-Control-Allow-Origin", value)
+                            for value in params["ACAOrigin"][0].split(",")
+                        )
+                    for suffix in ("Headers", "Methods", "Credentials"):
+                        if "ACA" + suffix in params:
+                            headers.append((
+                                "Access-Control-Allow-" + suffix,
+                                params["ACA" + suffix][0],
+                            ))
+                    if "ACEHeaders" in params:
+                        headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+                else:
+                    headers = [
+                        ("Cache-Control", "no-cache, must-revalidate"),
+                        ("Pragma", "no-cache"),
+                        ("Content-Type", "application/javascript"),
+                    ]
+                    if path.endswith("/import-scripts-version.py"):
+                        # Match the upstream delay so update checks see new bytes.
+                        if stopping.wait(0.1):
+                            self.close_connection = True
+                            return
+                        version = (datetime.now() - datetime(1970, 1, 1)).total_seconds()
+                        body = f'version = "{version}";\n'.encode("ascii")
+                    else:
+                        mode = params["Mode"][0]
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        extra_body = ""
+                        if count == 2:
+                            if mode == "bad_mime_type":
+                                headers[-1] = ("Content-Type", "text/html")
+                            elif mode == "not_found":
+                                status = 404
+                                headers = [("Content-Type", "text/plain")]
+                            elif mode == "redirect":
+                                status = 301
+                                location = unquote(params.get("Redirect", ["empty.js"])[0])
+                                headers.append(("Location", location))
+                            elif mode == "syntax_error":
+                                extra_body = "badsyntax(isbad;"
+                            elif mode == "throw_install":
+                                extra_body = (
+                                    "addEventListener('install', function(e) { "
+                                    "throw new Error('boom'); });"
+                                )
+                        if status == 404:
+                            body = b"Page not found"
+                        elif status == 301:
+                            body = f"/* {count} */".encode("ascii")
+                        else:
+                            body = f"/* {count} */ {extra_body}".encode("utf-8")
+                if not 100 <= status <= 599:
+                    raise ValueError("invalid response status")
+                for _, value in headers:
+                    if "\r" in value or "\n" in value:
+                        raise ValueError("invalid response header")
+                    value.encode("latin-1")
+            except (KeyError, ValueError, UnicodeError):
+                self.send_error(400)
+                return
+            self._send_bytes(
+                None, body, emit_body=self.command != "HEAD",
+                extra_headers=headers, status_code=status, cache_control=None,
+            )
 
         def _send_bytes(
             self,
