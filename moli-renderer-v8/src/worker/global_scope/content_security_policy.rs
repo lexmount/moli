@@ -8,7 +8,7 @@ use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
     ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
     ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
-    content_security_policy_non_url_violation_with_source, content_security_policy_report_requests,
+    content_security_policy_non_url_violation_with_source,
     content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
@@ -51,6 +51,7 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
     };
     let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
     send_content_security_policy_reports(
+        request_client.content_security_policy_reports(),
         request_client.request_client(),
         moli_url::WebOrigin::from_serialized(&violation.document_uri),
         &fields,
@@ -148,7 +149,7 @@ fn trusted_types_policies(
     state: &WorkerGlobalState,
 ) -> impl Iterator<Item = (&str, ContentSecurityPolicyDisposition)> {
     // Preserve the same partition ordering as document reporting. Identical
-    // policies remain distinct entries and each can produce a report.
+    // policies remain distinct entries and each can produce a violation event.
     [
         (
             &state.content_security_policies,
@@ -207,11 +208,16 @@ fn send_worker_content_security_policy_reports_for_state(
     violation: &ContentSecurityPolicyUrlViolation,
 ) {
     let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
-    for request in content_security_policy_report_requests(
-        &fields,
-        &violation.report_uri_endpoints,
-        &violation.report_to_endpoints,
-    ) {
+    let requests = state
+        .borrow()
+        .loader
+        .content_security_policy_reports()
+        .requests(
+            &fields,
+            &violation.report_uri_endpoints,
+            &violation.report_to_endpoints,
+        );
+    for request in requests {
         send_worker_content_security_policy_report_for_state(state, request);
     }
 }

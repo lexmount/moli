@@ -1241,3 +1241,37 @@ document.addEventListener("securitypolicyviolation", event => {
         );
     }
 }
+
+#[test]
+fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() {
+    let mut vm = new_storage_test_vm("https://eval-report-dedup.test/page.html");
+    vm.set_fetch_subresource_interception(
+        true,
+        Some(crate::types::SubresourceResourceType::CspReport),
+    );
+    vm.set_response_content_security_policies(
+        &["script-src 'self'; report-uri /report".to_owned()],
+    );
+    assert_eq!(vm.eval(r#"
+        globalThis.violations = 0;
+        document.addEventListener('securitypolicyviolation', () => violations++);
+        let errors = 0;
+        for (let i = 0; i < 5; i++) {
+            try { eval('throw new Error("must not execute")'); } catch (e) { if (e.name === 'EvalError') errors++; }
+        }
+        try { eval('throw new Error("different call")'); } catch (e) { if (e.name === 'EvalError') errors++; }
+        errors;
+    "#).unwrap(), "6");
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_window_csp_report_execution_contexts_for_test()
+            .len(),
+        2
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        6
+    );
+    assert_eq!(vm.eval("violations").unwrap(), "6");
+}
