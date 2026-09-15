@@ -166,16 +166,7 @@ pub(super) fn url_create_object_url_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let origin = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let active_child_handle = current_child_context_handle(scope)
-            .or_else(|| crate::native_bridge::active_child_window_handle(scope));
-        unsafe { &mut *host_ptr }
-            .active_storage_context(scope, active_child_handle)
-            .origin()
-            .to_owned()
-    } else if let Some(worker_url) = current_worker_script_url(scope) {
-        moli_url::origin_ascii_serialization(&worker_url)
-    } else {
+    let Some(storage_key) = current_object_url_storage_key(scope) else {
         rv.set(v8::undefined(scope).into());
         return;
     };
@@ -186,7 +177,7 @@ pub(super) fn url_create_object_url_callback<'s>(
         );
         return;
     };
-    let Some(url) = blob::create_object_url_for_object(scope, object, &origin) else {
+    let Some(url) = blob::create_object_url_for_object(scope, object, storage_key) else {
         throw_type_error(
             scope,
             "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob'.",
@@ -198,6 +189,22 @@ pub(super) fn url_create_object_url_callback<'s>(
     } else {
         rv.set(v8::undefined(scope).into());
     }
+}
+
+fn current_object_url_storage_key(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<moli_storage_key::MoliStorageKey> {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let active_child_handle = current_child_context_handle(scope)
+            .or_else(|| crate::native_bridge::active_child_window_handle(scope));
+        return Some(
+            unsafe { &mut *host_ptr }
+                .active_storage_context(scope, active_child_handle)
+                .storage_key()
+                .clone(),
+        );
+    }
+    crate::worker::worker_storage_key(scope)
 }
 
 fn current_child_context_handle(
@@ -230,8 +237,10 @@ pub(super) fn url_revoke_object_url_callback<'s>(
     let Some(parsed) = webidl::parse_args::<UrlRevokeObjectUrlArgs>(scope, &args) else {
         return;
     };
-    if parsed.url.starts_with("blob:") {
-        blob::revoke_object_url(&parsed.url);
+    if parsed.url.starts_with("blob:")
+        && let Some(storage_key) = current_object_url_storage_key(scope)
+    {
+        blob::revoke_object_url(scope, &parsed.url, storage_key);
     }
     rv.set_undefined();
 }
