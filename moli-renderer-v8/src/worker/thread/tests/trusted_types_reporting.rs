@@ -1,6 +1,45 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_eval_violations_preserve_each_call_location() {
+    ensure_v8();
+    for enforce in [false, true] {
+        let source = r#"
+const reports = [];
+addEventListener('securitypolicyviolation', e => {
+  reports.push([e.sourceFile, e.lineNumber, e.columnNumber]);
+  if (reports.length === 6) { postMessage(reports); close(); }
+});
+for (let i = 0; i < 5; i++) { try { eval('1'); } catch {} }
+try { eval('2'); } catch {}
+"#;
+        let policies = vec!["script-src 'self'".to_owned()];
+        let options = WorkerSpawnOptions::new(
+            source.to_owned(),
+            "https://app.test/worker.js?secret#fragment".into(),
+        );
+        let mut handle = spawn_test_worker_with_options(if enforce {
+            options.with_content_security_policies(policies)
+        } else {
+            options.with_content_security_report_only_policies(policies)
+        });
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        let reports: Vec<(String, i32, i32)> =
+            serde_json::from_str(&expect_post_json(message)).unwrap();
+        assert_eq!(reports.len(), 6);
+        assert!(
+            reports
+                .iter()
+                .all(|(url, line, column)| url == "https://app.test/worker.js"
+                    && *line > 0
+                    && *column > 0)
+        );
+        assert!(reports[..5].iter().all(|location| location == &reports[0]));
+        assert_ne!(reports[0].1, reports[5].1);
+    }
+}
+
+#[tokio::test]
 async fn worker_trusted_types_policy_creation_queues_every_violated_policy() {
     ensure_v8();
     let enforced = [
