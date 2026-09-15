@@ -1,5 +1,100 @@
 use super::*;
 
+async fn drain_child_runtime_module_tasks(page_vm: &mut PageVm) -> anyhow::Result<()> {
+    let loader = page_vm.request_client.clone();
+    for _ in 0..32 {
+        if page_vm
+            .run_next_child_frame_task_source_for_semantic_test()
+            .await
+            .is_some()
+        {
+            continue;
+        }
+        if page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::ChildModuleScriptTerminal,
+                &loader,
+            )
+            .await?
+            || page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ModuleReaction,
+                    &loader,
+                )
+                .await?
+        {
+            continue;
+        }
+        return Ok(());
+    }
+    anyhow::bail!("child runtime module tasks did not settle in 32 turns")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_runtime_inline_modules_preserve_insertion_order_after_load_and_release_tla() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/runtime-module")?,
+            );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.events = [];
+const frame = document.createElement('iframe');
+frame.id = 'runtime-module';
+frame.srcdoc = '<!doctype html><body>child';
+frame.onload = () => events.push('frame-load');
+document.body.append(frame);
+"queued"
+"#,
+        )?;
+        drain_child_runtime_module_tasks(&mut page_vm).await?;
+        assert_eq!(page_vm.vm_mut().eval("events.join('|')")?, "frame-load");
+        page_vm.vm_mut().eval(
+            r#"
+(() => {
+  const d = document.getElementById('runtime-module').contentDocument;
+  const second = d.createElement('script'), first = d.createElement('script');
+  first.type = second.type = 'module';
+  first.async = second.async = false;
+  first.textContent = `parent.events.push('first-start');
+    await new Promise(resolve => parent.releaseModule = resolve);
+    parent.events.push('first-end');`;
+  second.textContent = `parent.events.push('second');`;
+  first.onload = () => events.push('first-load');
+  second.onload = () => events.push('second-load');
+  d.body.append(first);
+  d.body.append(second);
+  return 'queued';
+})()
+"#,
+        )?;
+        drain_child_runtime_module_tasks(&mut page_vm).await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("events.join('|')")?,
+            "frame-load|first-start|second",
+            "a pending TLA must not hold the next ordered module or repeat document load"
+        );
+        page_vm.vm_mut().eval("releaseModule(); 'resolved'")?;
+        drain_child_runtime_module_tasks(&mut page_vm).await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("events.join('|')")?,
+            "frame-load|first-start|second|first-end"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("document.getElementById('runtime-module').contentDocument.readyState")?,
+            "complete"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child runtime inline modules should execute after load");
+}
+
 pub(super) async fn queue_child_module_document_script_ready(
     page_vm: &mut PageVm,
     base_url: &str,

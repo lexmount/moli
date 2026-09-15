@@ -287,7 +287,7 @@ impl ChildModuleScriptExecutionOwner<'_> {
         script_handle: DomHandle,
         mode: ScriptMode,
         pending_script_key: crate::document_script_scheduler::ParserPendingScriptKey,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> std::result::Result<(), DocumentScriptExecutionOutcome> {
         let current = {
             let host = self.vm._context_host.borrow();
@@ -400,7 +400,7 @@ impl ChildModuleScriptExecutionOwner<'_> {
         realm_id: FrameRealmId,
         mode: ScriptMode,
         pending_script_key: crate::document_script_scheduler::ParserPendingScriptKey,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> std::result::Result<(), DocumentScriptExecutionOutcome> {
         let current = self.check_current_frame_parser_module_route(owner, realm_id);
         if current.is_err() && mode == ScriptMode::ModuleDefer {
@@ -438,7 +438,7 @@ impl ChildModuleScriptExecutionOwner<'_> {
         &mut self,
         owner: FrameDocumentTaskOwner,
         mode: ScriptMode,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> bool {
         let released = self
             .vm

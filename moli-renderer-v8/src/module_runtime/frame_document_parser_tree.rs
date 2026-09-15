@@ -36,7 +36,7 @@ impl NativeDocumentModulator {
         parent_key: ModuleMapKey,
         requests: Vec<ModuleRequestRecord>,
         effective_fetch_metadata: ModuleFetchMetadata,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> module_tree::ModuleTreeId {
         let request_count = requests.len();
         let parser_tree_job = NativeModuleGraphJob::parser_owned_compiled_entry(
