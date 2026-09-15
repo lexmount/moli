@@ -2,15 +2,16 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use super::ids::FrameOwnerIdAllocator;
 use super::lifecycle_tasks::{
-    ChildDocumentAsyncClassicScriptLoadDelay, DocumentLinkEventOwner,
-    FrameDocumentCompleteLifecycleAction, FrameDocumentDomContentLoadedLifecycleAction,
-    FrameDocumentImageLoadEventBinding, FrameDocumentInteractiveLifecycleAction,
-    FrameDocumentLifecycleAction, FrameDocumentMediaLoadDelayBinding,
-    MainDocumentCompleteLifecycleAction, MainDocumentDomContentLoadedLifecycleAction,
-    MainDocumentImageLoadDelayBinding, MainDocumentInteractiveLifecycleAction,
-    MainDocumentMediaLoadDelayBinding, MainDocumentScriptLoadDelayKind,
-    MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
-    MainDocumentStyleLoadEventBinding, StylesheetSubresourceLoadDelayBinding,
+    ChildDocumentAsyncClassicScriptLoadDelay, ChildDocumentModuleScriptLoadDelay,
+    DocumentLinkEventOwner, FrameDocumentCompleteLifecycleAction,
+    FrameDocumentDomContentLoadedLifecycleAction, FrameDocumentImageLoadEventBinding,
+    FrameDocumentInteractiveLifecycleAction, FrameDocumentLifecycleAction,
+    FrameDocumentMediaLoadDelayBinding, MainDocumentCompleteLifecycleAction,
+    MainDocumentDomContentLoadedLifecycleAction, MainDocumentImageLoadDelayBinding,
+    MainDocumentInteractiveLifecycleAction, MainDocumentMediaLoadDelayBinding,
+    MainDocumentScriptLoadDelayKind, MainDocumentScriptLoadDelayLease,
+    MainDocumentScriptLoadDelayRelease, MainDocumentStyleLoadEventBinding,
+    StylesheetSubresourceLoadDelayBinding,
 };
 use super::load_event_gate::DocumentLoadGateRelease;
 use super::module_clients::{
@@ -2968,12 +2969,20 @@ impl FrameOwnerStore {
         &mut self,
         child_handle: DomHandle,
         owner: FrameDocumentTaskOwner,
-    ) -> Option<DocumentLoadDelayTokenId> {
-        self.acquire_current_child_document_load_delay(
-            child_handle,
-            owner,
-            DocumentLoadDelayReason::AsyncModuleScript,
-        )
+    ) -> Option<ChildDocumentModuleScriptLoadDelay> {
+        if !self.child_document_task_owner_is_current(child_handle, owner) {
+            return None;
+        }
+        if let Some(token) =
+            self.acquire_document_load_delay(owner, DocumentLoadDelayReason::AsyncModuleScript)
+        {
+            return Some(ChildDocumentModuleScriptLoadDelay::Pending(token));
+        }
+        self.documents
+            .get(&owner.document_id)
+            .filter(|document| document.local_window_id == owner.local_window_id)
+            .is_some_and(|document| document.lifecycle_progress.is_complete())
+            .then_some(ChildDocumentModuleScriptLoadDelay::AlreadyUnblocked)
     }
 
     pub(crate) fn accept_current_child_image_load_event(

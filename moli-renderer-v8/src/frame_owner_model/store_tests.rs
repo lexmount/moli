@@ -4141,11 +4141,28 @@ fn child_document_script_delays_own_dcl_and_complete_readiness() {
             .is_none(),
         "the async-module token must delay complete without blocking DCL"
     );
-    assert!(store.release_async_module_script_load_delay(owner, async_module));
+    assert!(store.release_async_module_script_load_delay(
+        owner,
+        async_module.token().expect("pending module delay")
+    ));
     let complete = store
         .prepare_current_child_document_complete_transition(child_handle, owner)
         .expect("the final async-module terminal should unblock complete");
     assert!(store.apply_current_child_document_complete_transition(complete));
+    assert_eq!(
+        store.acquire_current_child_async_module_script_load_delay(child_handle, owner),
+        Some(ChildDocumentModuleScriptLoadDelay::AlreadyUnblocked),
+        "dynamic modules remain admissible after load without reopening its gate",
+    );
+    assert_eq!(
+        store.current_child_document_has_load_delay_tokens(child_handle, owner),
+        Some(false)
+    );
+    assert!(
+        store
+            .prepare_current_child_document_complete_transition(child_handle, owner)
+            .is_none()
+    );
 
     let replacement_transition = store
         .replace_child_document(
@@ -4191,7 +4208,10 @@ fn child_document_script_delays_own_dcl_and_complete_readiness() {
         "replacement must retire parser-deferred delays owned by the old document"
     );
     assert!(
-        !store.release_async_module_script_load_delay(replacement_owner, retired_async_module),
+        !store.release_async_module_script_load_delay(
+            replacement_owner,
+            retired_async_module.token().expect("pending module delay")
+        ),
         "replacement must retire async-module delays owned by the old document"
     );
     let final_owner = final_transition
@@ -4213,7 +4233,12 @@ fn child_document_script_delays_own_dcl_and_complete_readiness() {
         "bulk cancellation must consume the parser-deferred token exactly once"
     );
     assert!(
-        !store.release_async_module_script_load_delay(final_owner, replacement_async_module),
+        !store.release_async_module_script_load_delay(
+            final_owner,
+            replacement_async_module
+                .token()
+                .expect("pending module delay")
+        ),
         "bulk cancellation must consume the async-module token exactly once"
     );
     assert_eq!(

@@ -352,7 +352,7 @@ pub(crate) fn module_script_graph_failed_work_from_root_client(
     script: crate::planning::PreparedScript,
     script_handle: DomHandle,
     request_key: ModuleMapKey,
-    load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+    load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     error: ModuleLoadError,
 ) -> DocumentModuleGraphFailedWork {
     DocumentModuleGraphFailedWork::new(

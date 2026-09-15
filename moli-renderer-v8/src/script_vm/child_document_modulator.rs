@@ -570,7 +570,7 @@ impl ScriptVm {
         parent_key: ModuleMapKey,
         requests: Vec<ModuleRequestRecord>,
         effective_fetch_metadata: ModuleFetchMetadata,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> ModuleTreeId {
         self.child_document_modulator_store
             .record_compiled_parser_root(

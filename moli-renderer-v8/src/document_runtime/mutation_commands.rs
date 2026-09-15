@@ -2174,7 +2174,7 @@ fn start_connected_child_document_script(
             source_kind,
         } => {
             match unsafe { &mut *host_ptr }
-                .queue_child_dynamic_external_classic_script_for_current_document(
+                .queue_child_dynamic_document_script_for_current_document(
                     scope,
                     owner_document_handle,
                     node,
