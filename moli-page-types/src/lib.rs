@@ -4268,8 +4268,13 @@ mod tests {
             r#"{"ok":true}"#,
             &expectation,
         ));
-        assert!(!json_path_equals(
+        assert!(json_path_equals(
             &[("content-type".to_owned(), "text/json".to_owned())],
+            r#"{"ok":true}"#,
+            &expectation,
+        ));
+        assert!(!json_path_equals(
+            &[("content-type".to_owned(), "text/plain".to_owned())],
             r#"{"ok":true}"#,
             &expectation,
         ));

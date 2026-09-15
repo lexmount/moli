@@ -132,7 +132,9 @@ pub fn multipart_form_data_boundary(input: &str) -> Option<String> {
 }
 
 pub fn is_json_module_mime(input: &str) -> bool {
-    mime_essence(input).is_some_and(|mime| mime == "application/json" || mime.ends_with("+json"))
+    mime_essence(input).is_some_and(|mime| {
+        matches!(mime.as_str(), "application/json" | "text/json") || mime.ends_with("+json")
+    })
 }
 
 pub fn is_webassembly_mime(input: &str) -> bool {

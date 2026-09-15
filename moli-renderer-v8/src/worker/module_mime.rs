@@ -18,7 +18,13 @@ pub(crate) fn ensure_worker_wasm_module_mime(
 pub(crate) fn ensure_worker_json_module_mime(
     response: &moli_fetch::Response,
 ) -> Result<(), String> {
-    let content_type = worker_module_response_content_type(&response.headers);
+    ensure_worker_json_module_mime_from_headers(&response.headers)
+}
+
+pub(super) fn ensure_worker_json_module_mime_from_headers(
+    headers: &[(String, String)],
+) -> Result<(), String> {
+    let content_type = worker_module_response_content_type(headers);
     let Some(content_type) = content_type else {
         return Err(
             "non-JSON module response for JSON import attribute: missing Content-Type".to_owned(),
