@@ -1,7 +1,5 @@
 use super::*;
-use crate::content_security_policy::{
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
-};
+use crate::content_security_policy::ContentSecurityPolicyViolationEventFields;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::WorkerOwnerScope;
 use crate::service_worker_runtime::{
@@ -180,8 +178,10 @@ fn send_content_security_policy_reports_from_window_context(
     report_uri_endpoints: &[String],
     report_to_endpoints: &[String],
 ) {
-    for request in
-        content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
+    for request in request_context
+        .resource_loader
+        .content_security_policy_reports()
+        .requests(fields, report_uri_endpoints, report_to_endpoints)
     {
         send_content_security_policy_report_request(host, request_context, request);
     }
