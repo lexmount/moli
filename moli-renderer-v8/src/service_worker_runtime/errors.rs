@@ -2,6 +2,7 @@
 pub(crate) enum ServiceWorkerRegistrationErrorKind {
     Abort,
     Install,
+    InvalidState,
     Network,
     NotFound,
     ScriptEvaluateFailed,
@@ -15,6 +16,7 @@ impl ServiceWorkerRegistrationErrorKind {
         match self {
             Self::Abort | Self::Install | Self::ScriptEvaluateFailed => "AbortError",
             Self::Network => "NetworkError",
+            Self::InvalidState => "InvalidStateError",
             Self::NotFound => "NotFoundError",
             Self::Security => "SecurityError",
             Self::Type => unreachable!("type errors are not DOMExceptions"),

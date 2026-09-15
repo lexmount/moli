@@ -186,6 +186,10 @@ pub(super) const WORKER_EXCEPTION_LINE_SLOT: &str = "__moliWorkerExceptionLine";
 pub(super) const WORKER_EXCEPTION_COLUMN_SLOT: &str = "__moliWorkerExceptionColumn";
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
 const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
+const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobalRegistration";
+const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
+const SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT: &str =
+    "__moliServiceWorkerRegistrationOnUpdateFound";
 const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
 const SERVICE_WORKER_WORKER_EVENTS_SLOT: &str = "__moliServiceWorkerWorkerEvents";
 const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
@@ -664,6 +668,13 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
     scope: String,
 
     #[webapi(
+        accessor_property = "onupdatefound",
+        getter = service_worker_registration_onupdatefound_getter,
+        setter = service_worker_registration_onupdatefound_setter
+    )]
+    onupdatefound: (),
+
+    #[webapi(
         accessor_property = "installing",
         getter = service_worker_registration_installing_getter
     )]
@@ -683,6 +694,9 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
     unregister: (),
+
+    #[webapi(method, callback = service_worker_registration_update_callback, length = 0)]
+    update: (),
 
     #[webapi(
         method = "showNotification",
@@ -965,6 +979,11 @@ pub(super) struct PendingServiceWorkerClientsOpenWindow {
 
 pub(super) struct PendingServiceWorkerShowNotification {
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
+}
+
+pub(super) struct PendingServiceWorkerUpdate {
+    pub(super) resolver: v8::Global<v8::PromiseResolver>,
+    pub(super) registration: v8::Global<v8::Object>,
 }
 
 pub(super) struct PendingServiceWorkerGetNotifications {
@@ -1531,6 +1550,7 @@ pub(crate) struct WorkerGlobalState {
     /// Responses in this ServiceWorker version's script resource map, keyed by
     /// requested URL. Dedicated and Shared Workers leave this map empty.
     pub(super) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(super) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     pub(super) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(super) referrer_policy: Option<String>,
@@ -1641,6 +1661,8 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
     pub(super) pending_service_worker_show_notifications:
         HashMap<u64, PendingServiceWorkerShowNotification>,
+    pub(super) pending_service_worker_updates: HashMap<u64, PendingServiceWorkerUpdate>,
+    pub(super) service_worker_update_request_ids: WorkerServiceWorkerRequestIdAllocator,
     /// In-flight Service Worker `registration.getNotifications()` requests keyed by request id.
     pub(super) pending_service_worker_get_notifications:
         HashMap<u64, PendingServiceWorkerGetNotifications>,
@@ -2502,6 +2524,45 @@ pub(super) fn drain_service_worker_clients_open_window_result(
                 let _ = resolver.reject(scope, error);
             }
         },
+    }
+}
+
+pub(super) fn drain_service_worker_update_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    result: Result<
+        crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
+        crate::service_worker_runtime::ServiceWorkerRegistrationError,
+    >,
+) {
+    let Some(pending) = state
+        .borrow_mut()
+        .pending_service_worker_updates
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &pending.resolver);
+    match result {
+        Ok(_) => {
+            let registration = v8::Local::new(scope, &pending.registration);
+            let _ = resolver.resolve(scope, registration.into());
+        }
+        Err(error) => {
+            let exception = if error.kind.rejects_as_type_error_for_update() {
+                let message = v8_string(scope, &error.message)
+                    .unwrap_or_else(|| v8str(scope, "ServiceWorker update failed"));
+                v8::Exception::type_error(scope, message)
+            } else {
+                crate::context_bootstrap::new_dom_exception_value(
+                    scope,
+                    &error.message,
+                    error.kind.dom_exception_name(),
+                )
+            };
+            let _ = resolver.reject(scope, exception);
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use url::Url;
 use crate::{
     network::{BrowserResourceRuntimeBinding, ResourceRequestClient},
     page_task_queue::RendererPageServiceWorkerTaskSender,
-    runtime::{RendererBrowserContextRuntime, RendererWorkerContextRuntime},
+    runtime::RendererWorkerContextRuntime,
     types::{ServiceWorkerRegisterCompletion, ServiceWorkerUnregisterCompletion},
     worker::{WorkerNetworkPolicy, WorkerScriptKind},
 };
@@ -39,10 +39,16 @@ pub(crate) struct ServiceWorkerLaunchParams {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ServiceWorkerRegisterJob {
-    pub(super) request_id: u64,
-    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
-    pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
+pub(crate) enum ServiceWorkerRegisterJob {
+    Page {
+        request_id: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
+        completion_tx: RendererPageServiceWorkerTaskSender,
+    },
+    Worker {
+        request_id: u64,
+        completion_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
+    },
 }
 
 impl ServiceWorkerRegisterJob {
@@ -53,13 +59,30 @@ impl ServiceWorkerRegisterJob {
             ServiceWorkerRegistrationError,
         >,
     ) {
-        let _ = self
-            .completion_tx
-            .send_service_worker_register(ServiceWorkerRegisterCompletion {
-                request_id: self.request_id,
-                document_owner: self.document_owner,
-                result,
-            });
+        match self {
+            Self::Page {
+                request_id,
+                document_owner,
+                completion_tx,
+            } => {
+                let _ =
+                    completion_tx.send_service_worker_register(ServiceWorkerRegisterCompletion {
+                        request_id,
+                        document_owner,
+                        result,
+                    });
+            }
+            Self::Worker {
+                request_id,
+                completion_tx,
+            } => {
+                let _ =
+                    completion_tx.send(crate::worker::WorkerMessage::ServiceWorkerUpdateResult {
+                        request_id,
+                        result: Box::new(result),
+                    });
+            }
+        }
     }
 
     pub(super) fn send_all(
@@ -73,6 +96,20 @@ impl ServiceWorkerRegisterJob {
             job.send(result.clone());
         }
     }
+}
+
+pub(crate) struct ServiceWorkerRegistrationUpdate {
+    pub(crate) registration_id: ServiceWorkerRegistrationId,
+    pub(crate) caller_version_id: Option<ServiceWorkerVersionId>,
+    pub(crate) storage_key: String,
+    pub(crate) document_url: Url,
+    pub(crate) request_client: ResourceRequestClient,
+    pub(crate) network_policy: WorkerNetworkPolicy,
+    pub(crate) worker_context_runtime: RendererWorkerContextRuntime,
+    pub(crate) broadcast_channel_top_level_site: Option<String>,
+    pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+    pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+    pub(crate) completion: ServiceWorkerRegisterJob,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +126,7 @@ pub(super) enum ServiceWorkerRegisterJobPhase {
 
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerPendingRegisterJob {
+    pub(super) is_update: bool,
     phase: ServiceWorkerRegisterJobPhase,
     skip_waiting_after_install: bool,
     callbacks: Vec<ServiceWorkerRegisterJob>,
@@ -109,6 +147,7 @@ impl ServiceWorkerPendingRegisterJob {
     ) -> Self {
         Self {
             phase: ServiceWorkerRegisterJobPhase::Initial,
+            is_update: false,
             skip_waiting_after_install,
             callbacks,
             resolved_result: None,
@@ -250,7 +289,7 @@ mod tests {
     #[test]
     fn pending_register_job_resolves_when_install_starts() {
         let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
-        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
+        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob::Page {
             request_id: 1,
             document_owner: crate::window_document_identity::WindowDocumentOwner::for_test(1),
             completion_tx: queue.sender(),
@@ -353,6 +392,9 @@ impl ServiceWorkerQueuedUnregisterJob {
 
 #[derive(Clone)]
 pub(super) struct ServiceWorkerQueuedRegisterJob {
+    /// Web API update jobs retain their registration identity and cannot
+    /// create a new registration or clear a pending unregistration.
+    pub(super) update_registration_id: Option<ServiceWorkerRegistrationId>,
     pub(super) script_url: Url,
     pub(super) scope_url: Url,
     pub(super) document_url: Url,
@@ -365,7 +407,7 @@ pub(super) struct ServiceWorkerQueuedRegisterJob {
     pub(super) force_update_page_load_waiter_ids: Vec<u64>,
     pub(super) request_client: ResourceRequestClient,
     pub(super) network_policy: WorkerNetworkPolicy,
-    pub(super) browser_context_runtime: RendererBrowserContextRuntime,
+    pub(super) worker_context_runtime: RendererWorkerContextRuntime,
     pub(super) broadcast_channel_top_level_site: Option<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(super) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -381,7 +423,8 @@ impl ServiceWorkerQueuedRegisterJob {
     }
 
     pub(super) fn matches_registration_job(&self, other: &Self) -> bool {
-        self.scope_url == other.scope_url
+        self.update_registration_id == other.update_registration_id
+            && self.scope_url == other.scope_url
             && self.storage_key == other.storage_key
             && self.script_url == other.script_url
             && self.script_kind == other.script_kind
@@ -461,6 +504,7 @@ pub(super) enum ServiceWorkerMainScriptUpdateCheckStart {
 impl std::fmt::Debug for ServiceWorkerQueuedRegisterJob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServiceWorkerQueuedRegisterJob")
+            .field("update_registration_id", &self.update_registration_id)
             .field("script_url", &self.script_url)
             .field("scope_url", &self.scope_url)
             .field("document_url", &self.document_url)
@@ -718,7 +762,7 @@ impl ServiceWorkerVersionLaunchConfig {
             document_url: job.document_url.clone(),
             request_client: ServiceWorkerRequestClientSource::Captured(job.request_client.clone()),
             network_policy: job.network_policy.clone(),
-            worker_context_runtime: job.browser_context_runtime.worker_context_runtime(),
+            worker_context_runtime: job.worker_context_runtime.clone(),
             broadcast_channel_top_level_site: job.broadcast_channel_top_level_site.clone(),
             indexed_db_manager: job.indexed_db_manager.clone(),
             storage_bucket_store: job.storage_bucket_store.clone(),

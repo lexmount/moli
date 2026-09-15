@@ -15,6 +15,7 @@ use crate::worker::WorkerScriptKind;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject, WebApiObjectDeclaration};
 
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
+const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
 const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
 const SERVICE_WORKER_REGISTRATION_WORKER_SLOT: &str = "__moliServiceWorkerRegistrationWorker";
 const SERVICE_WORKER_REGISTRATION_WORKERS_SLOT: &str = "__moliServiceWorkerRegistrationWorkers";
@@ -63,6 +64,9 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 
     #[webapi(method, callback = navigator_service_worker_unregister_callback, length = 0)]
     unregister: (),
+
+    #[webapi(method, callback = service_worker_registration_update_callback, length = 0)]
+    update: (),
 
     #[webapi(
         method = "showNotification",
@@ -513,6 +517,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
             scope,
             scope_url.clone(),
             resolver,
+            None,
             request_context.owner(),
         );
     host.start_service_worker_runtime(
@@ -532,6 +537,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
 pub(crate) fn settle_service_worker_register_completion<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
+    update_registration: Option<v8::Local<'s, v8::Object>>,
     owner: OwnerDispatchScope,
     scope_url: &url::Url,
     result: std::result::Result<
@@ -547,6 +553,16 @@ pub(crate) fn settle_service_worker_register_completion<'s>(
                 .or_else(|| state.installing())
                 .map(|version| version.script_url().as_str())
                 .unwrap_or_else(|| state.scope_url().as_str());
+            if let Some(registration) = update_registration {
+                update_service_worker_registration_object(
+                    scope,
+                    registration,
+                    script_url,
+                    ServiceWorkerRegistrationPhase::Snapshot(&state),
+                );
+                let _ = resolver.resolve(scope, registration.into());
+                return;
+            }
             let registration =
                 if let Some(container) = service_worker_container_for_owner(scope, owner) {
                     build_service_worker_registration_object_for_container(
@@ -673,6 +689,11 @@ pub(crate) fn dispatch_service_worker_lifecycle_notification(
         notification.document_owner,
     );
     for (owner, registration) in registrations {
+        if service_worker_registration_id_from_object(scope, registration)
+            != Some(notification.registration.registration_id())
+        {
+            continue;
+        }
         let previous_owner_context = owner.enter(scope);
         update_service_worker_registration_object(
             scope,
@@ -1010,12 +1031,20 @@ fn remember_service_worker_container_registration<'s>(
         return;
     };
     let scope_url = scope_url.to_rust_string_lossy(scope);
-    if service_worker_container_cached_registration_for_scope(scope, container, &scope_url)
-        .is_some()
-    {
-        return;
-    }
     let cache = service_worker_container_registration_cache(scope, container);
+    if let Some(previous) =
+        service_worker_container_cached_registration_for_scope(scope, container, &scope_url)
+    {
+        for index in 0..cache.length() {
+            if cache
+                .get_index(scope, index)
+                .is_some_and(|value| value.strict_equals(previous.into()))
+            {
+                let _ = cache.set_index(scope, index, registration.into());
+                return;
+            }
+        }
+    }
     array_push_value(scope, cache, registration.into());
 }
 
@@ -1308,6 +1337,95 @@ fn service_worker_container_owner_scope<'s>(
     container: v8::Local<'s, v8::Object>,
 ) -> OwnerDispatchScope {
     service_worker_owner_scope_from_object(scope, container)
+}
+
+fn service_worker_registration_id_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registration: v8::Local<'s, v8::Object>,
+) -> Option<crate::service_worker_runtime::ServiceWorkerRegistrationId> {
+    let value = get_private_value(scope, registration, SERVICE_WORKER_REGISTRATION_ID_SLOT)?;
+    let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
+    let (value, lossless) = value.u64_value();
+    lossless.then(|| {
+        crate::service_worker_runtime::ServiceWorkerRegistrationId::from_u64_for_binding(value)
+    })
+}
+
+fn service_worker_registration_update_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    rv.set(resolver.get_promise(scope).into());
+    let Some(registration_id) = service_worker_registration_id_from_object(scope, args.this())
+    else {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "Illegal invocation of ServiceWorkerRegistration.update",
+        );
+        return;
+    };
+    let Some(scope_url) = service_worker_registration_scope_from_this(scope, args.this()) else {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The registration is unavailable.",
+            "InvalidStateError",
+        );
+        return;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The registration owner is unavailable.",
+            "InvalidStateError",
+        );
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let owner = service_worker_owner_scope_from_object(scope, args.this());
+    let Some(request_context) = host.service_worker_window_request_context(owner) else {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The registration Document is no longer active.",
+            "InvalidStateError",
+        );
+        return;
+    };
+    let Some(request_client) = host
+        .document_resource_loader_for_window_owner(request_context.owner().window_document_owner())
+        .map(|loader| loader.request_client().clone())
+    else {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The registration Document is no longer active.",
+            "InvalidStateError",
+        );
+        return;
+    };
+    let (request_id, document_owner, completion_tx) = host
+        .register_pending_service_worker_register(
+            scope,
+            scope_url,
+            resolver,
+            Some(args.this()),
+            request_context.owner(),
+        );
+    host.start_service_worker_registration_update(
+        registration_id,
+        &request_context,
+        request_client,
+        request_id,
+        document_owner,
+        completion_tx,
+    );
 }
 
 fn navigator_service_worker_unregister_callback<'s>(
@@ -2364,6 +2482,13 @@ fn build_service_worker_registration_object<'s>(
         navigation_preload,
     );
     let registration = bind_declared_service_worker_object(scope, &declaration);
+    let id = v8::BigInt::new_from_u64(scope, resolved.registration_id.as_u64());
+    set_private_value(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_ID_SLOT,
+        id.into(),
+    );
     mark_service_worker_registration_event_target(scope, registration);
     if let Some(scope_value) = v8_string(scope, scope_url) {
         define_non_enumerable_value_property(
@@ -2408,6 +2533,12 @@ fn build_service_worker_registration_object_for_container<'s>(
     let owner = service_worker_container_owner_scope(scope, container);
     if let Some(registration) =
         service_worker_container_cached_registration_for_scope(scope, container, scope_url)
+        && match &phase {
+            ServiceWorkerRegistrationPhase::Snapshot(snapshot) => {
+                service_worker_registration_id_from_object(scope, registration)
+                    == Some(snapshot.registration_id())
+            }
+        }
     {
         service_worker_worker_set_owner_scope(scope, registration, owner);
         update_service_worker_registration_object(scope, registration, script_url, phase);
@@ -2441,6 +2572,7 @@ fn watch_service_worker_registration_object_lifecycle<'s>(
 }
 
 struct ResolvedServiceWorkerRegistrationPhase<'s> {
+    registration_id: crate::service_worker_runtime::ServiceWorkerRegistrationId,
     installing: v8::Local<'s, v8::Value>,
     waiting: v8::Local<'s, v8::Value>,
     active: v8::Local<'s, v8::Value>,
@@ -2496,6 +2628,7 @@ fn resolve_service_worker_registration_phase<'s>(
                 })
                 .unwrap_or_else(|| build_service_worker_object(scope, script_url, "redundant"));
             ResolvedServiceWorkerRegistrationPhase {
+                registration_id: snapshot.registration_id(),
                 installing,
                 waiting,
                 active,
@@ -2533,6 +2666,11 @@ fn update_service_worker_registration_object<'s>(
 ) {
     let resolved =
         resolve_service_worker_registration_phase(scope, Some(registration), script_url, phase);
+    if service_worker_registration_id_from_object(scope, registration)
+        != Some(resolved.registration_id)
+    {
+        return;
+    }
     set_service_worker_registration_worker_values(
         scope,
         registration,
