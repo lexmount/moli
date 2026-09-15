@@ -1,5 +1,7 @@
 use super::*;
 
+mod dom;
+
 #[test]
 fn webidl_receiver_checks_reject_prototypes_plain_objects_and_forged_instances() {
     let mut vm = new_storage_test_vm("https://receiver-check.test/");

@@ -3537,7 +3537,7 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
   return JSON.stringify({
     animation: [animation.id, outcome(() => animationId.set.call({}))].join(","),
     document: [outcome(() => bodySetter.call({})), detached.fullscreenEnabled].join(","),
-    lenient: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
+    eventHandler: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
     replaceableShape,
     replacements: [window.scrollX, window.screenLeft, window.screenTop].join(","),
     failures: [selfFailure, screenFailure].join(",")
@@ -3549,7 +3549,84 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
 
     assert_eq!(
         result,
-        r#"{"animation":"undefined,TypeError","document":"TypeError,false","lenient":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
+        r#"{"animation":"undefined,TypeError","document":"TypeError,false","eventHandler":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
+    );
+}
+
+#[test]
+fn legacy_lenient_this_event_handlers_ignore_incompatible_receivers() {
+    let mut vm = new_storage_test_vm("https://legacy-lenient-this.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const text = document.createTextNode("text");
+  const invalidObject = {};
+  const element = document.createElement("div");
+  const shadow = element.attachShadow({mode: "open"});
+  const invalidReceivers = [
+    undefined, null, 1, invalidObject, text, shadow,
+    Object.create(element), new Proxy(element, {}), new Proxy(document, {})
+  ];
+  const lenientDescriptors = [
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseenter"),
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseleave"),
+    Object.getOwnPropertyDescriptor(Document.prototype, "onmouseenter"),
+    Object.getOwnPropertyDescriptor(Document.prototype, "onmouseleave")
+  ];
+  const lenient = lenientDescriptors.every(descriptor =>
+    invalidReceivers.every(receiver =>
+      descriptor.get.call(receiver) === undefined &&
+      descriptor.set.call(receiver) === undefined &&
+      descriptor.set.call(receiver, undefined) === undefined &&
+      descriptor.set.call(receiver, "ignored") === undefined
+    )
+  );
+
+  const strict = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onclick");
+  const documentStrict = Object.getOwnPropertyDescriptor(Document.prototype, "onclick");
+  const outcome = callback => {
+    try {
+      callback();
+      return "return";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  let documentCalls = 0;
+  const handler = () => documentCalls++;
+  documentStrict.set.call(document, handler);
+  const documentHandlerPreserved = documentStrict.get.call(document) === handler;
+  document.dispatchEvent(new Event("click"));
+  documentStrict.set.call(document, null);
+  document.dispatchEvent(new Event("click"));
+
+  return [
+    lenient,
+    outcome(() => strict.get.call({})),
+    outcome(() => strict.set.call({})),
+    outcome(() => strict.get.call(text)),
+    outcome(() => strict.set.call(text)),
+    outcome(() => strict.get.call(shadow)),
+    outcome(() => strict.set.call(shadow)),
+    outcome(() => documentStrict.get.call(element)),
+    outcome(() => documentStrict.set.call(element)),
+    outcome(() => documentStrict.get.call({})),
+    outcome(() => documentStrict.set.call({})),
+    Object.getOwnPropertyNames(invalidObject).length,
+    documentHandlerPreserved,
+    documentCalls
+  ].join("|");
+})()
+"#,
+        )
+        .expect("LegacyLenientThis event handler probe should evaluate");
+
+    assert_eq!(
+        result,
+        "true|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|0|true|1"
     );
 }
 

@@ -1,25 +1,30 @@
-use super::helpers::{character_data_string, require_argument_count, utf16_index_value_or_throw};
+use super::helpers::{
+    character_data_string, character_data_utf16_units, require_argument_count,
+    utf16_index_value_or_throw,
+};
 use super::*;
-use crate::{util::utf16_len, webidl};
+use crate::{native_bridge::document, util::utf16_len, webidl};
 use moli_dom::native::NodeType;
 
-pub(in crate::native_bridge) fn node_whole_text_value_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Option<String> {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) else {
+pub(in crate::native_bridge) fn node_whole_text_utf16_units_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<Vec<u16>> {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    else {
         return None;
     };
     let runtime = unsafe { &*runtime_ptr };
     let dom = runtime.dom_host();
     let node = dom.node(handle)?;
-    if !node.is_text() {
+    let is_text = |node: &Node| matches!(node.node_type(), NodeType::Text | NodeType::CDataSection);
+    if !is_text(node) {
         return None;
     }
-    let mut parts = Vec::new();
+    let mut units = Vec::new();
     let mut start = handle;
     while let Some(prev_id) = dom.node(start).and_then(|n| n.prev_sibling()) {
-        if dom.node(prev_id).is_some_and(Node::is_text) {
+        if dom.node(prev_id).is_some_and(is_text) {
             start = prev_id;
         } else {
             break;
@@ -28,15 +33,13 @@ pub(in crate::native_bridge) fn node_whole_text_value_from_object(
     let mut current = Some(start);
     while let Some(h) = current {
         let Some(n) = dom.node(h) else { break };
-        if !n.is_text() {
+        if !is_text(n) {
             break;
         }
-        if let Some(data) = n.node_value() {
-            parts.push(data.to_owned());
-        }
+        units.extend(character_data_utf16_units(runtime, h)?);
         current = n.next_sibling();
     }
-    Some(parts.join(""))
+    Some(units)
 }
 
 pub(in crate::native_bridge) fn node_split_text_callback<'s>(
@@ -47,7 +50,8 @@ pub(in crate::native_bridge) fn node_split_text_callback<'s>(
     if !require_argument_count(scope, &args, "Text", "splitText", 1) {
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         rv.set_undefined();
         return;
     };
@@ -81,6 +85,7 @@ pub(in crate::native_bridge) fn node_split_text_callback<'s>(
         rv.set_undefined();
         return;
     };
+    document::detached_record_tree_mutation(scope, args.this());
     let Some(wrapper) = runtime
         .native_bridge_mut()
         .wrap_handle(scope, runtime_ptr, new_handle)
