@@ -1128,6 +1128,7 @@ impl ScriptVm {
                         module_failure_policy,
                         source_network_result,
                         error_value,
+                        ..
                     } => {
                         if yield_after_one_runnable && processed_runnable_this_turn {
                             self.document_runtime
@@ -1258,15 +1259,14 @@ impl ScriptVm {
             self.document_runtime
                 .runtime_script_work_mut()
                 .dynamic_scripts
-                .requeue_failed_script_front_with_error_value(
+                .note_script_failed_with_kind_and_error_value(
                     owner_id,
-                    continuation.script,
+                    &continuation.script,
                     error.message().to_owned(),
                     kind,
                     Some(crate::host::ModuleFailurePolicy::for_module_load_error(
                         &error,
                     )),
-                    None,
                     error.error_value(),
                 );
         }
