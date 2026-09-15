@@ -19,5 +19,5 @@ pub(in crate::native_bridge) use helpers::{
 };
 pub(crate) use prototype::install_character_data_template_bindings;
 pub(in crate::native_bridge) use text::{
-    node_split_text_callback, node_whole_text_value_from_object,
+    node_split_text_callback, node_whole_text_utf16_units_from_object,
 };

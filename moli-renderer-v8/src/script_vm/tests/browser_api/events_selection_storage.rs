@@ -598,6 +598,15 @@ fn element_prototype_accessors_are_hookable() {
               Object.defineProperty(copiedIframe, "src", iframeSrcDescriptor);
               copiedIframe.src = "/copied.html";
 
+              const outcome = callback => {
+                try {
+                  callback();
+                  return "return";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+
               return JSON.stringify({
                 clickGet: typeof clickDescriptor.get,
                 clickSet: typeof clickDescriptor.set,
@@ -610,7 +619,7 @@ fn element_prototype_accessors_are_hookable() {
                 divHandler: div.onclick === handler,
                 otherNull: other.onclick === null,
                 formHandler: form.onsubmit === handler,
-                prototypeNull: HTMLElement.prototype.onsubmit === null,
+                prototypeError: outcome(() => HTMLElement.prototype.onsubmit),
                 iframePrototypeSrc: HTMLIFrameElement.prototype.src,
                 iframeSrcValue: originalIframeSrcGet.apply(iframe, []),
                 iframeSrcAttribute: iframe.getAttribute("src"),
@@ -624,7 +633,7 @@ fn element_prototype_accessors_are_hookable() {
 
     assert_eq!(
         result,
-        r#"{"clickGet":"function","clickSet":"function","clickConfigurable":true,"submitGet":"function","submitSet":"function","iframeSrcGet":"function","iframeSrcSet":"function","iframeSrcConfigurable":true,"divHandler":true,"otherNull":true,"formHandler":true,"prototypeNull":true,"iframePrototypeSrc":"","iframeSrcValue":"https://element-prototype-accessors.test/child.html","iframeSrcAttribute":"/child.html","copiedIframeSrcValue":"https://element-prototype-accessors.test/copied.html","copiedIframeSrcAttribute":"/copied.html"}"#
+        r#"{"clickGet":"function","clickSet":"function","clickConfigurable":true,"submitGet":"function","submitSet":"function","iframeSrcGet":"function","iframeSrcSet":"function","iframeSrcConfigurable":true,"divHandler":true,"otherNull":true,"formHandler":true,"prototypeError":"TypeError","iframePrototypeSrc":"","iframeSrcValue":"https://element-prototype-accessors.test/child.html","iframeSrcAttribute":"/child.html","copiedIframeSrcValue":"https://element-prototype-accessors.test/copied.html","copiedIframeSrcAttribute":"/copied.html"}"#
     );
 }
 

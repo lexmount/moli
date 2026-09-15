@@ -181,8 +181,8 @@ pub(in crate::native_bridge) use detached_objects::{
     detached_clone_node_method_callback, detached_doctype_name, detached_doctype_public_id,
     detached_doctype_system_id, detached_insert_before_method_callback,
     detached_parent_node_object, detached_processing_instruction_target,
-    detached_remove_child_method_callback, detached_replace_child_method_callback,
-    detached_set_owner_document,
+    detached_record_tree_mutation, detached_remove_child_method_callback,
+    detached_replace_child_method_callback, detached_set_owner_document,
 };
 pub(in crate::native_bridge) use detached_objects::{
     detached_attach_shadow_method_callback, detached_blur_method_callback,
@@ -330,7 +330,7 @@ struct DocumentMetadataPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentStructurePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -657,7 +657,7 @@ fn document_title_setter_function<'s>(
 ) {
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let Some(value) = args.get(0).to_string(scope) else {
@@ -726,7 +726,7 @@ fn document_head_getter_function<'s>(
 ) {
     let receiver = args.this();
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_null();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
