@@ -95,6 +95,7 @@ impl DocumentRuntime {
         effects: DomMutationEffects,
     ) {
         self.assert_active_parser_document_incarnation();
+        self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
         apply_parser_mutation_effects(scope, host_ptr, self, &effects);
     }
 

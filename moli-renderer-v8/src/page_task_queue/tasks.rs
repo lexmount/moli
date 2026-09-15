@@ -87,6 +87,7 @@ pub(crate) struct ContentSecurityPolicyViolationEventTask {
     // The task resides in the root Page queue; a captured Window additionally
     // requires its exact Document to remain current before entering JavaScript.
     window_target: Option<crate::native_bridge::WindowDocumentTaskTarget>,
+    event_document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     target: Option<DomHandle>,
     violation: ContentSecurityPolicyUrlViolation,
 }
@@ -99,6 +100,7 @@ impl ContentSecurityPolicyViolationEventTask {
         Self {
             owner,
             window_target: None,
+            event_document_owner: None,
             target: None,
             violation,
         }
@@ -112,6 +114,7 @@ impl ContentSecurityPolicyViolationEventTask {
         Self {
             owner,
             window_target: None,
+            event_document_owner: None,
             target: Some(target),
             violation,
         }
@@ -131,6 +134,20 @@ impl ContentSecurityPolicyViolationEventTask {
 
     pub(crate) fn target(&self) -> Option<DomHandle> {
         self.target
+    }
+
+    pub(crate) fn with_event_document_owner(
+        mut self,
+        owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    ) -> Self {
+        self.event_document_owner = owner;
+        self
+    }
+
+    pub(crate) fn event_document_owner(
+        &self,
+    ) -> Option<crate::frame_owner_model::FrameDocumentTaskOwner> {
+        self.event_document_owner
     }
 
     pub(crate) fn for_window(
