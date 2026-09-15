@@ -638,7 +638,7 @@ impl JsContextHost {
             .document_resource_loaders
             .get(retired_owner)
             .expect("document.open() requires its exact source resource authority");
-        let replacement = DocumentResourceLoader::for_committed_document(context, source);
+        let replacement = DocumentResourceLoader::for_document_open(context, source, &retired);
         let transferred_loads = retired.transfer_existing_loads_to(&replacement);
         self.retire_document_resource_loader(retired_owner)
             .expect("a committed Document transition must retire its exact resource authority");
