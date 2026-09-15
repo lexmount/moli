@@ -122,6 +122,11 @@ FETCH_REDIRECT_RESOURCE_PATHS = {
 }
 FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
 SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
+    "/service-workers/service-worker/resources/mime-type-worker.py",
+    "/service-workers/service-worker/resources/import-mime-type-worker.py",
+    "/service-workers/service-worker/resources/malformed-worker.py",
+    "/service-workers/service-worker/resources/invalid-chunked-encoding.py",
+    "/service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
     "/service-workers/service-worker/resources/redirect.py",
     "/service-workers/service-worker/resources/update-worker.py",
     "/service-workers/service-worker/resources/update-worker-from-file.py",
@@ -132,6 +137,18 @@ SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/import-scripts-echo.py",
     "/service-workers/service-worker/resources/subdir/import-scripts-echo.py",
     "/service-workers/service-worker/resources/scope2/import-scripts-echo.py",
+}
+SERVICE_WORKER_MALFORMED_SCRIPTS = {
+    "parse-error": 'var foo = function() {;',
+    "undefined-error": 'foo.bar = 42;',
+    "uncaught-exception": 'throw new DOMException("AbortError");',
+    "caught-exception": 'try { throw new Error; } catch(e) {}',
+    "import-malformed-script": 'importScripts("malformed-worker.py?parse-error");',
+    "import-no-such-script": 'importScripts("no-such-script.js");',
+    "top-level-await": 'await Promise.resolve(1);',
+    "instantiation-error": 'import nonexistent from "./imported-module-script.js";',
+    "instantiation-error-and-top-level-await":
+        'import nonexistent from "./imported-module-script.js"; await Promise.resolve(1);',
 }
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
@@ -3180,11 +3197,36 @@ def _make_handler(
                 except (BrokenPipeError, ConnectionResetError):
                     return
 
-        def _serve_service_worker_script_resource(self) -> None:
-            if not self._consume_request_body():
+        def _serve_service_worker_invalid_chunked(self, *, delayed: bool) -> None:
+            self.close_connection = True
+            self.protocol_version = self.request_version
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Transfer-Encoding", "chunked")
+                # wptserve adds a length for the returned body, but not for
+                # the explicit writer used by the delayed variant.
+                if not delayed:
+                    self.send_header("Content-Length", "6")
+                self.end_headers()
+                self.wfile.flush()
+                if delayed and stopping.wait(1):
+                    return
+                # An explicit upstream writer also emits its bytes for HEAD.
+                if delayed or self.command != "HEAD":
+                    self.wfile.write(b"XX\r\n\r\n")
+                    self.wfile.flush()
+            except OSError:
                 return
+
+        def _serve_service_worker_script_resource(self) -> None:
             parsed = urlsplit(self.path)
             path = unquote(parsed.path)
+            if path.endswith(("/invalid-chunked-encoding.py", "/invalid-chunked-encoding-with-flush.py")):
+                self._serve_service_worker_invalid_chunked(delayed=path.endswith("-with-flush.py"))
+                return
+            if not self._consume_request_body():
+                return
             params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
             headers: list[tuple[str, str]] = []
             status = 200
@@ -3206,6 +3248,21 @@ def _make_handler(
                             ))
                     if "ACEHeaders" in params:
                         headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+                elif path.endswith("/mime-type-worker.py"):
+                    if "mime" in params:
+                        headers.append(("Content-Type", params["mime"][0]))
+                elif path.endswith("/import-mime-type-worker.py"):
+                    headers.append(("Content-Type", "application/javascript"))
+                    suffix = "?mime=" + params["mime"][0] if "mime" in params else ""
+                    body = f"importScripts('./mime-type-worker.py{suffix}');".encode("latin-1")
+                elif path.endswith("/malformed-worker.py"):
+                    # Upstream selects on the complete, undecoded query.
+                    script = SERVICE_WORKER_MALFORMED_SCRIPTS.get(parsed.query)
+                    if script is None:
+                        self.send_error(500)
+                        return
+                    headers.append(("Content-Type", "application/javascript"))
+                    body = script.encode("utf-8")
                 else:
                     headers = [
                         ("Cache-Control", "no-cache, must-revalidate"),
