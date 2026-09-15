@@ -207,6 +207,7 @@ enum MarkdownInlineKind {
     ListItem { list_depth: usize },
     Strong,
     Emphasis,
+    Code,
 }
 
 fn render_markdown_node(
@@ -260,7 +261,7 @@ fn render_markdown_nodes(
                 target,
                 kind,
             } => {
-                let text = collapse_whitespace(&std::mem::take(&mut buffers[source]));
+                let text = std::mem::take(&mut buffers[source]);
                 finish_inline_markdown(kind, &text, &mut buffers[target]);
             }
         }
@@ -290,16 +291,10 @@ fn render_markdown_enter_node(
             push_child_markdown_frames(stack, dom, node_id, list_depth, next_tree_depth, target);
         }
         NodeData::Text(text) => {
-            let collapsed = collapse_whitespace(text.data());
-            if !collapsed.is_empty() {
-                buffers[target].push_str(&collapsed);
-            }
+            push_markdown_text(&mut buffers[target], text.data());
         }
         NodeData::CDataSection(cdata) => {
-            let collapsed = collapse_whitespace(cdata.data());
-            if !collapsed.is_empty() {
-                buffers[target].push_str(&collapsed);
-            }
+            push_markdown_text(&mut buffers[target], cdata.data());
         }
         NodeData::Comment(_) | NodeData::DocumentType(_) | NodeData::ProcessingInstruction(_) => {}
         NodeData::Element(element) => match element.local_name() {
@@ -337,12 +332,8 @@ fn render_markdown_enter_node(
                 }
             }
             "code" => {
-                let text = collapse_whitespace(&dom.text_content(node_id).unwrap_or_default());
-                if !text.is_empty() {
-                    buffers[target].push('`');
-                    buffers[target].push_str(&text);
-                    buffers[target].push('`');
-                }
+                let text = dom.text_content(node_id).unwrap_or_default();
+                finish_inline_markdown(MarkdownInlineKind::Code, &text, &mut buffers[target]);
             }
             "a" => {
                 let href = dom.get_attribute(node_id, "href").unwrap_or_default();
@@ -427,6 +418,7 @@ fn render_markdown_enter_node(
                     element.local_name(),
                     "div" | "section" | "article" | "main" | "header" | "footer" | "aside" | "nav"
                 ) {
+                    buffers[target].push('\n');
                     stack.push(MarkdownFrame::Append { target, text: "\n" });
                 }
                 push_child_markdown_frames(
@@ -481,6 +473,21 @@ fn push_child_markdown_frames(
 }
 
 fn finish_inline_markdown(kind: MarkdownInlineKind, text: &str, out: &mut String) {
+    // Spaces at inline element edges belong outside Markdown delimiters, but
+    // still separate this element's text from its siblings. Block edges trim.
+    let preserve_spacing = matches!(
+        kind,
+        MarkdownInlineKind::Anchor { .. }
+            | MarkdownInlineKind::Strong
+            | MarkdownInlineKind::Emphasis
+            | MarkdownInlineKind::Code
+    );
+    let trailing_space = preserve_spacing && text.ends_with(char::is_whitespace);
+    if preserve_spacing && text.starts_with(char::is_whitespace) {
+        push_markdown_text(out, " ");
+    }
+    let text = collapse_whitespace(text);
+    let text = text.as_str();
     match kind {
         MarkdownInlineKind::Paragraph => {
             if !text.is_empty() {
@@ -523,6 +530,30 @@ fn finish_inline_markdown(kind: MarkdownInlineKind, text: &str, out: &mut String
                 out.push('*');
             }
         }
+        MarkdownInlineKind::Code => {
+            if !text.is_empty() {
+                out.push('`');
+                out.push_str(text);
+                out.push('`');
+            }
+        }
+    }
+    if trailing_space {
+        push_markdown_text(out, " ");
+    }
+}
+
+fn push_markdown_text(out: &mut String, text: &str) {
+    // Collapse whitespace across text nodes without discarding leading,
+    // trailing, or whitespace-only separators in the source inline flow.
+    for character in text.chars() {
+        if character.is_whitespace() {
+            if !out.ends_with(char::is_whitespace) {
+                out.push(' ');
+            }
+        } else {
+            out.push(character);
+        }
     }
 }
 
@@ -553,6 +584,7 @@ fn collapse_whitespace(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use moli_parser::HtmlParser;
     use url::Url;
 
     use super::*;
@@ -564,6 +596,11 @@ mod tests {
     fn append_text(dom: &mut NativeDom, parent: NativeNodeId, text: &str) {
         let text = dom.create_text_node(text);
         assert!(dom.append_child(parent, text));
+    }
+
+    fn markdown_from_html(html: &str) -> String {
+        let dom = HtmlParser::SCRIPTING_DISABLED.parse(test_url(), html.to_owned());
+        render_markdown_document(&dom)
     }
 
     #[test]
@@ -589,7 +626,131 @@ mod tests {
 
         assert_eq!(
             render_markdown_document(&dom),
-            "Go[docs](https://example.test/docs)now\n\n- One"
+            "Go [docs](https://example.test/docs) now\n\n- One"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_whitespace_across_inline_nodes() {
+        for (html, expected) in [
+            (
+                "<p>by <small>Albert Einstein</small></p>",
+                "by Albert Einstein",
+            ),
+            (
+                "<p><span>538 points</span> by <a href='/user'>onderkalaci</a></p>",
+                "538 points by [onderkalaci](/user)",
+            ),
+            (
+                "<div><span>one</span> \n\t <span>two</span></div>",
+                "one two",
+            ),
+            (
+                "<p><span>one </span><span> two</span>   three</p>",
+                "one two three",
+            ),
+            (
+                "<p>a<span> </span>b<strong> </strong>c<em> </em>d<a> </a>e</p>",
+                "a b c d e",
+            ),
+            ("<p>one&nbsp;<span>two</span></p>", "one two"),
+            (
+                "<p><span>one</span><!-- comment --> <span>two</span></p>",
+                "one two",
+            ),
+            (
+                "<ul><li>one <span>two</span> three</li></ul>",
+                "- one two three",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "HTML: {html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_keeps_boundary_spaces_outside_inline_markup() {
+        for (html, expected) in [
+            (
+                "<p>before<a href='/docs'> docs </a>after</p>",
+                "before [docs](/docs) after",
+            ),
+            (
+                "<p>before<strong> bold </strong>after</p>",
+                "before **bold** after",
+            ),
+            (
+                "<p>before<em> emphasis </em>after</p>",
+                "before *emphasis* after",
+            ),
+            (
+                "<p>before<code> code </code>after</p>",
+                "before `code` after",
+            ),
+            (
+                "<p>before<strong> <em> nested </em> </strong>after</p>",
+                "before ***nested*** after",
+            ),
+            ("<p>a<code> \t\n </code>b</p>", "a b"),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "HTML: {html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_intentional_inline_adjacency() {
+        for (html, expected) in [
+            ("<p>word<span>piece</span></p>", "wordpiece"),
+            ("<p>日<span>本</span>語</p>", "日本語"),
+            ("<p>foo<strong>bar</strong>baz</p>", "foo**bar**baz"),
+            (
+                "<p>Read <a href='/docs'>docs</a>, <em>now</em>!</p>",
+                "Read [docs](/docs), *now*!",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "HTML: {html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_separates_text_at_block_boundaries() {
+        for (html, expected) in [
+            (
+                "<span>Main menu</span><div>Main menu</div>",
+                "Main menu\nMain menu",
+            ),
+            ("<div>outer<div>inner</div>tail</div>", "outer\ninner\ntail"),
+            (
+                "<span>by <small>Albert Einstein</small></span><div>Tags:\n <a>change</a>\n <a>deep-thoughts</a> <a>thinking</a> <a>world</a></div>",
+                "by Albert Einstein\nTags: change deep-thoughts thinking world",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "HTML: {html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_collapses_split_text_and_cdata_whitespace() {
+        for use_cdata in [false, true] {
+            let mut dom = NativeDom::new_html(test_url());
+            let body = dom.create_element("body");
+            assert!(dom.append_child(dom.document_node_id(), body));
+            for chunk in ["one", " \t", "\n ", "two ", " ", "three"] {
+                let node = if use_cdata {
+                    dom.create_cdata_section(chunk)
+                } else {
+                    dom.create_text_node(chunk)
+                };
+                assert!(dom.append_child(body, node));
+            }
+            assert_eq!(render_markdown_document(&dom), "one two three");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_preformatted_spacing() {
+        assert_eq!(
+            markdown_from_html("<pre>  first  line\n    second  line\n</pre>"),
+            "```text\n  first  line\n    second  line\n```",
         );
     }
 
