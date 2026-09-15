@@ -10,7 +10,8 @@ use crate::{
     document_task_lane::DocumentRealmTask,
     dom::NodeId,
     frame_owner_model::{
-        DocumentLoadDelayTokenId, FrameDocumentOwner, FrameDocumentTaskOwner, FrameRealmId,
+        ChildDocumentModuleScriptLoadDelay, FrameDocumentOwner, FrameDocumentTaskOwner,
+        FrameRealmId,
     },
     module_runtime::{ModuleEntryId, ModuleGraphHandle, ModuleLoadError, ModuleMapKey},
     parser_module_pending::ParserPendingModuleScriptState,
@@ -118,7 +119,7 @@ pub(crate) struct FrameDocumentModuleGraphReadyPayload {
     script_handle: DomHandle,
     request_key: ModuleMapKey,
     tree_id: module_tree::ModuleTreeId,
-    load_delay_token: DocumentLoadDelayTokenId,
+    load_delay_token: ChildDocumentModuleScriptLoadDelay,
 }
 
 pub(crate) type FrameDocumentModuleGraphReadyTarget =
@@ -200,7 +201,7 @@ impl FrameDocumentModuleGraphReadyTarget {
         script_handle: DomHandle,
         request_key: ModuleMapKey,
         tree_id: module_tree::ModuleTreeId,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
     ) -> Self {
         assert_eq!(pending_script_id.owner(), owner.document_owner());
         Self::new(
@@ -211,7 +212,7 @@ impl FrameDocumentModuleGraphReadyTarget {
                 script_handle,
                 request_key,
                 tree_id,
-                load_delay_token,
+                load_delay_token: load_delay_token.into(),
             },
         )
     }
@@ -235,7 +236,7 @@ impl FrameDocumentModuleGraphReadyTarget {
         self.payload().tree_id
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.payload().load_delay_token
     }
 }
@@ -269,7 +270,7 @@ pub(crate) struct FrameDocumentModuleGraphFailedPayload {
     script_handle: DomHandle,
     request_key: ModuleMapKey,
     tree_id: Option<module_tree::ModuleTreeId>,
-    load_delay_token: DocumentLoadDelayTokenId,
+    load_delay_token: ChildDocumentModuleScriptLoadDelay,
 }
 
 pub(crate) type FrameDocumentModuleGraphFailedTarget =
@@ -283,7 +284,7 @@ impl FrameDocumentModuleGraphFailedTarget {
         script_handle: DomHandle,
         request_key: ModuleMapKey,
         tree_id: Option<module_tree::ModuleTreeId>,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
     ) -> Self {
         assert_eq!(pending_script_id.owner(), owner.document_owner());
         Self::new(
@@ -294,7 +295,7 @@ impl FrameDocumentModuleGraphFailedTarget {
                 script_handle,
                 request_key,
                 tree_id,
-                load_delay_token,
+                load_delay_token: load_delay_token.into(),
             },
         )
     }
@@ -318,7 +319,7 @@ impl FrameDocumentModuleGraphFailedTarget {
         self.payload().tree_id
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.payload().load_delay_token
     }
 }
@@ -362,7 +363,7 @@ impl ModuleScriptGraphFailedWork<FrameDocumentModuleGraphFailedTarget> {
         script_handle: DomHandle,
         request_key: ModuleMapKey,
         tree_id: Option<module_tree::ModuleTreeId>,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
         error: ModuleLoadError,
     ) -> Self {
         Self::with_target(
@@ -404,7 +405,7 @@ impl ModuleScriptGraphFailedWork<FrameDocumentModuleGraphFailedTarget> {
         self.target.tree_id()
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.target.load_delay_token()
     }
 }
@@ -447,7 +448,7 @@ impl ModuleScriptGraphReadyWork<FrameDocumentModuleGraphReadyTarget> {
         script_handle: DomHandle,
         request_key: ModuleMapKey,
         tree_id: module_tree::ModuleTreeId,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
         graph: ModuleGraphHandle,
     ) -> Self {
         Self::with_target(
@@ -489,7 +490,7 @@ impl ModuleScriptGraphReadyWork<FrameDocumentModuleGraphReadyTarget> {
         self.target.tree_id()
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.target.load_delay_token()
     }
 }
