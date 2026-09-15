@@ -791,12 +791,16 @@ def _script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str],
 @lru_cache(maxsize=None)
 def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
-    for name in (
-        "redirect.py", "update-worker.py", "import-scripts-version.py",
-        "import-scripts-get.py", "import-scripts-echo.py",
-        "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
-    ):
-        resource = "service-workers/service-worker/resources/" + name
+    resources = tuple(
+        "service-workers/service-worker/resources/" + name
+        for name in (
+            "redirect.py", "update-worker.py", "update-worker-from-file.py",
+            "update-during-installation-worker.py",
+            "import-scripts-version.py", "import-scripts-get.py", "import-scripts-echo.py",
+            "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
+        )
+    ) + ("service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",)
+    for resource in resources:
         relative = posixpath.relpath(resource, directory)
         references.extend(("/" + resource, relative, "./" + relative))
     return tuple(
