@@ -3,6 +3,7 @@ mod document;
 mod element;
 mod host;
 mod html_serialization;
+mod markdown;
 mod node;
 mod queries;
 mod scripts;

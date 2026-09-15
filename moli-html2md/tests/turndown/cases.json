@@ -1,0 +1,1604 @@
+{
+  "upstream": {
+    "repository": "https://github.com/mixmark-io/turndown",
+    "revision": "aa84dfa3e2361edea8c43acbfc2b7a9363494bfd",
+    "version": "7.2.4",
+    "domino": "2.2.0"
+  },
+  "options": {
+    "headingStyle": "atx",
+    "hr": "---",
+    "bulletListMarker": "-",
+    "codeBlockStyle": "fenced",
+    "fence": "```",
+    "emDelimiter": "*",
+    "strongDelimiter": "**",
+    "linkStyle": "inlined",
+    "br": "  "
+  },
+  "cases": [
+    {
+      "id": "upstream_001",
+      "name": "p",
+      "html": "<p>Lorem ipsum</p>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Lorem ipsum"
+    },
+    {
+      "id": "upstream_002",
+      "name": "multiple ps",
+      "html": "\n    <p>Lorem</p>\n    <p>ipsum</p>\n    <p>sit</p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Lorem\n\nipsum\n\nsit"
+    },
+    {
+      "id": "upstream_003",
+      "name": "em",
+      "html": "<em>em element</em>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*em element*"
+    },
+    {
+      "id": "upstream_004",
+      "name": "i",
+      "html": "<i>i element</i>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*i element*"
+    },
+    {
+      "id": "upstream_005",
+      "name": "strong",
+      "html": "<strong>strong element</strong>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "**strong element**"
+    },
+    {
+      "id": "upstream_006",
+      "name": "b",
+      "html": "<b>b element</b>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "**b element**"
+    },
+    {
+      "id": "upstream_007",
+      "name": "code",
+      "html": "<code>code element</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "`code element`"
+    },
+    {
+      "id": "upstream_008",
+      "name": "code containing a backtick",
+      "html": "<code>There is a literal backtick (`) here</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "``There is a literal backtick (`) here``"
+    },
+    {
+      "id": "upstream_009",
+      "name": "code containing three or more backticks",
+      "html": "<code>here are three ``` here are four ```` that's it</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "`here are three ``` here are four ```` that's it`"
+    },
+    {
+      "id": "upstream_010",
+      "name": "code containing one or more backticks",
+      "html": "<code>here are three ``` here are four ```` here is one ` that's it</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "``here are three ``` here are four ```` here is one ` that's it``"
+    },
+    {
+      "id": "upstream_011",
+      "name": "code starting with a backtick",
+      "html": "<code>`starting with a backtick</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "`` `starting with a backtick ``"
+    },
+    {
+      "id": "upstream_012",
+      "name": "code containing markdown syntax",
+      "html": "<code>_emphasis_</code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "`_emphasis_`"
+    },
+    {
+      "id": "upstream_013",
+      "name": "code containing markdown syntax in a span",
+      "html": "<code><span>_emphasis_</span></code>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "`_emphasis_`"
+    },
+    {
+      "id": "upstream_014",
+      "name": "h1",
+      "html": "<h1>Level One Heading</h1>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "# Level One Heading"
+    },
+    {
+      "id": "upstream_015",
+      "name": "escape = when used as heading",
+      "html": "===",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\==="
+    },
+    {
+      "id": "upstream_016",
+      "name": "not escaping = outside of a heading",
+      "html": "A sentence containing =",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "A sentence containing ="
+    },
+    {
+      "id": "upstream_017",
+      "name": "h1 as atx",
+      "html": "<h1>Level One Heading with ATX</h1>",
+      "original_options": {
+        "headingStyle": "atx"
+      },
+      "preformatted_code": false,
+      "markdown": "# Level One Heading with ATX"
+    },
+    {
+      "id": "upstream_018",
+      "name": "h2",
+      "html": "<h2>Level Two Heading</h2>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "## Level Two Heading"
+    },
+    {
+      "id": "upstream_019",
+      "name": "h2 as atx",
+      "html": "<h2>Level Two Heading with ATX</h2>",
+      "original_options": {
+        "headingStyle": "atx"
+      },
+      "preformatted_code": false,
+      "markdown": "## Level Two Heading with ATX"
+    },
+    {
+      "id": "upstream_020",
+      "name": "h3",
+      "html": "<h3>Level Three Heading</h3>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "### Level Three Heading"
+    },
+    {
+      "id": "upstream_021",
+      "name": "heading with child",
+      "html": "<h4>Level Four Heading with <code>child</code></h4>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "#### Level Four Heading with `child`"
+    },
+    {
+      "id": "upstream_022",
+      "name": "invalid heading",
+      "html": "<h7>Level Seven Heading?</h7>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Level Seven Heading?"
+    },
+    {
+      "id": "upstream_023",
+      "name": "hr",
+      "html": "<hr>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "---"
+    },
+    {
+      "id": "upstream_024",
+      "name": "hr with closing tag",
+      "html": "<hr>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "---"
+    },
+    {
+      "id": "upstream_025",
+      "name": "hr with option",
+      "html": "<hr>",
+      "original_options": {
+        "hr": "- - -"
+      },
+      "preformatted_code": false,
+      "markdown": "---"
+    },
+    {
+      "id": "upstream_026",
+      "name": "br",
+      "html": "More<br>after the break",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "More  \nafter the break"
+    },
+    {
+      "id": "upstream_027",
+      "name": "br with visible line-ending",
+      "html": "More<br>after the break",
+      "original_options": {
+        "br": "\\"
+      },
+      "preformatted_code": false,
+      "markdown": "More  \nafter the break"
+    },
+    {
+      "id": "upstream_028",
+      "name": "img with no alt",
+      "html": "<img src=\"http://example.com/logo.png\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](http://example.com/logo.png)"
+    },
+    {
+      "id": "upstream_029",
+      "name": "img with relative src",
+      "html": "<img src=\"logo.png\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](logo.png)"
+    },
+    {
+      "id": "upstream_030",
+      "name": "img with alt",
+      "html": "<img src=\"logo.png\" alt=\"img with alt\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![img with alt](logo.png)"
+    },
+    {
+      "id": "upstream_031",
+      "name": "img with escaped content in alt",
+      "html": "<img src=\"logo.png\" alt=\"_img_ *with* [alt]\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![\\_img\\_ \\*with\\* \\[alt\\]](logo.png)"
+    },
+    {
+      "id": "upstream_032",
+      "name": "img with no src",
+      "html": "<img>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": ""
+    },
+    {
+      "id": "upstream_033",
+      "name": "img with parenthesis in src",
+      "html": "<img src=\"logo.png?(query)\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](logo.png?\\(query\\))"
+    },
+    {
+      "id": "upstream_034",
+      "name": "img with a new line in alt",
+      "html": "<img src=\"logo.png\" alt=\"img with\n    alt\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![img with\nalt](logo.png)"
+    },
+    {
+      "id": "upstream_035",
+      "name": "img with more than one new line in alt",
+      "html": "<img src=\"logo.png\" alt=\"img with\n    \n    alt\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![img with\nalt](logo.png)"
+    },
+    {
+      "id": "upstream_036",
+      "name": "img with new lines in title",
+      "html": "<img src=\"logo.png\" title=\"the\n    \n    title\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](logo.png \"the\ntitle\")"
+    },
+    {
+      "id": "upstream_037",
+      "name": "img with quotes in title",
+      "html": "<img src=\"logo.png\" title=\"&quot;hello&quot;\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](logo.png \"\\\"hello\\\"\")"
+    },
+    {
+      "id": "upstream_038",
+      "name": "img with space in URL",
+      "html": "<img src=\"logo 1.png\" alt=\"An image\">",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![An image](<logo 1.png>)"
+    },
+    {
+      "id": "upstream_039",
+      "name": "a",
+      "html": "<a href=\"http://example.com\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](http://example.com)"
+    },
+    {
+      "id": "upstream_040",
+      "name": "a with space in URL",
+      "html": "<a href=\"http://example.com/foo bar\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](<http://example.com/foo bar>)"
+    },
+    {
+      "id": "upstream_041",
+      "name": "a with title",
+      "html": "<a href=\"http://example.com\" title=\"Title for link\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](http://example.com \"Title for link\")"
+    },
+    {
+      "id": "upstream_042",
+      "name": "a with multiline title",
+      "html": "<a href=\"http://example.com\" title=\"Title for\n    \n    link\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](http://example.com \"Title for\nlink\")"
+    },
+    {
+      "id": "upstream_043",
+      "name": "a with quotes in title",
+      "html": "<a href=\"http://example.com\" title=\"&quot;hello&quot;\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](http://example.com \"\\\"hello\\\"\")"
+    },
+    {
+      "id": "upstream_044",
+      "name": "a with parenthesis in query",
+      "html": "<a href=\"http://example.com?(query)\">An anchor</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[An anchor](http://example.com?\\(query\\))"
+    },
+    {
+      "id": "upstream_045",
+      "name": "a without a src",
+      "html": "<a id=\"about-anchor\">Anchor without a title</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Anchor without a title"
+    },
+    {
+      "id": "upstream_046",
+      "name": "a with a child",
+      "html": "<a href=\"http://example.com/code\">Some <code>code</code></a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[Some `code`](http://example.com/code)"
+    },
+    {
+      "id": "upstream_047",
+      "name": "a with a brackets in text",
+      "html": "<a href=\"http://example.com/code\">Some [text]</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[Some \\[text\\]](http://example.com/code)"
+    },
+    {
+      "id": "upstream_048",
+      "name": "a reference",
+      "html": "<a href=\"http://example.com\">Reference link</a>",
+      "original_options": {
+        "linkStyle": "referenced"
+      },
+      "preformatted_code": false,
+      "markdown": "[Reference link](http://example.com)"
+    },
+    {
+      "id": "upstream_049",
+      "name": "a reference with space in URL",
+      "html": "<a href=\"http://example.com/foo bar\">Reference link</a>",
+      "original_options": {
+        "linkStyle": "referenced"
+      },
+      "preformatted_code": false,
+      "markdown": "[Reference link](<http://example.com/foo bar>)"
+    },
+    {
+      "id": "upstream_050",
+      "name": "a reference with collapsed style",
+      "html": "<a href=\"http://example.com\">Reference link with collapsed style</a>",
+      "original_options": {
+        "linkStyle": "referenced",
+        "linkReferenceStyle": "collapsed"
+      },
+      "preformatted_code": false,
+      "markdown": "[Reference link with collapsed style](http://example.com)"
+    },
+    {
+      "id": "upstream_051",
+      "name": "a reference with shortcut style",
+      "html": "<a href=\"http://example.com\">Reference link with shortcut style</a>",
+      "original_options": {
+        "linkStyle": "referenced",
+        "linkReferenceStyle": "shortcut"
+      },
+      "preformatted_code": false,
+      "markdown": "[Reference link with shortcut style](http://example.com)"
+    },
+    {
+      "id": "upstream_052",
+      "name": "a reference with title",
+      "html": "<a href=\"http://example.com\" title=\"Hello &quot; World\">Reference link</a>",
+      "original_options": {
+        "linkStyle": "referenced"
+      },
+      "preformatted_code": false,
+      "markdown": "[Reference link](http://example.com \"Hello \\\" World\")"
+    },
+    {
+      "id": "upstream_053",
+      "name": "pre/code block",
+      "html": "<pre><code>def code_block\n  # 42 &lt; 9001\n  \"Hello world!\"\nend</code></pre>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "```\ndef code_block\n  # 42 < 9001\n  \"Hello world!\"\nend\n```"
+    },
+    {
+      "id": "upstream_054",
+      "name": "multiple pre/code blocks",
+      "html": "<pre><code>def first_code_block\n  # 42 &lt; 9001\n  \"Hello world!\"\nend</code></pre>\n\n<p>next:</p>\n\n<pre><code>def second_code_block\n  # 42 &lt; 9001\n  \"Hello world!\"\nend</code></pre>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "```\ndef first_code_block\n  # 42 < 9001\n  \"Hello world!\"\nend\n```\n\nnext:\n\n```\ndef second_code_block\n  # 42 < 9001\n  \"Hello world!\"\nend\n```"
+    },
+    {
+      "id": "upstream_055",
+      "name": "pre/code block with multiple new lines",
+      "html": "<div><pre><code>Multiple new lines\n\n\nshould not be\n\n\nremoved</code></pre></div>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "```\nMultiple new lines\n\n\nshould not be\n\n\nremoved\n```"
+    },
+    {
+      "id": "upstream_056",
+      "name": "fenced pre/code block",
+      "html": "\n    <pre><code>def a_fenced_code block; end</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced"
+      },
+      "preformatted_code": false,
+      "markdown": "```\ndef a_fenced_code block; end\n```"
+    },
+    {
+      "id": "upstream_057",
+      "name": "pre/code block fenced with ~",
+      "html": "\n    <pre><code>def a_fenced_code block; end</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced",
+        "fence": "~~~"
+      },
+      "preformatted_code": false,
+      "markdown": "```\ndef a_fenced_code block; end\n```"
+    },
+    {
+      "id": "upstream_058",
+      "name": "escaping ~~~",
+      "html": "\n    <pre>~~~ foo</pre>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\~~~ foo"
+    },
+    {
+      "id": "upstream_059",
+      "name": "not escaping ~~~",
+      "html": "A sentence containing ~~~",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "A sentence containing ~~~"
+    },
+    {
+      "id": "upstream_060",
+      "name": "fenced pre/code block with language",
+      "html": "\n    <pre><code class=\"language-ruby\">def a_fenced_code block; end</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced"
+      },
+      "preformatted_code": false,
+      "markdown": "```ruby\ndef a_fenced_code block; end\n```"
+    },
+    {
+      "id": "upstream_061",
+      "name": "empty pre does not throw error",
+      "html": "\n    <pre></pre>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": ""
+    },
+    {
+      "id": "upstream_062",
+      "name": "ol",
+      "html": "\n    <ol>\n      <li>Ordered list item 1</li>\n      <li>Ordered list item 2</li>\n      <li>Ordered list item 3</li>\n    </ol>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "1.  Ordered list item 1\n2.  Ordered list item 2\n3.  Ordered list item 3"
+    },
+    {
+      "id": "upstream_063",
+      "name": "ol with start",
+      "html": "\n    <ol start=\"42\">\n      <li>Ordered list item 42</li>\n      <li>Ordered list item 43</li>\n      <li>Ordered list item 44</li>\n    </ol>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "42.  Ordered list item 42\n43.  Ordered list item 43\n44.  Ordered list item 44"
+    },
+    {
+      "id": "upstream_064",
+      "name": "ol with content",
+      "html": "\n    <ol start=\"42\">\n      <li>\n        <p>Ordered list item 42</p>\n        <p>Ordered list's additional content</p>\n      </li>\n    </ol>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "42.  Ordered list item 42\n     \n     Ordered list's additional content"
+    },
+    {
+      "id": "upstream_065",
+      "name": "list spacing",
+      "html": "\n    <p>A paragraph.</p>\n    <ol>\n      <li>Ordered list item 1</li>\n      <li>Ordered list item 2</li>\n      <li>Ordered list item 3</li>\n    </ol>\n    <p>Another paragraph.</p>\n    <ul>\n      <li>Unordered list item 1</li>\n      <li>Unordered list item 2</li>\n      <li>Unordered list item 3</li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "A paragraph.\n\n1.  Ordered list item 1\n2.  Ordered list item 2\n3.  Ordered list item 3\n\nAnother paragraph.\n\n-   Unordered list item 1\n-   Unordered list item 2\n-   Unordered list item 3"
+    },
+    {
+      "id": "upstream_066",
+      "name": "ul",
+      "html": "\n    <ul>\n      <li>Unordered list item 1</li>\n      <li>Unordered list item 2</li>\n      <li>Unordered list item 3</li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   Unordered list item 1\n-   Unordered list item 2\n-   Unordered list item 3"
+    },
+    {
+      "id": "upstream_067",
+      "name": "ul with custom bullet",
+      "html": "\n    <ul>\n      <li>Unordered list item 1</li>\n      <li>Unordered list item 2</li>\n      <li>Unordered list item 3</li>\n    </ul>\n  ",
+      "original_options": {
+        "bulletListMarker": "-"
+      },
+      "preformatted_code": false,
+      "markdown": "-   Unordered list item 1\n-   Unordered list item 2\n-   Unordered list item 3"
+    },
+    {
+      "id": "upstream_068",
+      "name": "ul with paragraph",
+      "html": "\n    <ul>\n      <li><p>List item with paragraph</p></li>\n      <li>List item without paragraph</li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   List item with paragraph\n    \n-   List item without paragraph"
+    },
+    {
+      "id": "upstream_069",
+      "name": "ol with paragraphs",
+      "html": "\n    <ol>\n      <li>\n        <p>This is a paragraph in a list item.</p>\n        <p>This is a paragraph in the same list item as above.</p>\n      </li>\n      <li>\n        <p>A paragraph in a second list item.</p>\n      </li>\n    </ol>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "1.  This is a paragraph in a list item.\n    \n    This is a paragraph in the same list item as above.\n    \n2.  A paragraph in a second list item."
+    },
+    {
+      "id": "upstream_070",
+      "name": "nested uls",
+      "html": "\n    <ul>\n      <li>This is a list item at root level</li>\n      <li>This is another item at root level</li>\n      <li>\n        <ul>\n          <li>This is a nested list item</li>\n          <li>This is another nested list item</li>\n          <li>\n            <ul>\n              <li>This is a deeply nested list item</li>\n              <li>This is another deeply nested list item</li>\n              <li>This is a third deeply nested list item</li>\n            </ul>\n          </li>\n        </ul>\n      </li>\n      <li>This is a third item at root level</li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   This is a list item at root level\n-   This is another item at root level\n-   -   This is a nested list item\n    -   This is another nested list item\n    -   -   This is a deeply nested list item\n        -   This is another deeply nested list item\n        -   This is a third deeply nested list item\n-   This is a third item at root level"
+    },
+    {
+      "id": "upstream_071",
+      "name": "nested ols and uls",
+      "html": "\n    <ul>\n      <li>This is a list item at root level</li>\n      <li>This is another item at root level</li>\n      <li>\n        <ol>\n          <li>This is a nested list item</li>\n          <li>This is another nested list item</li>\n          <li>\n            <ul>\n              <li>This is a deeply nested list item</li>\n              <li>This is another deeply nested list item</li>\n              <li>This is a third deeply nested list item</li>\n            </ul>\n          </li>\n        </ol>\n      </li>\n      <li>This is a third item at root level</li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   This is a list item at root level\n-   This is another item at root level\n-   1.  This is a nested list item\n    2.  This is another nested list item\n    3.  -   This is a deeply nested list item\n        -   This is another deeply nested list item\n        -   This is a third deeply nested list item\n-   This is a third item at root level"
+    },
+    {
+      "id": "upstream_072",
+      "name": "ul with blockquote",
+      "html": "\n    <ul>\n      <li>\n        <p>A list item with a blockquote:</p>\n        <blockquote>\n          <p>This is a blockquote inside a list item.</p>\n        </blockquote>\n      </li>\n    </ul>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   A list item with a blockquote:\n    \n    > This is a blockquote inside a list item."
+    },
+    {
+      "id": "upstream_073",
+      "name": "blockquote",
+      "html": "\n    <blockquote>\n      <p>This is a paragraph within a blockquote.</p>\n      <p>This is another paragraph within a blockquote.</p>\n    </blockquote>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "> This is a paragraph within a blockquote.\n> \n> This is another paragraph within a blockquote."
+    },
+    {
+      "id": "upstream_074",
+      "name": "nested blockquotes",
+      "html": "\n    <blockquote>\n      <p>This is the first level of quoting.</p>\n      <blockquote>\n        <p>This is a paragraph in a nested blockquote.</p>\n      </blockquote>\n      <p>Back to the first level.</p>\n    </blockquote>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "> This is the first level of quoting.\n> \n> > This is a paragraph in a nested blockquote.\n> \n> Back to the first level."
+    },
+    {
+      "id": "upstream_075",
+      "name": "html in blockquote",
+      "html": "\n    <blockquote>\n      <h2>This is a header.</h2>\n      <ol>\n        <li>This is the first list item.</li>\n        <li>This is the second list item.</li>\n      </ol>\n      <p>A code block:</p>\n      <pre><code>return 1 &lt; 2 ? shell_exec('echo $input | $markdown_script') : 0;</code></pre>\n    </blockquote>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "> ## This is a header.\n> \n> 1.  This is the first list item.\n> 2.  This is the second list item.\n> \n> A code block:\n> \n> ```\n> return 1 < 2 ? shell_exec('echo $input | $markdown_script') : 0;\n> ```"
+    },
+    {
+      "id": "upstream_076",
+      "name": "multiple divs",
+      "html": "\n    <div>A div</div>\n    <div>Another div</div>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "A div\n\nAnother div"
+    },
+    {
+      "id": "upstream_077",
+      "name": "multiple divs",
+      "html": "\n    <div>A div</div>\n    <div>Another div</div>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "A div\n\nAnother div"
+    },
+    {
+      "id": "upstream_078",
+      "name": "comment",
+      "html": "<!-- comment -->",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": ""
+    },
+    {
+      "id": "upstream_079",
+      "name": "pre/code with comment",
+      "html": "\n    <pre><code>Hello<!-- comment --> world</code></pre>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "```\nHello world\n```"
+    },
+    {
+      "id": "upstream_080",
+      "name": "leading whitespace in heading",
+      "html": "<h3>\n    h3 with leading whitespace</h3>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "### h3 with leading whitespace"
+    },
+    {
+      "id": "upstream_081",
+      "name": "trailing whitespace in li",
+      "html": "\n    <ol>\n      <li>Chapter One\n        <ol>\n          <li>Section One</li>\n          <li>Section Two with trailing whitespace </li>\n          <li>Section Three with trailing whitespace </li>\n        </ol>\n      </li>\n      <li>Chapter Two</li>\n      <li>Chapter Three with trailing whitespace  </li>\n    </ol>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "1.  Chapter One\n    1.  Section One\n    2.  Section Two with trailing whitespace\n    3.  Section Three with trailing whitespace\n2.  Chapter Two\n3.  Chapter Three with trailing whitespace"
+    },
+    {
+      "id": "upstream_082",
+      "name": "multilined and bizarre formatting",
+      "html": "\n    <ul>\n      <li>\n        Indented li with leading/trailing newlines\n      </li>\n      <li>\n        <strong>Strong with trailing space inside li with leading/trailing whitespace </strong> </li>\n      <li>li without whitespace</li>\n      <li> Leading space, text, lots of whitespace …\n                          text\n      </li>\n    \n  </ul>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "-   Indented li with leading/trailing newlines\n-   **Strong with trailing space inside li with leading/trailing whitespace**\n-   li without whitespace\n-   Leading space, text, lots of whitespace … text"
+    },
+    {
+      "id": "upstream_083",
+      "name": "whitespace between inline elements",
+      "html": "\n    <p>I <a href=\"http://example.com/need\">need</a> <a href=\"http://www.example.com/more\">more</a> spaces!</p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "I [need](http://example.com/need) [more](http://www.example.com/more) spaces!"
+    },
+    {
+      "id": "upstream_084",
+      "name": "whitespace in inline elements",
+      "html": "Text with no space after the period.<em> Text in em with leading/trailing spaces </em><strong>text in strong with trailing space </strong>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Text with no space after the period. *Text in em with leading/trailing spaces* **text in strong with trailing space**"
+    },
+    {
+      "id": "upstream_085",
+      "name": "whitespace in nested inline elements",
+      "html": "Text at root <strong><a href=\"http://www.example.com\">link text with trailing space in strong </a></strong>more text at root",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Text at root **[link text with trailing space in strong](http://www.example.com)** more text at root"
+    },
+    {
+      "id": "upstream_086",
+      "name": "blank inline elements",
+      "html": "\n    Text before blank em … <em></em> text after blank em\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Text before blank em … text after blank em"
+    },
+    {
+      "id": "upstream_087",
+      "name": "blank block elements",
+      "html": "\n    Text before blank div … <div></div> text after blank div\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Text before blank div …\n\ntext after blank div"
+    },
+    {
+      "id": "upstream_088",
+      "name": "blank inline element with br",
+      "html": "<strong><br></strong>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": ""
+    },
+    {
+      "id": "upstream_089",
+      "name": "whitespace between blocks",
+      "html": "<div><div>Content in a nested div</div></div>\n<div>Content in another div</div>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Content in a nested div\n\nContent in another div"
+    },
+    {
+      "id": "upstream_090",
+      "name": "escaping backslashes",
+      "html": "backslash \\",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "backslash \\\\"
+    },
+    {
+      "id": "upstream_091",
+      "name": "escaping headings with #",
+      "html": "### This is not a heading",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\### This is not a heading"
+    },
+    {
+      "id": "upstream_092",
+      "name": "not escaping # outside of a heading",
+      "html": "#This is not # a heading",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "#This is not # a heading"
+    },
+    {
+      "id": "upstream_093",
+      "name": "escaping em markdown with *",
+      "html": "To add emphasis, surround text with *. For example: *this is emphasis*",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "To add emphasis, surround text with \\*. For example: \\*this is emphasis\\*"
+    },
+    {
+      "id": "upstream_094",
+      "name": "escaping em markdown with _",
+      "html": "To add emphasis, surround text with _. For example: _this is emphasis_",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "To add emphasis, surround text with \\_. For example: \\_this is emphasis\\_"
+    },
+    {
+      "id": "upstream_095",
+      "name": "not escaping within code",
+      "html": "<pre><code>def this_is_a_method; end;</code></pre>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "```\ndef this_is_a_method; end;\n```"
+    },
+    {
+      "id": "upstream_096",
+      "name": "escaping strong markdown with *",
+      "html": "To add strong emphasis, surround text with **. For example: **this is strong**",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "To add strong emphasis, surround text with \\*\\*. For example: \\*\\*this is strong\\*\\*"
+    },
+    {
+      "id": "upstream_097",
+      "name": "escaping strong markdown with _",
+      "html": "To add strong emphasis, surround text with __. For example: __this is strong__",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "To add strong emphasis, surround text with \\_\\_. For example: \\_\\_this is strong\\_\\_"
+    },
+    {
+      "id": "upstream_098",
+      "name": "escaping hr markdown with *",
+      "html": "* * *",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\* \\* \\*"
+    },
+    {
+      "id": "upstream_099",
+      "name": "escaping hr markdown with -",
+      "html": "- - -",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\- - -"
+    },
+    {
+      "id": "upstream_100",
+      "name": "escaping hr markdown with _",
+      "html": "_ _ _",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\_ \\_ \\_"
+    },
+    {
+      "id": "upstream_101",
+      "name": "escaping hr markdown without spaces",
+      "html": "***",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\*\\*\\*"
+    },
+    {
+      "id": "upstream_102",
+      "name": "escaping hr markdown with more than 3 characters",
+      "html": "* * * * *",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\* \\* \\* \\* \\*"
+    },
+    {
+      "id": "upstream_103",
+      "name": "escaping ol markdown",
+      "html": "1984. by George Orwell",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "1984\\. by George Orwell"
+    },
+    {
+      "id": "upstream_104",
+      "name": "not escaping . outside of an ol",
+      "html": "1984.George Orwell wrote 1984.",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "1984.George Orwell wrote 1984."
+    },
+    {
+      "id": "upstream_105",
+      "name": "escaping ul markdown *",
+      "html": "* An unordered list item",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\* An unordered list item"
+    },
+    {
+      "id": "upstream_106",
+      "name": "escaping ul markdown -",
+      "html": "- An unordered list item",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\- An unordered list item"
+    },
+    {
+      "id": "upstream_107",
+      "name": "escaping ul markdown +",
+      "html": "+ An unordered list item",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\+ An unordered list item"
+    },
+    {
+      "id": "upstream_108",
+      "name": "not escaping - outside of a ul",
+      "html": "Hello-world, 45 - 3 is 42",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Hello-world, 45 - 3 is 42"
+    },
+    {
+      "id": "upstream_109",
+      "name": "not escaping + outside of a ul",
+      "html": "+1 and another +",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "+1 and another +"
+    },
+    {
+      "id": "upstream_110",
+      "name": "escaping *",
+      "html": "You can use * for multiplication",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "You can use \\* for multiplication"
+    },
+    {
+      "id": "upstream_111",
+      "name": "escaping ** inside strong tags",
+      "html": "<strong>**test</strong>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "**\\*\\*test**"
+    },
+    {
+      "id": "upstream_112",
+      "name": "escaping _ inside em tags",
+      "html": "<em>test_italics</em>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*test\\_italics*"
+    },
+    {
+      "id": "upstream_113",
+      "name": "escaping > as blockquote",
+      "html": "&gt; Blockquote in markdown",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\> Blockquote in markdown"
+    },
+    {
+      "id": "upstream_114",
+      "name": "escaping > as blockquote without space",
+      "html": "&gt;Blockquote in markdown",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\>Blockquote in markdown"
+    },
+    {
+      "id": "upstream_115",
+      "name": "not escaping > outside of a blockquote",
+      "html": "42 &gt; 1",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "42 > 1"
+    },
+    {
+      "id": "upstream_116",
+      "name": "escaping code",
+      "html": "`not code`",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\`not code\\`"
+    },
+    {
+      "id": "upstream_117",
+      "name": "escaping []",
+      "html": "[This] is a sentence with brackets",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\[This\\] is a sentence with brackets"
+    },
+    {
+      "id": "upstream_118",
+      "name": "escaping [",
+      "html": "<a href=\"http://www.example.com\">c[iao</a>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "[c\\[iao](http://www.example.com)"
+    },
+    {
+      "id": "upstream_119",
+      "name": "escaping * performance",
+      "html": "fasdf *883 asdf wer qweasd fsd asdf asdfaqwe rqwefrsdf",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "fasdf \\*883 asdf wer qweasd fsd asdf asdfaqwe rqwefrsdf"
+    },
+    {
+      "id": "upstream_120",
+      "name": "escaping multiple asterisks",
+      "html": "<p>* * ** It aims to be*</p>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\* \\* \\*\\* It aims to be\\*"
+    },
+    {
+      "id": "upstream_121",
+      "name": "escaping delimiters around short words and numbers",
+      "html": "<p>_Really_? Is that what it _is_? A **2000** year-old computer?</p>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "\\_Really\\_? Is that what it \\_is\\_? A \\*\\*2000\\*\\* year-old computer?"
+    },
+    {
+      "id": "upstream_122",
+      "name": "non-markdown block elements",
+      "html": "\n    Foo\n    <div>Bar</div>\n    Baz\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Foo\n\nBar\n\nBaz"
+    },
+    {
+      "id": "upstream_123",
+      "name": "non-markdown inline elements",
+      "html": "\n    Foo <span>Bar</span>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Foo Bar"
+    },
+    {
+      "id": "upstream_124",
+      "name": "blank inline elements",
+      "html": "\n    Hello <em></em>world\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Hello world"
+    },
+    {
+      "id": "upstream_125",
+      "name": "elements with a single void element",
+      "html": "\n    <p><img src=\"http://example.com/logo.png\"></p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](http://example.com/logo.png)"
+    },
+    {
+      "id": "upstream_126",
+      "name": "elements with a nested void element",
+      "html": "\n    <p><span><img src=\"http://example.com/logo.png\"></span></p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "![](http://example.com/logo.png)"
+    },
+    {
+      "id": "upstream_127",
+      "name": "text separated by a space in an element",
+      "html": "\n    <p>Foo<span> </span>Bar</p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Foo Bar"
+    },
+    {
+      "id": "upstream_128",
+      "name": "text separated by a non-breaking space in an element",
+      "html": "\n    <p>Foo<span>&nbsp;</span>Bar</p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Foo Bar"
+    },
+    {
+      "id": "upstream_129",
+      "name": "triple tildes inside code",
+      "html": "\n<pre><code>~~~\nCode\n~~~\n</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced",
+        "fence": "~~~"
+      },
+      "preformatted_code": false,
+      "markdown": "```\n~~~\nCode\n~~~\n```"
+    },
+    {
+      "id": "upstream_130",
+      "name": "triple ticks inside code",
+      "html": "\n<pre><code>```\nCode\n```\n</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced",
+        "fence": "```"
+      },
+      "preformatted_code": false,
+      "markdown": "````\n```\nCode\n```\n````"
+    },
+    {
+      "id": "upstream_131",
+      "name": "four ticks inside code",
+      "html": "\n<pre><code>````\nCode\n````\n</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced",
+        "fence": "```"
+      },
+      "preformatted_code": false,
+      "markdown": "`````\n````\nCode\n````\n`````"
+    },
+    {
+      "id": "upstream_132",
+      "name": "empty line in start/end of code block",
+      "html": "\n<pre><code>\nCode\n\n</code></pre>\n  ",
+      "original_options": {
+        "codeBlockStyle": "fenced",
+        "fence": "```"
+      },
+      "preformatted_code": false,
+      "markdown": "```\n\nCode\n\n```"
+    },
+    {
+      "id": "upstream_133",
+      "name": "text separated by ASCII and nonASCII space in an element",
+      "html": "\n    <p>Foo<span>  &nbsp;  </span>Bar</p>\n  ",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "Foo   Bar"
+    },
+    {
+      "id": "upstream_134",
+      "name": "list-like text with non-breaking spaces",
+      "html": "&nbsp;1. First<br>&nbsp;2. Second",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": " 1. First  \n 2. Second"
+    },
+    {
+      "id": "upstream_135",
+      "name": "element with trailing nonASCII WS followed by nonWS",
+      "html": "<i>foo&nbsp;</i>bar",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*foo* bar"
+    },
+    {
+      "id": "upstream_136",
+      "name": "element with trailing nonASCII WS followed by nonASCII WS",
+      "html": "<i>foo&nbsp;</i>&nbsp;bar",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*foo*  bar"
+    },
+    {
+      "id": "upstream_137",
+      "name": "element with trailing ASCII WS followed by nonASCII WS",
+      "html": "<i>foo </i>&nbsp;bar",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*foo*  bar"
+    },
+    {
+      "id": "upstream_138",
+      "name": "element with trailing nonASCII WS followed by ASCII WS",
+      "html": "<i>foo&nbsp;</i> bar",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "*foo*  bar"
+    },
+    {
+      "id": "upstream_139",
+      "name": "nonWS followed by element with leading nonASCII WS",
+      "html": "foo<i>&nbsp;bar</i>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "foo *bar*"
+    },
+    {
+      "id": "upstream_140",
+      "name": "nonASCII WS followed by element with leading nonASCII WS",
+      "html": "foo&nbsp;<i>&nbsp;bar</i>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "foo  *bar*"
+    },
+    {
+      "id": "upstream_141",
+      "name": "nonASCII WS followed by element with leading ASCII WS",
+      "html": "foo&nbsp;<i> bar</i>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "foo  *bar*"
+    },
+    {
+      "id": "upstream_142",
+      "name": "ASCII WS followed by element with leading nonASCII WS",
+      "html": "foo <i>&nbsp;bar</i>",
+      "original_options": {},
+      "preformatted_code": false,
+      "markdown": "foo  *bar*"
+    },
+    {
+      "id": "upstream_143",
+      "name": "preformatted code with leading whitespace",
+      "html": "Four spaces <code>    make an indented code block in Markdown</code>",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "Four spaces `    make an indented code block in Markdown`"
+    },
+    {
+      "id": "upstream_144",
+      "name": "preformatted code with trailing whitespace",
+      "html": "<code>A line break  </code> <b> note the spaces</b>",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "`A line break  ` **note the spaces**"
+    },
+    {
+      "id": "upstream_145",
+      "name": "preformatted code tightly surrounded",
+      "html": "<b>tight</b><code>code</code><b>wrap</b>",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "**tight**`code`**wrap**"
+    },
+    {
+      "id": "upstream_146",
+      "name": "preformatted code loosely surrounded",
+      "html": "<b>not so tight </b><code>code</code><b> wrap</b>",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "**not so tight** `code` **wrap**"
+    },
+    {
+      "id": "upstream_147",
+      "name": "preformatted code with newlines",
+      "html": "\n<code>\n\n nasty\ncode\n\n</code>\n  ",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "`    nasty code   `"
+    },
+    {
+      "id": "extra_empty_href",
+      "name": "empty href keeps link text",
+      "html": "before<a href=''>label</a>after",
+      "preformatted_code": false,
+      "markdown": "beforelabelafter"
+    },
+    {
+      "id": "extra_empty_link",
+      "name": "empty link label",
+      "html": "before<a href='/target'></a>after",
+      "preformatted_code": false,
+      "markdown": "before[](/target)after"
+    },
+    {
+      "id": "extra_blank_link",
+      "name": "whitespace-only link label",
+      "html": "before<a href='/target'> </a>after",
+      "preformatted_code": false,
+      "markdown": "before [](/target)after"
+    },
+    {
+      "id": "extra_missing_image_src",
+      "name": "image alt without source",
+      "html": "before<img alt='missing'>after",
+      "preformatted_code": false,
+      "markdown": "beforeafter"
+    },
+    {
+      "id": "extra_img_alt_whitespace",
+      "name": "image alt with multiple lines and indentation",
+      "html": "<img src='/x' alt='one\n   \n   two'>",
+      "preformatted_code": false,
+      "markdown": "![one\ntwo](/x)"
+    },
+    {
+      "id": "extra_img_alt_code",
+      "name": "image label containing code delimiters",
+      "html": "<img src='/x' alt='a`b'>",
+      "preformatted_code": false,
+      "markdown": "![a\\`b](/x)"
+    },
+    {
+      "id": "extra_adjacent_lists",
+      "name": "adjacent unordered lists stay separate",
+      "html": "<ul><li>one</li></ul><ul><li>two</li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   one\n\n-   two"
+    },
+    {
+      "id": "extra_adjacent_ordered_lists",
+      "name": "adjacent ordered lists stay separate",
+      "html": "<ol><li>one</li></ol><ol start='4'><li>four</li></ol>",
+      "preformatted_code": false,
+      "markdown": "1.  one\n\n4.  four"
+    },
+    {
+      "id": "extra_empty_list",
+      "name": "empty list",
+      "html": "before<ul></ul>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nafter"
+    },
+    {
+      "id": "extra_empty_list_item",
+      "name": "empty list item",
+      "html": "<ul><li></li><li>text</li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   text"
+    },
+    {
+      "id": "extra_loose_list",
+      "name": "paragraph list items stay loose",
+      "html": "<ul><li><p>one</p></li><li><p>two</p></li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   one\n    \n-   two"
+    },
+    {
+      "id": "extra_mixed_loose_list",
+      "name": "paragraph followed by a plain list item",
+      "html": "<ul><li><p>one</p></li><li>two</li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   one\n    \n-   two"
+    },
+    {
+      "id": "extra_list_nested_only",
+      "name": "list item containing only a nested list",
+      "html": "<ul><li><ul><li>inner</li></ul></li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   -   inner"
+    },
+    {
+      "id": "extra_list_nested_tail",
+      "name": "text after a nested list",
+      "html": "<ul><li>start<ul><li>inner</li></ul>end</li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   start\n    -   innerend"
+    },
+    {
+      "id": "extra_list_nested_tail_p",
+      "name": "paragraph after a nested list",
+      "html": "<ul><li><p>start</p><ul><li>inner</li></ul><p>end</p></li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   start\n    \n    -   inner\n    \n    end"
+    },
+    {
+      "id": "extra_list_code",
+      "name": "fenced code inside list item",
+      "html": "<ol start='9'><li><pre><code>  first\nsecond\n</code></pre></li><li>end</li></ol>",
+      "preformatted_code": false,
+      "markdown": "9.  ```\n      first\n    second\n    ```\n    \n10.  end"
+    },
+    {
+      "id": "extra_list_quote",
+      "name": "list item containing only a quote",
+      "html": "<ul><li><blockquote><p>quote</p></blockquote></li></ul>",
+      "preformatted_code": false,
+      "markdown": "-   > quote"
+    },
+    {
+      "id": "extra_empty_quote",
+      "name": "empty quote still separates blocks",
+      "html": "before<blockquote></blockquote>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nafter"
+    },
+    {
+      "id": "extra_quote_blank_lines",
+      "name": "quote with paragraphs and hard breaks",
+      "html": "<blockquote><p>one<br>two</p><p>three</p></blockquote>",
+      "preformatted_code": false,
+      "markdown": "> one  \n> two\n> \n> three"
+    },
+    {
+      "id": "extra_empty_heading",
+      "name": "empty heading boundary",
+      "html": "before<h2></h2>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nafter"
+    },
+    {
+      "id": "extra_empty_pre",
+      "name": "empty pre",
+      "html": "before<pre></pre>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nafter"
+    },
+    {
+      "id": "extra_empty_pre_code",
+      "name": "empty pre code",
+      "html": "before<pre><code></code></pre>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nafter"
+    },
+    {
+      "id": "extra_blank_pre_code",
+      "name": "whitespace-only pre code",
+      "html": "<pre><code>  \n</code></pre>",
+      "preformatted_code": false,
+      "markdown": ""
+    },
+    {
+      "id": "extra_adjacent_code",
+      "name": "adjacent code spans",
+      "html": "<code>a</code><code>b</code>",
+      "preformatted_code": false,
+      "markdown": "`a``b`"
+    },
+    {
+      "id": "extra_code_gap",
+      "name": "separated code spans",
+      "html": "<code>a</code> <code>b</code>",
+      "preformatted_code": false,
+      "markdown": "`a` `b`"
+    },
+    {
+      "id": "extra_code_nested_format",
+      "name": "markup inside inline code",
+      "html": "<code><strong>a</strong><em>b</em></code>",
+      "preformatted_code": false,
+      "markdown": "`**a***b*`"
+    },
+    {
+      "id": "extra_code_many_runs",
+      "name": "code span chooses an unused delimiter length",
+      "html": "<code>a```b`````c</code>",
+      "preformatted_code": false,
+      "markdown": "`a```b`````c`"
+    },
+    {
+      "id": "extra_code_only_ticks",
+      "name": "code containing only backticks",
+      "html": "<code>```</code>",
+      "preformatted_code": false,
+      "markdown": "` ``` `"
+    },
+    {
+      "id": "extra_code_nbsp",
+      "name": "code with nonbreaking boundary spaces",
+      "html": "before<code>&nbsp;a&nbsp;</code>after",
+      "preformatted_code": false,
+      "markdown": "before `a` after"
+    },
+    {
+      "id": "extra_preformatted_internal",
+      "name": "preformatted inline code preserves multiple spaces",
+      "html": "<code> a  b </code>",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "`  a  b  `"
+    },
+    {
+      "id": "extra_preformatted_blank",
+      "name": "preformatted whitespace-only code",
+      "html": "before<code>   </code>after",
+      "original_options": {
+        "preformattedCode": true
+      },
+      "preformatted_code": true,
+      "markdown": "beforeafter"
+    },
+    {
+      "id": "extra_literal_entities",
+      "name": "decoded entity text remains literal",
+      "html": "<p>&amp;copy; &amp;lt; &amp;#32;</p>",
+      "preformatted_code": false,
+      "markdown": "&copy; &lt; &#32;"
+    },
+    {
+      "id": "extra_literal_html",
+      "name": "literal HTML tags remain visible text",
+      "html": "<p>&lt;b&gt;literal&lt;/b&gt;</p>",
+      "preformatted_code": false,
+      "markdown": "<b>literal</b>"
+    },
+    {
+      "id": "extra_split_list_marker",
+      "name": "ordered marker split across elements",
+      "html": "<p>12<span>.</span> text</p>",
+      "preformatted_code": false,
+      "markdown": "12. text"
+    },
+    {
+      "id": "extra_split_emphasis_literal",
+      "name": "asterisks split across elements",
+      "html": "<p>*<span>word</span>*</p>",
+      "preformatted_code": false,
+      "markdown": "\\*word\\*"
+    },
+    {
+      "id": "extra_link_backslash",
+      "name": "link destination with backslashes",
+      "html": "<a href='a\\b'>link</a>",
+      "preformatted_code": false,
+      "markdown": "[link](a\\b)"
+    },
+    {
+      "id": "extra_link_entities",
+      "name": "link destination with literal entity syntax",
+      "html": "<a href='/?q=&amp;copy;'>link</a>",
+      "preformatted_code": false,
+      "markdown": "[link](/?q=&copy;)"
+    },
+    {
+      "id": "extra_link_leading_space",
+      "name": "leading whitespace inside link label",
+      "html": "before<a href='/'> label</a>after",
+      "preformatted_code": false,
+      "markdown": "before [label](/)after"
+    },
+    {
+      "id": "extra_nested_link_emphasis",
+      "name": "emphasis nested in link",
+      "html": "<a href='/'><strong><em>text</em></strong></a>",
+      "preformatted_code": false,
+      "markdown": "[***text***](/)"
+    },
+    {
+      "id": "extra_emphasis_nested_link",
+      "name": "link nested in emphasis",
+      "html": "<em><a href='/'>text</a></em>",
+      "preformatted_code": false,
+      "markdown": "*[text](/)*"
+    },
+    {
+      "id": "extra_emphasis_intraword_link",
+      "name": "link in intraword emphasis",
+      "html": "before<em><a href='/'>text</a></em>after",
+      "preformatted_code": false,
+      "markdown": "before*[text](/)*after"
+    },
+    {
+      "id": "extra_emphasis_intraword_punctuation",
+      "name": "intraword emphasis around punctuation",
+      "html": "before<em>(text)</em>after",
+      "preformatted_code": false,
+      "markdown": "before*(text)*after"
+    },
+    {
+      "id": "extra_empty_emphasis",
+      "name": "empty formatting preserves surrounding spaces",
+      "html": "a<strong> </strong>b<em> </em>c",
+      "preformatted_code": false,
+      "markdown": "a b c"
+    },
+    {
+      "id": "extra_nbsp_comment",
+      "name": "nonbreaking whitespace around ignored comment",
+      "html": "a&nbsp;<!--x--> b",
+      "preformatted_code": false,
+      "markdown": "a  b"
+    },
+    {
+      "id": "extra_leading_br",
+      "name": "leading hard break",
+      "html": "<p><br>text</p>",
+      "preformatted_code": false,
+      "markdown": "  \ntext"
+    },
+    {
+      "id": "extra_consecutive_br",
+      "name": "consecutive hard breaks",
+      "html": "<p>one<br><br>two</p>",
+      "preformatted_code": false,
+      "markdown": "one  \n  \ntwo"
+    },
+    {
+      "id": "extra_blank_br_container",
+      "name": "otherwise empty span containing hard break",
+      "html": "a<span><br></span>b",
+      "preformatted_code": false,
+      "markdown": "a  \nb"
+    },
+    {
+      "id": "extra_empty_block_inside_inline",
+      "name": "empty block inside emphasis",
+      "html": "<strong>a<div></div>b</strong>",
+      "preformatted_code": false,
+      "markdown": "**a\n\nb**"
+    },
+    {
+      "id": "extra_audio_boundary",
+      "name": "audio fallback content is a block",
+      "html": "before<audio>fallback</audio>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nfallback\n\nafter"
+    },
+    {
+      "id": "extra_output_boundary",
+      "name": "output element block boundary",
+      "html": "before<output>result</output>after",
+      "preformatted_code": false,
+      "markdown": "before\n\nresult\n\nafter"
+    }
+  ]
+}
