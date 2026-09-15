@@ -42,6 +42,9 @@ impl JsContextHost {
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
         {
+            policy_container
+                .content_security_policy_self_url
+                .get_or_insert_with(|| self.document_url_for_handle(parent_document));
             if let Some(permissions_policy) =
                 self.document_permissions_policy_for_document_handle(parent_document)
             {

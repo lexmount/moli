@@ -1879,6 +1879,7 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
         prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> RuntimeMutationApplyResult {
+        self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
         let mut result = apply_runtime_mutation_effects_to_dom_host(
             &mut self.mutations,
             &self.document,

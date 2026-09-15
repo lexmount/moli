@@ -107,6 +107,7 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
     ) {
         self.assert_active_parser_document_incarnation();
+        self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
         let mut owner = RuntimeParserMutationEffects { runtime: self, options };
         apply_parser_mutation_effects(scope, host_ptr, &mut owner, &effects);
     }
