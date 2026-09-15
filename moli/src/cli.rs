@@ -76,9 +76,11 @@ pub struct Cli {
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Commands {
+    /// Fetch a URL and write page content, a screenshot, or a JavaScript result to stdout.
     Fetch(Box<FetchArgs>),
+    /// Start a browser automation server for CDP, WebDriver Classic, and WebDriver BiDi.
     Serve(Box<ServeArgs>),
-    /// Import browser session state into a Moli profile.
+    /// [Beta feature] Import browser session state into a Moli profile.
     Import(Box<ImportArgs>),
 }
 
