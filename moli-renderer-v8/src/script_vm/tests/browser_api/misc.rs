@@ -15655,7 +15655,7 @@ async fn navigator_service_worker_intercepts_connected_stylesheet_link() {
 }
 
 #[tokio::test]
-async fn navigator_service_worker_update_check_failure_rejects_register_with_type_error() {
+async fn navigator_service_worker_update_check_preserves_mime_security_error() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
         (
             "/app/worker.js",
@@ -15717,7 +15717,7 @@ async fn navigator_service_worker_update_check_failure_rejects_register_with_typ
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerUpdateFailureProbe)",
-        r#"{"name":"TypeError","isTypeError":true,"isDomException":false,"messageIncludesNosniff":true}"#,
+        r#"{"name":"SecurityError","isTypeError":false,"isDomException":true,"messageIncludesNosniff":true}"#,
     )
     .await;
 
@@ -18889,6 +18889,263 @@ async fn navigator_service_worker_update_via_cache_option_reflects_registration(
 }
 
 #[tokio::test]
+async fn navigator_service_worker_update_preserves_identity_and_rejects_stale_receivers() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/workers/sw.js", "text/javascript", "// first"),
+        ("/app/workers/sw.js", "text/javascript", "// second"),
+        ("/app/workers/sw.js", "text/javascript", "// second"),
+        (
+            "/app/workers/sw.js",
+            "text/javascript",
+            "// new registration",
+        ),
+        ("/app/workers/sw.js", "text/javascript", "// new update"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__updateIdentity = 'pending';
+      (async () => {
+        const activated = async r => {
+          const w = r.installing || r.waiting || r.active;
+          if (w.state !== 'activated') await new Promise(resolve => w.addEventListener('statechange', () => {
+            if (w.state === 'activated') resolve();
+          }));
+        };
+        const errorName = async p => { try { await p; return 'success'; } catch(e) { return e.name; } };
+        const register = () => navigator.serviceWorker.register('workers/sw.js', {scope:'workers/'});
+        const r = await register();
+        let found = 0;
+        r.addEventListener('updatefound', () => found++);
+        await activated(r);
+        const initial = found;
+        const receivers = [];
+        for (const fake of [{}, Object.create(r), new Proxy(r, {}), null]) {
+          const p = Reflect.apply(r.update, fake, []);
+          receivers.push(p instanceof Promise && await errorName(p) === 'TypeError');
+        }
+        const before = r.active;
+        const order = [];
+        r.addEventListener('updatefound', () => order.push('event'), {once:true});
+        const updated = await r.update(); order.push('promise');
+        await activated(r);
+        const changed = before !== r.active;
+        const current = r.active;
+        const unchanged = await r.update({get unused(){throw new Error('argument read');}});
+        const stable = unchanged === r && current === r.active && found === 2;
+        await r.unregister();
+        const removed = await errorName(r.update());
+        const replacement = await register();
+        await activated(replacement);
+        const stale = await errorName(r.update());
+        const again = await replacement.update();
+        await activated(replacement);
+        const lookup = await navigator.serviceWorker.getRegistration('workers/client');
+        globalThis.__updateIdentity = [r.update.name, r.update.length, initial,
+          receivers.every(Boolean), updated === r, changed, order.join(','), stable,
+          removed, stale, replacement !== r, again === replacement, lookup === replacement].join('|');
+        await replacement.unregister();
+      })().catch(e => globalThis.__updateIdentity = 'error:' + e);
+    "#).expect("update identity probe");
+    drain_service_worker_test_until_eval_equals(&mut vm, &runtime, &loader,
+        "String(globalThis.__updateIdentity)",
+        "update|0|1|true|true|true|promise,event|true|InvalidStateError|InvalidStateError|true|true|true",
+    ).await;
+    server.await.expect("update identity server");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_update_reuses_failed_import_responses() {
+    const MAIN: &str = "importScripts('a.js', 'z.js');";
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/workers/sw.js", "text/javascript", MAIN),
+        ("/app/workers/a.js", "text/javascript", "// a"),
+        ("/app/workers/z.js", "text/javascript", "// z1"),
+        ("/app/workers/sw.js", "text/javascript", MAIN),
+        ("/app/workers/a.js", "text/html", "missing import"),
+        ("/app/workers/z.js", "text/javascript", "// z2"),
+        (
+            "/app/workers/sw.js",
+            "text/javascript",
+            "importScripts('z.js');",
+        ),
+        ("/app/workers/z.js", "text/javascript", "// z3"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__updateImports = 'pending';
+      (async () => {
+        const activated = async r => {
+          const w = r.installing || r.waiting || r.active;
+          if (w.state !== 'activated') await new Promise(resolve => w.addEventListener('statechange', () => {
+            if (w.state === 'activated') resolve();
+          }));
+        };
+        const r = await navigator.serviceWorker.register('workers/sw.js', {scope:'workers/'});
+        await activated(r);
+        const before = r.active;
+        let found = 0;
+        r.addEventListener('updatefound', () => found++);
+        let error = 'success';
+        try { await r.update(); } catch(e) { error = e.name; }
+        const failed = error === 'TypeError' && found === 0 && r.active === before && r.installing === null;
+        const updated = await r.update();
+        await activated(r);
+        globalThis.__updateImports = [failed, updated === r, r.active !== before, found].join('|');
+        await r.unregister();
+      })().catch(e => globalThis.__updateImports = 'error:' + e);
+    "#).expect("update import response probe");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__updateImports)",
+        "true|true|true|1",
+    )
+    .await;
+    server
+        .await
+        .expect("update import server should not refetch failed responses");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_update_discards_prefetched_but_unused_imports_after_install() {
+    const MAIN: &str = r#"
+      importScripts('flag.js');
+      if (!self.skipOld) importScripts('unused.js');
+      onmessage = e => {
+        try { importScripts('unused.js'); e.ports[0].postMessage('success'); }
+        catch(error) { e.ports[0].postMessage(error.name); }
+      };
+    "#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/workers/sw.js", "text/javascript", MAIN),
+        (
+            "/app/workers/flag.js",
+            "text/javascript",
+            "self.skipOld = false;",
+        ),
+        ("/app/workers/unused.js", "text/javascript", "// unused"),
+        ("/app/workers/sw.js", "text/javascript", MAIN),
+        (
+            "/app/workers/flag.js",
+            "text/javascript",
+            "self.skipOld = true;",
+        ),
+        ("/app/workers/unused.js", "text/javascript", "// unused"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__unusedUpdateImport = 'pending';
+      (async () => {
+        const activated = async r => {
+          const w = r.installing || r.waiting || r.active;
+          if (w.state !== 'activated') await new Promise(resolve => w.addEventListener('statechange', () => {
+            if (w.state === 'activated') resolve();
+          }));
+        };
+        const r = await navigator.serviceWorker.register('workers/sw.js', {scope:'workers/'});
+        await activated(r);
+        await r.update(); await activated(r);
+        const value = await new Promise(resolve => {
+          const c = new MessageChannel();
+          c.port1.onmessage = e => { c.port1.close(); resolve(e.data); };
+          r.active.postMessage('probe', [c.port2]);
+        });
+        globalThis.__unusedUpdateImport = value;
+        await r.unregister();
+      })().catch(e => globalThis.__unusedUpdateImport = 'error:' + e);
+    "#).expect("unused update import probe");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__unusedUpdateImport)",
+        "NetworkError",
+    )
+    .await;
+    server
+        .await
+        .expect("prefetched imports should not be fetched again");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_update_in_worker_preserves_events_and_install_rejection() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/workers/sw.js", "text/javascript", r#"
+          const original = registration;
+          const seen = [];
+          let installError;
+          original.addEventListener('updatefound', () => seen.push('before'));
+          original.onupdatefound = function(e) {
+            seen.push([this === original, e.target === original, e.currentTarget === original,
+              e instanceof Event, e.isTrusted, e.bubbles, e.cancelable].join(':'));
+          };
+          original.addEventListener('updatefound', () => seen.push('after'));
+          oninstall = e => e.waitUntil(original.update().then(
+            () => installError = 'success', e => installError = e.name));
+          onactivate = () => seen.push('activate');
+          onmessage = e => {
+            if (e.data === 'sample') e.ports[0].postMessage(seen.join(',') + '|' + installError);
+            else e.waitUntil(original.update().then(r => e.ports[0].postMessage(r === original)));
+          };
+          Object.defineProperty(self, 'registration', {get(){throw new Error('public registration read');}});
+        "#),
+        ("/app/workers/sw.js", "text/javascript", "// updated"),
+    ]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(
+        r#"
+      globalThis.__workerUpdate = 'pending';
+      (async () => {
+        const r = await navigator.serviceWorker.register('workers/sw.js', {scope:'workers/'});
+        const w = r.installing;
+        await new Promise(resolve => w.addEventListener('statechange', () => {
+          if (w.state === 'activated') resolve();
+        }));
+        const message = data => new Promise(resolve => {
+          const c = new MessageChannel();
+          c.port1.onmessage = e => { c.port1.close(); resolve(e.data); };
+          w.postMessage(data, [c.port2]);
+        });
+        const first = await message('sample');
+        const same = await message('update');
+        globalThis.__workerUpdate = first + '|' + same;
+        await r.unregister();
+      })().catch(e => globalThis.__workerUpdate = 'error:' + e);
+    "#,
+    )
+    .expect("worker update probe");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__workerUpdate)",
+        "before,true:true:true:true:true:false:false,after,activate|InvalidStateError|true",
+    )
+    .await;
+    server.await.expect("worker update server");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_update_via_cache_all_uses_fresh_main_script_cache() {
     let cache_dir = service_worker_http_cache_test_root("update-via-cache-all");
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![(
@@ -18907,12 +19164,33 @@ async fn navigator_service_worker_update_via_cache_all_uses_fresh_main_script_ca
     .await;
     let mut fetch_config = moli_fetch::FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let loader = ResourceRequestClient::new(&fetch_config).expect("loader");
-    let (mut vm, browser_context_runtime) =
-        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-            &format!("{base_url}/app/page.html"),
-            &loader,
-        );
+    let browser_context_runtime = crate::runtime::RendererBrowserContextRuntime::new();
+    let resource_runtime = browser_context_runtime
+        .replace_browser_resource_runtime(crate::network::BrowserResourceRuntimeOwner::new(
+            &fetch_config,
+            moli_cookie_jar::new_shared_browser_cookie_store(),
+        ))
+        .expect("cache-enabled browser resource runtime");
+    let loader = ResourceRequestClient::from_browser_resource_runtime(resource_runtime);
+    let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
+        url::Url::parse(&format!("{base_url}/app/page.html")).unwrap(),
+        &loader,
+        browser_context_runtime.handle(),
+    );
+    // Execute register and update with the same Document transport, including
+    // its browser-site context used to partition the HTTP cache.
+    let loader = vm
+        ._context_host
+        .borrow()
+        .current_main_document_resource_loader()
+        .expect("current Document loader")
+        .request_client()
+        .clone();
+    assert!(
+        loader
+            .browser_resource_runtime()
+            .matches_fetch_config(&fetch_config)
+    );
 
     vm.eval(
         r#"
@@ -18933,6 +19211,8 @@ async fn navigator_service_worker_update_via_cache_all_uses_fresh_main_script_ca
                   scope: "./",
                   updateViaCache: "all"
                 });
+                const updated = await registration.update();
+                if (updated !== registration) throw new Error('update identity changed');
                 const all = await sw.getRegistrations();
                 globalThis.__serviceWorkerUpdateViaCacheAllProbe = [
                   updatefoundCount,
