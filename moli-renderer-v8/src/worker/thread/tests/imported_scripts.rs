@@ -161,9 +161,9 @@ async fn worker_importscripts_cross_origin_respects_corp_and_coep() {
 async fn worker_importscripts_redirects_check_csp_and_ignore_redirected_paths() {
     ensure_v8();
     for (report_only, allow_foreign, expected) in [
-        (false, false, r#"["NetworkError",false,["enforce"]]"#),
-        (true, false, r#"["ok",true,["report"]]"#),
-        (false, true, r#"["ok",true,[]]"#),
+        (false, false, r#"["NetworkError",false,["enforce"],true]"#),
+        (true, false, r#"["ok",true,["report"],true]"#),
+        (false, true, r#"["ok",true,[],true]"#),
     ] {
         let (foreign_url, foreign_server) = spawn_path_response_http_server(vec![(
             "/redirect-target/foreign.js",
@@ -190,11 +190,28 @@ async fn worker_importscripts_redirects_check_csp_and_ignore_redirected_paths() 
         let mut options = WorkerSpawnOptions::new(
             r#"
             const violations = [];
-            addEventListener('securitypolicyviolation', event => violations.push(event.disposition));
             let outcome = 'ok';
             try { importScripts('./redirect.js'); } catch (error) { outcome = error.name; }
-            postMessage([outcome, self.loaded === true, violations]); close();
-            "#.into(), format!("{worker_url}/worker/main.js"),
+            let microtaskRan = false;
+            queueMicrotask(() => microtaskRan = true);
+            const finish = () => {
+                postMessage([outcome, self.loaded === true, violations, microtaskRan]);
+                close();
+            };
+            if (EXPECT_VIOLATION) {
+                addEventListener('securitypolicyviolation', event => {
+                    violations.push(event.disposition);
+                    finish();
+                });
+            } else {
+                queueMicrotask(finish);
+            }
+            "#
+            .replace(
+                "EXPECT_VIOLATION",
+                if allow_foreign { "false" } else { "true" },
+            ),
+            format!("{worker_url}/worker/main.js"),
         );
         options = if report_only {
             options.with_content_security_report_only_policies(vec![policy])
