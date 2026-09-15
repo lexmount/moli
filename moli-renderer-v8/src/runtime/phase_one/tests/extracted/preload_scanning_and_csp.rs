@@ -454,9 +454,10 @@ fn scanned_stylesheet_admission_uses_processed_meta_csp() {
             .expect("current-thread runtime should build");
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let mut page_vm = new_phase_one_page_vm_for_test();
-            let body = create_connected_html_body_for_test(&mut page_vm);
             let meta = {
                 let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
+                dom_host.reset_html_document_shell();
+                let head = dom_host.document_head_handle().expect("document head");
                 let meta = dom_host.create_parser_element_without_attributes(
                     "meta".to_owned(),
                     "http://www.w3.org/1999/xhtml".to_owned(),
@@ -464,7 +465,7 @@ fn scanned_stylesheet_admission_uses_processed_meta_csp() {
                 );
                 assert!(dom_host.set_attribute(meta, "http-equiv", "content-security-policy"));
                 assert!(dom_host.set_attribute(meta, "content", "style-src 'none'"));
-                assert!(dom_host.append_child(body, meta));
+                assert!(dom_host.append_child(head, meta));
                 meta
             };
             page_vm

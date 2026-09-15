@@ -13,6 +13,7 @@ use url::Url;
 const CONNECT_SRC: &str = "connect-src";
 const CHILD_SRC: &str = "child-src";
 const DEFAULT_SRC: &str = "default-src";
+const BASE_URI: &str = "base-uri";
 const FRAME_ANCESTORS: &str = "frame-ancestors";
 const FRAME_SRC: &str = "frame-src";
 const IMG_SRC: &str = "img-src";
@@ -1325,6 +1326,7 @@ fn csp_keyword_eq(source: &str, keyword: &str) -> bool {
 impl ContentSecurityPolicyResourceKind {
     fn effective_directive(self) -> &'static str {
         match self {
+            Self::DocumentBase => BASE_URI,
             Self::DocumentConnect => CONNECT_SRC,
             Self::DocumentFrame => FRAME_SRC,
             Self::DocumentImage => IMG_SRC,
@@ -1341,6 +1343,7 @@ impl ContentSecurityPolicyResourceKind {
 
     fn directive_fallbacks(self) -> &'static [&'static str] {
         match self {
+            Self::DocumentBase => &[BASE_URI],
             Self::DocumentConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::DocumentFrame => &[FRAME_SRC, CHILD_SRC, DEFAULT_SRC],
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],

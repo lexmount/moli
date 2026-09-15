@@ -191,7 +191,7 @@ pub fn content_security_policy_reporting_api_report_body(
     .to_string()
 }
 
-pub(crate) fn csp_url_for_report(url: &Url) -> String {
+pub fn csp_url_for_report(url: &Url) -> String {
     if !matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
         return url.scheme().to_owned();
     }

@@ -378,6 +378,9 @@ fn runtime_evaluate_code_generation_policy_matches_inspector_scope() {
 #[test]
 fn webassembly_compile_obeys_document_csp_wasm_eval() {
     let mut vm = new_storage_test_vm("https://wasm-csp.test/");
+    vm.document_runtime
+        .dom_host_mut()
+        .reset_html_document_shell();
     let result = vm
         .eval(
             r#"
@@ -429,6 +432,9 @@ fn webassembly_compile_obeys_document_csp_wasm_eval() {
 #[test]
 fn document_csp_violation_event_survives_mutated_event_globals() {
     let mut vm = new_storage_test_vm("https://wasm-csp-mutated-event.test/");
+    vm.document_runtime
+        .dom_host_mut()
+        .reset_html_document_shell();
     let result = vm
         .eval(
             r#"

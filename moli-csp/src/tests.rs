@@ -2840,3 +2840,44 @@ fn violation_report_formats_preserve_captured_script_locations() {
     assert_eq!(reporting[0]["body"]["lineNumber"], 12);
     assert_eq!(reporting[0]["body"]["columnNumber"], 34);
 }
+
+#[test]
+fn base_uri_uses_its_own_source_list_and_reports_violations() {
+    let protected_url = Url::parse("https://page.test/path/page.html").unwrap();
+    for (policy, request, allowed) in [
+        ("default-src 'none'", "https://other.test/base/", true),
+        ("base-uri 'none'", "https://page.test/base/", false),
+        ("base-uri 'self'", "https://page.test/base/", true),
+        ("base-uri 'self'", "https://other.test/base/", false),
+        (
+            "base-uri https://cdn.test:0443/",
+            "https://cdn.test/base/",
+            true,
+        ),
+        (
+            "base-uri https://cdn%2Etest/",
+            "https://cdn.test/base/",
+            false,
+        ),
+    ] {
+        let violation =
+            content_security_policy_url_violation_with_redirect_status_and_disposition(
+                &[policy.into()],
+                &protected_url,
+                &Url::parse(request).unwrap(),
+                ContentSecurityPolicyResourceKind::DocumentBase,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyDisposition::Report,
+            );
+        assert_eq!(violation.is_none(), allowed, "{policy}: {request}");
+        if let Some(violation) = violation {
+            assert_eq!(violation.effective_directive, "base-uri");
+            assert_eq!(violation.blocked_uri, request);
+            assert_eq!(violation.original_policy, policy);
+            assert_eq!(
+                violation.disposition,
+                ContentSecurityPolicyDisposition::Report
+            );
+        }
+    }
+}
