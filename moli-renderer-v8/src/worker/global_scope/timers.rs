@@ -174,8 +174,8 @@ fn worker_timer_callback_from_arg<'s>(
     ) else {
         return Err(());
     };
-    let allow_trusted_types_eval = require_trusted_types_for_script
-        && worker_allows_trusted_types_eval(scope).unwrap_or(false);
+    let allow_trusted_types_eval =
+        requirements.is_enforced() && worker_allows_trusted_types_eval(scope).unwrap_or(false);
     if !worker_allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(&source))
         .unwrap_or(true)
     {
