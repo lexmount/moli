@@ -156,32 +156,42 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    effectiveDirective: event.effectiveDirective,
-                    violatedDirective: event.violatedDirective,
-                    blockedURI: event.blockedURI,
-                    documentURI: event.documentURI,
-                    originalPolicy: event.originalPolicy,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            let name;
+            addEventListener("securitypolicyviolation", event => events.push(event));
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
             } catch (error) {
-                postMessage({
-                    events,
-                    name: error && error.name,
-                    ran: globalThis.__ran === true,
-                });
+                name = error.name;
             }
-            close();
+            const eventsAtReturn = events.length;
+            let eventsAtMicrotask;
+            queueMicrotask(() => eventsAtMicrotask = events.length);
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    event: {
+                        type: event.type,
+                        effectiveDirective: event.effectiveDirective,
+                        violatedDirective: event.violatedDirective,
+                        blockedURI: event.blockedURI,
+                        documentURI: event.documentURI,
+                        originalPolicy: event.originalPolicy,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent,
+                        sourceFile: event.sourceFile,
+                        lineNumber: event.lineNumber,
+                        columnNumber: event.columnNumber,
+                    },
+                    name,
+                    ran: globalThis.__ran === true,
+                    eventsAtReturn,
+                    eventsAtMicrotask,
+                });
+                close();
+            });
             "#
             .into(),
-            "https://app.test/worker/main.js".into(),
+            "https://app.test/worker/main.js?secret=1".into(),
         )
         .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
     );
@@ -192,7 +202,105 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"event":{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js?secret=1","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true,"sourceFile":"https://app.test/worker/main.js","lineNumber":6,"columnNumber":17},"name":"NetworkError","ran":false,"eventsAtReturn":0,"eventsAtMicrotask":0}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_importscripts_csp_uses_script_src_elem_and_its_fallbacks() {
+    ensure_v8();
+    for (policies, blocked) in [
+        (vec!["script-src 'none'; script-src-elem data:"], false),
+        (vec!["script-src data:; script-src-elem 'none'"], true),
+        (vec!["default-src 'none'; script-src data:"], false),
+        (vec!["default-src data:; script-src 'none'"], true),
+        (vec!["default-src data:"], false),
+        (vec!["default-src 'none'"], true),
+        (vec!["worker-src 'none'"], false),
+        (vec!["script-src-elem data:", "script-src 'none'"], true),
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                r#"
+                let name;
+                try {
+                    importScripts("data:text/javascript,globalThis.__ran=true");
+                } catch (error) {
+                    name = error.name;
+                }
+                if (name === undefined) {
+                    postMessage({ran: globalThis.__ran === true});
+                    close();
+                } else {
+                    addEventListener("securitypolicyviolation", event => {
+                        postMessage({
+                            ran: globalThis.__ran === true,
+                            name,
+                            directive: event.effectiveDirective,
+                            disposition: event.disposition,
+                        });
+                        close();
+                    });
+                }
+                "#
+                .into(),
+                "https://app.test/worker/main.js".into(),
+            )
+            .with_content_security_policies(policies.iter().map(|p| (*p).to_owned()).collect()),
+        );
+        let msg = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(
+            expect_post_json(msg),
+            if blocked {
+                r#"{"ran":false,"name":"NetworkError","directive":"script-src-elem","disposition":"enforce"}"#
+            } else {
+                r#"{"ran":true}"#
+            },
+            "{policies:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_importscripts_csp_reports_the_imported_callsite() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            let name;
+            try {
+                importScripts("data:text/javascript," + encodeURIComponent(
+                    "\n  importScripts('https://blocked.test/script.js');"
+                ));
+            } catch (error) {
+                name = error.name;
+            }
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    name,
+                    blockedURI: event.blockedURI,
+                    sourceFile: event.sourceFile,
+                    lineNumber: event.lineNumber,
+                    columnNumber: event.columnNumber,
+                });
+                close();
+            });
+            "#
+            .into(),
+            "https://app.test/worker/main.js".into(),
+        )
+        .with_content_security_policies(vec!["script-src data:".into()]),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"name":"NetworkError","blockedURI":"https://blocked.test/script.js","sourceFile":"data","lineNumber":2,"columnNumber":3}"#
     );
 }
 
@@ -208,27 +316,27 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
                 writable: false,
                 configurable: true
             });
-            const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    blockedURI: event.blockedURI,
-                    effectiveDirective: event.effectiveDirective,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            let name;
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
             } catch (error) {
+                name = error.name;
+            }
+            addEventListener("securitypolicyviolation", event => {
                 postMessage({
-                    events,
-                    name: error && error.name,
+                    event: {
+                        type: event.type,
+                        blockedURI: event.blockedURI,
+                        effectiveDirective: event.effectiveDirective,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent
+                    },
+                    name,
                     ran: globalThis.__ran === true,
                 });
-            }
-            close();
+                close();
+            });
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -242,7 +350,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"event":{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src-elem","disposition":"enforce","instance":true},"name":"NetworkError","ran":false}"#
     );
 }
 
@@ -259,24 +367,27 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
+                let name;
+                try {
+                    importScripts("data:text/javascript,globalThis.__ran=true");
+                } catch (error) {
+                    name = error.name;
+                }
+                let microtaskRan = false;
+                queueMicrotask(() => microtaskRan = true);
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                    const matched = event.type === "securitypolicyviolation" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "enforce" &&
                         event instanceof SecurityPolicyViolationEvent;
-                });
-                try {
-                    importScripts("data:text/javascript,globalThis.__ran=true");
-                } catch (_) {
-                    if (matched && globalThis.__ran !== true) {
+                    if (matched && name === "NetworkError" && microtaskRan && globalThis.__ran !== true) {
                         close();
                     }
-                }
+                });
             };
             "#
             .into(),
@@ -311,24 +422,29 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    effectiveDirective: event.effectiveDirective,
-                    violatedDirective: event.violatedDirective,
-                    blockedURI: event.blockedURI,
-                    documentURI: event.documentURI,
-                    originalPolicy: event.originalPolicy,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            addEventListener("securitypolicyviolation", event => events.push(event));
             importScripts("data:text/javascript,globalThis.__ran=true");
-            postMessage({
-                events,
-                ran: globalThis.__ran === true,
+            const eventsAtReturn = events.length;
+            let eventsAtMicrotask;
+            queueMicrotask(() => eventsAtMicrotask = events.length);
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    event: {
+                        type: event.type,
+                        effectiveDirective: event.effectiveDirective,
+                        violatedDirective: event.violatedDirective,
+                        blockedURI: event.blockedURI,
+                        documentURI: event.documentURI,
+                        originalPolicy: event.originalPolicy,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent
+                    },
+                    ran: globalThis.__ran === true,
+                    eventsAtReturn,
+                    eventsAtMicrotask,
+                });
+                close();
             });
-            close();
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -342,7 +458,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true}],"ran":true}"#
+        r#"{"event":{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true},"ran":true,"eventsAtReturn":0,"eventsAtMicrotask":0}"#
     );
 }
 
@@ -359,21 +475,22 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
+                importScripts("data:text/javascript,globalThis.__ran=true");
+                let microtaskRan = false;
+                queueMicrotask(() => microtaskRan = true);
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                    const matched = event.type === "securitypolicyviolation" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "report" &&
                         event instanceof SecurityPolicyViolationEvent;
+                    if (matched && microtaskRan && globalThis.__ran === true) {
+                        close();
+                    }
                 });
-                importScripts("data:text/javascript,globalThis.__ran=true");
-                if (matched && globalThis.__ran === true) {
-                    close();
-                }
             };
             "#
             .into(),
