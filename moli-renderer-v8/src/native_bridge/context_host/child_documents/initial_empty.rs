@@ -37,10 +37,15 @@ impl PageScriptHost {
             .dom_host()
             .node(handle)
             .and_then(crate::dom::native::Node::owner_document)
-            && let Some(permissions_policy) =
-                self.document_permissions_policy_for_document_handle(parent_document)
         {
-            policy_container.permissions_policy = permissions_policy;
+            policy_container
+                .content_security_policy_self_url
+                .get_or_insert_with(|| self.document_url_for_handle(parent_document));
+            if let Some(permissions_policy) =
+                self.document_permissions_policy_for_document_handle(parent_document)
+            {
+                policy_container.permissions_policy = permissions_policy;
+            }
         }
         policy_container.document_referrer =
             self.document_url_for_child_context(handle).to_string();

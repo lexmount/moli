@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use document::DocumentKind;
 pub use document::{
-    Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
+    Document, DocumentBaseUrlPolicyCheck, DocumentFragment, DocumentReadyState,
+    DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
     Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,
@@ -160,6 +161,7 @@ pub struct NativeDom {
     nodes: NativeNodeStorage,
     document_node_id: NativeNodeId,
     stylesheet_candidate_registries: StylesheetCandidateRegistries,
+    pending_base_url_documents: Vec<NativeNodeId>,
     parse_errors: Vec<String>,
 }
 
@@ -171,6 +173,7 @@ impl Clone for NativeDom {
             nodes: self.nodes.clone(),
             document_node_id: self.document_node_id,
             stylesheet_candidate_registries: self.stylesheet_candidate_registries.clone(),
+            pending_base_url_documents: self.pending_base_url_documents.clone(),
             parse_errors: self.parse_errors.clone(),
         }
     }
@@ -207,6 +210,7 @@ impl NativeDom {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
+            pending_base_url_documents: Vec::new(),
             parse_errors: Vec::new(),
         }
     }
@@ -224,6 +228,7 @@ impl NativeDom {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
+            pending_base_url_documents: Vec::new(),
             parse_errors: Vec::new(),
         }
     }
@@ -3254,6 +3259,41 @@ mod tests {
     }
 
     #[test]
+    fn rejected_base_url_remains_frozen_until_the_first_base_input_changes() {
+        let document_url = url::Url::parse("https://base.test/page.html").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(document_url.clone()));
+        host.reset_html_document_shell();
+        let head = host.document_head_handle().unwrap();
+        let first = host.create_element("base");
+        host.set_attribute(first, "href", "/one/");
+        host.append_child(head, first);
+        let checks = host.take_base_url_policy_checks();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].element, first);
+        host.reject_base_url_policy_check(&checks[0]);
+        assert_eq!(host.document_base_url(), Some(document_url.clone()));
+
+        let second = host.create_element("base");
+        host.set_attribute(second, "href", "/one/");
+        host.append_child(head, second);
+        host.set_attribute(first, "target", "_blank");
+        assert!(host.take_base_url_policy_checks().is_empty());
+        assert_eq!(host.document_base_url(), Some(document_url.clone()));
+
+        host.remove_child(head, first);
+        let checks = host.take_base_url_policy_checks();
+        assert_eq!(
+            checks.len(),
+            1,
+            "a different first base must be checked even for the same URL"
+        );
+        assert_eq!(checks[0].element, second);
+        assert_eq!(host.document_base_url(), Some(checks[0].url.clone()));
+        host.reject_base_url_policy_check(&checks[0]);
+        assert_eq!(host.document_base_url(), Some(document_url));
+    }
+
+    #[test]
     fn empty_base_href_does_not_override_a_document_base_url_override() {
         let mut host = DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://example.test/path/page.html").unwrap(),
@@ -3611,7 +3651,7 @@ mod tests {
     }
 
     #[test]
-    fn document_base_url_recomputes_when_document_url_changes() {
+    fn document_url_changes_preserve_base_until_href_changes() {
         let mut host = DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://example.test/first/page.html").unwrap(),
         ));
@@ -3632,7 +3672,19 @@ mod tests {
         );
         assert_eq!(
             host.document_base_url().expect("base URL").as_str(),
-            "https://example.test/second/assets/"
+            "https://example.test/first/assets/"
+        );
+        assert!(host.set_attribute(base, "href", "next/"));
+        assert_eq!(
+            host.document_base_url().expect("updated base URL").as_str(),
+            "https://example.test/second/next/"
+        );
+        assert!(host.remove_child(body, base));
+        assert_eq!(
+            host.document_base_url()
+                .expect("fallback base URL")
+                .as_str(),
+            "https://example.test/second/page.html"
         );
     }
 
