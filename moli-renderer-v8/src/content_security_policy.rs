@@ -124,6 +124,28 @@ fn send_content_security_policy_report_request(loader: &ResourceRequestClient, r
     }
 }
 
+/// The script location available when a CSP violation is created.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContentSecurityPolicySourceLocation(Option<(String, i32, i32)>);
+
+impl ContentSecurityPolicySourceLocation {
+    pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        Self(current_script_violation_location(scope))
+    }
+
+    pub(crate) fn apply_to(&self, violation: &mut ContentSecurityPolicyUrlViolation) {
+        if let Some((source_file, line_number, column_number)) = &self.0 {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        } else {
+            violation.source_file.clear();
+            violation.line_number = 0;
+            violation.column_number = 0;
+        }
+    }
+}
+
 pub(crate) fn current_script_violation_location(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<(String, i32, i32)> {
@@ -279,6 +301,49 @@ mod tests {
                     expected_count
                 );
             }
+        }
+    }
+
+    #[test]
+    fn violation_report_formats_preserve_captured_script_locations() {
+        let mut violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'".into()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        violation.source_file = "https://app.test/imported/script.js".into();
+        violation.line_number = 12;
+        violation.column_number = 34;
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        assert_eq!(fields.source_file, violation.source_file);
+        assert_eq!((fields.line_number, fields.column_number), (12, 34));
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
+        assert_eq!(legacy["csp-report"]["line-number"], 12);
+        assert_eq!(legacy["csp-report"]["column-number"], 34);
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
+        assert_eq!(reporting[0]["body"]["lineNumber"], 12);
+        assert_eq!(reporting[0]["body"]["columnNumber"], 34);
+    
+        ContentSecurityPolicySourceLocation::default().apply_to(&mut violation);
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        for key in ["source-file", "line-number", "column-number"] {
+            assert!(legacy["csp-report"].get(key).is_none());
+        }
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        for key in ["sourceFile", "lineNumber", "columnNumber"] {
+            assert!(reporting[0]["body"].get(key).is_none());
         }
     }
 
