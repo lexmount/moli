@@ -65,7 +65,7 @@ pub(super) fn materialize_worker_import_source(
         csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
             .map_err(WorkerImportScriptError::network)?;
     }
-    let (service_worker, cached, can_import_new) = {
+    let (service_worker, cached, updated, can_import_new) = {
         let state = state.borrow();
         (
             matches!(
@@ -76,10 +76,21 @@ pub(super) fn materialize_worker_import_source(
                 .service_worker_script_resources
                 .get(script_url)
                 .cloned(),
+            state
+                .service_worker_updated_script_resources
+                .get(script_url)
+                .cloned(),
             state.service_worker_can_import_new_scripts,
         )
     };
     if service_worker {
+        let from_update_check = cached.is_none() && updated.is_some();
+        let cached = match cached.clone() {
+            Some(resource) => Some(resource),
+            None => updated
+                .transpose()
+                .map_err(WorkerImportScriptError::network)?,
+        };
         if let Some(resource) = &cached
             && let Some(script) = &resource.classic_script
         {
@@ -88,6 +99,13 @@ pub(super) fn materialize_worker_import_source(
                     csp.check_url(url, ContentSecurityPolicyRedirectStatus::FollowedRedirect)
                         .map_err(WorkerImportScriptError::network)?;
                 }
+            }
+            if from_update_check {
+                state
+                    .borrow_mut()
+                    .service_worker_script_resources
+                    .insert(script_url.clone(), resource.clone());
+                report_service_worker_imported_script_loaded(state, resource.clone());
             }
             return Ok(WorkerImportScriptSource {
                 final_url: resource.final_url.clone(),
