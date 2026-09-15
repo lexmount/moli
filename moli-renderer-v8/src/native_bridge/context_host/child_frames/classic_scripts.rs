@@ -420,6 +420,12 @@ impl JsContextHost {
         if current_realm_id != Some(realm_id) || work.realm_id.is_some_and(|id| id != realm_id) {
             return None;
         }
+        let document = self
+            .frame_owner_current_child_snapshot(work.child_handle)?
+            .document_handle;
+        if self.dom_host().owner_document_handle(work.script_handle) != Some(document) {
+            return None;
+        }
         let execution = match &work.source_result {
             Ok(source) => FrameDocumentExternalClassicScriptExecution::script_job(
                 self.frame_owner_store
@@ -474,11 +480,8 @@ impl JsContextHost {
         {
             return false;
         }
-        if self.dom_host().owner_document_handle(event.script_handle)
-            != Some(snapshot.document_handle)
-        {
-            return false;
-        }
+        // Adoption is checked before execution. A script can move itself while
+        // running and must still receive its terminal event on the same element.
         let _ = self.child_browsing_context_document_wrapper(scope, event.child_handle);
         let host_ptr = self as *mut JsContextHost;
         let Some(target) =
@@ -1905,7 +1908,8 @@ impl JsContextHost {
         &mut self,
         failed: FrameDocumentClassicSourceFailureWork,
     ) -> FrameDocumentClassicSourceFailureReportApplication {
-        let (target, _failure, script_element_event) = failed.into_parts();
+        let script_handle = failed.script_handle();
+        let (target, _failure, mut script_element_event) = failed.into_parts();
         let child_handle = target.child_handle();
         let owner = target.task_owner().document_owner();
         let runner_owner_current = self.frame_parser_classic_scripts.has_runner(owner);
@@ -1943,6 +1947,15 @@ impl JsContextHost {
             return FrameDocumentClassicSourceFailureReportApplication::skipped(
                 FrameDocumentClassicSourceFailureReportSkipReason::StaleRealm,
             );
+        }
+        if self
+            .frame_owner_current_child_snapshot(child_handle)
+            .is_none_or(|snapshot| {
+                self.dom_host().owner_document_handle(script_handle)
+                    != Some(snapshot.document_handle)
+            })
+        {
+            script_element_event = None;
         }
         FrameDocumentClassicSourceFailureReportApplication::completed(
             FrameDocumentClassicScriptCompletionAction::new(

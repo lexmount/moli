@@ -18,6 +18,182 @@ fn bound_parser_module(page_vm: &mut PageVm, position: u32, url: Url) -> Prepare
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn prepared_main_classic_scripts_check_their_node_document() {
+    run_page_vm_async_test(async {
+        for (mutation, executes) in [
+            ("__script.remove()", true),
+            ("__other.body.append(__script)", false),
+            (
+                "__other.body.append(__script); document.body.append(__script)",
+                true,
+            ),
+        ] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let mut page_vm = test_page_vm_with_loader_and_document_url(
+                &loader,
+                Vec::new(),
+                Url::parse("https://example.com/adopted-classic.html").unwrap(),
+            );
+            let mut script = bound_parser_module(
+                &mut page_vm,
+                9301,
+                Url::parse("https://example.com/adopted.js").unwrap(),
+            );
+            script.kind = ScriptKind::Classic;
+            script.mode = ScriptMode::Normal;
+            script.source =
+                crate::planning::ScriptSource::Loaded("++globalThis.__runs;".to_owned());
+            page_vm
+                .vm_mut()
+                .eval(&format!(
+                    r#"
+                globalThis.__runs = 0;
+                globalThis.__script = document.querySelector('script');
+                globalThis.__other = document.implementation.createHTMLDocument('');
+                {mutation};
+            "#
+                ))
+                .unwrap();
+            let outcome = page_vm
+                .vm_mut()
+                .run_prepared_script(&loader, &script, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                matches!(
+                    outcome,
+                    crate::script_vm::PreparedScriptExecutionOutcome::Completed(_)
+                ),
+                executes,
+                "{mutation}",
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("__runs").unwrap(),
+                if executes { "1" } else { "0" }
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adopted_main_module_graphs_settle_without_execution_or_events() {
+    run_page_vm_async_test(async {
+        for fetch_fails in [false, true] {
+            for move_back in [false, true] {
+                let loader =
+                    crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+                let mut page_vm = test_page_vm_with_loader_and_document_url(
+                    &loader,
+                    Vec::new(),
+                    Url::parse("https://example.com/adopted-module.html").unwrap(),
+                );
+                let url = Url::parse("https://example.com/adopted.mjs").unwrap();
+                let script = bound_parser_module(&mut page_vm, 9302, url.clone());
+                page_vm
+                    .vm_mut()
+                    .eval(
+                        r#"
+                    globalThis.__counts = [0, 0, 0, 0];
+                    globalThis.__script = document.querySelector('script');
+                    __script.onload = () => ++__counts[1];
+                    __script.onerror = () => ++__counts[2];
+                    addEventListener('error', event => { ++__counts[3]; event.preventDefault(); });
+                "#,
+                    )
+                    .unwrap();
+                let work = install_parser_module_defer_work(&mut page_vm, script);
+                page_vm
+                    .execute_post_parse_page_owned_task_on_named_owner_lane(&loader, work)
+                    .await
+                    .unwrap();
+                page_vm
+                    .vm_mut()
+                    .eval("document.implementation.createHTMLDocument('').body.append(__script)")
+                    .unwrap();
+                if move_back {
+                    page_vm
+                        .vm_mut()
+                        .eval("document.body.append(__script)")
+                        .unwrap();
+                }
+                if fetch_fails {
+                    enqueue_parser_owned_module_script_fetch_error_for_test(
+                        &mut page_vm,
+                        0,
+                        &url,
+                        "HTTP 404",
+                    );
+                } else {
+                    enqueue_parser_owned_module_script_fetch_completion_for_test(
+                        &mut page_vm,
+                        0,
+                        &url,
+                        "++globalThis.__counts[0];",
+                    );
+                }
+                assert!(
+                    run_next_main_module_fetch_terminal_for_test(&mut page_vm)
+                        .unwrap()
+                        .is_some()
+                );
+                run_and_finish_ready_parser_deferred_task_for_test(
+                    &mut page_vm,
+                    &loader,
+                    "adopted module terminal",
+                )
+                .await;
+                run_parser_module_completion_turns_for_test(
+                    &mut page_vm,
+                    &loader,
+                    0,
+                    "adopted module terminal",
+                )
+                .await;
+                let expected = if !move_back {
+                    "[0,0,0,0]"
+                } else if fetch_fails {
+                    "[0,0,1,0]"
+                } else {
+                    "[1,1,0,0]"
+                };
+                assert_eq!(
+                    page_vm.vm_mut().eval("JSON.stringify(__counts)").unwrap(),
+                    expected
+                );
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn module_evaluation_continues_if_element_is_adopted_after_it_starts() {
+    run_page_vm_async_test(async {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/adopted-tla.html").unwrap(),
+        );
+        let url = Url::parse("https://example.com/adopted-tla.mjs").unwrap();
+        let script = bound_parser_module(&mut page_vm, 9303, url.clone());
+        page_vm.vm_mut().eval("globalThis.__runs = 0; globalThis.__script = document.querySelector('script');").unwrap();
+        let work = install_parser_module_defer_work(&mut page_vm, script);
+        page_vm.execute_post_parse_page_owned_task_on_named_owner_lane(&loader, work).await.unwrap();
+        enqueue_parser_owned_module_script_fetch_completion_for_test(
+            &mut page_vm, 0, &url,
+            "await new Promise(resolve => { globalThis.__resumeModule = resolve; }); ++globalThis.__runs;",
+        );
+        assert!(run_next_main_module_fetch_terminal_for_test(&mut page_vm).unwrap().is_some());
+        run_ready_parser_deferred_body_for_test(&mut page_vm, &loader, "module before adoption").await;
+        assert_eq!(page_vm.vm_mut().eval("__runs").unwrap(), "0");
+        page_vm.vm_mut().eval("document.implementation.createHTMLDocument('').body.append(__script); __resumeModule();").unwrap();
+        run_parser_module_completion_turns_for_test(&mut page_vm, &loader, 1, "module adopted after evaluation start").await;
+        assert_eq!(page_vm.vm_mut().eval("__runs").unwrap(), "1");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn parser_module_error_reporting_preserves_inline_source_origin() {
     run_page_vm_async_test(async {
         for (source, expected_line, expected_column) in [

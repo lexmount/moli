@@ -6542,7 +6542,24 @@ impl ScriptVm {
         handle
     }
 
+    // Main-document work retains its preparation owner until it is ready. Check
+    // adoption when entering execution, without cancelling its fetch or order slot.
+    pub(crate) fn prepared_script_changed_documents(&self, script: &PreparedScript) -> bool {
+        let node = script
+            .host_script_handle
+            .as_deref()
+            .and_then(|handle| self.document_runtime.resolve_host_script_handle(handle))
+            .unwrap_or(script.node_id);
+        self.document_runtime
+            .dom_host()
+            .owner_document_handle(node)
+            .is_some_and(|document| document != self.document_runtime.document_handle())
+    }
+
     fn prepared_script_is_live_for_execution(&mut self, script: &PreparedScript) -> bool {
+        if self.prepared_script_changed_documents(script) {
+            return false;
+        }
         let Some(handle) = script.host_script_handle.as_deref() else {
             let allow_missing_handle = script.kind == ScriptKind::Classic
                 && script.source_kind == ScriptSourceKind::Inline
