@@ -142,6 +142,10 @@ SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/redirect.py",
     "/service-workers/service-worker/resources/update-worker.py",
     "/service-workers/service-worker/resources/import-scripts-version.py",
+    "/service-workers/service-worker/resources/import-scripts-get.py",
+    "/service-workers/service-worker/resources/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/subdir/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/scope2/import-scripts-echo.py",
 }
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
@@ -3485,6 +3489,16 @@ def _make_handler(
                             return
                         version = (datetime.now() - datetime(1970, 1, 1)).total_seconds()
                         body = f'version = "{version}";\n'.encode("ascii")
+                    elif path.endswith("/import-scripts-get.py"):
+                        body = ('%s = "%s";\n' % (
+                            params["output"][0], params["msg"][0],
+                        )).encode("latin-1")
+                    elif path.endswith("/import-scripts-echo.py"):
+                        directory = path.rsplit("/", 2)[-2]
+                        suffix = f" ({directory}/)" if directory in ("subdir", "scope2") else ""
+                        body = ('echo_output = "%s%s";\n' % (
+                            params["msg"][0], suffix,
+                        )).encode("latin-1")
                     else:
                         mode = params["Mode"][0]
                         count = fetch_stash.increment(params["Key"][0], path=parsed.path)
