@@ -775,7 +775,10 @@ def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ..
 @lru_cache(maxsize=None)
 def _script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
-    for name in ("serve-with-content-type.py", "resources/load-error-events.py"):
+    for name in (
+        "serve-with-content-type.py", "resources/load-error-events.py",
+        "json-module/load-error-events.py", "serve-json-then-js.py",
+    ):
         resource = "html/semantics/scripting-1/the-script-element/" + name
         relative = posixpath.relpath(resource, directory)
         references.extend(("/" + resource, relative, "./" + relative))
