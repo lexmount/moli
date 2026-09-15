@@ -163,7 +163,7 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
+            const reported = new Promise(resolve => addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
                     effectiveDirective: event.effectiveDirective,
@@ -174,18 +174,22 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
                 });
-            });
+                resolve();
+            }));
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
+                close();
             } catch (error) {
-                postMessage({
-                    events,
-                    name: error && error.name,
-                    ran: globalThis.__ran === true,
+                reported.then(() => {
+                    postMessage({
+                        events,
+                        name: error && error.name,
+                        ran: globalThis.__ran === true,
+                    });
+                    close();
                 });
             }
-            close();
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -217,7 +221,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
                 configurable: true
             });
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
+            const reported = new Promise(resolve => addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
                     blockedURI: getBlockedURI.call(event),
@@ -229,18 +233,22 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
                 });
-            });
+                resolve();
+            }));
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
+                close();
             } catch (error) {
-                postMessage({
-                    events,
-                    name: error && error.name,
-                    ran: globalThis.__ran === true,
+                reported.then(() => {
+                    postMessage({
+                        events,
+                        name: error && error.name,
+                        ran: globalThis.__ran === true,
+                    });
+                    close();
                 });
             }
-            close();
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -271,9 +279,9 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
+                let blocked = false;
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
+                    const matched = event.type === "securitypolicyviolation" &&
                         event.effectiveDirective === "script-src" &&
                         event.violatedDirective === "script-src" &&
                         event.blockedURI === "data" &&
@@ -281,13 +289,14 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "enforce" &&
                         event instanceof SecurityPolicyViolationEvent;
+                    if (matched && blocked && globalThis.__ran !== true) {
+                        close();
+                    }
                 });
                 try {
                     importScripts("data:text/javascript,globalThis.__ran=true");
-                } catch (_) {
-                    if (matched && globalThis.__ran !== true) {
-                        close();
-                    }
+                } catch (error) {
+                    blocked = error.name === "NetworkError";
                 }
             };
             "#
@@ -323,7 +332,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
+            const reported = new Promise(resolve => addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
                     effectiveDirective: event.effectiveDirective,
@@ -334,13 +343,16 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
                 });
-            });
+                resolve();
+            }));
             importScripts("data:text/javascript,globalThis.__ran=true");
-            postMessage({
-                events,
-                ran: globalThis.__ran === true,
+            reported.then(() => {
+                postMessage({
+                    events,
+                    ran: globalThis.__ran === true,
+                });
+                close();
             });
-            close();
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -371,9 +383,8 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
+                    const matched = event.type === "securitypolicyviolation" &&
                         event.effectiveDirective === "script-src" &&
                         event.violatedDirective === "script-src" &&
                         event.blockedURI === "data" &&
@@ -381,11 +392,11 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "report" &&
                         event instanceof SecurityPolicyViolationEvent;
+                    if (matched && globalThis.__ran === true) {
+                        close();
+                    }
                 });
                 importScripts("data:text/javascript,globalThis.__ran=true");
-                if (matched && globalThis.__ran === true) {
-                    close();
-                }
             };
             "#
             .into(),
@@ -5985,4 +5996,32 @@ async fn worker_module_internal_dynamic_rejection_uses_only_the_public_import_pr
             "{body}"
         );
     }
+}
+
+#[tokio::test]
+async fn worker_import_calls_finish_before_csp_violation_dispatch() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const order = [];
+            addEventListener("securitypolicyviolation", event => {
+                order.push(["violation", event.sourceFile, event.lineNumber > 0]);
+                postMessage(order);
+                close();
+            });
+            try { importScripts("data:text/javascript,"); }
+            catch (error) { order.push(error.name); }
+            order.push("returned");
+            "#
+            .to_owned(),
+            "https://app.test/worker/import-events.js".to_owned(),
+        )
+        .with_content_security_policies(vec!["script-src 'none'".into()]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(message),
+        r#"["NetworkError","returned",["violation","https://app.test/worker/import-events.js",true]]"#
+    );
 }

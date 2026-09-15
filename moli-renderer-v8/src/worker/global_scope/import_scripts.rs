@@ -36,39 +36,65 @@ fn resolve_import_script_url(
     Ok(url)
 }
 
+fn check_import_script_content_security_policy(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    script_url: &Url,
+) -> Result<(), WorkerImportScriptError> {
+    use crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript;
+    use crate::worker::handle::WorkerMessage;
+
+    let (wake_tx, mut report, mut enforce) = {
+        let state = state.borrow();
+        let Some(protected_url) = state.current_script_url.as_ref() else {
+            return Ok(());
+        };
+        (
+            state.worker_wake_tx.clone(),
+            worker_content_security_policy_report_only_violation(
+                &state,
+                protected_url,
+                script_url,
+                WorkerScript,
+            ),
+            worker_content_security_policy_violation(
+                &state,
+                protected_url,
+                script_url,
+                WorkerScript,
+            ),
+        )
+    };
+    if (report.is_some() || enforce.is_some())
+        && let Some((source_file, line_number, column_number)) =
+            crate::content_security_policy::current_script_violation_location(scope)
+    {
+        for violation in [&mut report, &mut enforce].into_iter().flatten() {
+            violation.source_file.clone_from(&source_file);
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
+    }
+    let failure = enforce
+        .as_ref()
+        .map(|violation| worker_content_security_policy_error_message(violation, "importScripts"));
+    for violation in report.into_iter().chain(enforce) {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    match failure {
+        Some(message) => Err(WorkerImportScriptError::network(message)),
+        None => Ok(()),
+    }
+}
+
 fn materialize_worker_import_source(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     script_url: &Url,
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
-    if let Some(violation) = {
-        let state = state.borrow();
-        state.current_script_url.as_ref().and_then(|protected_url| {
-            worker_content_security_policy_report_only_violation(
-                &state,
-                protected_url,
-                script_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
-            )
-        })
-    } {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
-    if let Some(violation) = {
-        let state = state.borrow();
-        state.current_script_url.as_ref().and_then(|protected_url| {
-            worker_content_security_policy_violation(
-                &state,
-                protected_url,
-                script_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
-            )
-        })
-    } {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-        let message = worker_content_security_policy_error_message(&violation, "importScripts");
-        return Err(WorkerImportScriptError::network(message));
-    }
+    check_import_script_content_security_policy(scope, state, script_url)?;
     match script_url.scheme() {
         "data" => {
             let source =
