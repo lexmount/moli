@@ -44,6 +44,14 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
             work.script().mode,
             work.pending_script_id().key(),
             work.load_delay_token(),
+        )?;
+        self.check_script_preparation_document(
+            work.owner(),
+            work.realm_id(),
+            work.script_handle(),
+            work.script().mode,
+            work.pending_script_id().key(),
+            work.load_delay_token(),
         )
     }
 
@@ -54,6 +62,14 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
         self.check_current_module_work(
             work.owner(),
             work.realm_id(),
+            work.script().mode,
+            work.pending_script_id().key(),
+            work.load_delay_token(),
+        )?;
+        self.check_script_preparation_document(
+            work.owner(),
+            work.realm_id(),
+            work.script_handle(),
             work.script().mode,
             work.pending_script_id().key(),
             work.load_delay_token(),
@@ -262,6 +278,37 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
 }
 
 impl ChildModuleScriptExecutionOwner<'_> {
+    fn check_script_preparation_document(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        script_handle: DomHandle,
+        mode: ScriptMode,
+        pending_script_key: crate::document_script_scheduler::ParserPendingScriptKey,
+        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+    ) -> std::result::Result<(), DocumentScriptExecutionOutcome> {
+        let current = {
+            let host = self.vm._context_host.borrow();
+            host.frame_owner_current_child_snapshot_for_realm(realm_id)
+                .is_some_and(|snapshot| {
+                    host.dom_host().owner_document_handle(script_handle)
+                        == Some(snapshot.document_handle)
+                })
+        };
+        if current {
+            return Ok(());
+        }
+        let order_released =
+            self.complete_parser_deferred_module_script(owner, realm_id, mode, pending_script_key);
+        let released = self.release_module_script_load_delay(owner, mode, load_delay_token);
+        if order_released || released {
+            self.queue_lifecycle_followups_for_module_work(owner, realm_id);
+            Err(DocumentScriptExecutionOutcome::Progressed)
+        } else {
+            Err(DocumentScriptExecutionOutcome::NoProgress)
+        }
+    }
+
     fn complete_parser_deferred_module_script(
         &mut self,
         owner: FrameDocumentTaskOwner,
