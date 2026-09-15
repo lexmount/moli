@@ -426,6 +426,8 @@ impl JsContextHost {
                         DocumentNavigationEmbeddingContext::Nested(&ancestor_origins),
                     )
                     .into_violations();
+                let reports =
+                    crate::content_security_policy::ContentSecurityPolicyReports::default();
                 for violation in report_only_violations
                     .iter()
                     .chain(enforced_violations.iter())
@@ -439,6 +441,7 @@ impl JsContextHost {
                     let fields =
                         ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
                     send_content_security_policy_reports(
+                        &reports,
                         pending.resource_loader.request_client(),
                         moli_url::WebOrigin::from_url(&loaded.final_url),
                         &fields,

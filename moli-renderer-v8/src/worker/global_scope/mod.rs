@@ -6403,7 +6403,7 @@ pub(crate) fn worker_allows_eval_code_generation_by_csp(
     source: Option<&str>,
 ) -> Option<bool> {
     let state = get_worker_state(scope)?;
-    let (wake_tx, report_only_violation, enforce_violation) = {
+    let (wake_tx, mut report_only_violation, mut enforce_violation) = {
         let state = state.borrow();
         let Some(protected_url) = state.current_script_url.as_ref() else {
             return Some(true);
@@ -6426,6 +6426,19 @@ pub(crate) fn worker_allows_eval_code_generation_by_csp(
             ),
         )
     };
+    if (report_only_violation.is_some() || enforce_violation.is_some())
+        && let Some((source_file, line_number, column_number)) =
+            crate::content_security_policy::current_script_violation_location(scope)
+    {
+        for violation in [&mut report_only_violation, &mut enforce_violation]
+            .into_iter()
+            .flatten()
+        {
+            violation.source_file.clone_from(&source_file);
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
+    }
     if let Some(violation) = report_only_violation {
         let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
             Box::new(violation),
