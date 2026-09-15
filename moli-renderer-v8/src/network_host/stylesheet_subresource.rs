@@ -233,6 +233,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             .is_some()
     {
         let dispatch = ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id,
             request: host.service_worker_fetch_request(
                 client_id,

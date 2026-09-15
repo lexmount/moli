@@ -7186,6 +7186,7 @@ self.addEventListener("message", event => {
         let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
         assert!(
             second_service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+                redirect_check: None,
                 internal_id: 89,
                 request: ServiceWorkerFetchRequest {
                     client_id,
@@ -9183,6 +9184,7 @@ self.addEventListener("message", event => {
         let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
         assert!(
             service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+                redirect_check: None,
                 internal_id: 88,
                 request: ServiceWorkerFetchRequest {
                     client_id,
@@ -9276,6 +9278,7 @@ self.addEventListener("message", event => {
 
         assert!(
             service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+                redirect_check: None,
                 internal_id: 91,
                 request: ServiceWorkerFetchRequest {
                     client_id,
@@ -9447,6 +9450,7 @@ self.addEventListener("message", event => {
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         assert!(
             service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+                redirect_check: None,
                 internal_id: 90,
                 request: ServiceWorkerFetchRequest {
                     client_id,
@@ -9556,6 +9560,7 @@ self.addEventListener("message", event => {
         let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
         assert!(
             service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+                redirect_check: None,
                 internal_id: 89,
                 request: ServiceWorkerFetchRequest {
                     client_id,

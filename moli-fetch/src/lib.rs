@@ -72,7 +72,7 @@ pub use referrer_policy::{
 pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchPriorityHint, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
-    RequestHeaderOverride, RequestMode, RequestPriorityHints, RequestRedirectMode,
+    RequestHeaderOverride, RequestMode, RequestPriorityHints, RequestRedirectCheck, RequestRedirectMode,
     RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
     ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
