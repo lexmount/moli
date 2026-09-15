@@ -29,6 +29,8 @@ import http.client
 import json
 import math
 import mimetypes
+import os
+import random
 import re
 import socket
 import struct
@@ -163,6 +165,9 @@ FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
 SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/redirect.py",
     "/service-workers/service-worker/resources/update-worker.py",
+    "/service-workers/service-worker/resources/update-worker-from-file.py",
+    "/service-workers/service-worker/resources/update-during-installation-worker.py",
+    "/service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",
     "/service-workers/service-worker/resources/import-scripts-version.py",
     "/service-workers/service-worker/resources/import-scripts-get.py",
     "/service-workers/service-worker/resources/import-scripts-echo.py",
@@ -3733,7 +3738,33 @@ def _make_handler(
                         ("Pragma", "no-cache"),
                         ("Content-Type", "application/javascript"),
                     ]
-                    if path.endswith("/import-scripts-version.py"):
+                    if path.endswith("/update-worker-from-file.py"):
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        if count > 2:
+                            self.send_error(500, "Unknown update worker state")
+                            return
+                        filename = os.fsdecode(params["First" if count == 1 else "Second"][0].encode("latin-1"))
+                        source = ((wpt_root / path.lstrip("/")).parent / filename).resolve()
+                        source.relative_to(wpt_root.resolve())
+                        body = source.read_bytes()
+                    elif path.endswith("/ServiceWorkerGlobalScope/resources/update-worker.py"):
+                        headers = [
+                            ("Cache-Control", "max-age: 0"),
+                            ("Content-Type", "application/javascript"),
+                        ]
+                        source = (wpt_root / path.lstrip("/")).with_suffix(".js")
+                        script = source.read_text(encoding="utf-8")
+                        body = f"// {time.time()}\n{script}".encode("utf-8")
+                    elif path.endswith("/update-during-installation-worker.py"):
+                        headers = [
+                            ("Content-Type", "application/javascript"),
+                            ("Cache-Control", "max-age=0"),
+                        ]
+                        body = (
+                            f"// {random.random()}\n"
+                            "importScripts('update-during-installation-worker.js');"
+                        ).encode("ascii")
+                    elif path.endswith("/import-scripts-version.py"):
                         # Match the upstream delay so update checks see new bytes.
                         if stopping.wait(0.1):
                             self.close_connection = True
@@ -3783,6 +3814,9 @@ def _make_handler(
                     if "\r" in value or "\n" in value:
                         raise ValueError("invalid response header")
                     value.encode("latin-1")
+            except OSError:
+                self.send_error(500)
+                return
             except (KeyError, ValueError, UnicodeError):
                 self.send_error(400)
                 return
