@@ -1925,6 +1925,88 @@ async fn drive_window_message_until(
 }
 
 #[tokio::test]
+async fn local_worker_content_security_policy_preserves_self_and_blocks_cross_origin() {
+    run_page_vm_async_test(async move {
+        for kind in ["dedicated", "shared", "nested"] {
+            let shared = kind == "shared";
+            for blob in [false, true] {
+                for meta in [false, true] {
+                    let (base_url, same_server) = spawn_path_response_http_server(vec![(
+                        "/allowed", "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *", "ok".to_owned(), Duration::ZERO,
+                    )]).await;
+                    let (cross_url, mut cross_request, cross_server) = spawn_header_capture_http_server().await;
+                    let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base_url}/page.html")).unwrap());
+                    if !meta {
+                        page_vm.vm_mut().set_response_content_security_policies(&["connect-src 'self'".to_owned()]);
+                    }
+                    let local_executor = page_vm.local_executor.clone();
+                    let result = local_executor.run(async move {
+                        let source = format!(r#"
+                            const events = [];
+                            addEventListener('securitypolicyviolation', e => events.push([e.effectiveDirective, e.disposition, e.documentURI]));
+                            async function run(send) {{
+                                const allowed = await fetch({same}).then(r => r.text()).catch(e => 'fetch-error:' + e.name);
+                                let blocked = 'allowed';
+                                try {{ await fetch({cross}); }} catch (e) {{ blocked = e.name; }}
+                                setTimeout(() => send({{allowed, blocked, events}}), 50);
+                            }}
+                            {start}
+                        "#,
+                            same = serde_json::to_string(&format!("{base_url}/allowed")).unwrap(),
+                            cross = serde_json::to_string(&format!("{cross_url}/blocked")).unwrap(),
+                            start = if shared { "onconnect = e => run(value => e.ports[0].postMessage(value));" } else { "run(value => postMessage(value));" },
+                        );
+                        let source = if kind == "nested" {
+                            format!(r#"
+                                const source = {source};
+                                const url = {url};
+                                globalThis.child = new Worker(url);
+                                child.onmessage = e => postMessage(e.data);
+                                child.onerror = e => postMessage({{error: e.message}});
+                            "#,
+                                source = serde_json::to_string(&source).unwrap(),
+                                url = if blob { "URL.createObjectURL(new Blob([source], {type: 'text/javascript'}))" } else { "'data:text/javascript,' + encodeURIComponent(source)" },
+                            )
+                        } else { source };
+                        page_vm.vm_mut().eval(&format!(r#"
+                            globalThis.__localWorkerResult = null;
+                            const source = {source};
+                            const url = {url};
+                            {meta}
+                            globalThis.__localWorker = new {constructor}(url);
+                            {port}.onmessage = e => globalThis.__localWorkerResult = e.data;
+                            __localWorker.onerror = e => globalThis.__localWorkerResult = {{error: e.message}};
+                            {start}
+                        "#,
+                            source = serde_json::to_string(&source).unwrap(),
+                            url = if blob { "URL.createObjectURL(new Blob([source], {type: 'text/javascript'}))" } else { "'data:text/javascript,' + encodeURIComponent(source)" },
+                            meta = if meta { "const meta = document.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = \"connect-src 'self'\"; document.head.append(meta);" } else { "" },
+                            constructor = if shared { "SharedWorker" } else { "Worker" },
+                            port = if shared { "__localWorker.port" } else { "__localWorker" },
+                            start = if shared { "__localWorker.port.start();" } else { "" },
+                        ))?;
+                        let done = "String(globalThis.__localWorkerResult !== null)";
+                        if shared {
+                            drive_shared_worker_until_done(&mut page_vm, done, "local SharedWorker CSP result").await?;
+                        } else {
+                            drive_websocket_until_done(&mut page_vm, done, "local Worker CSP result").await?;
+                        }
+                        let result = page_vm.vm_mut().eval("JSON.stringify(__localWorkerResult)")?;
+                        page_vm.vm_mut().eval(if shared { "__localWorker.port.close()" } else { "__localWorker.terminate()" })?;
+                        anyhow::Ok(result)
+                    }).await;
+                    same_server.abort();
+                    cross_server.abort();
+                    let result: serde_json::Value = serde_json::from_str(&result.expect("local worker CSP test should finish")).unwrap();
+                    assert_eq!(result, serde_json::json!({"allowed": "ok", "blocked": "TypeError", "events": [["connect-src", "enforce", if blob { "blob" } else { "data" }]]}), "kind={kind}, blob={blob}, meta={meta}");
+                    assert!(cross_request.try_recv().is_err(), "CSP must prevent contacting the cross-origin target");
+                }
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn worker_post_message_flows_through_page_client_event_source() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();

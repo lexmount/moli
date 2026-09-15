@@ -278,6 +278,10 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             rv.set(worker.into());
             return;
         }
+        // Capture the creator policy before loading the body so concurrent URL
+        // revocation cannot leave a loaded script without its policy.
+        let blob_policy = (resolved_url.scheme() == "blob")
+            .then(|| crate::blob::object_url_content_security_policy(resolved_url.as_str()));
         let materialized = match materialize_worker_script_source(&resolved_url) {
             Ok(source) => source,
             Err(message) => {
@@ -287,6 +291,13 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         };
         let creator_secure_context = moli_url::is_potentially_trustworthy_url(&base_url);
         let worker_id = if let Some(script_source) = materialized {
+            let inherited_policy = if let Some(policy) = blob_policy {
+                policy.unwrap_or_default()
+            } else {
+                host.local_worker_content_security_policy_source_for_owner(dispatch_scope)
+                    .map(|source| source.read().clone())
+                    .unwrap_or_default()
+            };
             let request_url = worker_script_resource_url(&resolved_url);
             let network_response =
                 local_worker_main_script_network_response(&resolved_url, &script_source);
@@ -324,6 +335,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 creator_request_client.clone(),
             )
             .with_script_kind(worker_options.worker_type)
+            .with_content_security_policy_snapshot(inherited_policy)
             .with_module_credentials_mode(worker_options.credentials_mode)
             .with_module_static_import_initiator_url(base_url.clone())
             .with_module_static_import_content_security_policies(document_content_security_policies)
@@ -487,7 +499,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             );
             return;
         }
-        let (script_url, script_source) =
+        let (script_url, script_source, content_security_policy) =
             match materialize_nested_worker_script_source(&resolved_url, &nested_context) {
                 Ok(source) => source,
                 Err(message) => {
@@ -523,6 +535,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             script_url,
             nested_context.loader.request_client().clone(),
         )
+        .with_content_security_policy_snapshot(content_security_policy)
         .with_script_kind(worker_options.worker_type)
         .with_module_credentials_mode(worker_options.credentials_mode)
         .with_module_static_import_initiator_url(nested_context.base_url.clone())
@@ -898,9 +911,23 @@ fn child_context_handle_from_global<'s>(
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
-) -> Result<(String, String), String> {
+) -> Result<
+    (
+        String,
+        String,
+        crate::content_security_policy::InheritedContentSecurityPolicy,
+    ),
+    String,
+> {
+    let blob_policy = (script_url.scheme() == "blob")
+        .then(|| crate::blob::object_url_content_security_policy(script_url.as_str()));
     if let Some(source) = materialize_worker_script_source(script_url)? {
-        return Ok((script_url.to_string(), source));
+        let policy = if let Some(policy) = blob_policy {
+            policy.unwrap_or_default()
+        } else {
+            context.content_security_policy_snapshot.clone()
+        };
+        return Ok((script_url.to_string(), source, policy));
     }
     let loader = context.loader.clone();
     let resource_url = worker_script_resource_url(script_url);
@@ -928,9 +955,25 @@ fn materialize_nested_worker_script_source(
         response.body_bytes(),
     )?;
     let (head, body) = response.into_text_parts();
+    let policy = crate::content_security_policy::InheritedContentSecurityPolicy {
+        self_url: Some(head.final_url.clone()),
+        header_policies: crate::content_security_policy::content_security_policy_headers(
+            &head.headers,
+        ),
+        report_only_policies:
+            crate::content_security_policy::content_security_policy_report_only_headers(
+                &head.headers,
+            ),
+        reporting_endpoints:
+            crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
+                &head.headers,
+                &head.final_url,
+            ),
+        meta_policies: Vec::new(),
+    };
     let mut final_url = head.final_url;
     final_url.set_fragment(script_url.fragment());
-    Ok((final_url.to_string(), body))
+    Ok((final_url.to_string(), body, policy))
 }
 
 fn worker_script_inherits_parent_service_worker_controller(script_url: &Url) -> bool {
