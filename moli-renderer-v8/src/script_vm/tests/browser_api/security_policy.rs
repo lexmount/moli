@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn fetch_csp_violations_preserve_each_call_location_and_report_identity() {
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-source-location.test/page.html");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::CspReport),
+        );
+        let policies = ["connect-src 'none'; report-uri /report".to_owned()];
+        if enforce {
+            vm.set_response_content_security_policies(&policies);
+        } else {
+            vm.set_response_content_security_report_only_policies(&policies);
+        }
+        vm.eval(
+            r#"
+globalThis.fetchCspLocations = [];
+document.addEventListener('securitypolicyviolation', e => {
+  fetchCspLocations.push([e.sourceFile, e.lineNumber, e.columnNumber]);
+});
+for (let i = 0; i < 5; i++) { fetch('data:text/plain,blocked').catch(() => {}); }
+fetch('data:text/plain,blocked').catch(() => {});
+//# sourceURL=https://fetch-source-location.test/caller.js?secret#fragment
+"#,
+        )
+        .expect("fetch call locations should be captured synchronously");
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .pending_window_csp_report_execution_contexts_for_test()
+                .len(),
+            2,
+            "different call locations must produce distinct reports, enforce={enforce}"
+        );
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        let locations: Vec<(String, i32, i32)> =
+            serde_json::from_str(&vm.eval("JSON.stringify(fetchCspLocations)").unwrap()).unwrap();
+        assert_eq!(locations.len(), 6);
+        assert!(locations.iter().all(|(url, line, column)| url
+            == "https://fetch-source-location.test/caller.js"
+            && *line > 0
+            && *column > 0));
+        assert!(
+            locations[..5]
+                .iter()
+                .all(|location| location == &locations[0])
+        );
+        assert_ne!(locations[0].1, locations[5].1);
+    }
+}
+
+#[test]
 fn inline_script_reports_every_policy_and_only_enforced_policies_block() {
     let policies = [
         "script-src 'nonce-allowed' 'report-sample'".to_owned(),

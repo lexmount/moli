@@ -2778,6 +2778,66 @@ fn main_document_open_preserves_ordinary_and_keepalive_fetches() {
 }
 
 #[test]
+fn fetch_csp_redirect_reports_initial_url_without_a_script_location() {
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-csp-redirect.test/page.html");
+        vm.eval(
+            r#"
+globalThis.redirectCspEvents = [];
+document.addEventListener('securitypolicyviolation', e => {
+  redirectCspEvents.push([e.blockedURI, e.sourceFile, e.lineNumber, e.columnNumber]);
+});
+"#,
+        )
+        .unwrap();
+        let policies = vec!["connect-src 'self'".to_owned()];
+        let policy = if enforce {
+            crate::document_runtime::DocumentPolicyContainer {
+                response_content_security_policies: policies,
+                ..Default::default()
+            }
+        } else {
+            crate::document_runtime::DocumentPolicyContainer {
+                response_content_security_report_only_policies: policies,
+                ..Default::default()
+            }
+        };
+        let request_url = Url::parse("https://fetch-csp-redirect.test/request?public").unwrap();
+        let final_url = Url::parse("https://private-redirect.test/secret?token").unwrap();
+        let registered = vm
+            .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+                Ok(register_pending_window_fetch_with_connect_policy_for_test(
+                    scope,
+                    unsafe { &mut *host_ptr },
+                    false,
+                    policy,
+                    request_url.clone(),
+                ))
+            })
+            .unwrap();
+        vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            internal_id: registered.0,
+            request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
+            request_headers: Vec::new(),
+            request_body: None,
+            response_status_text: Some("OK".to_owned()),
+            skip_fetch_security_validation: true,
+            response_filter: None,
+            network_error_text: None,
+            result: Ok(redirected_fetch_response(&request_url, final_url)),
+        })
+        .unwrap();
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify(redirectCspEvents)").unwrap(),
+            r#"[["https://fetch-csp-redirect.test/request?public","",0,0]]"#,
+            "redirect CSP fields, enforce={enforce}",
+        );
+    }
+}
+
+#[test]
 fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     let mut vm = new_storage_test_vm("https://main-fetch-csp-owner.test/source-document");
     vm.set_fetch_subresource_interception(

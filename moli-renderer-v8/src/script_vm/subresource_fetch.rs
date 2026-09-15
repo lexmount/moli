@@ -126,7 +126,7 @@ fn document_connect_csp_redirect_failure_message<'s>(
 
     if let Some(fetch) = pending.continuation.window_fetch() {
         let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-        if let Some(violation) = fetch.connect_policy().report_only_violation(
+        if let Some(mut violation) = fetch.connect_policy().report_only_violation(
             &pending.info.document_url,
             final_url,
             redirect_status,
@@ -135,10 +135,11 @@ fn document_connect_csp_redirect_failure_message<'s>(
                 scope,
                 context_host,
                 fetch.csp_report_context(),
-                &violation,
+                &pending.info.url,
+                &mut violation,
             );
         }
-        let violation = fetch.connect_policy().enforce_violation(
+        let mut violation = fetch.connect_policy().enforce_violation(
             &pending.info.document_url,
             final_url,
             redirect_status,
@@ -147,7 +148,8 @@ fn document_connect_csp_redirect_failure_message<'s>(
             scope,
             context_host,
             fetch.csp_report_context(),
-            &violation,
+            &pending.info.url,
+            &mut violation,
         );
         return Some(
             crate::document_runtime::document_content_security_policy_error_message(
@@ -183,8 +185,14 @@ fn report_window_fetch_csp_redirect_violation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context_host: &Rc<RefCell<JsContextHost>>,
     report_context: &crate::network_host::WindowCspReportRequestContext,
-    violation: &crate::document_runtime::DocumentContentSecurityPolicyViolation,
+    request_url: &Url,
+    violation: &mut crate::document_runtime::DocumentContentSecurityPolicyViolation,
 ) {
+    // Redirect checks create a new violation without an executing script. Report
+    // the initial request URL, never the potentially private redirect target.
+    violation.blocked_uri = crate::content_security_policy::csp_url_for_report(request_url);
+    crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+        .apply_to(violation);
     crate::network_host::send_content_security_policy_violation_report_from_window_context(
         &mut context_host.borrow_mut(),
         report_context,
@@ -208,22 +216,29 @@ fn detached_window_fetch_csp_redirect_failure_message(
 ) -> Option<String> {
     let fetch = pending.continuation.window_fetch()?;
     let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-    if let Some(violation) = fetch.connect_policy().report_only_violation(
+    if let Some(mut violation) = fetch.connect_policy().report_only_violation(
         &pending.info.document_url,
         final_url,
         redirect_status,
     ) {
+        violation.blocked_uri =
+            crate::content_security_policy::csp_url_for_report(&pending.info.url);
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+            .apply_to(&mut violation);
         crate::network_host::send_content_security_policy_violation_report_from_window_context(
             &mut context_host.borrow_mut(),
             fetch.csp_report_context(),
             &violation,
         );
     }
-    let violation = fetch.connect_policy().enforce_violation(
+    let mut violation = fetch.connect_policy().enforce_violation(
         &pending.info.document_url,
         final_url,
         redirect_status,
     )?;
+    violation.blocked_uri = crate::content_security_policy::csp_url_for_report(&pending.info.url);
+    crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+        .apply_to(&mut violation);
     crate::network_host::send_content_security_policy_violation_report_from_window_context(
         &mut context_host.borrow_mut(),
         fetch.csp_report_context(),

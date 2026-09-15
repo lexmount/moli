@@ -500,11 +500,13 @@ pub(crate) fn content_security_policy_violation_report_body(
             "original-policy": fields.original_policy,
             "disposition": fields.disposition.as_str(),
             "blocked-uri": fields.blocked_uri,
-            "source-file": fields.source_file,
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
     });
+    if !fields.source_file.is_empty() {
+        report["csp-report"]["source-file"] = json!(fields.source_file);
+    }
     if fields.line_number != 0 {
         report["csp-report"]["line-number"] = json!(fields.line_number);
     }
@@ -971,6 +973,28 @@ pub(crate) fn content_security_policy_source_file_for_report(source_file: &str) 
     source_url.set_query(None);
     source_url.set_fragment(None);
     source_url.to_string()
+}
+
+/// The script location available when a CSP violation is created.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContentSecurityPolicySourceLocation(Option<(String, i32, i32)>);
+
+impl ContentSecurityPolicySourceLocation {
+    pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        Self(current_script_violation_location(scope))
+    }
+
+    pub(crate) fn apply_to(&self, violation: &mut ContentSecurityPolicyUrlViolation) {
+        if let Some((source_file, line_number, column_number)) = &self.0 {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        } else {
+            violation.source_file.clear();
+            violation.line_number = 0;
+            violation.column_number = 0;
+        }
+    }
 }
 
 pub(crate) fn current_script_violation_location(
@@ -3719,6 +3743,20 @@ mod tests {
         assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
         assert_eq!(reporting[0]["body"]["lineNumber"], 12);
         assert_eq!(reporting[0]["body"]["columnNumber"], 34);
+
+        ContentSecurityPolicySourceLocation::default().apply_to(&mut violation);
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        for key in ["source-file", "line-number", "column-number"] {
+            assert!(legacy["csp-report"].get(key).is_none());
+        }
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        for key in ["sourceFile", "lineNumber", "columnNumber"] {
+            assert!(reporting[0]["body"].get(key).is_none());
+        }
     }
 
     #[test]
