@@ -734,7 +734,6 @@ pub(super) enum LifecycleProgress {
 pub(super) struct ServiceWorkerQueuedLaunch {
     pub(super) params: ServiceWorkerLaunchParams,
     pub(super) host: SharedRendererServiceWorkerHost,
-    pub(super) lifecycle_notifications: Vec<ServiceWorkerLifecycleNotificationDelivery>,
     pub(super) preloaded_script: Option<LoadedServiceWorkerScript>,
 }
 

@@ -180,9 +180,6 @@ impl ServiceWorkerRuntimeService {
             &mut launch,
             debugger_release_consumed,
         );
-        for notification in launch.lifecycle_notifications {
-            notification.send();
-        }
         launch
             .host
             .start_loading(self.clone(), launch.params, launch.preloaded_script);
@@ -483,7 +480,6 @@ impl ServiceWorkerRuntimeService {
                             Some(ServiceWorkerQueuedLaunch {
                                 params,
                                 host,
-                                lifecycle_notifications: Vec::new(),
                                 preloaded_script: None,
                             }),
                             None,
@@ -1616,9 +1612,6 @@ fn service_worker_fetch_request_is_navigation_destination(
 #[cfg(not(feature = "devtools"))]
 impl ServiceWorkerRuntimeService {
     pub(super) fn start_queued_launch(&self, launch: ServiceWorkerQueuedLaunch) {
-        for notification in launch.lifecycle_notifications {
-            notification.send();
-        }
         launch
             .host
             .start_loading(self.clone(), launch.params, launch.preloaded_script);
