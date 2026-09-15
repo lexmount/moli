@@ -42,6 +42,7 @@ struct WorkerResourceLoaderAuthority {
     state: Mutex<WorkerResourceLoaderState>,
     loads: ResourceLoadRegistry,
     interception: Mutex<Option<crate::network::interception_output::ResourceInterceptionContext>>,
+    csp_reports: crate::content_security_policy::ContentSecurityPolicyReports,
 }
 
 impl Drop for WorkerResourceLoaderAuthority {
@@ -85,6 +86,7 @@ impl WorkerResourceLoader {
                 state: Mutex::new(WorkerResourceLoaderState::Active),
                 loads,
                 interception: Mutex::new(None),
+                csp_reports: Default::default(),
             }),
         }
     }
@@ -121,6 +123,12 @@ impl WorkerResourceLoader {
     /// Worker lifecycle capability.
     pub(crate) fn request_client(&self) -> &ResourceRequestClient {
         &self.request_client
+    }
+
+    pub(crate) fn content_security_policy_reports(
+        &self,
+    ) -> &crate::content_security_policy::ContentSecurityPolicyReports {
+        &self.authority.csp_reports
     }
 
     pub(crate) fn begin_detach(&self) -> bool {
