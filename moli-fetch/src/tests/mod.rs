@@ -1512,6 +1512,48 @@ async fn fetch_raw_stream_finishes_null_body_status_without_connection_close() -
 }
 
 #[tokio::test]
+async fn fetch_redirects_recompute_bodyless_put_content_length() -> Result<()> {
+    for status in [301, 302, 303, 307, 308] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(status, "Redirect").with_header("Location", "/final"),
+            ScriptedResponse::ok("done"),
+        ]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let response = client
+            .fetch_raw(Request::new(
+                "PUT",
+                &server.url_path("/start"),
+                None,
+                vec![],
+            )?)
+            .await?;
+        assert_eq!(response.status, 200);
+        assert!(response.redirected);
+        let requests = server.requests();
+        server.shutdown();
+        assert_eq!(requests.len(), 2, "{status}: {requests:?}");
+        let final_method = if status == 303 { "GET" } else { "PUT" };
+        for (request, method, path) in [
+            (&requests[0], "PUT", "/start"),
+            (&requests[1], final_method, "/final"),
+        ] {
+            assert!(request.starts_with(&format!("{method} {path} HTTP/1.1\r\n")));
+            assert_eq!(
+                request_head_header_value(request, "content-length"),
+                if method == "PUT" { Some("0") } else { None },
+                "{status}: {request}"
+            );
+            assert_eq!(request_head_header_value(request, "content-type"), None);
+            assert_eq!(
+                request_head_header_value(request, "transfer-encoding"),
+                None
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn fetch_redirect_303_rewrites_post_to_get_and_drops_body_headers() -> Result<()> {
     let server = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::status(303, "See Other").with_header("Location", "/final"),

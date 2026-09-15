@@ -627,8 +627,9 @@ pub(crate) fn configure_easy<H: Handler>(
         method => {
             easy.custom_request(method)
                 .with_context(|| anyhow!("failed to configure {method} request"))?;
-            if let Some(ref body) = request.body {
-                easy.post_fields_copy(body)
+            // Fetch requires Content-Length: 0 for a bodyless PUT, just as for POST.
+            if request.body.is_some() || method == "PUT" {
+                easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
                     .context("failed to set custom request body")?;
             }
         }
@@ -685,13 +686,16 @@ pub(crate) fn configure_easy<H: Handler>(
             has_headers = true;
         }
     }
-    if request.method.eq_ignore_ascii_case("POST") && !has_content_type_header {
+    if (request.method.eq_ignore_ascii_case("POST")
+        || (request.method == "PUT" && request.body.is_none()))
+        && !has_content_type_header
+    {
         // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies. Browser fetch/sendBeacon only send Content-Type when
+        // for POST bodies and bodyless PUT requests. Browser requests only send Content-Type when
         // BodyInit or caller headers produce one, so suppress curl's transport default.
         headers
             .append("Content-Type:")
-            .context("failed to suppress curl default POST content-type")?;
+            .context("failed to suppress curl default content-type")?;
         has_headers = true;
     }
 
