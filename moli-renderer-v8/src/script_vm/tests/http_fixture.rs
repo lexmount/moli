@@ -36,15 +36,21 @@ pub(super) struct StaticHttpServer {
 
 impl StaticHttpServer {
     pub(super) async fn spawn(expected_requests: usize) -> Self {
+        const BODY: &str = "<!doctype html><body>child fixture</body>";
+        Self::spawn_with_bodies(vec![BODY.to_owned(); expected_requests]).await
+    }
+
+    pub(super) async fn spawn_with_bodies(response_bodies: Vec<String>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind static HTTP test server");
         let address = listener
             .local_addr()
             .expect("read static HTTP test server address");
+        let expected_requests = response_bodies.len();
         let task = tokio::spawn(async move {
             let mut requests = Vec::with_capacity(expected_requests);
-            for _ in 0..expected_requests {
+            for body in response_bodies {
                 let (mut socket, _) = listener
                     .accept()
                     .await
@@ -119,12 +125,11 @@ impl StaticHttpServer {
                     headers,
                 });
 
-                const BODY: &str = "<!doctype html><body>child fixture</body>";
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BODY}",
-                            BODY.len()
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
                         )
                         .as_bytes(),
                     )

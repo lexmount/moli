@@ -11659,7 +11659,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["worker", "xhr", "xmlhttprequest"]
-notes = "Manual smoke port for dedicated worker XMLHttpRequest responseType=json, responseType=arraybuffer, and responseType=blob using the existing focused fixture routes, responseText InvalidStateError for non-text responseType values, Window-only responseXML exposure, responseType LOADING/DONE InvalidStateError preservation, plus worker-specific responseType=document ignore semantics and invalid responseType TypeError preservation."
+notes = "Manual smoke port for dedicated worker XMLHttpRequest responseType=json, responseType=arraybuffer, and responseType=blob using the existing focused fixture routes, responseText InvalidStateError for non-text responseType values, Window-only responseXML exposure, responseType LOADING/DONE InvalidStateError preservation, plus worker-specific responseType=document ignore semantics and invalid responseType assignments preserving the previous value without throwing."
 
 [[test]]
 id = "worker-xhr-redirect-error-basic"
