@@ -1284,7 +1284,12 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .set_script_already_started(handle, true);
                     let _ = self.scheduler.grant_parse_visible_reevaluation_credit();
                 } else if failure.is_external_source_failure() {
-                    page_vm.vm_mut().queue_script_preparation_error(handle)?;
+                    let runtime = &page_vm.vm().document_runtime;
+                    if runtime.dom_host().owner_document_handle(handle)
+                        == Some(runtime.document_handle())
+                    {
+                        page_vm.vm_mut().queue_script_preparation_error(handle)?;
+                    }
                 } else {
                     page_vm
                         .vm_mut()

@@ -108,6 +108,12 @@ impl JsContextHost {
         work: &PendingChildDynamicDocumentScript,
         realm_id: FrameRealmId,
     ) -> Option<FrameDocumentDynamicClassicScriptExecutionAction> {
+        let document = self
+            .frame_owner_current_child_snapshot(work.child_handle)?
+            .document_handle;
+        if self.dom_host().owner_document_handle(work.script_handle) != Some(document) {
+            return None;
+        }
         let current_realm_id = self
             .frame_owner_store
             .current_materialized_realm_id_for_document_task_owner(work.owner);
