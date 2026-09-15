@@ -257,6 +257,49 @@ async fn worker_json_imports_accept_text_json_response_mime() {
 }
 
 #[tokio::test]
+async fn worker_json_imports_use_the_extracted_response_mime() {
+    ensure_v8();
+    let cases: &[(&[&str], bool)] = &[
+        (&["text/plain", "application/json"], true),
+        (&["text/plain, application/json"], true),
+        (&["application/json", "invalid", "*/*"], true),
+        (&["application/json", "text/plain"], false),
+        (&["application/json, text/plain"], false),
+        (&[r#"text/plain; a=",application/json""#], false),
+        (&[r#"text/plain; a=""#, "application/json"], false),
+        (&["applic(ation/vnd.api+json"], false),
+        (&["application/vnd)api+json"], false),
+        (&[], false),
+    ];
+    for (values, accepts) in cases {
+        let mut server = ModuleSourceServer::start().await;
+        let mut handle = server.worker(
+            "import('./module.json', {with: {type: 'json'}}).then(m => postMessage(m.default.answer), e => postMessage(e.name));".into(),
+            WorkerScriptKind::Module,
+        );
+        let mut stream = server.request("/worker/module.json").await;
+        let fields: String = values
+            .iter()
+            .map(|value| format!("Content-Type: {value}\r\n"))
+            .collect();
+        let body = r#"{"answer":42}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n{fields}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        drop(stream);
+        assert_eq!(
+            recv_post_json(&mut handle).await,
+            if *accepts { "42" } else { r#""TypeError""# },
+            "{values:?}"
+        );
+        handle.terminate_and_join();
+        server.assert_no_more_requests();
+    }
+}
+
+#[tokio::test]
 async fn worker_module_map_separates_json_from_javascript_or_wasm() {
     ensure_v8();
     for wasm in [true, false] {
