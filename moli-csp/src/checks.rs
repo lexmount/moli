@@ -442,7 +442,7 @@ pub fn content_security_policy_trusted_types_sink_violation_with_disposition_and
         if !policy_requires_trusted_types_for_script(policy) {
             return None;
         }
-        let document_uri = protected_url.to_string();
+        let document_uri = csp_url_for_report(protected_url);
         Some(ContentSecurityPolicyUrlViolation {
             effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
             blocked_uri: "trusted-types-sink".to_owned(),
@@ -506,7 +506,7 @@ pub fn content_security_policy_inline_script_element_violation_with_disposition_
     if inline_script_element_source_list_allows(source_list.clone(), source, request) {
         return None;
     }
-    let document_uri = protected_url.to_string();
+    let document_uri = csp_url_for_report(protected_url);
     Some(ContentSecurityPolicyUrlViolation {
         effective_directive,
         blocked_uri: kind.blocked_uri().to_owned(),
@@ -542,7 +542,7 @@ pub fn content_security_policy_inline_style_element_violation_with_disposition_a
     if inline_style_element_source_list_allows(source_list.clone(), source, request) {
         return None;
     }
-    let document_uri = protected_url.to_string();
+    let document_uri = csp_url_for_report(protected_url);
     Some(ContentSecurityPolicyUrlViolation {
         effective_directive,
         blocked_uri: kind.blocked_uri().to_owned(),
@@ -577,7 +577,7 @@ pub fn content_security_policy_non_url_violation_with_source(
     if kind.source_list_allows(&source_list, source) {
         return None;
     }
-    let document_uri = protected_url.to_string();
+    let document_uri = csp_url_for_report(protected_url);
     Some(ContentSecurityPolicyUrlViolation {
         effective_directive,
         blocked_uri: kind.blocked_uri().to_owned(),

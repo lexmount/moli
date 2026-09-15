@@ -2235,6 +2235,23 @@ fn violation_report_body_uses_csp_report_shape() {
 }
 
 #[test]
+fn inline_script_violation_uses_the_sanitized_document_url() {
+    let document = request_url("https://author:secret@app.test/script.html#section");
+    let violation =
+        content_security_policy_inline_script_element_violation_with_disposition_and_reporting_endpoints(
+            &ContentSecurityPolicy::from("script-src 'none'"),
+            &document,
+            "void 0",
+            ContentSecurityPolicyScriptElementRequest::default(),
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        )
+        .expect("inline script should be blocked");
+    assert_eq!(violation.document_uri, "https://app.test/script.html");
+    assert_eq!(violation.source_file, "https://app.test/script.html");
+}
+
+#[test]
 fn reporting_api_report_body_uses_csp_violation_shape() {
     let violation = content_security_policy_url_violation_with_redirect_status(
         &["connect-src 'none'".into()],
