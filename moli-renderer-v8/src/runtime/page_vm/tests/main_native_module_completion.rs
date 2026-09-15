@@ -393,8 +393,9 @@ for (let index = 0; index < 2; index++) {
         assert_eq!(
             page_vm
                 .vm_mut()
-                .eval("__runtimeModuleFailureFanout.sort().join('|')")?,
-            "runtime-module-failure-0|runtime-module-failure-1"
+                .eval("__runtimeModuleFailureFanout.join('|')")?,
+            "runtime-module-failure-0|runtime-module-failure-1",
+            "the shared failure must preserve terminal readiness order across selected tasks"
         );
         assert_eq!(
             page_vm

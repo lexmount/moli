@@ -10,6 +10,8 @@ use super::{DynamicScriptEntry, DynamicScriptQueueKind, DynamicScriptReadyState}
 /// the earliest queue head may participate. The async queue exposes every
 /// ready entry independently. Lifecycle eligibility filters candidates in
 /// place; rejected entries are never copied into a second waiting queue.
+/// A failed graph is a ready result: it retains its ordered slot, or competes
+/// by readiness in the async lane, without waiting for later module fetches.
 #[derive(Debug, Default)]
 pub(super) struct DynamicScriptLanes {
     pub(super) in_order: VecDeque<DynamicScriptEntry>,
@@ -30,8 +32,6 @@ impl DynamicScriptLanes {
         &mut self,
         predicate: &mut impl FnMut(&PreparedScript) -> bool,
     ) -> Option<DynamicScriptEntry> {
-        self.rotate_blocked_module_in_order_failures();
-
         let in_order_front = self
             .next_in_order_front_queue_kind()
             .filter(|queue_kind| {
@@ -46,13 +46,6 @@ impl DynamicScriptLanes {
             .async_scripts
             .iter()
             .enumerate()
-            .filter(|(index, entry)| {
-                !Self::deferred_module_failure_is_blocked_by_later_module(
-                    &self.async_scripts,
-                    *index,
-                    entry,
-                )
-            })
             .filter(|(_, entry)| Self::entry_is_eligible(entry, predicate))
             .filter_map(|(index, entry)| {
                 Self::ready_order(entry).map(|order| {
@@ -106,42 +99,6 @@ impl DynamicScriptLanes {
             | DynamicScriptReadyState::SuspendedModuleScriptGraph { .. }
             | DynamicScriptReadyState::SuspendedModuleScriptEvaluation { .. } => false,
         }
-    }
-
-    fn rotate_blocked_module_in_order_failures(&mut self) {
-        let len = self.module_in_order.len();
-        for _ in 0..len {
-            let Some(front) = self.module_in_order.front() else {
-                return;
-            };
-            if !Self::deferred_module_failure_is_blocked_by_later_module(
-                &self.module_in_order,
-                0,
-                front,
-            ) {
-                return;
-            }
-            let Some(entry) = self.module_in_order.pop_front() else {
-                return;
-            };
-            self.module_in_order.push_back(entry);
-        }
-    }
-
-    fn deferred_module_failure_is_blocked_by_later_module(
-        queue: &VecDeque<DynamicScriptEntry>,
-        index: usize,
-        entry: &DynamicScriptEntry,
-    ) -> bool {
-        let DynamicScriptReadyState::Failed { failure, .. } = &entry.ready_state else {
-            return false;
-        };
-        if !failure.is_deferrable_module() {
-            return false;
-        }
-        queue.iter().skip(index + 1).any(|later| {
-            later.script.kind == ScriptKind::Module && later.script.position > entry.script.position
-        })
     }
 
     fn next_in_order_front_queue_kind(&self) -> Option<DynamicScriptQueueKind> {
