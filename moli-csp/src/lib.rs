@@ -3,6 +3,7 @@
 //! across documents, workers, and request snapshots.
 
 mod checks;
+mod inheritance;
 mod integrity;
 mod policy;
 mod reporting;
@@ -16,3 +17,5 @@ pub use policy::{
 };
 pub use reporting::*;
 pub use types::*;
+
+pub use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
