@@ -3,14 +3,14 @@ use tokio::net::TcpStream;
 
 // Keep responses under the test's control: a source import must settle even
 // while the evaluation graph's dependency response is withheld.
-struct ModuleSourceServer {
-    url: String,
+pub(super) struct ModuleSourceServer {
+    pub(super) url: String,
     requests: tokio::sync::mpsc::UnboundedReceiver<(String, TcpStream)>,
     task: JoinHandle<()>,
 }
 
 impl ModuleSourceServer {
-    async fn start() -> Self {
+    pub(super) async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
@@ -37,16 +37,25 @@ impl ModuleSourceServer {
         }
     }
 
-    fn worker(&self, source: String, kind: WorkerScriptKind) -> WorkerTestHandle {
+    pub(super) fn worker(&self, source: String, kind: WorkerScriptKind) -> WorkerTestHandle {
+        self.worker_at(source, kind, "main.js")
+    }
+
+    pub(super) fn worker_at(
+        &self,
+        source: String,
+        kind: WorkerScriptKind,
+        name: &str,
+    ) -> WorkerTestHandle {
         spawn_worker_with_request_client_and_kind(
             source,
-            format!("{}/worker/main.js", self.url),
+            format!("{}/worker/{name}", self.url),
             worker_test_request_client(),
             kind,
         )
     }
 
-    async fn request(&mut self, path: &str) -> TcpStream {
+    pub(super) async fn request(&mut self, path: &str) -> TcpStream {
         let (actual, stream) = timeout(TIMEOUT, self.requests.recv())
             .await
             .unwrap()
@@ -55,16 +64,31 @@ impl ModuleSourceServer {
         stream
     }
 
-    async fn respond(&mut self, path: &str, status: &str, mime: &str, body: &str) {
+    pub(super) async fn respond(&mut self, path: &str, status: &str, mime: &str, body: &str) {
         Self::write(self.request(path).await, status, mime, body).await;
     }
 
-    async fn write(mut stream: TcpStream, status: &str, mime: &str, body: &str) {
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    pub(super) async fn respond_bytes(
+        &mut self,
+        path: &str,
+        status: &str,
+        mime: &str,
+        body: &[u8],
+    ) {
+        Self::write_bytes(self.request(path).await, status, mime, body).await;
+    }
+
+    async fn write(stream: TcpStream, status: &str, mime: &str, body: &str) {
+        Self::write_bytes(stream, status, mime, body.as_bytes()).await;
+    }
+
+    async fn write_bytes(mut stream: TcpStream, status: &str, mime: &str, body: &[u8]) {
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
-        stream.write_all(response.as_bytes()).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
     }
 
     async fn wasm(&mut self) {
@@ -77,7 +101,7 @@ impl ModuleSourceServer {
         .await;
     }
 
-    fn assert_no_more_requests(&mut self) {
+    pub(super) fn assert_no_more_requests(&mut self) {
         assert!(self.requests.try_recv().is_err(), "unexpected module fetch");
     }
 }

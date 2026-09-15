@@ -98,8 +98,7 @@ use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
     WorkerDevToolsHandle, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
     WorkerHandle, WorkerMessage, WorkerNetworkPolicy, WorkerParentErrorEventKind,
-    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
-    WorkerToParentMessage,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerToParentMessage,
 };
 use super::inspector_task_runner::{
     WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
@@ -108,12 +107,11 @@ use super::module_runtime::{
     WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
     WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
-    WorkerModuleGraphFetchRequest, WorkerModuleKind, WorkerModulePendingBootstrap,
-    WorkerModuleSource, evaluate_module_worker_bootstrap_source,
-    install_classic_worker_dynamic_module_runtime, resume_worker_dynamic_module_evaluation,
-    resume_worker_dynamic_module_fetch, run_next_worker_dynamic_module_import,
-    worker_dynamic_module_import_waits_for_fetch, worker_has_pending_dynamic_module_imports,
-    worker_has_runnable_dynamic_module_imports,
+    WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
+    evaluate_module_worker_bootstrap_source, install_classic_worker_dynamic_module_runtime,
+    resume_worker_dynamic_module_evaluation, resume_worker_dynamic_module_fetch,
+    run_next_worker_dynamic_module_import, worker_dynamic_module_import_waits_for_fetch,
+    worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
 
 pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
@@ -698,8 +696,7 @@ fn start_worker_module_graph_fetch(
         .with_credentials_mode(request.credentials_mode());
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();
-    let requested_module_type = request.module_type().map(str::to_owned);
-    let requested_kind = request.kind();
+    let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
     let response_policy = policy.clone();
     let response_resource_kind = resource_kind;
@@ -753,24 +750,11 @@ fn start_worker_module_graph_fetch(
                     request_credentials_mode,
                     Default::default(),
                 )?;
-                if requested_kind == WorkerModuleKind::WebAssembly {
-                    crate::worker::ensure_worker_wasm_module_mime(&response)?;
-                } else {
-                    match requested_module_type.as_deref() {
-                        Some("json") => crate::worker::ensure_worker_json_module_mime(&response)?,
-                        _ => crate::worker::ensure_worker_script_mime_acceptable(
-                            &response.final_url,
-                            &response.headers,
-                            response.body_bytes(),
-                        )
-                        .map_err(|error| {
-                            error.replace(
-                                "unsupported script MIME type",
-                                "unsupported module script MIME type",
-                            )
-                        })?,
-                    }
-                }
+                let response_kind = requested_module_type.response_kind(
+                    &response.final_url,
+                    &response.headers,
+                    response.body_bytes(),
+                )?;
                 let response_time_ms = response_started_at
                     .elapsed()
                     .as_millis()
@@ -784,13 +768,9 @@ fn start_worker_module_graph_fetch(
                     &body_bytes,
                     response_time_ms,
                 )
-                .with_kind(worker_script_resource_kind_for_module(requested_kind));
+                .with_kind(response_kind);
                 let final_url = head.final_url.clone();
-                let source = if requested_kind == WorkerModuleKind::WebAssembly {
-                    WorkerModuleSource::binary(body_bytes)
-                } else {
-                    WorkerModuleSource::text(moli_encoding::decode_utf8(&body_bytes))
-                };
+                let source = WorkerModuleSource::from_bytes(response_kind, body_bytes);
                 Ok(WorkerModuleFetchedSource::new(final_url, source)
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
@@ -858,14 +838,6 @@ fn start_worker_module_graph_fetch_batch(
                 .content_security_policy_snapshot_for_inheritance(),
             module_graph_fetch_tx.clone(),
         );
-    }
-}
-
-fn worker_script_resource_kind_for_module(kind: WorkerModuleKind) -> WorkerScriptResourceKind {
-    match kind {
-        WorkerModuleKind::JavaScript => WorkerScriptResourceKind::JavaScript,
-        WorkerModuleKind::Json => WorkerScriptResourceKind::JsonModule,
-        WorkerModuleKind::WebAssembly => WorkerScriptResourceKind::WebAssemblyModule,
     }
 }
 

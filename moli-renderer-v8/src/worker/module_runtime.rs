@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use super::global_scope::worker_current_script_url;
-use super::handle::{WorkerParentErrorEventKind, WorkerScriptResource};
+use super::handle::{WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind};
 use crate::content_security_policy::ContentSecurityPolicyUrlViolation;
 
 pub(super) type WorkerBootstrapError = (
@@ -279,6 +279,24 @@ impl WorkerModuleFetchedSource {
 }
 
 impl WorkerModuleSource {
+    pub(super) fn from_response_parts(
+        module_type: WorkerModuleType,
+        url: &Url,
+        headers: &[(String, String)],
+        bytes: Vec<u8>,
+    ) -> Result<Self, String> {
+        let kind = module_type.response_kind(url, headers, &bytes)?;
+        Ok(Self::from_bytes(kind, bytes))
+    }
+
+    pub(super) fn from_bytes(kind: WorkerScriptResourceKind, bytes: Vec<u8>) -> Self {
+        if kind == WorkerScriptResourceKind::WebAssemblyModule {
+            Self::binary(bytes)
+        } else {
+            Self::text(moli_encoding::decode_utf8(&bytes))
+        }
+    }
+
     pub(super) fn text(source: String) -> Self {
         Self::Text(source)
     }
@@ -1053,12 +1071,6 @@ fn advance_worker_dynamic_module_import(
     let module_url = resolve_worker_module_specifier(&job.specifier, &job.base_url)?;
     let module_key = worker_module_key_for_attributes(&module_url, &job.attributes)
         .map_err(|message| format!("{message} for dynamic import `{}`", job.specifier))?;
-    if job.phase == ModuleImportPhase::Source && module_key.kind != WorkerModuleKind::WebAssembly {
-        return Err(WorkerDynamicModuleImportError::syntax_error(format!(
-            "source-phase dynamic import `{}` does not resolve to a WebAssembly module",
-            job.specifier
-        )));
-    }
     if let Some(error) = graph.borrow().source_fetch_failure(&module_key) {
         return Err(WorkerDynamicModuleImportError::type_error(format!(
             "Failed to dynamically import module worker dependency `{module_url}`: {error}"
@@ -1082,7 +1094,7 @@ fn advance_worker_dynamic_module_import(
     let inherited_referrer_policy = graph.borrow().referrer_policy_for_url(&job.base_url);
     let root_entry = match existing_root_entry {
         Some(entry) => entry,
-        None => match load_worker_static_module_dependency(module_url)? {
+        None => match load_worker_static_module_dependency(module_url, module_key.module_type)? {
             WorkerModuleDependencyLoad::Source { url, source } => {
                 let key =
                     worker_module_key_for_attributes(&url, &job.attributes).map_err(|message| {
@@ -1389,23 +1401,28 @@ fn resolve_single_worker_dynamic_module_import(
         match job.phase {
             ModuleImportPhase::Evaluation => {
                 let module = v8::Local::new(scope, &record.module);
-                Some(module.get_module_namespace())
+                Ok(Some(module.get_module_namespace()))
             }
-            ModuleImportPhase::Source => {
-                let Some(wasm_record) = record.wasm_module.as_ref() else {
-                    reject_worker_dynamic_module_import(
-                        scope,
-                        job,
-                        WorkerDynamicModuleImportError::syntax_error(
-                            "source-phase dynamic import did not resolve to a WebAssembly module",
-                        ),
-                    );
-                    return;
-                };
-                wasm_record
-                    .source_module(scope)
-                    .map(v8::Local::<v8::Value>::from)
-            }
+            ModuleImportPhase::Source => record
+                .wasm_module
+                .as_ref()
+                .ok_or_else(|| {
+                    WorkerDynamicModuleImportError::syntax_error(
+                        "source-phase dynamic import did not resolve to a WebAssembly module",
+                    )
+                })
+                .map(|wasm_record| {
+                    wasm_record
+                        .source_module(scope)
+                        .map(v8::Local::<v8::Value>::from)
+                }),
+        }
+    };
+    let resolved_value = match resolved_value {
+        Ok(value) => value,
+        Err(error) => {
+            reject_worker_dynamic_module_import(scope, job, error);
+            return;
         }
     };
     let Some(resolved_value) = resolved_value else {
@@ -1508,7 +1525,7 @@ impl WorkerModuleBootstrapJob {
     }
 
     fn advance(&mut self, scope: &mut v8::PinScope<'_, '_>) -> WorkerModuleAdvance {
-        let root_key = worker_module_root_key_for_source(&self.root_url, &self.source);
+        let root_key = WorkerModuleKey::javascript_or_wasm(self.root_url.clone());
         let root_referrer_policy = self
             .runtime
             .graph
@@ -1591,7 +1608,7 @@ impl WorkerModuleBootstrapJob {
         if let Err(error) = self.finish_fetch(scope, request, completion) {
             return WorkerModuleAdvance::Failed(error);
         }
-        let root_key = worker_module_root_key_for_source(&self.root_url, &self.source);
+        let root_key = WorkerModuleKey::javascript_or_wasm(self.root_url.clone());
         let root_entry = match self.runtime.graph.borrow().entry_for_key(&root_key) {
             Some(entry) => entry,
             None => {
@@ -1620,13 +1637,6 @@ impl WorkerModuleBootstrapJob {
             }
             Err(error) => WorkerModuleAdvance::Failed(error),
         }
-    }
-}
-
-fn worker_module_root_key_for_source(url: &Url, source: &WorkerModuleSource) -> WorkerModuleKey {
-    match source {
-        WorkerModuleSource::Text(_) => WorkerModuleKey::java_script(url.clone()),
-        WorkerModuleSource::Binary(_) => WorkerModuleKey::webassembly(url.clone()),
     }
 }
 
@@ -1754,12 +1764,8 @@ impl WorkerModuleGraphFetchRequest {
         self.csp_source
     }
 
-    pub(super) fn module_type(&self) -> Option<&str> {
-        self.attributes.module_type()
-    }
-
-    pub(super) fn kind(&self) -> WorkerModuleKind {
-        self.key.kind
+    pub(super) fn module_type(&self) -> WorkerModuleType {
+        self.key.module_type
     }
 
     pub(super) fn credentials_mode(&self) -> RequestCredentialsMode {
@@ -1771,7 +1777,7 @@ impl WorkerModuleGraphFetchRequest {
     }
 
     pub(super) fn browser_request_metadata(&self) -> BrowserRequestMetadata {
-        worker_module_browser_request_metadata(self.key.kind, self.browser_request_metadata)
+        worker_module_browser_request_metadata(self.key.module_type, self.browser_request_metadata)
     }
 
     fn graph_browser_request_metadata(&self) -> BrowserRequestMetadata {
@@ -1780,12 +1786,12 @@ impl WorkerModuleGraphFetchRequest {
 }
 
 fn worker_module_browser_request_metadata(
-    kind: WorkerModuleKind,
+    module_type: WorkerModuleType,
     graph_metadata: BrowserRequestMetadata,
 ) -> BrowserRequestMetadata {
-    match kind {
-        WorkerModuleKind::Json => BrowserRequestMetadata::JsonModule,
-        WorkerModuleKind::JavaScript | WorkerModuleKind::WebAssembly => graph_metadata,
+    match module_type {
+        WorkerModuleType::Json => BrowserRequestMetadata::JsonModule,
+        WorkerModuleType::JavaScriptOrWebAssembly => graph_metadata,
     }
 }
 
@@ -1812,45 +1818,64 @@ struct WorkerModuleRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct WorkerModuleKey {
     url: Url,
-    kind: WorkerModuleKind,
+    module_type: WorkerModuleType,
     attributes: ModuleAttributesKey,
 }
 
 impl WorkerModuleKey {
-    fn java_script(url: Url) -> Self {
-        Self::java_script_with_attributes(url, ModuleAttributesKey::empty())
-    }
-
-    fn java_script_with_attributes(url: Url, attributes: ModuleAttributesKey) -> Self {
+    fn javascript_or_wasm(url: Url) -> Self {
         Self {
             url,
-            kind: WorkerModuleKind::JavaScript,
-            attributes,
+            module_type: WorkerModuleType::JavaScriptOrWebAssembly,
+            attributes: ModuleAttributesKey::empty(),
         }
     }
 
     fn json(url: Url, attributes: ModuleAttributesKey) -> Self {
         Self {
             url,
-            kind: WorkerModuleKind::Json,
+            module_type: WorkerModuleType::Json,
             attributes,
-        }
-    }
-
-    fn webassembly(url: Url) -> Self {
-        Self {
-            url,
-            kind: WorkerModuleKind::WebAssembly,
-            attributes: ModuleAttributesKey::empty(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum WorkerModuleKind {
-    JavaScript,
+pub(super) enum WorkerModuleType {
+    // HTML keys the module map by the requested type. JavaScript and Wasm
+    // share this entry; the fetched MIME type selects the compiled record.
+    JavaScriptOrWebAssembly,
     Json,
-    WebAssembly,
+}
+
+impl WorkerModuleType {
+    pub(super) fn response_kind(
+        self,
+        url: &Url,
+        headers: &[(String, String)],
+        bytes: &[u8],
+    ) -> Result<WorkerScriptResourceKind, String> {
+        match self {
+            Self::Json => {
+                super::module_mime::ensure_worker_json_module_mime_from_headers(headers)?;
+                Ok(WorkerScriptResourceKind::JsonModule)
+            }
+            Self::JavaScriptOrWebAssembly => {
+                if super::worker_response_has_webassembly_mime(headers) {
+                    return Ok(WorkerScriptResourceKind::WebAssemblyModule);
+                }
+                super::ensure_worker_script_mime_acceptable(url, headers, bytes).map_err(
+                    |error| {
+                        error.replace(
+                            "unsupported script MIME type",
+                            "unsupported module script MIME type",
+                        )
+                    },
+                )?;
+                Ok(WorkerScriptResourceKind::JavaScript)
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2051,16 +2076,15 @@ impl WorkerModuleGraph {
     ) -> Option<WorkerSyntheticModuleRecord> {
         let entry = self.entry_for_module(module)?;
         let record = &self.records[entry];
-        match record.key.kind {
-            WorkerModuleKind::Json => record
+        if let Some(wasm) = &record.wasm_module {
+            return Some(WorkerSyntheticModuleRecord::WebAssembly(wasm.clone()));
+        }
+        match record.key.module_type {
+            WorkerModuleType::Json => record
                 .source
                 .text_source()
                 .map(|source| WorkerSyntheticModuleRecord::Json(source.to_owned())),
-            WorkerModuleKind::WebAssembly => record
-                .wasm_module
-                .clone()
-                .map(WorkerSyntheticModuleRecord::WebAssembly),
-            WorkerModuleKind::JavaScript => None,
+            WorkerModuleType::JavaScriptOrWebAssembly => None,
         }
     }
 
@@ -2232,100 +2256,93 @@ fn resolve_worker_module_dependency(
     request: &WorkerModuleRequest,
     pending_keys: &mut HashSet<WorkerModuleKey>,
 ) -> WorkerModuleBootstrapResult<WorkerModuleGraphBuild> {
-    let dependency_url =
-        resolve_worker_module_specifier(&request.specifier, url).map_err(|message| {
+    let dependency_url = resolve_worker_module_specifier(&request.specifier, url).map_err(|error| {
             Box::new(worker_bootstrap_error(
-                scope,
-                url.as_str(),
-                &message,
-                WorkerParentErrorEventKind::Event,
-            ))
-        })?;
-    if request.phase == ModuleImportPhase::Source {
-        let dependency_key = worker_module_key_for_attributes(&dependency_url, &request.attributes)
-            .map_err(|message| {
-                Box::new(worker_bootstrap_error(
-                    scope,
-                    url.as_str(),
-                    &format!("{message} for import `{}`", request.specifier),
-                    WorkerParentErrorEventKind::Event,
-                ))
-            })?;
-        if dependency_key.kind != WorkerModuleKind::WebAssembly {
-            return Err(Box::new(worker_bootstrap_error(
                 scope,
                 url.as_str(),
                 &format!(
-                    "source-phase import `{}` does not resolve to a WebAssembly module",
+                    "Failed to resolve module worker dependency `{}`: {error}",
                     request.specifier
                 ),
                 WorkerParentErrorEventKind::Event,
-            )));
-        }
-    }
-    let (dependency_key, dependency_source) =
-        match load_worker_static_module_dependency(dependency_url).map_err(|message| {
+            ))
+        })?;
+    let dependency_key = worker_module_key_for_attributes(&dependency_url, &request.attributes)
+        .map_err(|message| {
             Box::new(worker_bootstrap_error(
                 scope,
                 url.as_str(),
-                &message,
+                &format!("{message} for import `{}`", request.specifier),
                 WorkerParentErrorEventKind::Event,
             ))
-        })? {
-            WorkerModuleDependencyLoad::Source { url, source } => {
-                let dependency_key = worker_module_key_for_attributes(&url, &request.attributes)
-                    .map_err(|message| {
+        })?;
+    let (dependency_key, dependency_source) = match load_worker_static_module_dependency(
+        dependency_url,
+        dependency_key.module_type,
+    )
+    .map_err(|message| {
+        Box::new(worker_bootstrap_error(
+            scope,
+            url.as_str(),
+            &message,
+            WorkerParentErrorEventKind::Event,
+        ))
+    })? {
+        WorkerModuleDependencyLoad::Source { url, source } => {
+            let dependency_key = worker_module_key_for_attributes(&url, &request.attributes)
+                .map_err(|message| {
+                    Box::new(worker_bootstrap_error(
+                        scope,
+                        url.as_str(),
+                        &format!("{message} for import `{}`", request.specifier),
+                        WorkerParentErrorEventKind::Event,
+                    ))
+                })?;
+            (dependency_key, source)
+        }
+        WorkerModuleDependencyLoad::NeedFetch(dependency_url) => {
+            let dependency_key =
+                worker_module_key_for_attributes(&dependency_url, &request.attributes).map_err(
+                    |message| {
                         Box::new(worker_bootstrap_error(
                             scope,
                             url.as_str(),
                             &format!("{message} for import `{}`", request.specifier),
                             WorkerParentErrorEventKind::Event,
                         ))
-                    })?;
-                (dependency_key, source)
+                    },
+                )?;
+            let existing_entry = graph.borrow().entry_for_key(&dependency_key);
+            if let Some(target_entry) = existing_entry {
+                graph.borrow_mut().add_dependency(
+                    entry,
+                    request.specifier.clone(),
+                    request.attributes.clone(),
+                    target_entry,
+                );
+                return Ok(WorkerModuleGraphBuild::Ready);
             }
-            WorkerModuleDependencyLoad::NeedFetch(dependency_url) => {
-                let dependency_key =
-                    worker_module_key_for_attributes(&dependency_url, &request.attributes)
-                        .map_err(|message| {
-                            Box::new(worker_bootstrap_error(
-                                scope,
-                                url.as_str(),
-                                &format!("{message} for import `{}`", request.specifier),
-                                WorkerParentErrorEventKind::Event,
-                            ))
-                        })?;
-                let existing_entry = graph.borrow().entry_for_key(&dependency_key);
-                if let Some(target_entry) = existing_entry {
-                    graph.borrow_mut().add_dependency(
-                        entry,
-                        request.specifier.clone(),
-                        request.attributes.clone(),
-                        target_entry,
-                    );
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                if !pending_keys.insert(dependency_key.clone()) {
-                    return Ok(WorkerModuleGraphBuild::Ready);
-                }
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
-                let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
-                return Ok(WorkerModuleGraphBuild::NeedFetches(
-                    WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
-                        fetch_id,
-                        dependency_key,
-                        fetch_initiator_url.clone(),
-                        csp_source,
-                        Some(entry),
-                        request.specifier.clone(),
-                        request.attributes.clone(),
-                        graph.borrow().credentials_mode(),
-                        referrer_policy,
-                        browser_request_metadata,
-                    )),
-                ));
+            if !pending_keys.insert(dependency_key.clone()) {
+                return Ok(WorkerModuleGraphBuild::Ready);
             }
-        };
+            let fetch_id = reserve_worker_module_graph_fetch_id(scope);
+            let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
+            return Ok(WorkerModuleGraphBuild::NeedFetches(
+                WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
+                    fetch_id,
+                    dependency_key,
+                    fetch_initiator_url.clone(),
+                    csp_source,
+                    Some(entry),
+                    request.specifier.clone(),
+                    request.attributes.clone(),
+                    graph.borrow().credentials_mode(),
+                    referrer_policy,
+                    browser_request_metadata,
+                )),
+            ));
+        }
+    };
     let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
     let target_entry = ensure_worker_module_entry(
         scope,
@@ -2429,18 +2446,10 @@ fn compile_worker_module_record(
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
 )> {
-    if matches!(key.kind, WorkerModuleKind::Json) {
+    if key.module_type == WorkerModuleType::Json {
         return compile_worker_synthetic_module_record(scope, source_url);
     }
-    if key.kind == WorkerModuleKind::WebAssembly {
-        let Some(bytes) = source.binary_source() else {
-            return Err(Box::new(worker_bootstrap_error(
-                scope,
-                source_url.as_str(),
-                "WebAssembly module worker source is not binary",
-                WorkerParentErrorEventKind::Event,
-            )));
-        };
+    if let Some(bytes) = source.binary_source() {
         return compile_worker_wasm_module_record(scope, bytes, source_url);
     }
     let Some(source) = source.text_source() else {
@@ -2668,16 +2677,21 @@ fn resolve_worker_module_specifier(specifier: &str, base_url: &Url) -> Result<Ur
 
 fn load_worker_static_module_dependency(
     dependency_url: Url,
+    module_type: WorkerModuleType,
 ) -> Result<WorkerModuleDependencyLoad, String> {
     match dependency_url.scheme() {
         "data" => {
-            let source = super::decode_data_url_script_source(
+            let (bytes, mime) = moli_web_mime::data_url_body_and_mime_type(dependency_url.as_str())
+                .ok_or_else(|| format!("Failed to load module worker dependency: invalid data URL `{dependency_url}`"))?;
+            let source = WorkerModuleSource::from_response_parts(
+                module_type,
                 &dependency_url,
-                "Failed to load module worker dependency",
+                &[("content-type".to_owned(), mime)],
+                bytes,
             )?;
             Ok(WorkerModuleDependencyLoad::Source {
                 url: dependency_url,
-                source: WorkerModuleSource::text(source),
+                source,
             })
         }
         "http" | "https" => Ok(WorkerModuleDependencyLoad::NeedFetch(dependency_url)),
@@ -2692,10 +2706,7 @@ fn worker_module_key_for_attributes(
     attributes: &ModuleAttributesKey,
 ) -> Result<WorkerModuleKey, String> {
     let Some(module_type) = attributes.module_type() else {
-        if url.path().to_ascii_lowercase().ends_with(".wasm") {
-            return Ok(WorkerModuleKey::webassembly(url.clone()));
-        }
-        return Ok(WorkerModuleKey::java_script(url.clone()));
+        return Ok(WorkerModuleKey::javascript_or_wasm(url.clone()));
     };
     match module_type {
         "json" => Ok(WorkerModuleKey::json(url.clone(), attributes.clone())),
