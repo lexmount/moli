@@ -337,6 +337,11 @@ pub(crate) fn html_element_constructor_with_early_sanity_trap<'s>(
     let handler = HtmlElementConstructorTrapHandlerDeclaration { construct }
         .bind(scope)
         .ok()?;
+    // Reading a constructor's prototype must not invoke an inherited Proxy trap.
+    let null_prototype = v8::null(scope).into();
+    if !handler.set_prototype(scope, null_prototype)? {
+        return None;
+    }
     v8::Proxy::new(scope, constructor.into(), handler)
 }
 
