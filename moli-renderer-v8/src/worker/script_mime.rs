@@ -60,21 +60,23 @@ mod tests {
     }
 
     #[test]
-    fn worker_script_mime_does_not_reject_blob_or_missing_content_type() {
+    fn worker_script_mime_rejects_missing_content_type() {
         let blob_url = Url::parse("blob:https://example.test/id").expect("valid url");
         let http_url = Url::parse("https://example.test/worker").expect("valid url");
 
-        assert!(ensure_worker_script_mime_acceptable(&blob_url, &[], b"").is_ok());
-        assert!(ensure_worker_script_mime_acceptable(&http_url, &[], b"").is_ok());
+        // Classic blob/data main scripts are materialized without this check;
+        // imported scripts and modules still require a JavaScript MIME type.
+        assert!(ensure_worker_script_mime_acceptable(&blob_url, &[], b"").is_err());
+        assert!(ensure_worker_script_mime_acceptable(&http_url, &[], b"").is_err());
     }
 
     #[test]
-    fn worker_script_mime_allows_invalid_content_type_through_script_context_default() {
+    fn worker_script_mime_rejects_invalid_content_type() {
         let url = Url::parse("https://example.test/worker").expect("valid url");
         let headers: Vec<(String, Vec<u8>)> =
             vec![("content-type".to_owned(), b"not a mime type".to_vec())];
 
-        assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_ok());
+        assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_err());
     }
 
     #[test]
