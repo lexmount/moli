@@ -18,7 +18,7 @@ use crate::script_vm::{
     ParserModuleEvaluationSettlement, ParserModuleTerminalDisposition,
     ParserOwnedModuleSuccessTerminal, PreparedModuleSuccessSettlement, PreparedScriptBodyActivity,
 };
-use crate::types::ScriptRun;
+use crate::types::{ScriptRun, ScriptSkipReason};
 
 use super::parser_owned_document_script::MainParserModuleExecution;
 use super::parser_task_completion::{
@@ -62,6 +62,48 @@ impl ModuleScriptCompletionOutcome {
     }
 }
 impl PageVm {
+    fn complete_moved_module_script(
+        &mut self,
+        mut continuation: ModuleScriptContinuation,
+        terminal_disposition: ParserModuleTerminalDisposition,
+    ) -> ModuleScriptCompletionOutcome {
+        let load_delay = continuation.take_main_document_load_delay_binding();
+        let dynamic_owner = continuation.dynamic_script_owner_id();
+        let script = continuation.script;
+        if let Some(owner_id) = dynamic_owner {
+            self.vm_mut()
+                .cancel_runtime_owned_script_load_delay_body(&script, owner_id);
+        }
+        if let Some(binding) = load_delay {
+            let _ = self
+                .vm_mut()
+                .enqueue_main_document_script_load_delay_settlement_best_effort(&script, binding);
+        }
+        let run = ScriptRun::skipped(
+            script.node_id,
+            script.kind,
+            script.mode,
+            script.source_kind,
+            script.url,
+            ScriptSkipReason::NotInMainDocument,
+        );
+        if terminal_disposition == ParserModuleTerminalDisposition::ReturnToSelectedParserTask {
+            ModuleScriptCompletionOutcome::TerminalForSelectedTask {
+                run,
+                terminal: ParserOwnedModuleSuccessTerminal::new(
+                    ParserModuleEvaluationSettlement::Completed,
+                    None,
+                    PreparedScriptBodyActivity::NotEntered,
+                ),
+            }
+        } else {
+            ModuleScriptCompletionOutcome::Completed {
+                run,
+                task_effect: MainParserContinuationTaskEffect::NotApplied,
+            }
+        }
+    }
+
     pub(super) fn complete_module_script_failure_for_runner(
         &mut self,
         script_continuation: ModuleScriptContinuation,
@@ -88,6 +130,13 @@ impl PageVm {
         prepared_activity: PreparedScriptBodyActivity,
         terminal_disposition: ParserModuleTerminalDisposition,
     ) -> ModuleScriptCompletionOutcome {
+        if matches!(prepared_activity, PreparedScriptBodyActivity::NotEntered)
+            && self
+                .vm()
+                .prepared_script_changed_documents(&script_continuation.script)
+        {
+            return self.complete_moved_module_script(script_continuation, terminal_disposition);
+        }
         let parser_owner = script_continuation
             .parser_document_owner()
             .map(MainParserDocumentOwner::task_owner);
@@ -151,6 +200,16 @@ impl PageVm {
         mut script_continuation: ModuleScriptContinuation,
         terminal_disposition: ParserModuleTerminalDisposition,
     ) -> Result<MainParserModuleExecution> {
+        if self
+            .vm()
+            .prepared_script_changed_documents(&script_continuation.script)
+        {
+            let (run, execution) = self
+                .complete_moved_module_script(script_continuation, terminal_disposition)
+                .into_parser_execution();
+            self.report.runs.push(run);
+            return Ok(execution);
+        }
         let Some(graph) = script_continuation.completed_graph.take() else {
             self.handle_module_script_continuation_graph_advance(
                 ModuleScriptContinuationGraphAdvance::Ready(Box::new(script_continuation)),

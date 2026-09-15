@@ -1126,6 +1126,114 @@ mod tests {
         }));
     }
 
+    fn assert_main_parser_blocking_source_failure_events(movement: &str, expected: &str) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let PhaseOnePageVmHarness {
+                mut page_vm,
+                loader: _,
+                state,
+            } = new_phase_one_page_vm_harness_for_test();
+            let body = create_connected_html_body_for_test(&mut page_vm);
+            let script_node = page_vm
+                .vm_mut()
+                .document_runtime
+                .dom_host_mut()
+                .create_parser_element_without_attributes(
+                    "script".to_owned(),
+                    "http://www.w3.org/1999/xhtml".to_owned(),
+                    None,
+                );
+            {
+                let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
+                assert!(dom_host.set_attribute(script_node, "src", "/missing.js"));
+                assert!(dom_host.set_attribute(
+                    script_node,
+                    "onerror",
+                    "window.__mainParserClassicFailureEvents.push('error:' + (document.currentScript === null)); queueMicrotask(() => window.__mainParserClassicFailureEvents.push('error-microtask'))"
+                ));
+                assert!(dom_host.append_child(body, script_node));
+            }
+            let _host_handle = page_vm
+                .vm_mut()
+                .document_runtime
+                .bind_parser_owned_script_handle_for_node(script_node);
+            page_vm
+                .vm_mut()
+                .eval("window.__mainParserClassicFailureEvents = []")
+                .expect("source failure event state should initialize");
+            page_vm.vm_mut().eval(&format!(r#"
+                (() => {{
+                    const script = document.querySelector('script');
+                    const foreign = document.implementation.createHTMLDocument('');
+                    {movement}
+                }})()
+            "#)).expect("source failure script movement should complete");
+
+            let task_owner = page_vm
+                .vm()
+                .current_main_document_task_owner()
+                .expect("main document task owner should exist");
+            let target = crate::document_script_scheduler::MainDocumentClassicScriptTarget::new(
+                task_owner,
+                script_node,
+            );
+            let failure: super::parser_blocking_task::MainParserBlockingClassicScriptSourceFailureAction =
+                crate::parser_script::action::ParserClassicScriptSourceFailureAction::new(
+                    target,
+                    crate::parser_script::payload::ParserClassicScriptSourceFailure {
+                        metadata: crate::parser_script::payload::ParserClassicScriptMetadata::new(
+                            script_node,
+                            1,
+                        ),
+                        script_url: Url::parse("https://example.test/missing.js")
+                            .expect("script URL"),
+                        error: "network failure".to_owned(),
+                        prepared_script: None,
+                        source_network_result: None,
+                    },
+                    None,
+                );
+            let mut pending_runner =
+                PendingParsingBlockingClassicScriptRunner::new_parser_blocking(Vec::new());
+            let parser_bridge =
+                crate::document_runtime::ParserConnectedScriptBridge::for_session(
+                    &state.parser_session,
+                );
+            let mut owner = super::parser_blocking_document_script::MainParserBlockingDocumentScriptOwner::new(
+                &mut page_vm,
+                &mut pending_runner,
+                parser_bridge,
+                "test source failure",
+            );
+
+            let outcome = crate::document_script_scheduler::ParserClassicDocumentScriptExecutionOwner::new(
+                &mut owner,
+            )
+            .run_source_failure(failure)
+            .await
+            .expect("main parser classic source failure should complete");
+
+            assert_eq!(
+                outcome,
+                crate::document_script_scheduler::DocumentScriptExecutionOutcome::Progressed,
+                "source failure should be consumed by the shared completion owner"
+            );
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("__mainParserClassicFailureEvents.join('|')")
+                    .expect("source failure events should evaluate"),
+                expected,
+                "source failure must check the preparation Document before dispatching error and settling reactions"
+            );
+        }));
+    }
+
     fn blocking_classic_is_stylesheet_gated_for_testing(
         live_runtime: &mut DocumentRuntime,
         discovered_blocking_stylesheet_inputs: &[DocumentOwnedBlockingStylesheetDiscoveryInput],
