@@ -199,7 +199,7 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
     );
 }
 
@@ -254,7 +254,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src-elem","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
     );
 }
 
@@ -274,8 +274,8 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
                 let matched = false;
                 addEventListener("securitypolicyviolation", event => {
                     matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
@@ -354,7 +354,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true}],"ran":true}"#
+        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true}],"ran":true}"#
     );
 }
 
@@ -374,8 +374,8 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
                 let matched = false;
                 addEventListener("securitypolicyviolation", event => {
                     matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
