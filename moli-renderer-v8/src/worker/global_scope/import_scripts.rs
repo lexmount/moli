@@ -137,12 +137,13 @@ fn check_import_script_csp(
     checked_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> Result<(), WorkerImportScriptError> {
-    let (report, enforce) = {
+    let (wake_tx, mut report, mut enforce) = {
         let state = state.borrow();
         let Some(protected_url) = state.current_script_url.as_ref() else {
             return Ok(());
         };
         (
+            state.worker_wake_tx.clone(),
             worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status(
                 &state, protected_url, checked_url, request_url, ContentSecurityPolicyResourceKind::WorkerScript, redirect_status,
             ),
@@ -151,14 +152,26 @@ fn check_import_script_csp(
             ),
         )
     };
+    // importScripts throws synchronously, but CSP events run in a later task.
+    // Capture the caller now, before its stack is lost or imported code runs.
+    if report.is_some() || enforce.is_some() {
+        let location =
+            crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope);
+        for violation in [&mut report, &mut enforce].into_iter().flatten() {
+            location.apply_to(violation);
+        }
+    }
     if let Some(violation) = report {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
     }
     if let Some(violation) = enforce {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-        return Err(WorkerImportScriptError::network(
-            worker_content_security_policy_error_message(&violation, "importScripts"),
+        let message = worker_content_security_policy_error_message(&violation, "importScripts");
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
         ));
+        return Err(WorkerImportScriptError::network(message));
     }
     Ok(())
 }
