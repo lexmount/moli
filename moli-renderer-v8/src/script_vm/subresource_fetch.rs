@@ -60,6 +60,9 @@ fn document_connect_csp_redirect_failure_message<'s>(
     }
 
     if let Some(fetch) = pending.continuation.window_fetch() {
+        if fetch.redirect_csp_state().was_checked(final_url) {
+            return None;
+        }
         let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
         if let Some(mut violation) = fetch.connect_policy().report_only_violation(
             &pending.info.document_url,
@@ -168,6 +171,9 @@ fn detached_window_fetch_csp_redirect_failure_message(
     final_url: &Url,
 ) -> Option<String> {
     let fetch = pending.continuation.window_fetch()?;
+    if fetch.redirect_csp_state().was_checked(final_url) {
+        return None;
+    }
     let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
     if let Some(mut violation) = fetch.connect_policy().report_only_violation(
         &pending.info.document_url,
@@ -524,6 +530,12 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. } => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("csp_violation"),
+                ..AsyncSubresourceTraceFields::default()
+            }
+        }
         AsyncSubresourceFetchEvent::Upload { internal_id, .. } => AsyncSubresourceTraceFields {
             event_kind: Some("upload"),
             internal_id: Some(*internal_id),

@@ -380,6 +380,7 @@ fn dispatch_service_worker_event_source<'s>(
         service_worker_fetch_request_metadata(&native_request),
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id: registered.internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
