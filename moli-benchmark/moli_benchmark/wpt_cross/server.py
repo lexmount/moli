@@ -37,6 +37,7 @@ import threading
 import time
 import uuid
 from html import escape as html_escape
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, unquote, urlparse, urlsplit, urlunsplit
@@ -71,6 +72,10 @@ http.client._MAXHEADERS = 512
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+XHR_RESPONSE_RESOURCE_PATHS = {
+    "/xhr/resources/status.py",
+    "/xhr/resources/last-modified.py",
+}
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
     "/fetch/api/resources/stash-take.py",
@@ -1602,6 +1607,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_xhr_response_resource():
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | {
@@ -1627,6 +1634,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_xhr_response_resource():
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path in FETCH_ABORT_RESOURCE_PATHS | {
@@ -1673,6 +1682,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_xhr_response_resource():
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(
@@ -1819,6 +1830,8 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_xhr_response_resource(emit_body=emit_body):
+                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == LINK_STYLESHEET_COUNTER_PATH:
@@ -2317,6 +2330,39 @@ def _make_handler(
                 b"export let delayedLoaded = true;",
                 emit_body=emit_body,
             )
+
+        def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
+                return self._serve_xhr_response_resource
+            raise AttributeError(name)
+
+        def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
+            parsed = urlparse(self.path)
+            path = unquote(parsed.path)
+            if path not in XHR_RESPONSE_RESOURCE_PATHS:
+                return False
+            try:
+                if path == "/xhr/resources/status.py":
+                    status, reason, content_type, body = _fetch_status_response(parsed.query)
+                    headers = [("X-Request-Method", self.command)]
+                else:
+                    source = wpt_root / "xhr/resources/well-formed.xml"
+                    modified = formatdate(source.stat().st_mtime, usegmt=True)
+                    body = source.read_text(encoding="utf-8").encode("utf-8")
+                    status, reason, content_type = 200, None, "application/xml"
+                    headers = [("Last-Modified", modified)]
+            except (ValueError, OSError, OverflowError):
+                self.send_error(500)
+                return True
+            # These upstream handlers can respond without consuming the upload.
+            # Close the connection so unread bytes cannot become another request.
+            self.close_connection = True
+            headers.append(("Connection", "close"))
+            self._send_bytes(
+                content_type, body, emit_body=emit_body, extra_headers=headers,
+                status_code=status, status_text=reason,
+            )
+            return True
 
         def _serve_fetch_abort_resource(
             self, path: str, query: str, *, emit_body: bool

@@ -45,8 +45,10 @@ media/canvas documents during the initial static baseline.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from itertools import chain
@@ -727,7 +729,25 @@ def _supported_wptserve_handler_references(
         "html/semantics/scripting-1/the-script-element/module/"
     ):
         supported += SUPPORTED_MODULE_DELAY_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None:
+        supported += _xhr_response_handler_reference_patterns(posixpath.dirname(rel) or ".")
     return supported
+
+
+@lru_cache(maxsize=None)
+def _xhr_response_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in ("status.py", "last-modified.py"):
+        resource = f"xhr/resources/{name}"
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
 
 
 def _has_unsupported_server_feature(
