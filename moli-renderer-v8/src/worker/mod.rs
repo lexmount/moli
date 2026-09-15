@@ -51,14 +51,15 @@ pub(crate) use global_scope::{
     try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
     worker_allows_wasm_code_generation_by_csp, worker_broadcast_channel_registry,
-    worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
-    worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
-    worker_global_origin, worker_message_port_registry, worker_message_port_wake_sender,
-    worker_message_port_wrapper, worker_notification_permission_state,
-    worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
-    worker_realm_secure_context_available, worker_service_worker_control_state, worker_storage_key,
-    worker_storage_partition_identity, worker_termination_requested,
-    worker_trusted_types_for_script_requirements,
+    worker_broadcast_channel_storage_key,
+    worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
+    worker_content_security_policy_snapshot,
+    worker_current_script_url, worker_global_is_closed, worker_global_origin,
+    worker_message_port_registry, worker_message_port_wake_sender, worker_message_port_wrapper,
+    worker_notification_permission_state, worker_opfs_directory_iterator_registry,
+    worker_opfs_handle_registry, worker_realm_secure_context_available,
+    worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
+    worker_termination_requested, worker_trusted_types_for_script_requirements,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
