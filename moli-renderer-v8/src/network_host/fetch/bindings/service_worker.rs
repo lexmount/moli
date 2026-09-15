@@ -99,6 +99,7 @@ pub(super) fn dispatch_service_worker_fetch(
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: host.window_fetch_redirect_check(internal_id),
         internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),
