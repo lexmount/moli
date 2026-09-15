@@ -3511,6 +3511,7 @@ impl ScriptVm {
         source: &str,
         source_url: &Url,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
+        let mut exception_id = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3520,6 +3521,31 @@ impl ScriptVm {
                 let try_catch = pin!(v8::TryCatch::new(scope));
                 let mut scope = try_catch.init();
 
+                let value = if key.kind() == ModuleKind::Json {
+                    let value = crate::module_runtime::parse_json_module(
+                        &mut scope,
+                        source,
+                        source_url.as_str(),
+                    )
+                    .ok_or_else(|| {
+                        if let Some(exception) = scope.exception() {
+                            match retain_module_exception(&mut scope, exception) {
+                                Ok(id) => exception_id = Some(id),
+                                Err(error) => return error,
+                            }
+                        }
+                        let message = scope
+                            .message()
+                            .map(|message| message.get(&scope).to_rust_string_lossy(&scope))
+                            .unwrap_or_else(|| "failed to parse JSON module".to_owned());
+                        anyhow::anyhow!("{message}")
+                    })?;
+                    crate::module_runtime::SyntheticTextModuleValue::Json(v8::Global::new(
+                        &scope, value,
+                    ))
+                } else {
+                    crate::module_runtime::SyntheticTextModuleValue::Css(source.to_owned())
+                };
                 let module_name = v8_string(&scope, source_url.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("failed to allocate v8 synthetic module name")
                 })?;
@@ -3536,14 +3562,23 @@ impl ScriptVm {
                     &mut scope,
                     module,
                     key.clone(),
-                    source,
+                    value,
                 );
                 let compiled_module = v8::Global::new(scope.as_ref(), module);
                 let entry = ModuleRecordEntry::new(key, compiled_module, Vec::new())
                     .with_synthetic_text_module_source(evaluation_source);
                 Ok((entry, identity))
             })
-            .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Compile, error.to_string()))
+            .map_err(|error| {
+                let error = ModuleLoadError::new(ModuleLoadStage::Compile, error.to_string());
+                if let Some(id) = exception_id {
+                    error
+                        .with_exception_id(id)
+                        .with_error_constructor(ScriptErrorConstructorKind::SyntaxError)
+                } else {
+                    error
+                }
+            })
     }
 
     pub(crate) fn instantiate_native_module_graph(
@@ -4638,13 +4673,14 @@ fn synthetic_text_module_evaluation_steps<'s>(
     else {
         return throw_synthetic_module_error(scope, "synthetic module source is not available");
     };
-    let source = record.source();
-    match record.key().kind() {
-        ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
-        ModuleKind::Css => {
+    match record.value() {
+        crate::module_runtime::SyntheticTextModuleValue::Json(value) => {
+            let value = v8::Local::new(scope, value);
+            set_synthetic_default_export(scope, module, value)
+        }
+        crate::module_runtime::SyntheticTextModuleValue::Css(source) => {
             evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
         }
-        _ => throw_synthetic_module_error(scope, "unexpected synthetic text module kind"),
     }
 }
 
@@ -4665,18 +4701,6 @@ fn wasm_synthetic_module_evaluation_steps<'s>(
     evaluate_wasm_synthetic_module(scope, module, wasm_record, |scope, import| {
         wasm_import_value(scope, module, import)
     })
-}
-
-fn evaluate_json_synthetic_module<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    module: v8::Local<'s, v8::Module>,
-    source: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let Some(json_source) = v8_string(scope, source) else {
-        return throw_synthetic_module_error(scope, "failed to allocate JSON module source");
-    };
-    let value = v8::json::parse(scope, json_source)?;
-    set_synthetic_default_export(scope, module, value)
 }
 
 fn evaluate_css_synthetic_module<'s>(
