@@ -3,6 +3,7 @@ use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
+mod json_parse;
 mod response_mime;
 mod source_phase;
 

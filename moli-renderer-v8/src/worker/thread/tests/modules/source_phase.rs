@@ -226,7 +226,7 @@ async fn worker_source_import_survives_concurrent_evaluation_graph_failure() {
     ensure_v8();
     for (status, body, expected_error) in [
         ("404 Not Found", "missing", "TypeError"),
-        ("200 OK", "export function {", "TypeError"),
+        ("200 OK", "export function {", "SyntaxError"),
         (
             "200 OK",
             "export function pm() {} throw new Error('evaluation failed');",
