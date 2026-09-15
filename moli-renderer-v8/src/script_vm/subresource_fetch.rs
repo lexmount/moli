@@ -125,6 +125,9 @@ fn document_connect_csp_redirect_failure_message<'s>(
     }
 
     if let Some(fetch) = pending.continuation.window_fetch() {
+        if fetch.redirect_csp_state().was_checked(final_url) {
+            return None;
+        }
         let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
         if let Some(mut violation) = fetch.connect_policy().report_only_violation(
             &pending.info.document_url,
@@ -215,6 +218,9 @@ fn detached_window_fetch_csp_redirect_failure_message(
     final_url: &Url,
 ) -> Option<String> {
     let fetch = pending.continuation.window_fetch()?;
+    if fetch.redirect_csp_state().was_checked(final_url) {
+        return None;
+    }
     let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
     if let Some(mut violation) = fetch.connect_policy().report_only_violation(
         &pending.info.document_url,
@@ -1556,6 +1562,7 @@ impl ScriptVm {
         let request_client = pending.load.request_client();
         let resource_task_runner = pending.load.task_runner();
         let dispatch = crate::service_worker_runtime::ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id,
             request: self._context_host.borrow().service_worker_fetch_request(
                 client_id,
@@ -4044,7 +4051,7 @@ impl ScriptVm {
     pub(super) fn spawn_running_subresource_fetch(
         &mut self,
         request_client: ResourceRequestClient,
-        request: moli_fetch::Request,
+        mut request: moli_fetch::Request,
         state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
@@ -4064,6 +4071,9 @@ impl ScriptVm {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
+            if let Some(check) = host.window_fetch_redirect_check(internal_id) {
+                request = request.with_redirect_check(check);
+            }
         }
         let request =
             crate::network_host::observe_async_xhr_upload(request, &completion_tx, internal_id);
@@ -4391,6 +4401,10 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                report_context,
+                violation,
+            } => self.report_async_fetch_csp_violation(&report_context, &violation),
             AsyncSubresourceFetchEvent::Upload { internal_id, event } => {
                 self.apply_async_xhr_upload_event(internal_id, event)
             }
@@ -4420,6 +4434,36 @@ impl ScriptVm {
         };
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
+    }
+
+    fn report_async_fetch_csp_violation(
+        &mut self,
+        report_context: &crate::network_host::WindowCspReportRequestContext,
+        violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        crate::network_host::send_content_security_policy_violation_report_from_window_context(
+            &mut self._context_host.borrow_mut(),
+            report_context,
+            violation,
+        );
+        let identity = report_context.identity();
+        if !self
+            ._context_host
+            .borrow()
+            .window_document_owner_is_current_for_dispatch_scope(
+                identity.owner(),
+                identity.dispatch_scope(),
+            )
+        {
+            return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+        }
+        self.with_default_context_scope(|scope, host_ptr| {
+            // SAFETY: the default context scope keeps this ScriptVm's host alive.
+            unsafe { &mut *host_ptr }.dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
+                scope, host_ptr, identity, violation,
+            );
+            Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+        })
     }
 
     fn apply_async_xhr_upload_event(
@@ -6412,6 +6456,12 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. } => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("csp_violation"),
+                ..AsyncSubresourceTraceFields::default()
+            }
+        }
         AsyncSubresourceFetchEvent::Upload { internal_id, .. } => AsyncSubresourceTraceFields {
             event_kind: Some("upload"),
             internal_id: Some(*internal_id),

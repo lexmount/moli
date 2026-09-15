@@ -245,6 +245,7 @@ impl ManualCorsRedirectState {
         {
             return Err("CORS redirect URL must not include credentials".to_owned());
         }
+        self.request.check_redirect_target(&next_url)?;
         if !moli_url::same_origin(&head.final_url, &next_url) {
             self.request
                 .request_headers

@@ -5,6 +5,7 @@ mod blob_url_entry;
 mod body;
 mod body_source;
 mod browser_response;
+mod csp_redirect;
 mod csp_reports;
 mod event_source;
 mod fetch;
@@ -68,6 +69,7 @@ pub(crate) use self::body_source::{
 pub(crate) use self::browser_response::{
     local_url_response, local_url_response_result, local_url_response_with_blob_entry,
 };
+pub(crate) use self::csp_redirect::FetchCspRedirectState;
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,

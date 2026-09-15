@@ -245,6 +245,7 @@ pub(super) struct PendingWindowFetchContinuation {
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
+    redirect_csp_state: crate::network_host::FetchCspRedirectState,
     redirect_mode: moli_fetch::RequestRedirectMode,
 }
 
@@ -264,6 +265,7 @@ impl PendingWindowFetchContinuation {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
+            redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
             connect_policy,
             csp_report_context,
             redirect_mode,
@@ -306,6 +308,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn csp_report_context(&self) -> &crate::network_host::WindowCspReportRequestContext {
         &self.csp_report_context
+    }
+
+    pub(super) fn redirect_csp_state(&self) -> &crate::network_host::FetchCspRedirectState {
+        &self.redirect_csp_state
     }
 
     pub(super) fn redirect_mode(&self) -> moli_fetch::RequestRedirectMode {
@@ -715,6 +721,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    /// The violation carries its source Document's reporting authority and
+    /// remains reportable after the originating fetch has settled or aborted.
+    ContentSecurityPolicyViolation,
     Upload {
         internal_id: u64,
     },
@@ -739,6 +748,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    ContentSecurityPolicyViolation {
+        report_context: Box<crate::network_host::WindowCspReportRequestContext>,
+        violation: Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    },
     Upload {
         internal_id: u64,
         event: moli_fetch::UploadEvent,
@@ -753,6 +766,9 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::ContentSecurityPolicyViolation { .. } => {
+                AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation
+            }
             Self::Upload { internal_id, .. } => AsyncSubresourceFetchEventTarget::Upload {
                 internal_id: *internal_id,
             },

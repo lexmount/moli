@@ -141,6 +141,27 @@ fn worker_network_result_parts<R>(
     )
 }
 
+fn worker_fetch_redirect_check(
+    state: &WorkerGlobalState,
+    fetch_id: u32,
+) -> Option<moli_fetch::RequestRedirectCheck> {
+    let pending = state.pending_fetches.get(&fetch_id)?;
+    if !pending.connect_policy.has_policies() {
+        return None;
+    }
+    let completion_tx = state.fetch_completion_tx.clone();
+    pending.redirect_csp_state.redirect_check(
+        pending.connect_policy.clone(),
+        pending.document_url.clone(),
+        pending.request_url.clone(),
+        move |violation| {
+            let _ = completion_tx.send(WorkerFetchEvent::ContentSecurityPolicyViolation(Box::new(
+                violation,
+            )));
+        },
+    )
+}
+
 pub(in crate::worker) fn spawn_worker_fetch_network(
     load: ResourceLoadLease,
     completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
@@ -161,6 +182,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     request_metadata: ServiceWorkerFetchRequestMetadata,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
     allow_headers_first: bool,
+    redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
     // Resolve local URLs before scheduling: fetch(url) already parsed and
     // captured its entry when JavaScript regains control and may revoke it.
@@ -209,6 +231,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     }
                     if let Some(auth) = auth {
                         request = request.with_auth(auth.into());
+                    }
+                    if let Some(check) = redirect_check {
+                        request = request.with_redirect_check(check);
                     }
                     if request.auth_requires_buffered_transport() || !request.follow_redirects {
                         match fetch_browser_subresource_with_preflight_headers_and_network_metadata(
@@ -391,9 +416,11 @@ fn spawn_worker_fetch_service_worker(
     redirect_mode: RequestRedirectMode,
     priority: Option<moli_fetch::FetchPriorityHint>,
     request_metadata: ServiceWorkerFetchRequestMetadata,
+    redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
     let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: redirect_check.clone(),
         internal_id: u64::from(fetch_id),
         request: ServiceWorkerFetchRequest {
             client_id,
@@ -462,6 +489,7 @@ fn spawn_worker_fetch_service_worker(
                 request_metadata,
                 None,
                 true,
+                redirect_check,
             ),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
@@ -705,6 +733,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         request_metadata,
         auth,
         allow_headers_first,
+        worker_fetch_redirect_check(&state.borrow(), fetch_id),
     );
 }
 
@@ -2213,6 +2242,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
+    let connect_policy = {
+        let state = state.borrow();
+        crate::document_runtime::DocumentConnectPolicySnapshot::from_policies(
+            state.content_security_policies.clone(),
+            state.content_security_report_only_policies.clone(),
+            state.content_security_reporting_endpoints.clone(),
+        )
+    };
     // Local URLs are resolved by the worker fetch task without interception.
     if !matches!(resolved_url.scheme(), "blob" | "data")
         && fetch_subresource_interception_enabled
@@ -2249,6 +2286,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 PendingWorkerFetch {
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
+                    redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
+                        &connect_policy,
+                    ),
+                    connect_policy,
                     credentials_mode,
                     request_mode,
                     redirect_mode,
@@ -2348,6 +2389,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 PendingWorkerFetch {
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
+                    redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
+                        &connect_policy,
+                    ),
+                    connect_policy,
                     credentials_mode,
                     request_mode,
                     redirect_mode,
@@ -2380,6 +2425,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             )
         };
 
+        let redirect_check = worker_fetch_redirect_check(&state.borrow(), fetch_id);
         if let Some((service_worker_runtime, service_worker_client_id)) = service_worker_controller
         {
             spawn_worker_fetch_service_worker(
@@ -2402,6 +2448,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 redirect_mode,
                 priority,
                 request_metadata,
+                redirect_check,
             );
         } else {
             spawn_worker_fetch_network(
@@ -2424,6 +2471,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 request_metadata,
                 None,
                 true,
+                redirect_check,
             );
         }
 
@@ -2548,6 +2596,11 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::ContentSecurityPolicyViolation(violation) => {
+            dispatch_worker_content_security_policy_violation_event_for_state(
+                scope, state, &violation,
+            );
+        }
         WorkerFetchEvent::Completion(completion) => {
             drain_worker_fetch_completion_result(scope, state, *completion)
         }
@@ -2581,6 +2634,9 @@ fn worker_fetch_response_csp_violations(
     Option<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
     Option<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
 ) {
+    if pending.redirect_csp_state.was_checked(&head.final_url) {
+        return (None, None);
+    }
     use crate::content_security_policy::{
         ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
     };

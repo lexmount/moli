@@ -1092,6 +1092,8 @@ pub(crate) struct WorkerOpfsCompletion {
 pub(super) struct PendingWorkerFetch {
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
     pub(super) document_url: Url,
+    pub(super) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
+    pub(super) redirect_csp_state: crate::network_host::FetchCspRedirectState,
     pub(super) credentials_mode: RequestCredentialsMode,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) redirect_mode: RequestRedirectMode,
@@ -1113,6 +1115,9 @@ pub(super) struct PendingWorkerFetch {
 }
 
 pub(super) enum WorkerFetchEvent {
+    ContentSecurityPolicyViolation(
+        Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    ),
     Completion(Box<WorkerFetchCompletion>),
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
