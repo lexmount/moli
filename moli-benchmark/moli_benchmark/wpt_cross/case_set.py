@@ -869,6 +869,8 @@ def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[r
         "service-workers/service-worker/resources/" + name
         for name in (
             "redirect.py", "update-worker.py", "update-worker-from-file.py",
+            "mime-type-worker.py", "import-mime-type-worker.py", "malformed-worker.py",
+            "invalid-chunked-encoding.py", "invalid-chunked-encoding-with-flush.py",
             "update-during-installation-worker.py",
             "import-scripts-version.py", "import-scripts-get.py", "import-scripts-echo.py",
             "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
