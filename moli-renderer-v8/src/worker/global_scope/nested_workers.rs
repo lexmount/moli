@@ -16,6 +16,7 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) module_static_import_content_security_policies: Vec<String>,
+    pub(crate) content_security_policy_snapshot: crate::content_security_policy::InheritedContentSecurityPolicy,
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: crate::worker::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
@@ -49,6 +50,7 @@ pub(crate) fn reserve_nested_worker_context(
         indexed_db_manager: state.indexed_db_manager.clone(),
         storage_bucket_store: state.storage_bucket_store.clone(),
         module_static_import_content_security_policies: state.content_security_policies.clone(),
+        content_security_policy_snapshot: content_security_policy::worker_policy_snapshot(&state),
         require_trusted_types_for_script:
             crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
                 &state.content_security_policies,
