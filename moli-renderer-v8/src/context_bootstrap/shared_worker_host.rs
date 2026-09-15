@@ -1,6 +1,6 @@
 use super::{
-    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
-    ensure_message_port_wrapper_for_id_in_realm,
+    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType, MessagePortRealmBinding,
+    apply_event_handler_return_value, ensure_message_port_wrapper_for_id_in_realm,
     events::{clear_event_dispatch_fields, set_event_dispatch_fields},
     invoke_simple_event_listener,
     navigation_serialize::{
@@ -817,12 +817,12 @@ fn dispatch_shared_worker_error_event<'s>(
         );
         if listener.handler_slot.as_deref() == Some(SHARED_WORKER_ONERROR_SLOT)
             && let Some(returned) = callback_result
-            && v8::Local::new(scope, &returned).boolean_value(scope)
         {
-            let _ = event.set(
+            apply_event_handler_return_value(
                 scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
+                event,
+                v8::Local::new(scope, &returned),
+                EventHandlerType::EventHandler,
             );
         }
         if listener.once {
