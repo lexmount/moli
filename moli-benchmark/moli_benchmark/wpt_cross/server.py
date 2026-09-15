@@ -141,10 +141,6 @@ FETCH_RANGE_RESOURCE_PATHS = {
     "/fetch/range/resources/long-wav.py",
     "/fetch/range/resources/stash-take.py",
 }
-JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
-JSON_LOAD_ERROR_PATH = (
-    "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
-)
 
 NAVIGATION_SECOND_VISIT_PATH = (
     "/navigation-api/navigation-methods/return-value/resources/"
@@ -191,6 +187,10 @@ SERVICE_WORKER_MALFORMED_SCRIPTS = {
 }
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
+)
+JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
+JSON_LOAD_ERROR_PATH = (
+    "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
 )
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
@@ -2201,14 +2201,6 @@ def _make_handler(
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
                 return
-            if path == JSON_LOAD_ERROR_PATH:
-                self._serve_script_load_error_events(
-                    parsed.query, emit_body=emit_body, json_module=True,
-                )
-                return
-            if path == JSON_THEN_JS_PATH:
-                self._serve_json_then_js(parsed.query, emit_body=emit_body)
-                return
             if path == FORM_ECHO_PATH:
                 self._send_bytes("text/plain", b"", emit_body=emit_body)
                 return
@@ -2257,6 +2249,14 @@ def _make_handler(
                 "resources/load-error-events.py"
             ):
                 self._serve_script_load_error_events(parsed.query, emit_body=emit_body)
+                return
+            if path == JSON_LOAD_ERROR_PATH:
+                self._serve_script_load_error_events(
+                    parsed.query, emit_body=emit_body, json_module=True,
+                )
+                return
+            if path == JSON_THEN_JS_PATH:
+                self._serve_json_then_js(parsed.query, emit_body=emit_body)
                 return
             if path in {"/wasm/webapi/status.py", "/wasm/webapi/webapi/status.py"}:
                 status_code = _wasm_webapi_status_code(parsed.query)
@@ -3226,25 +3226,44 @@ def _make_handler(
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
 
-        def _serve_script_load_error_events(self, query: str, *, emit_body: bool) -> None:
+        def _serve_script_load_error_events(
+            self, query: str, *, emit_body: bool, json_module: bool = False,
+        ) -> None:
             params = parse_qs(query, keep_blank_values=True)
             test = params.get("test", [""])[0]
             if re.fullmatch(r"[a-zA-Z0-9_]+", test) is None:
-                self.send_error(400)
+                self.send_error(500 if json_module else 400)
                 return
             if "_load" in test:
                 status = 200
-                body = f'"use strict"; {test}.executed = true;'
+                prefix = 'import "./module.json" with { type: "json"};' if json_module else '"use strict";'
+                body = f'{prefix} {test}.executed = true;'
             else:
-                status = 404
+                # The JSON fixture serves a valid module whose dependency
+                # fetch fails; the classic fixture itself returns 404.
+                status = 200 if json_module else 404
+                prefix = 'import "./not_found.json" with { type: "json"};' if json_module else '"use strict";'
                 body = (
-                    f'"use strict"; {test}.test.step(function() {{ '
+                    f'{prefix} {test}.test.step(function() {{ '
                     'assert_unreached("404 script should not be executed"); });'
                 )
             self._send_bytes(
                 "text/javascript", body.encode("ascii"),
                 emit_body=emit_body, status_code=status,
             )
+
+        def _serve_json_then_js(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            try:
+                count = fetch_stash.increment(params["key"][0], path=JSON_THEN_JS_PATH)
+            except (KeyError, ValueError):
+                self.send_error(400, "Not enough parameters")
+                return
+            if count == 1:
+                content_type, body = "text/json", b'{"hello": "world"}'
+            else:
+                content_type, body = "application/javascript", b"export default 'hello';"
+            self._send_bytes(content_type, body, emit_body=emit_body, cache_control=None)
 
         def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
             try:
@@ -3598,45 +3617,6 @@ def _make_handler(
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 
-        def _serve_json_then_js(self, query: str, *, emit_body: bool) -> None:
-            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
-            try:
-                count = fetch_stash.increment(params["key"][0], path=JSON_THEN_JS_PATH)
-            except (KeyError, ValueError):
-                self.send_error(400, "Not enough parameters")
-                return
-            if count == 1:
-                content_type, body = "text/json", b'{"hello": "world"}'
-            else:
-                content_type, body = "application/javascript", b"export default 'hello';"
-            self._send_bytes(content_type, body, emit_body=emit_body, cache_control=None)
-
-
-        def _serve_script_load_error_events(
-            self, query: str, *, emit_body: bool, json_module: bool = False,
-        ) -> None:
-            params = parse_qs(query, keep_blank_values=True)
-            test = params.get("test", [""])[0]
-            if re.fullmatch(r"[a-zA-Z0-9_]+", test) is None:
-                self.send_error(500 if json_module else 400)
-                return
-            if "_load" in test:
-                status = 200
-                prefix = 'import "./module.json" with { type: "json"};' if json_module else '"use strict";'
-                body = f'{prefix} {test}.executed = true;'
-            else:
-                # The JSON fixture serves a valid module whose dependency
-                # fetch fails; the classic fixture itself returns 404.
-                status = 200 if json_module else 404
-                prefix = 'import "./not_found.json" with { type: "json"};' if json_module else '"use strict";'
-                body = (
-                    f'{prefix} {test}.test.step(function() {{ '
-                    'assert_unreached("404 script should not be executed"); });'
-                )
-            self._send_bytes(
-                "text/javascript", body.encode("ascii"),
-                emit_body=emit_body, status_code=status,
-            )
 
         def _serve_fetch_status(self, query: str, *, emit_body: bool) -> None:
             try:
