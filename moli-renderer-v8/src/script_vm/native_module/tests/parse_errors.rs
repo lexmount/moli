@@ -1,6 +1,104 @@
 use super::super::{module_load_error_value, retain_module_exception};
 use super::*;
 
+#[test]
+fn json_module_parse_errors_keep_the_response_origin_and_original_exception() {
+    let mut vm = new_test_vm("https://json-errors.test/page.html");
+    vm.eval("JSON.parse = () => { throw new Error('author JSON.parse'); };")
+        .unwrap();
+    let request_url = Url::parse("https://json-errors.test/redirect.json").unwrap();
+    let response_url = Url::parse("https://json-errors.test/final/bad.json").unwrap();
+    let error = vm
+        .compile_native_module_record(
+            ModuleMapKey::json_with_attributes(request_url, ModuleAttributesKey::empty()),
+            &ModuleSource::text("{\n\"key\":\n}".to_owned()),
+            &response_url,
+            &ModuleFetchMetadata::default(),
+        )
+        .expect_err("invalid JSON must fail before instantiation or evaluation");
+    assert_eq!(
+        error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError)
+    );
+    vm.with_default_context_scope(|scope, _| {
+        let exception = module_load_error_value(scope, &error)?;
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(scope, v8str(scope, "__original").into(), exception),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    vm.eval(
+        r#"
+        globalThis.__reads = 0;
+        for (const name of ['fileName', 'lineNumber', 'columnNumber', 'stack']) {
+            Object.defineProperty(__original, name, {get() { ++__reads; throw 1; }});
+        }
+        Object.freeze(__original);
+        addEventListener('error', event => {
+            globalThis.__result = [event.filename, event.lineno, event.colno,
+                event.error === __original, event.error instanceof SyntaxError, __reads];
+            event.preventDefault();
+        });
+    "#,
+    )
+    .unwrap();
+    vm.report_window_error_body(
+        error.message(),
+        Some("https://json-errors.test/root.mjs"),
+        error.error_value(),
+    )
+    .unwrap();
+    // JSON.parse was replaced above, so inspect the result with stringify only.
+    assert_eq!(
+        vm.eval("JSON.stringify(__result)").unwrap(),
+        r#"["https://json-errors.test/final/bad.json",3,1,true,true,0]"#
+    );
+}
+
+#[test]
+fn json_module_parse_errors_do_not_override_a_later_javascript_throw_location() {
+    let mut vm = new_test_vm("https://json-errors.test/page.html");
+    let url = Url::parse("https://json-errors.test/bad.json").unwrap();
+    let error = vm
+        .compile_native_module_record(
+            ModuleMapKey::json_with_attributes(url.clone(), ModuleAttributesKey::empty()),
+            &ModuleSource::text("{".to_owned()),
+            &url,
+            &ModuleFetchMetadata::default(),
+        )
+        .unwrap_err();
+    vm.with_default_context_scope(|scope, _| {
+        let exception = module_load_error_value(scope, &error)?;
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(scope, v8str(scope, "__original").into(), exception),
+            Some(true)
+        );
+        let try_catch = pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        let source = v8str(
+            &scope,
+            "throw __original;\n//# sourceURL=https://json-errors.test/thrower.js",
+        );
+        let script = v8::Script::compile(&scope, source, None).unwrap();
+        assert!(script.run(&scope).is_none());
+        let exception = scope.exception();
+        let message = scope.message();
+        let report = crate::exception_reporting::build_event_handler_exception_report(
+            &mut scope, exception, message, None,
+        );
+        assert_eq!(
+            report.source.as_deref(),
+            Some("https://json-errors.test/thrower.js")
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn compile_parse_error(vm: &mut ScriptVm, path: &str) -> ModuleLoadError {
     let url = Url::parse(path).unwrap();
     vm.compile_native_module_record(

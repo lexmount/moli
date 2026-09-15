@@ -858,13 +858,14 @@ fn synthetic_text_module_evaluation_steps<'s>(
     else {
         return throw_synthetic_module_error(scope, "synthetic module source is not available");
     };
-    let source = record.source();
-    match record.key().kind() {
-        ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
-        ModuleKind::Css => {
+    match record.value() {
+        crate::module_runtime::SyntheticTextModuleValue::Json(value) => {
+            let value = v8::Local::new(scope, value);
+            set_synthetic_default_export(scope, module, value)
+        }
+        crate::module_runtime::SyntheticTextModuleValue::Css(source) => {
             evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
         }
-        _ => throw_synthetic_module_error(scope, "unexpected synthetic text module kind"),
     }
 }
 fn wasm_synthetic_module_evaluation_steps<'s>(
@@ -884,18 +885,6 @@ fn wasm_synthetic_module_evaluation_steps<'s>(
     evaluate_wasm_synthetic_module(scope, module, wasm_record, |scope, import| {
         wasm_import_value(scope, module, import)
     })
-}
-
-fn evaluate_json_synthetic_module<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    module: v8::Local<'s, v8::Module>,
-    source: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let Some(json_source) = v8_string(scope, source) else {
-        return throw_synthetic_module_error(scope, "failed to allocate JSON module source");
-    };
-    let value = v8::json::parse(scope, json_source)?;
-    set_synthetic_default_export(scope, module, value)
 }
 
 fn evaluate_css_synthetic_module<'s>(
