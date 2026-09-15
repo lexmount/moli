@@ -45,8 +45,10 @@ media/canvas documents during the initial static baseline.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from itertools import chain
@@ -721,6 +723,8 @@ def _supported_wptserve_handler_references(
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("wasm/webapi/"):
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None:
+        supported += _script_load_error_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("xhr/"):
         supported += SUPPORTED_XHR_DELAY_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith(
@@ -741,6 +745,19 @@ def _has_unsupported_server_feature(
     for supported in _supported_wptserve_handler_references(rel):
         text = supported.sub("", text)
     return any(token in text for token in UNSUPPORTED_SERVER_FEATURE_SUBSTRINGS)
+
+
+@lru_cache(maxsize=None)
+def _script_load_error_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "html/semantics/scripting-1/the-script-element/resources/load-error-events.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
 
 
 def _local_wpt_resource_path(wpt_root: Path, case_path: Path, src: str) -> Path | None:
