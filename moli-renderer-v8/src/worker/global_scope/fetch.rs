@@ -2089,13 +2089,15 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
-        scope,
-        &state,
-        &document_url,
-        &resolved_url,
-        crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-    );
+    let report_only_violation = {
+        let state_ref = state.borrow();
+        worker_content_security_policy_report_only_violation(
+            &state_ref,
+            &document_url,
+            &resolved_url,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        )
+    };
     let csp_violation = {
         let state_ref = state.borrow();
         worker_content_security_policy_violation(
@@ -2105,7 +2107,19 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
         )
     };
-    if let Some(violation) = csp_violation {
+    let csp_source_location = if report_only_violation.is_none() && csp_violation.is_none() {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+    } else {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope)
+    };
+    if let Some(mut violation) = report_only_violation {
+        csp_source_location.apply_to(&mut violation);
+        dispatch_worker_content_security_policy_violation_event_for_state(
+            scope, &state, &violation,
+        );
+    }
+    if let Some(mut violation) = csp_violation {
+        csp_source_location.apply_to(&mut violation);
         dispatch_worker_content_security_policy_violation_event_for_state(
             scope, &state, &violation,
         );
@@ -2559,6 +2573,50 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     }
 }
 
+fn worker_fetch_response_csp_violations(
+    state: &WorkerGlobalState,
+    pending: &PendingWorkerFetch,
+    head: &moli_fetch::ResponseHead,
+) -> (
+    Option<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    Option<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+) {
+    use crate::content_security_policy::{
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    };
+    let redirect_status = if head.redirect_chain.is_empty() {
+        ContentSecurityPolicyRedirectStatus::NoRedirect
+    } else {
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect
+    };
+    let mut report_only = (redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect)
+        .then(|| {
+            worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status(
+                state,
+                &pending.document_url,
+                &head.final_url,
+                &pending.request_url,
+                ContentSecurityPolicyResourceKind::WorkerConnect,
+                redirect_status,
+            )
+        })
+        .flatten();
+    let mut enforced =
+        worker_content_security_policy_violation_for_checked_url_with_redirect_status(
+            state,
+            &pending.document_url,
+            &head.final_url,
+            &pending.request_url,
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            redirect_status,
+        );
+    for violation in report_only.iter_mut().chain(&mut enforced) {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+            .apply_to(violation);
+    }
+    (report_only, enforced)
+}
+
 pub(in crate::worker) fn start_worker_streaming_fetch(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -2576,45 +2634,16 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             .initial_network_request_headers
             .get_or_insert_with(|| network_request_headers.clone());
     }
-    let redirect_status = if started.head.redirect_chain.is_empty() {
-        crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
-    } else {
-        crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-    };
-    if redirect_status
-        == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-    {
-        let (document_url, request_url) = {
-            let state_ref = state.borrow();
-            let Some(pending) = state_ref.pending_fetches.get(&started.fetch_id) else {
-                return;
-            };
-            (pending.document_url.clone(), pending.request_url.clone())
-        };
-        dispatch_worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status_for_state(
-            scope,
-            state,
-            &document_url,
-            &started.head.final_url,
-            &request_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-            redirect_status,
-        );
-    }
-    let csp_failure = {
+    let (report_only_violation, csp_failure) = {
         let state_ref = state.borrow();
         let Some(pending) = state_ref.pending_fetches.get(&started.fetch_id) else {
             return;
         };
-        worker_content_security_policy_violation_for_checked_url_with_redirect_status(
-            &state_ref,
-            &pending.document_url,
-            &started.head.final_url,
-            &pending.request_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-            redirect_status,
-        )
+        worker_fetch_response_csp_violations(&state_ref, pending, &started.head)
     };
+    if let Some(violation) = report_only_violation {
+        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    }
     let response_input = if let Some(violation) = csp_failure {
         let resolver = {
             let mut state_ref = state.borrow_mut();
@@ -2843,49 +2872,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     }
     if let Ok(response) = &completion.result {
         let response_head = response.head();
-        let redirect_status = if response_head.redirect_chain.is_empty() {
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
-        } else {
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        };
-        if redirect_status
-            == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        {
-            let (document_url, request_url) = {
-                let state_ref = state.borrow();
-                let Some(pending) = state_ref.pending_fetches.get(&completion.fetch_id) else {
-                    return;
-                };
-                (pending.document_url.clone(), pending.request_url.clone())
-            };
-            dispatch_worker_content_security_policy_report_only_violation_for_checked_url_with_redirect_status_for_state(
-                scope,
-                state,
-                &document_url,
-                &response_head.final_url,
-                &request_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-                redirect_status,
-            );
-        }
-        let csp_failure = {
+        let (report_only_violation, csp_failure) = {
             let state_ref = state.borrow();
             let Some(pending) = state_ref.pending_fetches.get(&completion.fetch_id) else {
                 return;
             };
-            worker_content_security_policy_violation_for_checked_url_with_redirect_status(
-                &state_ref,
-                &pending.document_url,
-                &response_head.final_url,
-                &pending.request_url,
-                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-                if response_head.redirect_chain.is_empty() {
-                    crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
-                } else {
-                    crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                },
-            )
+            worker_fetch_response_csp_violations(&state_ref, pending, &response_head)
         };
+        if let Some(violation) = report_only_violation {
+            dispatch_worker_content_security_policy_violation_event_for_state(
+                scope, state, &violation,
+            );
+        }
         if let Some(violation) = csp_failure {
             dispatch_worker_content_security_policy_violation_event_for_state(
                 scope, state, &violation,
