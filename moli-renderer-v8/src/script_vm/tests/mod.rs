@@ -2838,6 +2838,95 @@ document.addEventListener('securitypolicyviolation', e => {
 }
 
 #[test]
+fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
+    for replace_document in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-csp-queued.test/source");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::CspReport),
+        );
+        let request_url = Url::parse("https://fetch-csp-queued.test/request").unwrap();
+        let policy = crate::document_runtime::DocumentPolicyContainer {
+            response_content_security_policies: vec![
+                "connect-src 'self'; report-uri /report".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let snapshot =
+            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy);
+        let (registered, report_context) = vm
+            .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+                let host = unsafe { &mut *host_ptr };
+                let report_context =
+                    crate::network_host::capture_window_csp_report_request_context(
+                        scope,
+                        host,
+                        crate::native_bridge::OwnerDispatchScope::Top,
+                    )
+                    .unwrap();
+                Ok((
+                    register_pending_window_fetch_with_connect_policy_for_test(
+                        scope,
+                        host,
+                        false,
+                        policy,
+                        request_url.clone(),
+                    ),
+                    report_context,
+                ))
+            })
+            .unwrap();
+        assert!(
+            vm._context_host
+                .borrow_mut()
+                .abort_subresource_fetch(registered.0)
+        );
+        if replace_document {
+            vm.eval("document.open(); document.write('<!doctype html><body>replacement'); document.close()").unwrap();
+        }
+        vm.eval("globalThis.queuedCspEvents = 0; document.addEventListener('securitypolicyviolation', () => queuedCspEvents++)").unwrap();
+        let mut violation = snapshot.enforce_violation(
+            &Url::parse("https://fetch-csp-queued.test/source").unwrap(),
+            &Url::parse("https://forbidden.test/private").unwrap(),
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+        ).unwrap();
+        violation.blocked_uri = request_url.to_string();
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+            .apply_to(&mut violation);
+        let activity = vm
+            .complete_async_subresource_fetch_event_body(
+                crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                    report_context: Box::new(report_context),
+                    violation: Box::new(violation),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            matches!(
+                activity,
+                crate::script_vm::AsyncSubresourceFetchBodyActivity::WindowRealmEntered
+            ),
+            !replace_document
+        );
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("String(queuedCspEvents)").unwrap(),
+            if replace_document { "0" } else { "1" }
+        );
+        let reports = vm
+            ._context_host
+            .borrow()
+            .pending_window_csp_report_execution_contexts_for_test();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].1, registered.4);
+        assert!(
+            !reports[0].2,
+            "network reporting must not retain the source V8 realm"
+        );
+    }
+}
+
+#[test]
 fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     let mut vm = new_storage_test_vm("https://main-fetch-csp-owner.test/source-document");
     vm.set_fetch_subresource_interception(

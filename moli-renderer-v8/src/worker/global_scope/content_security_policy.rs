@@ -457,6 +457,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     load.attach_cancel_handle(cancel_handle.clone());
     let request_metadata = service_worker_fetch_request_metadata(&request);
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id,
         request: ServiceWorkerFetchRequest {
             client_id,

@@ -1032,8 +1032,9 @@ async fn spawn_redirect_loop_http_server(path: &'static str) -> (String, JoinHan
 
 async fn spawn_single_redirect_http_server(
     path: &'static str,
-    location: &'static str,
+    location: impl Into<String>,
 ) -> (String, JoinHandle<()>) {
+    let location = location.into();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind worker single-redirect http server");
