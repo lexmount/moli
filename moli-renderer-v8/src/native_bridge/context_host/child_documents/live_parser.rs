@@ -1075,7 +1075,7 @@ impl PageScriptHost {
         if script.kind != ScriptKind::Module {
             return ScriptDisposition::Continue;
         }
-        if !self.queue_child_parser_module_root_for_current_document(
+        if !self.queue_child_module_script_for_current_document(
             child_handle,
             script_handle,
             blocking_stylesheet_signatures,
