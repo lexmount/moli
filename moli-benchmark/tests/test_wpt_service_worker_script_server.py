@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -31,12 +32,17 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
         resources = self.root / DIRECTORY / "resources"
         resources.mkdir(parents=True)
         for name in (
-            "redirect.py", "update-worker.py", "import-scripts-version.py",
+            "redirect.py", "update-worker.py", "update-worker-from-file.py", "import-scripts-version.py",
+            "update-during-installation-worker.py",
             "import-scripts-get.py", "import-scripts-echo.py",
             "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
         ):
             (resources / name).parent.mkdir(exist_ok=True)
             (resources / name).write_text("# Python source must not be sent as a script")
+        global_resources = self.root / DIRECTORY / "ServiceWorkerGlobalScope/resources"
+        global_resources.mkdir(parents=True)
+        (global_resources / "update-worker.py").write_text("# Python source must not be sent as a script")
+        (global_resources / "update-worker.js").write_bytes(b"// caf\xc3\xa9\r\nself.ready = true;\r\n")
         self.stack.enter_context(patch(
             "moli_benchmark.wpt_cross.server._global_ipv6_address", return_value=None
         ))
@@ -49,7 +55,8 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
     ) -> tuple[int, list[tuple[str, str]], bytes]:
         connection = HTTPConnection("127.0.0.1", port, timeout=5)
         try:
-            connection.request(method, RESOURCES + resource + "?" + query)
+            path = resource if resource.startswith("/") else RESOURCES + resource
+            connection.request(method, path + "?" + query)
             response = connection.getresponse()
             return (
                 response.status,
@@ -181,6 +188,85 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
         self.assertLess(versions[0], versions[1])
         self.assertLess(versions[1], versions[2])
 
+    def test_update_from_file_preserves_bytes_and_shares_only_its_own_stash(self) -> None:
+        first, second = self.server(), self.server()
+        resources = self.root / DIRECTORY / "resources"
+        before, after = b"// before\r\n\xff\n", b"// after\x00\n"
+        (resources / "café.js").write_bytes(before)
+        (resources / "after.js").write_bytes(after)
+        key = str(uuid.uuid4())
+        query = urlencode([
+            ("Key", key), ("First", "café.js"), ("First", "ignored.js"),
+            ("Second", "after.js"),
+        ])
+        for port, expected in (
+            (first.port, before),
+            (second.port, before),
+            (first.alternate_port, after),
+        ):
+            status, headers, body = self.request(port, "update-worker-from-file.py", query)
+            self.assertEqual((status, body), (200, expected))
+            self.assertEqual(dict(headers)["content-type"], "application/javascript")
+            self.assertEqual(dict(headers)["cache-control"], "no-cache, must-revalidate")
+            self.assertEqual(dict(headers)["pragma"], "no-cache")
+        self.assertEqual(self.request(first.port, "update-worker-from-file.py", query)[0], 500)
+        self.assertEqual(
+            self.request(first.port, "update-worker.py", urlencode({"Key": key, "Mode": "normal"}))[2],
+            b"/* 1 */ ",
+        )
+        head_query = urlencode({"Key": str(uuid.uuid4()), "First": "café.js", "Second": "after.js"})
+        status, headers, body = self.request(first.port, "update-worker-from-file.py", head_query, method="HEAD")
+        self.assertEqual((status, dict(headers)["content-length"], body), (200, str(len(before)), b""))
+        self.assertEqual(self.request(first.port, "update-worker-from-file.py", head_query, method="POST")[2], after)
+        failure_query = urlencode({"Key": str(uuid.uuid4()), "First": "missing.js", "Second": "after.js"})
+        self.assertEqual(self.request(first.port, "update-worker-from-file.py", failure_query)[0], 500)
+        self.assertEqual(self.request(first.port, "update-worker-from-file.py", failure_query)[2], after)
+
+    def test_global_scope_update_script_uses_timestamp_and_original_text(self) -> None:
+        server = self.server()
+        resource = "/" + DIRECTORY + "/ServiceWorkerGlobalScope/resources/update-worker.py"
+        script = "// café\nself.ready = true;\n".encode("utf-8")
+        versions = []
+        for method in ("GET", "POST", "OPTIONS", "HEAD"):
+            before = time.time()
+            status, headers, body = self.request(server.port, resource, method=method)
+            after = time.time()
+            self.assertEqual(status, 200)
+            self.assertEqual(dict(headers)["cache-control"], "max-age: 0")
+            self.assertEqual(dict(headers)["content-type"], "application/javascript")
+            self.assertNotIn("pragma", dict(headers))
+            if method == "HEAD":
+                self.assertEqual(body, b"")
+                self.assertGreater(int(dict(headers)["content-length"]), len(script))
+                continue
+            stamp, source = body.split(b"\n", 1)
+            self.assertEqual(source, script)
+            self.assertTrue(stamp.startswith(b"// "))
+            versions.append(float(stamp[3:]))
+            self.assertLessEqual(before, versions[-1])
+            self.assertLessEqual(versions[-1], after)
+        self.assertEqual(versions, sorted(set(versions)))
+
+    def test_installation_update_script_changes_without_rewriting_its_import(self) -> None:
+        server = self.server()
+        versions = []
+        for method in ("GET", "POST", "OPTIONS", "HEAD"):
+            status, headers, body = self.request(server.port, "update-during-installation-worker.py", method=method)
+            self.assertEqual(status, 200)
+            self.assertEqual(dict(headers)["content-type"], "application/javascript")
+            self.assertEqual(dict(headers)["cache-control"], "max-age=0")
+            self.assertNotIn("pragma", dict(headers))
+            if method == "HEAD":
+                self.assertEqual(body, b"")
+                continue
+            version, script = body.split(b"\n", 1)
+            self.assertEqual(script, b"importScripts('update-during-installation-worker.js');")
+            self.assertTrue(version.startswith(b"// "))
+            versions.append(float(version[3:]))
+            self.assertGreaterEqual(versions[-1], 0)
+            self.assertLess(versions[-1], 1)
+        self.assertEqual(len(set(versions)), 3)
+
     def test_imported_assignments_preserve_raw_parameters_and_directory(self) -> None:
         server = self.server()
         for resource, query, expected in (
@@ -212,6 +298,8 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
             ("update-worker.py", "Mode=normal"),
             ("update-worker.py", "Key=invalid&Mode=normal"),
             ("update-worker.py", "Key=" + str(uuid.uuid4())),
+            ("update-worker-from-file.py", "First=x&Second=y"),
+            ("update-worker-from-file.py", urlencode({"Key": str(uuid.uuid4()), "First": "../../../../outside.js"})),
             ("import-scripts-get.py", "output=x"),
             ("import-scripts-get.py", "msg=x"),
             ("import-scripts-echo.py", ""),
@@ -223,6 +311,10 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
         cases = {
             "redirect-relative.html": ("resources/redirect.py", True),
             "update-absolute.html": (RESOURCES + "update-worker.py", True),
+            "update-from-file.html": ("resources/update-worker-from-file.py", True),
+            "update-installing.html": ("resources/update-during-installation-worker.py", True),
+            "ServiceWorkerGlobalScope/update.html": ("resources/update-worker.py", True),
+            "ServiceWorkerGlobalScope/update-wrong.html": ("resources/update-worker-from-file.py", False),
             "sub/version-relative.html": ("../resources/import-scripts-version.py", True),
             "sub/redirect-dot-relative.html": ("./../resources/redirect.py", True),
             "sub/redirect-wrong-relative.html": ("resources/redirect.py", False),
