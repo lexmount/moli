@@ -372,11 +372,19 @@ impl ParserClassicDocumentScriptExecutionHooks
             .document_runtime
             .mark_script_already_started_by_node_id(failure.script.node_id);
         let script_handle = DomHandle::new(failure.script.node_id.index());
-        let event = owner
+        let event = if owner
             .page_vm
             .vm()
-            .document_runtime
-            .plan_parser_owned_script_event_task(ScriptEventKind::Error, script_handle);
+            .prepared_script_changed_documents(&failure.script)
+        {
+            None
+        } else {
+            owner
+                .page_vm
+                .vm()
+                .document_runtime
+                .plan_parser_owned_script_event_task(ScriptEventKind::Error, script_handle)
+        };
         tracing::debug!(
             expected_owner = ?failure.owner,
             script_node_id = ?failure.script.node_id,
