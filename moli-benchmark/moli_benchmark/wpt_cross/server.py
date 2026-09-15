@@ -1821,6 +1821,12 @@ def _make_handler(
         def _serve(self, *, emit_body: bool) -> None:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/"
+                "serve-with-content-type.py"
+            ):
+                self._serve_script_with_content_type(parsed.query, emit_body=emit_body)
+                return
             if path == LINK_STYLESHEET_COUNTER_PATH:
                 self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
                 return
@@ -2304,6 +2310,22 @@ def _make_handler(
                     ("Access-Control-Allow-Origin", "*"),
                     ("Access-Control-Allow-Methods", "YO"),
                 ],
+            )
+
+        def _serve_script_with_content_type(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            directory = wpt_root / "html/semantics/scripting-1/the-script-element"
+            try:
+                filename = params["fn"][0]
+                content_type = params["ct"][0]
+                source = (directory / filename).resolve()
+                source.relative_to(wpt_root.resolve())
+                body = source.read_bytes()
+            except (KeyError, OSError, ValueError):
+                self.send_error(400, "Not enough parameters or file not found")
+                return
+            self._send_bytes(
+                content_type, body, emit_body=emit_body,
             )
 
         def _serve_delayed_module_script(self, query: str, *, emit_body: bool) -> None:
