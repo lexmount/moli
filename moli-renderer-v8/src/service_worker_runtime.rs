@@ -66,7 +66,9 @@ pub(crate) use ids::{
     ServiceWorkerClientId, ServiceWorkerClientIdAllocator, ServiceWorkerEventId,
     ServiceWorkerRegistrationId, ServiceWorkerVersionId,
 };
-pub(crate) use jobs::ServiceWorkerUnregisterStart;
+pub(crate) use jobs::{
+    ServiceWorkerRegisterJob, ServiceWorkerRegistrationUpdate, ServiceWorkerUnregisterStart,
+};
 pub(crate) use owner_wake::{
     ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender,
     service_worker_owner_wake_channel,

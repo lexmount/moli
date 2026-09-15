@@ -906,3 +906,47 @@ mod service_worker_request_id_allocator_tests {
         let _ = ids.allocate();
     }
 }
+
+pub(in crate::worker) struct PendingServiceWorkerUpdate {
+    pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
+    pub(in crate::worker) registration: v8::Global<v8::Object>,
+}
+
+pub(in crate::worker) fn drain_service_worker_update_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    result: Result<
+        crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
+        crate::service_worker_runtime::ServiceWorkerRegistrationError,
+    >,
+) {
+    let Some(pending) = state
+        .borrow_mut()
+        .pending_service_worker_updates
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &pending.resolver);
+    match result {
+        Ok(_) => {
+            let registration = v8::Local::new(scope, &pending.registration);
+            let _ = resolver.resolve(scope, registration.into());
+        }
+        Err(error) => {
+            let exception = if error.kind.rejects_as_type_error_for_update() {
+                let message = v8_string(scope, &error.message)
+                    .unwrap_or_else(|| v8str(scope, "ServiceWorker update failed"));
+                v8::Exception::type_error(scope, message)
+            } else {
+                crate::context_bootstrap::new_dom_exception_value(
+                    scope,
+                    &error.message,
+                    error.kind.dom_exception_name(),
+                )
+            };
+            let _ = resolver.reject(scope, exception);
+        }
+    }
+}

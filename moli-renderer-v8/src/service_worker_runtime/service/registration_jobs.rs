@@ -1,5 +1,56 @@
 use super::*;
+use crate::service_worker_runtime::{
+    ServiceWorkerRegistrationErrorKind, ServiceWorkerRegistrationUpdate,
+};
 use moli_fetch::RequestCacheMode;
+
+fn newest_exposed_version_id(
+    state: &ServiceWorkerRuntimeState,
+    registration: &ServiceWorkerRegistration,
+) -> Option<ServiceWorkerVersionId> {
+    let checking = state
+        .pending_main_script_update_checks
+        .get(&registration.id)
+        .map(|check| check.new_version_id);
+    registration
+        .installing_version_id
+        .filter(|version_id| Some(*version_id) != checking)
+        .or(registration.waiting_version_id)
+        .or(registration.active_version_id)
+}
+
+fn validate_queued_update(
+    state: &ServiceWorkerRuntimeState,
+    job: &ServiceWorkerQueuedRegisterJob,
+) -> Result<(), ServiceWorkerRegistrationError> {
+    let Some(registration_id) = job.update_registration_id else {
+        return Ok(());
+    };
+    let registration = state
+        .registrations
+        .get(&registration_id)
+        .filter(|registration| {
+            !registration.pending_unregistration && registration.key() == job.registration_key()
+        })
+        .ok_or_else(|| {
+            ServiceWorkerRegistrationError::type_error(
+                "The ServiceWorker registration was unregistered.",
+            )
+        })?;
+    let newest = newest_exposed_version_id(state, registration)
+        .and_then(|id| state.versions.get(&id))
+        .ok_or_else(|| {
+            ServiceWorkerRegistrationError::type_error(
+                "The ServiceWorker registration has no worker.",
+            )
+        })?;
+    if newest.script_url != job.script_url {
+        return Err(ServiceWorkerRegistrationError::type_error(
+            "The newest ServiceWorker script URL changed before update().",
+        ));
+    }
+    Ok(())
+}
 
 fn same_registration_options_fast_path_snapshot(
     state: &ServiceWorkerRuntimeState,
@@ -28,6 +79,77 @@ fn same_registration_options_fast_path_snapshot(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) fn start_registration_update(&self, request: ServiceWorkerRegistrationUpdate) {
+        let newest = {
+            let state = self.inner.state.lock();
+            (|| {
+                let registration = state
+                    .registrations
+                    .get(&request.registration_id)
+                    .filter(|registration| registration.storage_key == request.storage_key)
+                    .ok_or_else(|| {
+                        ServiceWorkerRegistrationError::new(
+                            ServiceWorkerRegistrationErrorKind::InvalidState,
+                            "The ServiceWorker registration has no worker.",
+                        )
+                    })?;
+                let newest = newest_exposed_version_id(&state, registration)
+                    .and_then(|id| state.versions.get(&id))
+                    .ok_or_else(|| {
+                        ServiceWorkerRegistrationError::new(
+                            ServiceWorkerRegistrationErrorKind::InvalidState,
+                            "The ServiceWorker registration has no worker.",
+                        )
+                    })?;
+                if request
+                    .caller_version_id
+                    .and_then(|id| state.versions.get(&id))
+                    .is_some_and(|caller| {
+                        caller.lifecycle_state == ServiceWorkerVersionLifecycleState::Installing
+                    })
+                {
+                    return Err(ServiceWorkerRegistrationError::new(
+                        ServiceWorkerRegistrationErrorKind::InvalidState,
+                        "An installing ServiceWorker cannot call update().",
+                    ));
+                }
+                Ok((
+                    registration.scope_url.clone(),
+                    newest.script_url.clone(),
+                    newest.script_kind,
+                    registration.update_via_cache,
+                ))
+            })()
+        };
+        let (scope_url, script_url, script_kind, update_via_cache) = match newest {
+            Ok(newest) => newest,
+            Err(error) => {
+                request.completion.send(Err(error));
+                return;
+            }
+        };
+        self.start_queued_register_job(ServiceWorkerQueuedRegisterJob {
+            update_registration_id: Some(request.registration_id),
+            script_url,
+            scope_url,
+            document_url: request.document_url,
+            storage_key: request.storage_key,
+            script_kind,
+            update_via_cache,
+            force_bypass_cache: false,
+            skip_script_comparison: false,
+            skip_waiting_after_install: false,
+            force_update_page_load_waiter_ids: Vec::new(),
+            request_client: request.request_client,
+            network_policy: request.network_policy,
+            worker_context_runtime: request.worker_context_runtime,
+            broadcast_channel_top_level_site: request.broadcast_channel_top_level_site,
+            indexed_db_manager: request.indexed_db_manager,
+            storage_bucket_store: request.storage_bucket_store,
+            callbacks: vec![request.completion],
+        });
+    }
+
     fn record_force_update_page_load_devtools_message_locked(
         &self,
         state: &mut ServiceWorkerRuntimeState,
@@ -109,6 +231,7 @@ impl ServiceWorkerRuntimeService {
         register_completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
         let queued_job = ServiceWorkerQueuedRegisterJob {
+            update_registration_id: None,
             script_url,
             scope_url,
             document_url,
@@ -121,11 +244,11 @@ impl ServiceWorkerRuntimeService {
             force_update_page_load_waiter_ids: Vec::new(),
             request_client,
             network_policy,
-            browser_context_runtime,
+            worker_context_runtime: browser_context_runtime.worker_context_runtime(),
             broadcast_channel_top_level_site,
             indexed_db_manager,
             storage_bucket_store,
-            callbacks: vec![ServiceWorkerRegisterJob {
+            callbacks: vec![ServiceWorkerRegisterJob::Page {
                 request_id: register_request_id,
                 document_owner: register_document_owner,
                 completion_tx: register_completion_tx,
@@ -138,6 +261,11 @@ impl ServiceWorkerRuntimeService {
         let (launch, update_check, completed_register_callbacks) = {
             let mut state = self.inner.state.lock();
             let registration_key = queued_job.registration_key();
+            if let Err(error) = validate_queued_update(&state, &queued_job) {
+                drop(state);
+                ServiceWorkerRegisterJob::send_all(queued_job.callbacks, Err(error));
+                return;
+            }
             self.restore_stored_registration_for_queued_job_locked(&mut state, &queued_job);
             let registration_id = state
                 .registrations
@@ -190,14 +318,19 @@ impl ServiceWorkerRuntimeService {
             {
                 registration.pending_unregistration = false;
             }
-            let can_coalesce_with_installing = installing_version_id
-                .and_then(|version_id| state.versions.get(&version_id))
-                .is_some_and(|version| {
-                    version.script_url == queued_job.script_url
-                        && version.script_kind == queued_job.script_kind
-                        && registration_scope_url == queued_job.scope_url
-                        && registration_update_via_cache == queued_job.update_via_cache
-                });
+            let can_coalesce_with_installing = queued_job.update_registration_id.is_none()
+                && installing_version_id
+                    .and_then(|version_id| state.versions.get(&version_id))
+                    .is_some_and(|version| {
+                        version.script_url == queued_job.script_url
+                            && version.script_kind == queued_job.script_kind
+                            && registration_scope_url == queued_job.scope_url
+                            && registration_update_via_cache == queued_job.update_via_cache
+                            && !state.registrations[&registration_id]
+                                .pending_register_jobs
+                                .get(&version.id)
+                                .is_some_and(|job| job.is_update)
+                    });
             let pending_update_check_matches = state
                 .pending_main_script_update_checks
                 .get(&registration_id)
@@ -514,6 +647,7 @@ impl ServiceWorkerRuntimeService {
             ),
         };
         let update_check_params = ServiceWorkerScriptUpdateCheckParams {
+            script_kind: queued_job.script_kind,
             main_script: load_params,
             newest_main_body_sha256: newest_body_sha256.clone(),
             imported_scripts,
@@ -616,16 +750,12 @@ impl ServiceWorkerRuntimeService {
             register_callbacks,
             queued_job.skip_waiting_after_install,
         );
+        pending_register_job.is_update = queued_job.update_registration_id.is_some();
         pending_register_job.start_current_moli_job();
         let registration = state.registrations.get_mut(&registration_id)?;
         registration
             .pending_register_jobs
             .insert(version_id, pending_register_job);
-        let lifecycle_notifications = lifecycle_notifications_for_registration_locked(
-            state,
-            registration_id,
-            vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
-        );
         let request_client = launch_config.request_client();
         Some(ServiceWorkerQueuedLaunch {
             params: ServiceWorkerLaunchParams {
@@ -645,7 +775,6 @@ impl ServiceWorkerRuntimeService {
                 pause_evaluation_until_debugger: false,
             },
             host,
-            lifecycle_notifications,
             preloaded_script,
         })
     }
@@ -681,6 +810,7 @@ impl ServiceWorkerRuntimeService {
             register_callbacks,
             queued_job.skip_waiting_after_install,
         );
+        pending_register_job.is_update = queued_job.update_registration_id.is_some();
         pending_register_job.start_current_moli_job();
         registration
             .pending_register_jobs
@@ -690,11 +820,6 @@ impl ServiceWorkerRuntimeService {
             new_version_id,
             host.run_identity(),
             &queued_job,
-        );
-        let lifecycle_notifications = lifecycle_notifications_for_registration_locked(
-            state,
-            registration_id,
-            vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
         );
         let request_client = launch_config.request_client();
         Some(ServiceWorkerQueuedLaunch {
@@ -715,7 +840,6 @@ impl ServiceWorkerRuntimeService {
                 pause_evaluation_until_debugger: false,
             },
             host,
-            lifecycle_notifications,
             preloaded_script: Some(preloaded_script),
         })
     }
@@ -837,6 +961,39 @@ impl ServiceWorkerRuntimeService {
             match queued_job {
                 ServiceWorkerQueuedJob::Register(queued_job) => {
                     let queued_job = *queued_job;
+                    if let Err(error) = validate_queued_update(state, &queued_job) {
+                        progress.push(LifecycleProgress::RegisterFailed((
+                            queued_job.callbacks,
+                            error,
+                        )));
+                        continue;
+                    }
+                    // A register queued behind update must wait for that job,
+                    // then reuse the matching registration without another fetch.
+                    if queued_job.update_registration_id.is_none()
+                        && !queued_job.force_bypass_cache
+                        && !queued_job.skip_script_comparison
+                        && let Some(snapshot) =
+                            state
+                                .registrations
+                                .get(&registration_id)
+                                .and_then(|registration| {
+                                    same_registration_options_fast_path_snapshot(
+                                        state,
+                                        registration,
+                                        &queued_job.script_url,
+                                        queued_job.script_kind,
+                                        queued_job.update_via_cache,
+                                        false,
+                                    )
+                                })
+                    {
+                        progress.push(LifecycleProgress::RegisterCompleted(Box::new((
+                            queued_job.callbacks,
+                            snapshot,
+                        ))));
+                        continue;
+                    }
                     if let Some(update_check) = self.start_main_script_update_check_locked(
                         state,
                         registration_id,
