@@ -5665,9 +5665,9 @@ async fn window_fetch_cross_origin_redirect_without_cors_rejects_and_records_fai
 }
 
 #[tokio::test]
-async fn window_fetch_document_csp_blocks_cross_origin_redirect_final_url() {
+async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_initial_url() {
     run_page_vm_async_test(async move {
-            let (source_base_url, target_base_url, source_server, target_server) =
+            let (source_base_url, _, source_server, target_server) =
                 spawn_cross_origin_redirect_with_cors_http_servers(
                     "/fetch-csp-redirect-source",
                     "/fetch-csp-redirect-target",
@@ -5675,7 +5675,6 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_final_url() {
                 )
                 .await;
             let fetch_url = format!("{source_base_url}/fetch-csp-redirect-source");
-            let target_url = format!("{target_base_url}/fetch-csp-redirect-target");
             let document_url =
                 Url::parse(&format!("{source_base_url}/page.html")).expect("document url");
             let mut page_vm = test_page_vm_with_document_url(document_url);
@@ -5696,6 +5695,9 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_final_url() {
                             self.addEventListener("securitypolicyviolation", event => {{
                                 globalThis.__fetchCspEvents.push({{
                                     blockedURI: event.blockedURI,
+                                    sourceFile: event.sourceFile,
+                                    lineNumber: event.lineNumber,
+                                    columnNumber: event.columnNumber,
                                     effectiveDirective: event.effectiveDirective,
                                     disposition: event.disposition,
                                     instance: event instanceof SecurityPolicyViolationEvent,
@@ -5763,7 +5765,10 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_final_url() {
                     "isTypeError": true,
                     "hasCspMessage": true,
                     "events": [{
-                        "blockedURI": target_url,
+                        "blockedURI": fetch_url,
+                        "sourceFile": "",
+                        "lineNumber": 0,
+                        "columnNumber": 0,
                         "effectiveDirective": "connect-src",
                         "disposition": "enforce",
                         "instance": true,
@@ -5785,9 +5790,9 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_final_url() {
 }
 
 #[tokio::test]
-async fn window_fetch_document_csp_report_only_records_cross_origin_redirect_final_url() {
+async fn window_fetch_document_csp_report_only_redirect_reports_initial_url() {
     run_page_vm_async_test(async move {
-        let (source_base_url, target_base_url, source_server, target_server) =
+        let (source_base_url, _, source_server, target_server) =
             spawn_cross_origin_redirect_with_cors_http_servers(
                 "/fetch-csp-report-redirect-source",
                 "/fetch-csp-report-redirect-target",
@@ -5795,7 +5800,6 @@ async fn window_fetch_document_csp_report_only_records_cross_origin_redirect_fin
             )
             .await;
         let fetch_url = format!("{source_base_url}/fetch-csp-report-redirect-source");
-        let target_url = format!("{target_base_url}/fetch-csp-report-redirect-target");
         let document_url =
             Url::parse(&format!("{source_base_url}/page.html")).expect("document url");
         let mut page_vm = test_page_vm_with_document_url(document_url);
@@ -5818,6 +5822,9 @@ async fn window_fetch_document_csp_report_only_records_cross_origin_redirect_fin
                             self.addEventListener("securitypolicyviolation", event => {{
                                 globalThis.__fetchReportEvents.push({{
                                     blockedURI: event.blockedURI,
+                                    sourceFile: event.sourceFile,
+                                    lineNumber: event.lineNumber,
+                                    columnNumber: event.columnNumber,
                                     effectiveDirective: event.effectiveDirective,
                                     disposition: event.disposition,
                                     instance: event instanceof SecurityPolicyViolationEvent,
@@ -5880,7 +5887,10 @@ async fn window_fetch_document_csp_report_only_records_cross_origin_redirect_fin
                 "status": 200,
                 "text": "cors-allowed-target",
                 "events": [{
-                    "blockedURI": target_url,
+                    "blockedURI": fetch_url,
+                    "sourceFile": "",
+                    "lineNumber": 0,
+                    "columnNumber": 0,
                     "effectiveDirective": "connect-src",
                     "disposition": "report",
                     "instance": true,

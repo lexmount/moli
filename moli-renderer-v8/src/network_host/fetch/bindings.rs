@@ -239,7 +239,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
 
     let owner = prepared.request_scope();
     if let Some(violation) = host
-        .check_document_connect_csp_for_owner(
+        .check_document_connect_csp_for_owner_with_script_location(
             scope,
             owner,
             &prepared.document_url,
