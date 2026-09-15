@@ -312,6 +312,75 @@ fn reads_response_header_values_case_insensitively() {
 }
 
 #[test]
+fn extracts_response_mime_essence_from_the_combined_header_list() {
+    let cases: &[(&[&str], Option<&str>)] = &[
+        (&[], None),
+        (&[""], None),
+        (&["*/*", "not-a-mime-type"], None),
+        (&["application/json"], Some("application/json")),
+        (&["Text/CSS; charset=utf-16"], Some("text/css")),
+        (
+            &["text/plain", "application/json"],
+            Some("application/json"),
+        ),
+        (&["application/json", "text/plain"], Some("text/plain")),
+        (&["application/json", "invalid"], Some("application/json")),
+        (&["application/json", "*/*", ""], Some("application/json")),
+        (&["text/plain, application/json"], Some("application/json")),
+        (&["application/json, text/plain"], Some("text/plain")),
+        (
+            &["application/json, invalid, */*"],
+            Some("application/json"),
+        ),
+        (&["text/plain; charset=gbk, text/css"], Some("text/css")),
+        (
+            &[r#"text/plain; a=",application/json""#],
+            Some("text/plain"),
+        ),
+        (
+            &[r#"text/plain; a="x\",application/json""#],
+            Some("text/plain"),
+        ),
+        (
+            &[r#"text/plain; a="x\\", application/json"#],
+            Some("application/json"),
+        ),
+        (
+            &[r#"text/plain; a=""#, "application/json"],
+            Some("text/plain"),
+        ),
+        (&[r#"text/plain;""#, "application/json"], Some("text/plain")),
+        (&["applic(ation/vnd.api+json"], None),
+        (&["application/vnd)api+json"], None),
+        (&["text /css"], None),
+        (&["application/vnd.中文+json"], None),
+    ];
+    for (values, expected) in cases {
+        let mut headers: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                (
+                    if index % 2 == 0 {
+                        "Content-Type"
+                    } else {
+                        "cOnTeNt-TyPe"
+                    }
+                    .to_owned(),
+                    (*value).to_owned(),
+                )
+            })
+            .collect();
+        headers.push(("X-Content-Type".to_owned(), "application/json".to_owned()));
+        assert_eq!(
+            extract_response_mime_essence(&headers).as_deref(),
+            *expected,
+            "{values:?}"
+        );
+    }
+}
+
+#[test]
 fn derives_effective_response_mime_for_body_consumers() {
     let headers = vec![(
         "Content-Type".to_owned(),

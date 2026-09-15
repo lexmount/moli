@@ -459,13 +459,23 @@ impl NativeModuleGraphFetchRequest {
                         .message()
                         .to_owned());
                     }
-                    if matches!(kind, ModuleKind::JavaScript | ModuleKind::WebAssembly)
-                        && let Err(error) = crate::planning::validate_external_script_response_mime(
-                            &source_url,
-                            ScriptKind::Module,
-                            &response,
-                        )
-                    {
+                    let mime_result = match kind {
+                        ModuleKind::JavaScript | ModuleKind::WebAssembly => {
+                            crate::planning::validate_external_script_response_mime(
+                                &source_url,
+                                ScriptKind::Module,
+                                &response,
+                            )
+                        }
+                        ModuleKind::Json => {
+                            super::validate_json_module_response_mime(&response.headers)
+                        }
+                        ModuleKind::Css => {
+                            super::validate_css_module_response_mime(&response.headers)
+                        }
+                        ModuleKind::ModulePreloadText => Ok(()),
+                    };
+                    if let Err(error) = mime_result {
                         return Err(ModuleLoadError::new(ModuleLoadStage::Fetch, error)
                             .message()
                             .to_owned());
@@ -4011,6 +4021,7 @@ import "./c.mjs";
         let first_response = fetch_module_for_test(
             &loader,
             module_url.clone(),
+            ModuleKind::JavaScript,
             Url::parse(&format!("http://{addr}/first-page.html"))?,
             ModuleFetchMetadata::default(),
         )
@@ -4018,6 +4029,7 @@ import "./c.mjs";
         let second_response = fetch_module_for_test(
             &loader,
             module_url,
+            ModuleKind::JavaScript,
             Url::parse(&format!("http://{addr}/second-page.html"))?,
             ModuleFetchMetadata::default(),
         )
@@ -4069,6 +4081,7 @@ import "./c.mjs";
         let error = fetch_module_for_test(
             &loader,
             module_url,
+            ModuleKind::JavaScript,
             Url::parse(&format!("http://{addr}/page.html"))?,
             metadata,
         )
@@ -4083,9 +4096,84 @@ import "./c.mjs";
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn module_graph_fetch_enforces_json_and_css_response_mime() -> anyhow::Result<()> {
+        for (kind, mime, body) in [
+            (ModuleKind::Json, "application/json", r#"{"answer":42}"#),
+            (ModuleKind::Css, "text/css", "#test { color: red; }"),
+        ] {
+            let cases = [
+                (vec![mime.to_owned()], true),
+                (
+                    vec![format!("{}; charset=utf-16", mime.to_ascii_uppercase())],
+                    true,
+                ),
+                (vec!["text/plain".to_owned(), mime.to_owned()], true),
+                (vec![format!("text/plain, {mime}")], true),
+                (
+                    vec![mime.to_owned(), "invalid".to_owned(), "*/*".to_owned()],
+                    true,
+                ),
+                (vec![mime.to_owned(), "text/plain".to_owned()], false),
+                (vec![format!("{mime}, text/plain")], false),
+                (vec![format!(r#"text/plain; a=",{mime}""#)], false),
+                (
+                    vec![r#"text/plain; a=""#.to_owned(), mime.to_owned()],
+                    false,
+                ),
+                (vec!["text/plain".to_owned()], false),
+                (vec!["applic(ation/vnd.api+json".to_owned()], false),
+                (vec!["application/vnd)api+json".to_owned()], false),
+                (vec!["*/*".to_owned()], false),
+                (vec![String::new()], false),
+                (vec![], false),
+            ];
+            for (values, accepts) in cases {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+                let addr = listener.local_addr()?;
+                let fields: String = values
+                    .iter()
+                    .map(|value| format!("Content-Type: {value}\r\n"))
+                    .collect();
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    read_http_request_head(&mut stream).await.unwrap();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\n{fields}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes())
+                        .await
+                        .unwrap();
+                });
+                let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+                let result = fetch_module_for_test(
+                    &loader,
+                    Url::parse(&format!("http://{addr}/module"))?,
+                    kind,
+                    Url::parse(&format!("http://{addr}/page"))?,
+                    ModuleFetchMetadata::default(),
+                )
+                .await;
+                server.await?;
+                assert_eq!(result.is_ok(), accepts, "{kind:?}: {values:?}: {result:?}");
+                if let Err(error) = result {
+                    let expected = if kind == ModuleKind::Json {
+                        "non-JSON module response"
+                    } else {
+                        "non-CSS module response"
+                    };
+                    assert!(error.to_string().contains(expected), "{error:#}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn fetch_module_for_test(
         loader: &ResourceRequestClient,
         source_url: Url,
+        kind: ModuleKind,
         initiator_url: Url,
         fetch_metadata: ModuleFetchMetadata,
     ) -> anyhow::Result<crate::protocol_types::NavigationResponse> {
@@ -4093,7 +4181,7 @@ import "./c.mjs";
             source_url,
             initiator_url,
             fetch_metadata,
-            kind: ModuleKind::JavaScript,
+            kind,
             tree_client: None,
             tree_graph_level: None,
             module_key: None,

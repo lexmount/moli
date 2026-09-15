@@ -20,6 +20,40 @@ pub fn response_content_type(headers: &[(String, String)]) -> Option<String> {
     response_header_value(headers, "content-type")
 }
 
+/// The essence returned by Fetch's "extract a MIME type" algorithm.
+///
+/// Combine Content-Type fields before splitting so quoted strings, including
+/// unterminated ones, can span fields. Ignore invalid MIME values and `*/*`.
+/// This deliberately returns only the essence; callers needing parameters
+/// must also implement the algorithm's charset inheritance rules.
+pub fn extract_response_mime_essence(headers: &[(String, String)]) -> Option<String> {
+    let combined = response_header_values(headers, "content-type").join(", ");
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut essence = None;
+    for value in combined.split(|character| {
+        if escaped {
+            escaped = false;
+            false
+        } else if quoted && character == '\\' {
+            escaped = true;
+            false
+        } else if character == '"' {
+            quoted = !quoted;
+            false
+        } else {
+            character == ',' && !quoted
+        }
+    }) {
+        if let Some(parsed) = mime_essence(value)
+            && parsed != "*/*"
+        {
+            essence = Some(parsed);
+        }
+    }
+    essence
+}
+
 pub fn response_headers_indicate_attachment_download(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, value)| {
         let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
