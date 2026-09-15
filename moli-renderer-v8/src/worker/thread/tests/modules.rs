@@ -1,4 +1,5 @@
 use super::*;
+use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
@@ -2767,6 +2768,175 @@ async fn worker_module_no_import_source_runs_in_strict_mode() {
         expect_post_json(msg),
         r#"{"answer":42,"topLevelThisUndefined":true,"functionThisUndefined":true,"implicitGlobalError":"ReferenceError","leakedGlobal":false}"#
     );
+}
+
+fn service_worker_module_options(source: String, script_url: String) -> WorkerSpawnOptions {
+    let scope_url = url::Url::parse(&script_url).unwrap().join(".").unwrap();
+    WorkerSpawnOptions::new(source, script_url)
+        .with_script_kind(WorkerScriptKind::Module)
+        .with_global_kind(super::super::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url,
+        })
+}
+
+async fn expect_service_worker_async_module_error(handle: &mut WorkerHandle) {
+    loop {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
+            WorkerToParentMessage::Error {
+                message,
+                phase,
+                event_kind,
+                ..
+            } => {
+                assert!(message.contains("TypeError"), "{message}");
+                assert!(message.contains("Top-level await"), "{message}");
+                assert_eq!(phase, WorkerErrorPhase::Bootstrap);
+                assert_eq!(event_kind, WorkerParentErrorEventKind::Event);
+                return;
+            }
+            // Console or skipWaiting would mean module evaluation had begun.
+            other => panic!("expected async module rejection before execution, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn service_worker_module_top_level_await_is_rejected_before_execution() {
+    ensure_v8();
+    for source in [
+        "await Promise.resolve();",
+        "await new Promise(() => {});",
+        "await Promise.reject(new Error('rejected'));",
+        "if (false) { await Promise.resolve(); }",
+        "for await (const item of []) {}",
+    ] {
+        let mut handle = spawn_test_worker_with_options(service_worker_module_options(
+            format!("console.log('unexpected execution'); {source} skipWaiting();"),
+            "https://example.test/worker/sw.js".into(),
+        ));
+        expect_service_worker_async_module_error(&mut handle).await;
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_module_rejects_async_dependencies_before_execution() {
+    ensure_v8();
+    for cycle in [false, true] {
+        let cycle_import = if cycle { "import './sw.js';" } else { "" };
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/worker/middle.js",
+                "HTTP/1.1 200 OK",
+                "text/javascript",
+                "import './dep.js'; console.log('unexpected middle execution');".into(),
+                Duration::ZERO,
+            ),
+            (
+                "/worker/dep.js",
+                "HTTP/1.1 200 OK",
+                "text/javascript",
+                format!("{cycle_import} console.log('unexpected dependency execution'); await 0;"),
+                Duration::ZERO,
+            ),
+        ])
+        .await;
+        let mut handle = spawn_test_worker_with_options(service_worker_module_options(
+            "import './middle.js'; console.log('unexpected root execution'); skipWaiting();".into(),
+            format!("{base_url}/worker/sw.js"),
+        ));
+        expect_service_worker_async_module_error(&mut handle).await;
+        handle.terminate_and_join();
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_module_checks_only_wasm_evaluation_dependencies() {
+    ensure_v8();
+    for source_only in [false, true] {
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/worker/worker.wasm",
+                "HTTP/1.1 200 OK",
+                "application/wasm",
+                worker_wasm_import_pm_body(),
+                Duration::ZERO,
+            ),
+            (
+                "/worker/worker-helper.js",
+                "HTTP/1.1 200 OK",
+                "text/javascript",
+                "console.log('unexpected helper execution'); export function pm() {} await 0;"
+                    .into(),
+                Duration::ZERO,
+            ),
+        ])
+        .await;
+        let source = if source_only {
+            "import source wasm from './worker.wasm'; console.log(wasm instanceof WebAssembly.Module);"
+        } else {
+            "import './worker.wasm'; console.log('unexpected root execution'); skipWaiting();"
+        };
+        let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut handle = spawn_test_worker_with_options(
+            service_worker_module_options(source.into(), format!("{base_url}/worker/sw.js"))
+                .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        if source_only {
+            let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(bootstrap.result.is_ok(), "{:?}", bootstrap.result);
+            loop {
+                match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                    WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
+                    WorkerToParentMessage::Console(message) => {
+                        assert_eq!(message.message, "log: true");
+                        break;
+                    }
+                    other => panic!("expected source import without evaluation, got {other:?}"),
+                }
+            }
+        } else {
+            expect_service_worker_async_module_error(&mut handle).await;
+        }
+        handle.terminate_and_join();
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_module_allows_await_inside_async_functions() {
+    ensure_v8();
+    for source in [
+        "async function run() { await Promise.resolve(); }",
+        "(async () => { await Promise.resolve(); })();",
+        "const text = 'await Promise.resolve()'; /* await 0 */",
+    ] {
+        let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut handle = spawn_test_worker_with_options(
+            service_worker_module_options(
+                format!("{source} console.log('ready');"),
+                "https://example.test/worker/sw.js".into(),
+            )
+            .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(bootstrap.result.is_ok(), "{:?}", bootstrap.result);
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Console(message) => assert_eq!(message.message, "log: ready"),
+            other => panic!("expected successful module execution, got {other:?}"),
+        }
+        handle.terminate_and_join();
+    }
 }
 
 #[tokio::test]
