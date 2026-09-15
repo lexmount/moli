@@ -370,6 +370,16 @@ struct JsonScriptResource {
     response_time_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classic_script: Option<JsonClassicScript>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonClassicScript {
+    source: String,
+    muted_errors: bool,
+    redirect_urls: Vec<String>,
 }
 
 impl JsonStoredRegistration {
@@ -411,8 +421,11 @@ impl JsonStoredRegistration {
             main_script_resource: self.main_script_resource.into_script_resource()?,
             imported_script_resources: self
                 .imported_script_resources
-                .into_iter()
-                .map(|(key, resource)| Ok((key, resource.into_script_resource()?)))
+                .into_values()
+                .map(|resource| {
+                    let resource = resource.into_script_resource()?;
+                    Ok((resource.request_url.to_string(), resource))
+                })
                 .collect::<Result<BTreeMap<_, _>>>()?,
         })
     }
@@ -475,6 +488,20 @@ impl From<&ServiceWorkerNavigationPreloadState> for JsonNavigationPreloadState {
 
 impl JsonScriptResource {
     fn into_script_resource(self) -> Result<ServiceWorkerScriptResource> {
+        let classic_script = self
+            .classic_script
+            .map(|script| {
+                Ok::<_, anyhow::Error>(crate::worker::WorkerStoredClassicScript {
+                    source: script.source.into(),
+                    muted_errors: script.muted_errors,
+                    redirect_urls: script
+                        .redirect_urls
+                        .iter()
+                        .map(|url| parse_url_field("redirectUrl", url))
+                        .collect::<Result<Vec<_>>>()?,
+                })
+            })
+            .transpose()?;
         Ok(ServiceWorkerScriptResource {
             request_url: parse_url_field("requestUrl", &self.request_url)?,
             final_url: parse_url_field("finalUrl", &self.final_url)?,
@@ -485,6 +512,7 @@ impl JsonScriptResource {
             body_sha256: self.body_sha256,
             response_time_ms: self.response_time_ms,
             mime_type: self.mime_type,
+            classic_script,
         })
     }
 }
@@ -501,6 +529,18 @@ impl From<&ServiceWorkerScriptResource> for JsonScriptResource {
             body_sha256: resource.body_sha256.clone(),
             response_time_ms: resource.response_time_ms,
             mime_type: resource.mime_type.clone(),
+            classic_script: resource
+                .classic_script
+                .as_ref()
+                .map(|script| JsonClassicScript {
+                    source: script.source.to_string(),
+                    muted_errors: script.muted_errors,
+                    redirect_urls: script
+                        .redirect_urls
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                }),
         }
     }
 }
@@ -681,6 +721,78 @@ mod tests {
             .expect("json service worker resource store should reopen");
         assert_eq!(
             reopened.lock().registration_for_key(&registration_key),
+            Some(registration)
+        );
+    }
+
+    #[test]
+    fn json_service_worker_resource_store_restores_script_map_sources_and_request_urls() {
+        let temp = TempStorePath::new("classic-script-map");
+        let mut registration = stored_registration();
+        registration.main_script_resource.classic_script =
+            Some(crate::worker::WorkerStoredClassicScript {
+                source: "importScripts('./alias-a.js'); // é\n".into(),
+                muted_errors: false,
+                redirect_urls: Vec::new(),
+            });
+        registration.imported_script_resources.clear();
+        for name in ["alias-a.js", "alias-b.js"] {
+            let mut resource = script_resource(
+                &format!("https://service-worker-resources.test/app/{name}"),
+                WorkerScriptResourceKind::JavaScript,
+            );
+            resource.final_url = "https://cdn.test/shared.js".parse().unwrap();
+            resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+                source: format!("throw new Error('{name}');").into(),
+                muted_errors: true,
+                redirect_urls: vec![resource.final_url.clone()],
+            });
+            registration
+                .imported_script_resources
+                .insert(resource.request_url.to_string(), resource);
+        }
+        let key = registration_key_for(&registration);
+        let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        store
+            .lock()
+            .store_registration(registration.clone())
+            .unwrap();
+        drop(store);
+        let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        assert_eq!(
+            reopened.lock().registration_for_key(&key),
+            Some(registration)
+        );
+    }
+
+    #[test]
+    fn json_service_worker_resource_store_reindexes_legacy_redirect_resources() {
+        let temp = TempStorePath::new("legacy-redirect-map");
+        let mut registration = stored_registration();
+        let mut resource = script_resource(
+            "https://service-worker-resources.test/app/alias.js",
+            WorkerScriptResourceKind::JavaScript,
+        );
+        resource.final_url = "https://cdn.test/target.js".parse().unwrap();
+        registration.imported_script_resources =
+            [(resource.final_url.to_string(), resource.clone())].into();
+        let key = registration_key_for(&registration);
+        let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        store
+            .lock()
+            .store_registration(registration.clone())
+            .unwrap();
+        drop(store);
+        assert!(
+            !fs::read_to_string(&temp.path)
+                .unwrap()
+                .contains("classicScript")
+        );
+        registration.imported_script_resources =
+            [(resource.request_url.to_string(), resource)].into();
+        let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        assert_eq!(
+            reopened.lock().registration_for_key(&key),
             Some(registration)
         );
     }
@@ -903,6 +1015,7 @@ mod tests {
             body_sha256: "hash".to_owned(),
             response_time_ms: 7,
             mime_type: Some("text/javascript".to_owned()),
+            classic_script: None,
         }
     }
 }
