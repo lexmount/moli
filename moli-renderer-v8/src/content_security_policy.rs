@@ -18,6 +18,7 @@ use url::Url;
 const CONNECT_SRC: &str = "connect-src";
 const CHILD_SRC: &str = "child-src";
 const DEFAULT_SRC: &str = "default-src";
+const BASE_URI: &str = "base-uri";
 const FRAME_ANCESTORS: &str = "frame-ancestors";
 const FRAME_SRC: &str = "frame-src";
 const IMG_SRC: &str = "img-src";
@@ -36,6 +37,7 @@ const SANDBOX: &str = "sandbox";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ContentSecurityPolicyResourceKind {
+    DocumentBase,
     DocumentConnect,
     DocumentFrame,
     DocumentImage,
@@ -924,7 +926,7 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
     })
 }
 
-fn csp_url_for_report(url: &Url) -> String {
+pub(crate) fn csp_url_for_report(url: &Url) -> String {
     if !matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
         return url.scheme().to_owned();
     }
@@ -1991,6 +1993,7 @@ fn csp_keyword_eq(source: &str, keyword: &str) -> bool {
 impl ContentSecurityPolicyResourceKind {
     fn effective_directive(self) -> &'static str {
         match self {
+            Self::DocumentBase => BASE_URI,
             Self::DocumentConnect => CONNECT_SRC,
             Self::DocumentFrame => FRAME_SRC,
             Self::DocumentImage => IMG_SRC,
@@ -2006,6 +2009,7 @@ impl ContentSecurityPolicyResourceKind {
 
     fn directive_fallbacks(self) -> &'static [&'static str] {
         match self {
+            Self::DocumentBase => &[BASE_URI],
             Self::DocumentConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::DocumentFrame => &[FRAME_SRC, CHILD_SRC, DEFAULT_SRC],
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
@@ -2317,6 +2321,47 @@ mod tests {
                 expected,
                 "{value:?} with {request}"
             );
+        }
+    }
+
+    #[test]
+    fn base_uri_uses_its_own_source_list_and_reports_violations() {
+        let protected_url = Url::parse("https://page.test/path/page.html").unwrap();
+        for (policy, request, allowed) in [
+            ("default-src 'none'", "https://other.test/base/", true),
+            ("base-uri 'none'", "https://page.test/base/", false),
+            ("base-uri 'self'", "https://page.test/base/", true),
+            ("base-uri 'self'", "https://other.test/base/", false),
+            (
+                "base-uri https://cdn.test:0443/",
+                "https://cdn.test/base/",
+                true,
+            ),
+            (
+                "base-uri https://cdn%2Etest/",
+                "https://cdn.test/base/",
+                false,
+            ),
+        ] {
+            let violation =
+                content_security_policy_url_violation_with_redirect_status_and_disposition(
+                    &[policy.to_owned()],
+                    &protected_url,
+                    &Url::parse(request).unwrap(),
+                    ContentSecurityPolicyResourceKind::DocumentBase,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect,
+                    ContentSecurityPolicyDisposition::Report,
+                );
+            assert_eq!(violation.is_none(), allowed, "{policy}: {request}");
+            if let Some(violation) = violation {
+                assert_eq!(violation.effective_directive, "base-uri");
+                assert_eq!(violation.blocked_uri, request);
+                assert_eq!(violation.original_policy, policy);
+                assert_eq!(
+                    violation.disposition,
+                    ContentSecurityPolicyDisposition::Report
+                );
+            }
         }
     }
 

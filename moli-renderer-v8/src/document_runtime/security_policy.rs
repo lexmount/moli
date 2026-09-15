@@ -140,6 +140,11 @@ impl DocumentPolicyContainer {
     ) -> Self {
         let response_content_security_policies =
             response_content_security_policies_from_headers(headers);
+        let response_content_security_report_only_policies =
+            response_content_security_report_only_policies_from_headers(headers);
+        let content_security_policy_self_url = (!response_content_security_policies.is_empty()
+            || !response_content_security_report_only_policies.is_empty())
+        .then(|| final_url.clone());
         Self {
             referrer_policy: crate::referrer_policy::response_referrer_policy_from_headers(headers),
             cross_origin_embedder_policy:
@@ -155,8 +160,8 @@ impl DocumentPolicyContainer {
                 &response_content_security_policies,
             ),
             response_content_security_policies,
-            response_content_security_report_only_policies:
-                response_content_security_report_only_policies_from_headers(headers),
+            response_content_security_report_only_policies,
+            content_security_policy_self_url,
             content_security_reporting_endpoints:
                 crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
                     headers,
@@ -220,6 +225,116 @@ impl DocumentPolicyContainer {
 }
 
 impl DocumentRuntime {
+    pub(super) fn apply_base_url_csp_mutation_steps(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: &DomMutationEffects,
+    ) {
+        // Base insertion steps precede the post-connection delivery of new
+        // meta policies, including when both arrive in one DocumentFragment.
+        for check in self.dom_host.take_base_url_policy_checks() {
+            let Some((owner, policy_check)) =
+                unsafe { &*host_ptr }.base_url_content_security_policy_check(&check)
+            else {
+                continue;
+            };
+            let (report_only, enforced) = policy_check.into_violations();
+            if !enforced.is_empty() {
+                self.dom_host.reject_base_url_policy_check(&check);
+            }
+            for violation in report_only.into_iter().chain(enforced) {
+                if let Err(error) = self.queue_content_security_policy_violation_event_for_target(
+                    scope,
+                    host_ptr,
+                    Some(check.document),
+                    &violation,
+                    true,
+                    Some(owner),
+                ) {
+                    tracing::error!(%error, "base-uri violation queueing failed");
+                }
+            }
+        }
+        let mut stack = effects.tree().connected_roots().to_vec();
+        stack.reverse();
+        while let Some(handle) = stack.pop() {
+            if self.dom_host.is_html_element_named(handle, "meta")
+                && let Some(document) = self.dom_host.owner_document_handle(handle)
+            {
+                self.process_meta_content_security_policy_handle(document, handle);
+            }
+            let mut children = self.dom_host.child_handles(handle).collect::<Vec<_>>();
+            children.reverse();
+            stack.extend(children);
+        }
+    }
+
+    pub(crate) fn base_url_content_security_policy_check_for_document(
+        &self,
+        document: DomHandle,
+        document_url: &Url,
+        policy_container: &DocumentPolicyContainer,
+        url: &Url,
+    ) -> DocumentContentSecurityPolicyCheck {
+        let mut policies = document_response_content_security_policy_strings(
+            &policy_container.response_content_security_policies,
+            &policy_container.content_security_reporting_endpoints,
+        );
+        // Use policies already delivered before these base insertion steps.
+        // Scanning the new subtree here would apply later meta elements early.
+        policies.extend(
+            self.delivered_meta_content_security_policies
+                .borrow()
+                .get(&document)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .map(|policy| DocumentContentSecurityPolicyString {
+                    policy,
+                    report_uri_enabled: false,
+                    reporting_endpoints: policy_container
+                        .content_security_reporting_endpoints
+                        .clone(),
+                }),
+        );
+        let policy_url = policy_container
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(document_url);
+        let mut check = DocumentContentSecurityPolicyCheck {
+            report_only_violations: document_url_policy_violations(
+                &policy_container.response_content_security_report_only_policies,
+                &policy_container.content_security_reporting_endpoints,
+                policy_url,
+                url,
+                ContentSecurityPolicyResourceKind::DocumentBase,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyDisposition::Report,
+            ),
+            enforced_violations: document_url_policy_violations_from_document_policies(
+                policies,
+                policy_url,
+                url,
+                ContentSecurityPolicyResourceKind::DocumentBase,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyDisposition::Enforce,
+            ),
+        };
+        if policy_url != document_url {
+            let document_uri = crate::content_security_policy::csp_url_for_report(document_url);
+            for violation in check
+                .report_only_violations
+                .iter_mut()
+                .chain(&mut check.enforced_violations)
+            {
+                violation.document_uri = document_uri.clone();
+                violation.source_file = document_uri.clone();
+            }
+        }
+        check
+    }
+
     pub(super) fn apply_style_csp_mutation_followups<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -1534,6 +1649,7 @@ impl DocumentRuntime {
             Some(target),
             violation,
             true,
+            None,
         ) {
             tracing::error!(
                 blocked_uri = violation.blocked_uri.as_str(),
@@ -1550,7 +1666,7 @@ impl DocumentRuntime {
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
         if let Err(error) = self.queue_content_security_policy_violation_event_for_target(
-            scope, host_ptr, None, violation, false,
+            scope, host_ptr, None, violation, false, None,
         ) {
             tracing::error!(
                 blocked_uri = violation.blocked_uri.as_str(),
@@ -1567,7 +1683,7 @@ impl DocumentRuntime {
         violation: &DocumentContentSecurityPolicyViolation,
     ) -> anyhow::Result<()> {
         self.queue_content_security_policy_violation_event_for_target(
-            scope, host_ptr, None, violation, true,
+            scope, host_ptr, None, violation, true, None,
         )
     }
 
@@ -1578,6 +1694,7 @@ impl DocumentRuntime {
         target: Option<DomHandle>,
         violation: &DocumentContentSecurityPolicyViolation,
         send_report: bool,
+        event_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     ) -> anyhow::Result<()> {
         self.record_content_security_policy_inspector_issue(target, violation);
         let host = unsafe { &mut *host_ptr };
@@ -1586,16 +1703,21 @@ impl DocumentRuntime {
             .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
         if send_report {
             let fields = ContentSecurityPolicyViolationEventFields::from(violation);
+            let report_owner = event_owner.unwrap_or(document_owner);
+            let child_handle = event_owner.and(target).and_then(|document| {
+                host.child_browsing_context_host_for_document_handle(document)
+            });
             crate::network_host::send_content_security_policy_reports_for_window(
                 scope,
                 host,
-                document_owner,
-                None,
+                report_owner,
+                child_handle,
                 &fields,
                 &violation.report_uri_endpoints,
                 &violation.report_to_endpoints,
             );
         }
+
         let event_task = match target {
             Some(target) => {
                 crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_element(
@@ -1608,7 +1730,8 @@ impl DocumentRuntime {
                 document_owner,
                 violation.clone(),
             ),
-        };
+        }
+        .with_event_document_owner(event_owner);
         let work = PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(event_task);
         if self.has_active_parser_write_insertion_point() {
             self.enqueue_parser_boundary_lifecycle_work(work);
@@ -1633,11 +1756,33 @@ impl DocumentRuntime {
         if unsafe { &*host_ptr }.current_main_document_task_owner() != Some(task.owner()) {
             return Ok(());
         }
+        if task.event_document_owner().is_some_and(|owner| {
+            !unsafe { &*host_ptr }.window_document_owner_is_current(
+                crate::window_document_identity::WindowDocumentOwner::Frame(owner),
+            )
+        }) {
+            return Ok(());
+        }
         let violation = task.violation();
         let event_target =
             EventTargetHandle::Node(task.target().unwrap_or_else(|| self.document_handle()));
         let event_target_value =
             event_target_value(scope, host_ptr, event_target).map_err(anyhow::Error::msg)?;
+        let context = task
+            .event_document_owner()
+            .and_then(|_| {
+                let host = unsafe { &*host_ptr };
+                if let Some(child) = task.target().and_then(|document| {
+                    host.child_browsing_context_host_for_document_handle(document)
+                }) {
+                    return host.child_browsing_context_relevant_context(scope, child);
+                }
+                v8::Local::<v8::Object>::try_from(event_target_value)
+                    .ok()
+                    .and_then(|target| target.get_creation_context(scope))
+            })
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         let event = create_content_security_policy_violation_event(
             scope,
             event_target_value,
@@ -1729,6 +1874,20 @@ impl DocumentRuntime {
     ) {
         if self.dom_host.owner_document_handle(handle) != Some(document_handle) {
             return;
+        }
+        let Some(head) = self
+            .dom_host
+            .document_head_handle_for_document(document_handle)
+        else {
+            return;
+        };
+        let mut ancestor = Some(handle);
+        loop {
+            match ancestor {
+                Some(current) if current == head => break,
+                Some(current) => ancestor = self.dom_host.node(current).and_then(Node::parent_node),
+                None => return,
+            }
         }
         let policy = {
             let Some(element) = self
@@ -2786,6 +2945,44 @@ mod tests {
     }
 
     #[test]
+    fn base_uri_csp_preserves_inherited_self_origin_and_report_document() {
+        let runtime = runtime_for_html("<!doctype html>");
+        let creator_url = Url::parse("https://creator.test/path/page.html").unwrap();
+        let policy = DocumentPolicyContainer::from_navigation_response_headers(
+            &[(
+                "Content-Security-Policy".to_owned(),
+                "base-uri 'self'; report-uri /reports".to_owned(),
+            )],
+            &creator_url,
+        );
+        for document_url in ["about:blank", "about:srcdoc"] {
+            let document_url = Url::parse(document_url).unwrap();
+            let allowed = runtime.base_url_content_security_policy_check_for_document(
+                runtime.document_handle(),
+                &document_url,
+                &policy,
+                &creator_url.join("/base/").unwrap(),
+            );
+            assert!(allowed.has_no_violations());
+            let blocked = runtime.base_url_content_security_policy_check_for_document(
+                runtime.document_handle(),
+                &document_url,
+                &policy,
+                &Url::parse("https://other.test/base/").unwrap(),
+            );
+            let violation = blocked
+                .enforced_violation()
+                .expect("cross-origin base is blocked");
+            assert_eq!(violation.document_uri, "about");
+            assert_eq!(violation.source_file, "about");
+            assert_eq!(
+                violation.report_uri_endpoints,
+                ["https://creator.test/reports"]
+            );
+        }
+    }
+
+    #[test]
     fn child_document_meta_csp_does_not_leak_into_main_document() {
         let mut runtime = runtime_for_html(
             r#"<!doctype html>
@@ -2793,6 +2990,14 @@ mod tests {
             "#,
         );
         let child_document = runtime.dom_host_mut().create_detached_html_document();
+        let child_html = runtime.dom_host_mut().create_element("html");
+        let child_head = runtime.dom_host_mut().create_element("head");
+        assert!(
+            runtime
+                .dom_host_mut()
+                .append_child(child_document, child_html)
+        );
+        assert!(runtime.dom_host_mut().append_child(child_html, child_head));
         let child_meta = runtime.dom_host_mut().create_element("meta");
         assert_eq!(
             runtime
@@ -2810,11 +3015,7 @@ mod tests {
             "content",
             "require-trusted-types-for 'script'"
         ));
-        assert!(
-            runtime
-                .dom_host_mut()
-                .append_child(child_document, child_meta)
-        );
+        assert!(runtime.dom_host_mut().append_child(child_head, child_meta));
         let reporting_endpoints = ContentSecurityPolicyReportingEndpoints::default();
 
         assert!(
@@ -2853,6 +3054,14 @@ mod tests {
         );
         runtime.set_content_security_reporting_endpoints(reporting_endpoints());
         let child_document = runtime.dom_host_mut().create_detached_html_document();
+        let child_html = runtime.dom_host_mut().create_element("html");
+        let child_head = runtime.dom_host_mut().create_element("head");
+        assert!(
+            runtime
+                .dom_host_mut()
+                .append_child(child_document, child_html)
+        );
+        assert!(runtime.dom_host_mut().append_child(child_html, child_head));
         let child_meta = runtime.dom_host_mut().create_element("meta");
         assert_eq!(
             runtime
@@ -2870,11 +3079,7 @@ mod tests {
             "content",
             "img-src 'none'; report-to csp; report-uri /ignored-meta-report"
         ));
-        assert!(
-            runtime
-                .dom_host_mut()
-                .append_child(child_document, child_meta)
-        );
+        assert!(runtime.dom_host_mut().append_child(child_head, child_meta));
 
         let child_url = Url::parse("https://child.example.test/page").unwrap();
         let request_url = child_url.join("image.png").unwrap();

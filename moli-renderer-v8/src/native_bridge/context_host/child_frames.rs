@@ -349,6 +349,9 @@ impl ChildBrowsingContextEntry {
         credentialless: bool,
         credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     ) {
+        self.document_policy_container
+            .content_security_policy_self_url =
+            policy_container.content_security_policy_self_url.clone();
         self.document_policy_container.referrer_policy = policy_container.referrer_policy.clone();
         self.document_policy_container.cross_origin_embedder_policy =
             policy_container.cross_origin_embedder_policy;
@@ -386,6 +389,11 @@ impl ChildBrowsingContextEntry {
         &mut self,
         snapshot: &ChildBrowsingContextSnapshot,
     ) {
+        self.document_policy_container
+            .content_security_policy_self_url = snapshot
+            .policy_container
+            .content_security_policy_self_url
+            .clone();
         let sandbox = self
             .document_policy_container
             .sandbox
