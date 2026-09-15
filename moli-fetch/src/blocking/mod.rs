@@ -368,7 +368,10 @@ fn append_browser_subresource_headers(
             append_header_if_missing(
                 outgoing,
                 "Accept-Language",
-                config.browser_identity().accept_language().to_owned(),
+                request
+                    .browser_identity(config)
+                    .accept_language()
+                    .to_owned(),
             );
             append_header_if_missing(
                 outgoing,
@@ -384,7 +387,7 @@ fn append_browser_subresource_headers(
             if let Some(origin) = request_origin_header_value(request, request_url) {
                 append_header_if_missing(outgoing, "Origin", origin);
             }
-            append_browser_client_hints(outgoing, config);
+            append_browser_client_hints(outgoing, request.browser_identity(config));
         }
         return;
     };
@@ -957,6 +960,69 @@ mod tests {
     struct ProtocolAllowlistHandler;
 
     impl Handler for ProtocolAllowlistHandler {}
+
+    #[test]
+    fn script_headers_use_request_identity_with_or_without_browser_metadata() {
+        let config = FetchConfig::default();
+        let overridden = std::sync::Arc::new(
+            moli_browser_profile::BrowserIdentityProfile::from_devtools_override(
+                config.browser_identity(),
+                "OverrideBrowser/1",
+                Some("fr-FR".to_owned()),
+                None,
+                None,
+            ),
+        );
+        for resource_type in [
+            crate::RequestResourceType::Script,
+            crate::RequestResourceType::ParserBlockingScript,
+            crate::RequestResourceType::ClassicAsyncOrDeferScript,
+            crate::RequestResourceType::LatePreloadScript,
+        ] {
+            for metadata in [false, true] {
+                for override_identity in [false, true] {
+                    let mut request =
+                        Request::new("GET", "https://app.test/script.js", None, Vec::new())
+                            .unwrap()
+                            .with_resource_type(resource_type);
+                    if metadata {
+                        request =
+                            request.with_browser_request_metadata(BrowserRequestMetadata::Script);
+                    }
+                    if override_identity {
+                        request = request.with_browser_identity(overridden.clone());
+                    }
+                    for target in [&request.url, &url("https://cdn.test/redirected.js")] {
+                        let headers =
+                            outgoing_request_headers_for_url(&config, &request, target, None);
+                        assert_eq!(
+                            header_value(&headers, "Accept-Language").as_deref(),
+                            Some(if override_identity {
+                                "fr-FR"
+                            } else {
+                                config.browser_identity().accept_language()
+                            }),
+                            "{resource_type:?} metadata={metadata} override={override_identity} target={target}"
+                        );
+                        if override_identity {
+                            assert_eq!(
+                                header_value(&headers, "User-Agent").as_deref(),
+                                Some("OverrideBrowser/1")
+                            );
+                            for name in ["Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform"] {
+                                assert_eq!(header_value(&headers, name), None, "{name}");
+                            }
+                        } else {
+                            assert_eq!(
+                                header_value(&headers, "Sec-CH-UA"),
+                                config.browser_identity().sec_ch_ua_value()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn curl_string_protocol_allowlist_rejects_file_transfer() {
