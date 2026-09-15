@@ -56,6 +56,86 @@ fn synthetic_redirect(from: &Url, to: &Url) -> RedirectInfo {
 }
 
 #[tokio::test]
+async fn redirect_checks_block_before_contact_in_every_transport() -> Result<()> {
+    let target = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("forbidden")]);
+    let source = ScriptedHttpServer::spawn(vec![
+        ScriptedResponse::status(302, "Found")
+            .with_header("Location", &target.url());
+        3
+    ]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let target_url = Url::parse(&target.url())?;
+    let seen = calls.clone();
+    let check = crate::RequestRedirectCheck::new(move |next_url| {
+        assert_eq!(next_url, &target_url);
+        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err("redirect denied by embedder".to_owned())
+    });
+    for transport in Transport::ALL {
+        let error = transport
+            .fetch(
+                &client,
+                Request::get(&source.url())?.with_redirect_check(check.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("redirect denied by embedder"),
+            "{transport:?}: {error:#}"
+        );
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(source.hits(), 3);
+    assert_eq!(target.hits(), 0);
+    source.shutdown();
+    target.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn cached_redirects_run_the_current_request_redirect_check() -> Result<()> {
+    for transport in [Transport::Html, Transport::Raw] {
+        let cache_dir = unique_test_cache_dir();
+        let mut config = FetchConfig::default();
+        config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+        let target = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("allowed once")]);
+        let source = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found")
+                .with_header("Location", &target.url())
+                .with_header("Cache-Control", "max-age=600"),
+        ]);
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let request = Request::get(&source.url())?;
+        transport.fetch(&client, request.clone()).await?;
+        let error = transport
+            .fetch(
+                &client,
+                request.with_redirect_check(crate::RequestRedirectCheck::new(|_| {
+                    Err("cached redirect denied".to_owned())
+                })),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cached redirect denied"),
+            "{transport:?}: {error:#}"
+        );
+        assert_eq!(source.hits(), 1, "the redirect response should be cached");
+        assert_eq!(
+            target.hits(),
+            1,
+            "the newly rejected request must not reach the target"
+        );
+        source.shutdown();
+        target.shutdown();
+        drop(client);
+        fs::remove_dir_all(cache_dir)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn plain_http_requests_do_not_infer_browser_origin_from_referrer() -> Result<()> {
     let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("http"); 3]);
     let url = Url::parse(&server.url())?;
