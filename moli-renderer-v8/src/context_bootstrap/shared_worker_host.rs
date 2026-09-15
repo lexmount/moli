@@ -331,6 +331,17 @@ fn shared_worker_constructor_callback_inner<'s>(
         }
     };
     let message_port_registry = context.browser_context_runtime.message_port_registry();
+    let script_load = if resolved_url.scheme() == "data" {
+        let global = scope.get_current_context().global(scope);
+        // SAFETY: the constructor's Window realm owns this host for the call.
+        let policy = unsafe { &*host_ptr }
+            .local_worker_content_security_policy_source_for_global(scope, global)
+            .map(|source| source.read().clone())
+            .unwrap_or_default();
+        script_load.with_ready_content_security_policy(policy)
+    } else {
+        script_load
+    };
     let Some(message_port_realm) = MessagePortRealmBinding::current(scope) else {
         throw_type_error(
             scope,

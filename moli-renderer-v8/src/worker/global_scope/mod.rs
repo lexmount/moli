@@ -1556,6 +1556,8 @@ pub(crate) struct WorkerGlobalState {
     pub(super) module_static_import_content_security_policies: Vec<String>,
     /// Enforce CSP policies parsed from the top-level worker script response.
     pub(super) content_security_policies: Vec<String>,
+    pub(super) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     /// Report-only CSP policies parsed from the top-level worker script response.
     pub(super) content_security_report_only_policies: Vec<String>,
     /// Reporting API endpoints parsed from the top-level worker script response.
@@ -2858,6 +2860,8 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) module_static_import_content_security_policies: Vec<String>,
+    pub(crate) content_security_policy_snapshot:
+        crate::content_security_policy::InheritedContentSecurityPolicy,
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: super::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
@@ -2891,6 +2895,7 @@ pub(crate) fn reserve_nested_worker_context(
         indexed_db_manager: state.indexed_db_manager.clone(),
         storage_bucket_store: state.storage_bucket_store.clone(),
         module_static_import_content_security_policies: state.content_security_policies.clone(),
+        content_security_policy_snapshot: content_security_policy::worker_policy_snapshot(&state),
         require_trusted_types_for_script:
             crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
                 &state.content_security_policies,
@@ -6346,6 +6351,22 @@ pub(crate) fn worker_storage_partition_identity(
             .worker_context_runtime
             .storage_partition_identity(),
     )
+}
+
+impl WorkerGlobalState {
+    pub(in crate::worker) fn content_security_policy_snapshot_for_inheritance(
+        &self,
+    ) -> crate::content_security_policy::InheritedContentSecurityPolicy {
+        content_security_policy::worker_policy_snapshot(self)
+    }
+}
+
+pub(crate) fn worker_content_security_policy_snapshot(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::content_security_policy::InheritedContentSecurityPolicy> {
+    Some(content_security_policy::worker_policy_snapshot(
+        &get_worker_state(scope)?.borrow(),
+    ))
 }
 
 pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {

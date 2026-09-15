@@ -16,6 +16,9 @@ use percent_encoding::percent_decode_str;
 use serde_json::json;
 use url::Url;
 
+mod inheritance;
+pub(crate) use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
+
 const CONNECT_SRC: &str = "connect-src";
 const CHILD_SRC: &str = "child-src";
 const DEFAULT_SRC: &str = "default-src";

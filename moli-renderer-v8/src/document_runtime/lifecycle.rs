@@ -295,6 +295,7 @@ impl DocumentRuntime {
         self.delivered_meta_content_security_policies
             .get_mut()
             .clear();
+        self.local_worker_policy_sources.get_mut().clear();
         self.processed_meta_content_security_policy_handles
             .get_mut()
             .clear();
