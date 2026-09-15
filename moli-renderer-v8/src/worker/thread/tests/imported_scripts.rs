@@ -385,6 +385,48 @@ async fn service_worker_importscripts_checks_legacy_resource_hash_before_executi
 }
 
 #[tokio::test]
+async fn worker_importscripts_rejects_missing_or_invalid_http_mime_before_execution() {
+    ensure_v8();
+    for content_type in [
+        None,
+        Some(""),
+        Some("not a mime type"),
+        Some("text/javascript"),
+    ] {
+        let headers = content_type
+            .map(|mime| format!("Content-Type: {mime}\r\n"))
+            .unwrap_or_default();
+        let body = "self.executed = true;";
+        let server = ImportScriptHttpServer::spawn(format!(
+            "HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        let mut handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
+            r#"
+            let result = 'ok';
+            try { importScripts('./dep.js'); }
+            catch (error) { result = error.name; }
+            postMessage([result, self.executed === true]); close();
+            "#
+            .into(),
+            format!("{}/worker.js", server.url),
+        ));
+        assert_eq!(
+            recv_post_json(&mut handle).await,
+            if content_type == Some("text/javascript") {
+                "[\"ok\",true]"
+            } else {
+                "[\"NetworkError\",false]"
+            },
+            "{content_type:?}"
+        );
+        assert_eq!(server.requests.lock().len(), 1);
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn worker_importscripts_fetches_data_urls_in_execution_order() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
@@ -406,19 +448,24 @@ async fn worker_importscripts_validates_captured_blob_entries_in_execution_order
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
         r#"
-        const badMime = URL.createObjectURL(new Blob(['self.second = true'], {type:'text/plain'}));
-        let result = 'ok';
-        try { importScripts('data:text/javascript,self.first = true', badMime); }
-        catch (error) { result = error.name; }
-        URL.revokeObjectURL(badMime);
-        postMessage([self.first === true, self.second === true, result]); close();
+        const results = [];
+        for (const type of ['text/plain', '', 'not a mime type']) {
+            self.first = self.second = false;
+            const badMime = URL.createObjectURL(new Blob(['self.second = true'], {type}));
+            let result = 'ok';
+            try { importScripts('data:text/javascript,self.first = true', badMime); }
+            catch (error) { result = error.name; }
+            URL.revokeObjectURL(badMime);
+            results.push([self.first === true, self.second === true, result]);
+        }
+        postMessage(results); close();
         "#
         .into(),
         "https://example.test/worker.js".into(),
     ));
     assert_eq!(
         recv_post_json(&mut handle).await,
-        "[true,false,\"NetworkError\"]"
+        "[[true,false,\"NetworkError\"],[true,false,\"NetworkError\"],[true,false,\"NetworkError\"]]"
     );
 }
 
