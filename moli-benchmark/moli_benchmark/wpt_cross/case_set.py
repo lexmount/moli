@@ -844,6 +844,22 @@ def _script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str],
     )
 
 
+@lru_cache(maxsize=None)
+def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in ("redirect.py", "update-worker.py", "import-scripts-version.py"):
+        resource = "service-workers/service-worker/resources/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
+
 def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
@@ -854,6 +870,7 @@ def _supported_wptserve_handler_references(
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
         supported += _script_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _service_worker_script_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/range":
