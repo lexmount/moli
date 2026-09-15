@@ -2235,6 +2235,34 @@ fn violation_report_body_uses_csp_report_shape() {
 }
 
 #[test]
+fn legacy_csp_report_serializes_only_known_source_location_fields() {
+    let violation = content_security_policy_url_violation_with_redirect_status(
+        &["connect-src 'none'".into()],
+        &protected_url(),
+        &request_url("https://api.test/data.json"),
+        ContentSecurityPolicyResourceKind::WorkerConnect,
+        ContentSecurityPolicyRedirectStatus::NoRedirect,
+    )
+    .unwrap();
+    let mut fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+    fields.source_file = "";
+    let body: serde_json::Value =
+        serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+    for name in ["source-file", "line-number", "column-number"] {
+        assert!(body["csp-report"].get(name).is_none(), "{name}");
+    }
+
+    fields.source_file = "https://app.test/script.js";
+    fields.line_number = 21;
+    fields.column_number = 4;
+    let body: serde_json::Value =
+        serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+    assert_eq!(body["csp-report"]["source-file"], fields.source_file);
+    assert_eq!(body["csp-report"]["line-number"], fields.line_number);
+    assert_eq!(body["csp-report"]["column-number"], fields.column_number);
+}
+
+#[test]
 fn reporting_api_report_body_uses_csp_violation_shape() {
     let violation = content_security_policy_url_violation_with_redirect_status(
         &["connect-src 'none'".into()],
