@@ -23,6 +23,28 @@ impl ChildDocumentAsyncClassicScriptLoadDelay {
     }
 }
 
+/// A module inserted after `load` still runs without reopening the load gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChildDocumentModuleScriptLoadDelay {
+    Pending(DocumentLoadDelayTokenId),
+    AlreadyUnblocked,
+}
+
+impl From<DocumentLoadDelayTokenId> for ChildDocumentModuleScriptLoadDelay {
+    fn from(token: DocumentLoadDelayTokenId) -> Self {
+        Self::Pending(token)
+    }
+}
+
+impl ChildDocumentModuleScriptLoadDelay {
+    pub(crate) const fn token(self) -> Option<DocumentLoadDelayTokenId> {
+        match self {
+            Self::Pending(token) => Some(token),
+            Self::AlreadyUnblocked => None,
+        }
+    }
+}
+
 /// Result of consuming one exact main-Document script load-delay lease.
 ///
 /// This reports a durable load-gate state transition. It does not itself wake
