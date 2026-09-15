@@ -481,6 +481,8 @@ pub(super) fn install_window_named_properties_object(
                     | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
             ),
     );
+    // Indexed callbacks share the named-property visibility check, including
+    // real numeric properties inherited from EventTarget/Object prototypes.
     named_properties_template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
             .getter(window_named_properties_indexed_property_getter)
@@ -505,6 +507,17 @@ pub(super) fn install_window_named_properties_object(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to create Window named properties proxy handler: {error}"))?;
+    // Proxy trap lookup traverses the handler's prototype chain. Inherited page
+    // properties must never become internal WindowProperties traps.
+    let null_prototype = v8::null(scope).into();
+    if !handler
+        .set_prototype(scope, null_prototype)
+        .unwrap_or(false)
+    {
+        return Err(anyhow!(
+            "failed to clear Window named properties proxy handler prototype"
+        ));
+    }
     let global = scope.get_current_context().global(scope);
     let reflect = global
         .get(scope, v8str(scope, "Reflect").into())
