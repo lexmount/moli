@@ -1,5 +1,39 @@
 use super::*;
 
+struct ImportScriptHttpServer {
+    url: String,
+    requests: Arc<parking_lot::Mutex<Vec<String>>>,
+    task: JoinHandle<()>,
+}
+
+impl ImportScriptHttpServer {
+    async fn spawn(response: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let observed = requests.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_http_request_head(&mut stream).await.unwrap();
+                observed.lock().push(request);
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        Self {
+            url,
+            requests,
+            task,
+        }
+    }
+}
+
+impl Drop for ImportScriptHttpServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 #[tokio::test]
 async fn worker_importscripts_trusted_types_reports_keep_script_and_document_locations_separate() {
     ensure_v8();
@@ -165,14 +199,12 @@ async fn worker_importscripts_redirects_check_csp_and_ignore_redirected_paths() 
         (true, false, r#"["ok",true,["report"],true]"#),
         (false, true, r#"["ok",true,[],true]"#),
     ] {
-        let (foreign_url, foreign_server) = spawn_path_response_http_server(vec![(
-            "/redirect-target/foreign.js",
-            "HTTP/1.1 200 OK",
-            "text/javascript",
-            "self.loaded = true;".into(),
-            Duration::ZERO,
-        )])
-        .await;
+        let body = "self.loaded = true;";
+        let foreign = ImportScriptHttpServer::spawn(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )).await;
+        let foreign_url = &foreign.url;
         let response = format!(
             "HTTP/1.1 302 Found\r\nLocation: {foreign_url}/redirect-target/foreign.js\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -226,8 +258,144 @@ async fn worker_importscripts_redirects_check_csp_and_ignore_redirected_paths() 
             "report={report_only}, allow={allow_foreign}"
         );
         server.await.unwrap();
-        foreign_server.await.unwrap();
+        assert_eq!(
+            foreign.requests.lock().len(),
+            usize::from(report_only || allow_foreign),
+            "an enforced CSP violation must stop before contacting the redirect target",
+        );
     }
+}
+
+#[tokio::test]
+async fn worker_importscripts_csp_reports_all_policies_before_and_after_redirects() {
+    ensure_v8();
+    for redirected in [false, true] {
+        let foreign = ImportScriptHttpServer::spawn(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ).await;
+        let target = format!("{}/private/script.js?secret=1", foreign.url);
+        let source = ImportScriptHttpServer::spawn(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )).await;
+        let request = if redirected {
+            format!("{}/redirect.js", source.url)
+        } else {
+            target
+        };
+        let script = r#"
+            let name;
+            try {
+                importScripts(REQUEST);
+            } catch (error) { name = error.name; }
+            let microtaskRan = false;
+            queueMicrotask(() => microtaskRan = true);
+            const events = [];
+            addEventListener('securitypolicyviolation', event => {
+                events.push([
+                    event.originalPolicy, event.disposition, event.effectiveDirective,
+                    event.blockedURI, event.sourceFile, event.lineNumber,
+                    event.columnNumber, microtaskRan
+                ]);
+                if (events.length === 4) { postMessage({name, events}); close(); }
+            });
+        "#
+        .replace("REQUEST", &serde_json::to_string(&request).unwrap());
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(script, format!("{}/worker.js?caller=1", source.url))
+                .with_content_security_policies(vec![
+                    "script-src 'self'".into(),
+                    "script-src-elem 'self'".into(),
+                ])
+                .with_content_security_report_only_policies(vec![
+                    "default-src 'self'".into(),
+                    "script-src 'self'; script-src-elem 'self'".into(),
+                ]),
+        );
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+        let location = format!("{}/worker.js", source.url);
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "name": "NetworkError",
+                "events": [
+                    ["default-src 'self'", "report", "script-src-elem", request, location, 4, 17, true],
+                    ["script-src 'self'; script-src-elem 'self'", "report", "script-src-elem", request, location, 4, 17, true],
+                    ["script-src 'self'", "enforce", "script-src-elem", request, location, 4, 17, true],
+                    ["script-src-elem 'self'", "enforce", "script-src-elem", request, location, 4, 17, true],
+                ],
+            })
+        );
+        assert_eq!(source.requests.lock().len(), usize::from(redirected));
+        assert!(foreign.requests.lock().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn worker_importscripts_cached_redirects_use_the_current_worker_policy() {
+    ensure_v8();
+    let body = "self.loaded = true;";
+    let foreign = ImportScriptHttpServer::spawn(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )).await;
+    let source = ImportScriptHttpServer::spawn(format!(
+        "HTTP/1.1 302 Found\r\nLocation: {}/imported.js\r\nCache-Control: max-age=600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        foreign.url
+    )).await;
+    let cache_dir = std::env::temp_dir().join(format!(
+        "moli-worker-importscripts-csp-{}-{}",
+        std::process::id(),
+        fastrand::u64(..),
+    ));
+    let mut config = FetchConfig::default();
+    config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+    let client = ResourceRequestClient::new(&config).unwrap();
+    for (blocked, contacts) in [(false, 1), (true, 1), (false, 2)] {
+        let script = r#"
+            let name;
+            try { importScripts('./redirect.js'); } catch (error) { name = error.name; }
+            if (name) {
+                addEventListener('securitypolicyviolation', event => {
+                    postMessage([name, self.loaded === true, event.effectiveDirective]);
+                    close();
+                });
+            } else { postMessage(['ok', self.loaded === true]); close(); }
+        "#;
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new_with_request_client(
+                script.into(),
+                format!("{}/worker.js", source.url),
+                client.clone(),
+            )
+            .with_content_security_policies(vec![if blocked {
+                "script-src 'self'".into()
+            } else {
+                "script-src http:".into()
+            }]),
+        );
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        assert_eq!(
+            expect_post_json(message),
+            if blocked {
+                r#"["NetworkError",false,"script-src-elem"]"#
+            } else {
+                r#"["ok",true]"#
+            }
+        );
+        assert_eq!(
+            source.requests.lock().len(),
+            1,
+            "the redirect should come from the HTTP cache after the first load"
+        );
+        assert_eq!(
+            foreign.requests.lock().len(),
+            contacts,
+            "cached redirects must honor the current worker's CSP before contacting the target"
+        );
+    }
+    drop(client);
+    std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
 #[tokio::test]
