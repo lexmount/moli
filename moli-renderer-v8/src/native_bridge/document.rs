@@ -1462,10 +1462,10 @@ fn document_has_browsing_context(runtime: &JsContextHost, handle: DomHandle) -> 
 fn document_is_hidden(runtime: &JsContextHost, handle: DomHandle) -> bool {
     !runtime.document_activity().visible
         || runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_document)
-        .is_none_or(|document| document.visibility_hidden())
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_document)
+            .is_none_or(|document| document.visibility_hidden())
         || !document_has_browsing_context(runtime, handle)
 }
 
