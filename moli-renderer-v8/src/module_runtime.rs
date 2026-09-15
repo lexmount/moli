@@ -12,6 +12,7 @@ mod parser_tree_registry;
 mod record;
 mod record_resolver;
 mod resolver;
+mod response_mime;
 mod single_module_fetch;
 mod synthetic_text;
 #[cfg(test)]
@@ -53,6 +54,9 @@ pub(crate) use self::record::{ModuleRecordEntry, WasmImportRecord, WasmModuleRec
 pub(crate) use self::resolver::{
     ResolverScopeGuard, resolve_evaluation_module_callback, resolve_evaluation_source_callback,
     resolve_static_module_callback, resolve_static_source_callback,
+};
+pub(crate) use self::response_mime::{
+    validate_css_module_response_mime, validate_json_module_response_mime,
 };
 pub(crate) use self::single_module_fetch::NativeModuleSingleFetchRequest;
 pub(crate) use self::synthetic_text::SyntheticTextModuleSource;
