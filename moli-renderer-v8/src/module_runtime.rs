@@ -63,7 +63,7 @@ pub(crate) use self::response_mime::{
     validate_css_module_response_mime, validate_json_module_response_mime,
 };
 pub(crate) use self::single_module_fetch::NativeModuleSingleFetchRequest;
-pub(crate) use self::synthetic_text::SyntheticTextModuleSource;
+pub(crate) use self::synthetic_text::{SyntheticTextModuleSource, SyntheticTextModuleValue};
 pub(crate) use self::tree_owner::{
     NativeModuleTreeDocumentOwnerAdapter, NativeModuleTreeFrameDocumentOwner,
 };
