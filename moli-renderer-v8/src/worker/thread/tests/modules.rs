@@ -3,6 +3,8 @@ use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
+mod source_phase;
+
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x60, 0x01, 0x7f, 0x00, 0x60,
     0x00, 0x00, 0x02, 0x19, 0x01, 0x12, 0x2e, 0x2f, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2d, 0x68,
@@ -2858,24 +2860,24 @@ async fn service_worker_module_rejects_async_dependencies_before_execution() {
 async fn service_worker_module_checks_only_wasm_evaluation_dependencies() {
     ensure_v8();
     for source_only in [false, true] {
-        let (base_url, server) = spawn_path_response_http_server(vec![
-            (
-                "/worker/worker.wasm",
-                "HTTP/1.1 200 OK",
-                "application/wasm",
-                worker_wasm_import_pm_body(),
-                Duration::ZERO,
-            ),
-            (
+        let mut responses = vec![(
+            "/worker/worker.wasm",
+            "HTTP/1.1 200 OK",
+            "application/wasm",
+            worker_wasm_import_pm_body(),
+            Duration::ZERO,
+        )];
+        if !source_only {
+            responses.push((
                 "/worker/worker-helper.js",
                 "HTTP/1.1 200 OK",
                 "text/javascript",
                 "console.log('unexpected helper execution'); export function pm() {} await 0;"
                     .into(),
                 Duration::ZERO,
-            ),
-        ])
-        .await;
+            ));
+        }
+        let (base_url, server) = spawn_path_response_http_server(responses).await;
         let source = if source_only {
             "import source wasm from './worker.wasm'; console.log(wasm instanceof WebAssembly.Module);"
         } else {
