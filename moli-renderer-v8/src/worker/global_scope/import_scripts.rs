@@ -9,7 +9,7 @@ use moli_url::WebOrigin;
 
 pub(super) struct WorkerImportScriptSource {
     pub(super) final_url: Url,
-    pub(super) source: String,
+    pub(super) source: Arc<str>,
     pub(super) muted_errors: bool,
     resource: Option<crate::worker::WorkerScriptResource>,
 }
@@ -18,7 +18,16 @@ pub(super) fn resolve_import_script_url(
     state: Rc<RefCell<WorkerGlobalState>>,
     input: &str,
 ) -> Result<Url, WorkerImportScriptError> {
-    let base_url = state.borrow().current_script_url.clone();
+    let (base_url, service_worker) = {
+        let state = state.borrow();
+        (
+            state.current_script_url.clone(),
+            matches!(
+                state.global_kind,
+                super::super::thread::WorkerGlobalKind::Service { .. }
+            ),
+        )
+    };
     let mut url = Url::parse(input)
         .or_else(|_| {
             base_url
@@ -39,7 +48,9 @@ pub(super) fn resolve_import_script_url(
             )));
         }
     }
-    url.set_fragment(None);
+    if !service_worker {
+        url.set_fragment(None);
+    }
     Ok(url)
 }
 
@@ -47,43 +58,84 @@ pub(super) fn materialize_worker_import_source(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     script_url: &Url,
+    blob_entry: Option<(String, String)>,
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
     let csp = WorkerImportScriptCsp::capture(scope, state, script_url);
     if let Some(csp) = &csp {
         csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
             .map_err(WorkerImportScriptError::network)?;
     }
-    match script_url.scheme() {
+    let (service_worker, cached, can_import_new) = {
+        let state = state.borrow();
+        (
+            matches!(
+                state.global_kind,
+                super::super::thread::WorkerGlobalKind::Service { .. }
+            ),
+            state
+                .service_worker_script_resources
+                .get(script_url)
+                .cloned(),
+            state.service_worker_can_import_new_scripts,
+        )
+    };
+    if service_worker {
+        if let Some(resource) = &cached
+            && let Some(script) = &resource.classic_script
+        {
+            if let Some(csp) = &csp {
+                for url in &script.redirect_urls {
+                    csp.check_url(url, ContentSecurityPolicyRedirectStatus::FollowedRedirect)
+                        .map_err(WorkerImportScriptError::network)?;
+                }
+            }
+            return Ok(WorkerImportScriptSource {
+                final_url: resource.final_url.clone(),
+                source: script.source.clone(),
+                muted_errors: script.muted_errors,
+                resource: Some(resource.clone()),
+            });
+        }
+        if !can_import_new && cached.is_none() {
+            return Err(WorkerImportScriptError::network(format!(
+                "Failed to execute 'importScripts': `{script_url}` was not imported during installation."
+            )));
+        }
+    }
+    // The resource map uses the complete request URL. Fragments are excluded
+    // only when obtaining the response body from the network or a local URL.
+    let mut fetch_url = script_url.clone();
+    fetch_url.set_fragment(None);
+    let mut source = match fetch_url.scheme() {
         "data" => {
             let source =
-                decode_data_url_script_source(script_url, "Failed to execute 'importScripts'")
+                decode_data_url_script_source(&fetch_url, "Failed to execute 'importScripts'")
                     .map_err(WorkerImportScriptError::network)?;
             let mime_type =
-                moli_web_mime::data_url_mime_type(script_url.as_str()).ok_or_else(|| {
+                moli_web_mime::data_url_mime_type(fetch_url.as_str()).ok_or_else(|| {
                     WorkerImportScriptError::network(format!(
                         "Failed to execute 'importScripts': invalid data URL `{script_url}`."
                     ))
                 })?;
             ensure_worker_import_script_mime_acceptable(script_url, &mime_type, source.as_bytes())?;
             Ok(WorkerImportScriptSource {
-                final_url: script_url.clone(),
-                source,
+                final_url: fetch_url.clone(),
+                source: source.into(),
                 muted_errors: false,
                 resource: None,
             })
         }
         "blob" => {
-            let (body, mime_type) = crate::blob::object_url_body_and_type(script_url.as_str())
-                .ok_or_else(|| {
-                    WorkerImportScriptError::network(format!(
-                        "Failed to execute 'importScripts': blob URL `{}` is unavailable.",
-                        script_url
-                    ))
-                })?;
+            let (body, mime_type) = blob_entry.ok_or_else(|| {
+                WorkerImportScriptError::network(format!(
+                    "Failed to execute 'importScripts': blob URL `{}` is unavailable.",
+                    script_url
+                ))
+            })?;
             ensure_worker_import_script_mime_acceptable(script_url, &mime_type, body.as_bytes())?;
             Ok(WorkerImportScriptSource {
-                final_url: script_url.clone(),
-                source: body,
+                final_url: fetch_url.clone(),
+                source: body.into(),
                 muted_errors: false,
                 resource: None,
             })
@@ -101,7 +153,7 @@ pub(super) fn materialize_worker_import_source(
             };
             let source = fetch_worker_import_source_blocking(
                 loader,
-                script_url.clone(),
+                fetch_url.clone(),
                 initiator_url,
                 referrer_policy,
                 network_partition_key,
@@ -116,15 +168,48 @@ pub(super) fn materialize_worker_import_source(
                 }),
             )
             .map_err(WorkerImportScriptError::network)?;
-            if let Some(resource) = source.resource.clone() {
-                report_service_worker_imported_script_loaded(state, resource);
-            }
             Ok(source)
         }
         scheme => Err(WorkerImportScriptError::network(format!(
             "Failed to execute 'importScripts': URL scheme `{scheme}` is not allowed."
         ))),
+    }?;
+    if service_worker {
+        let resource = source
+            .resource
+            .get_or_insert_with(|| crate::worker::WorkerScriptResource {
+                request_url: script_url.clone(),
+                final_url: source.final_url.clone(),
+                kind: crate::worker::WorkerScriptResourceKind::JavaScript,
+                status: 200,
+                headers: vec![("Content-Type".into(), "text/javascript".into())],
+                body_len: source.source.len(),
+                body_sha256: moli_crypto::sha256_hex(source.source.as_bytes()),
+                response_time_ms: 0,
+                mime_type: Some("text/javascript".into()),
+                classic_script: Some(crate::worker::WorkerStoredClassicScript {
+                    source: source.source.clone(),
+                    muted_errors: source.muted_errors,
+                    redirect_urls: Vec::new(),
+                }),
+            });
+        resource.request_url = script_url.clone();
+        // Older profiles stored only hashes. Recover their content only when
+        // the server still returns the installed bytes, never a new version.
+        if cached.as_ref().is_some_and(|cached| {
+            cached.body_sha256 != resource.body_sha256 || cached.final_url != resource.final_url
+        }) {
+            return Err(WorkerImportScriptError::network(format!(
+                "Failed to execute 'importScripts': the installed script `{script_url}` is unavailable."
+            )));
+        }
+        state
+            .borrow_mut()
+            .service_worker_script_resources
+            .insert(script_url.clone(), resource.clone());
+        report_service_worker_imported_script_loaded(state, resource.clone());
     }
+    Ok(source)
 }
 
 // Redirect checks run on the network thread. Keep the caller's location and
@@ -309,15 +394,25 @@ pub(super) fn fetch_worker_import_source_blocking(
         }
     })?;
     let (head, body, body_bytes) = response.into_parts();
-    let resource = crate::worker::WorkerScriptResource::from_response_parts(
+    let mut resource = crate::worker::WorkerScriptResource::from_response_parts(
         request_url,
         &head,
         &body_bytes,
         response_time_ms,
     );
+    let source: Arc<str> = body.into();
+    resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+        source: source.clone(),
+        muted_errors,
+        redirect_urls: head
+            .redirect_chain
+            .iter()
+            .map(|redirect| redirect.to_url.clone())
+            .collect(),
+    });
     Ok(WorkerImportScriptSource {
         final_url: head.final_url,
-        source: body,
+        source,
         muted_errors,
         resource: Some(resource),
     })

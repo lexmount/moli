@@ -4088,6 +4088,9 @@ fn maybe_send_service_worker_lifecycle_completion(
             return;
         }
         let completion = pending.completion.clone();
+        if completion.kind == ServiceWorkerLifecycleEventKind::Install {
+            state.service_worker_can_import_new_scripts = false;
+        }
         state
             .pending_service_worker_lifecycle_events
             .remove(&event_id);

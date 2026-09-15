@@ -1436,12 +1436,6 @@ impl WorkerImportScriptError {
     }
 }
 
-struct PreparedWorkerImportScript {
-    final_url: Url,
-    source: Option<String>,
-    muted_errors: bool,
-}
-
 fn annotate_worker_exception_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Value>,
@@ -1529,6 +1523,10 @@ pub(crate) struct WorkerGlobalState {
     /// Worker global's URL and settings base, unchanged by importScripts().
     /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(super) current_script_url: Option<Url>,
+    /// Responses in this ServiceWorker version's script resource map, keyed by
+    /// requested URL. Dedicated and Shared Workers leave this map empty.
+    pub(super) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(super) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(super) referrer_policy: Option<String>,
     /// CSP policies from outside settings used for module static imports.
@@ -6938,44 +6936,31 @@ fn worker_import_scripts_callback<'s>(
                 return;
             }
         };
-        let source = if matches!(resolved_url.scheme(), "data" | "blob") {
-            match materialize_worker_import_source(scope, &state, &resolved_url) {
-                Ok(import_source) => Some(import_source.source),
-                Err(error) => {
-                    error.throw(scope);
-                    return;
-                }
-            }
+        // Parsing a blob URL captures its entry before any imported script
+        // can revoke it. Fetch validation still runs in execution order.
+        let blob_entry = if resolved_url.scheme() == "blob" {
+            let mut blob_url = resolved_url.clone();
+            blob_url.set_fragment(None);
+            crate::blob::object_url_body_and_type(blob_url.as_str())
         } else {
             None
         };
-        prepared.push(PreparedWorkerImportScript {
-            final_url: resolved_url,
-            source,
-            muted_errors: false,
-        });
+        prepared.push((resolved_url, blob_entry));
     }
-    for mut script in prepared {
-        let request_url = script.final_url.clone();
-        if script.source.is_none() {
-            let import_source =
-                match materialize_worker_import_source(scope, &state, &script.final_url) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        error.throw(scope);
-                        return;
-                    }
-                };
-            script.final_url = import_source.final_url;
-            script.source = Some(import_source.source);
-            script.muted_errors = import_source.muted_errors;
-        }
-        let source = script.source.as_deref().unwrap_or_default();
+    for (request_url, blob_entry) in prepared {
+        let script = match materialize_worker_import_source(scope, &state, &request_url, blob_entry)
+        {
+            Ok(result) => result,
+            Err(error) => {
+                error.throw(scope);
+                return;
+            }
+        };
         if let Err(error) = evaluate_worker_script(
             scope,
             &request_url,
             &script.final_url,
-            source,
+            &script.source,
             script.muted_errors,
         ) {
             error.throw(scope);

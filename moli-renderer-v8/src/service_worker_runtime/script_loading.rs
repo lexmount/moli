@@ -59,6 +59,7 @@ pub(super) struct ServiceWorkerScriptResource {
     pub(super) body_sha256: String,
     pub(super) response_time_ms: u64,
     pub(super) mime_type: Option<String>,
+    pub(super) classic_script: Option<crate::worker::WorkerStoredClassicScript>,
 }
 
 impl ServiceWorkerScriptResource {
@@ -80,6 +81,7 @@ impl ServiceWorkerScriptResource {
             body_sha256,
             response_time_ms,
             mime_type,
+            classic_script: None,
         }
     }
 
@@ -96,8 +98,30 @@ impl ServiceWorkerScriptResource {
             body_sha256: resource.body_sha256,
             response_time_ms: resource.response_time_ms,
             mime_type: resource.mime_type,
+            classic_script: resource.classic_script,
         }
     }
+
+    pub(super) fn to_worker_script_resource(&self) -> crate::worker::WorkerScriptResource {
+        crate::worker::WorkerScriptResource {
+            request_url: self.request_url.clone(),
+            final_url: self.final_url.clone(),
+            kind: self.kind,
+            status: self.status,
+            headers: self.headers.clone(),
+            body_len: self.body_len,
+            body_sha256: self.body_sha256.clone(),
+            response_time_ms: self.response_time_ms,
+            mime_type: self.mime_type.clone(),
+            classic_script: self.classic_script.clone(),
+        }
+    }
+}
+
+pub(super) struct ServiceWorkerScriptMapSnapshot {
+    pub(super) main_script: Option<ServiceWorkerScriptResource>,
+    pub(super) imported_scripts: Vec<crate::worker::WorkerScriptResource>,
+    pub(super) can_import_new_scripts: bool,
 }
 
 pub(super) struct LoadedServiceWorkerScript {
@@ -108,6 +132,29 @@ pub(super) struct LoadedServiceWorkerScript {
     pub(super) response_content_security_report_only_policies: Vec<String>,
     pub(super) response_content_security_reporting_endpoints:
         ContentSecurityPolicyReportingEndpoints,
+}
+
+impl LoadedServiceWorkerScript {
+    pub(super) fn from_stored_resource(resource: ServiceWorkerScriptResource) -> Option<Self> {
+        let source = resource.classic_script.as_ref()?.source.to_string();
+        let response_referrer_policy =
+            crate::referrer_policy::response_referrer_policy_from_headers(&resource.headers);
+        let response_content_security_policies =
+            crate::content_security_policy::content_security_policy_headers(&resource.headers);
+        let response_content_security_report_only_policies =
+            crate::content_security_policy::content_security_policy_report_only_headers(
+                &resource.headers,
+            );
+        let response_content_security_reporting_endpoints = crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(&resource.headers, &resource.final_url);
+        Some(Self {
+            resource,
+            source,
+            response_referrer_policy,
+            response_content_security_policies,
+            response_content_security_report_only_policies,
+            response_content_security_reporting_endpoints,
+        })
+    }
 }
 
 pub(super) struct ServiceWorkerScriptUpdateCheckResult {
@@ -251,6 +298,15 @@ pub(super) fn load_service_worker_script_source_for_params(
         &body_bytes,
         response_time_ms,
     );
+    resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+        source: body.clone().into(),
+        muted_errors: false,
+        redirect_urls: head
+            .redirect_chain
+            .iter()
+            .map(|redirect| redirect.to_url.clone())
+            .collect(),
+    });
     let mut final_url = head.final_url;
     final_url.set_fragment(params.script_url.fragment());
     resource.final_url = final_url;
