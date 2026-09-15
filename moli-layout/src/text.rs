@@ -925,11 +925,27 @@ fn decode_web_font_bytes(bytes: &[u8]) -> Result<Arc<[u8]>, WebFontRegistrationE
     let decoded = match bytes.get(..4) {
         Some(b"wOFF") => wuff::decompress_woff1(bytes)
             .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF" })?,
-        Some(b"wOF2") => wuff::decompress_woff2(bytes)
-            .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF2" })?,
+        Some(b"wOF2") => {
+            wuff::decompress_woff2_with_custom_brotli(bytes, &mut decompress_woff2_brotli)
+                .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF2" })?
+        }
         _ => bytes.to_vec(),
     };
     Ok(Arc::from(decoded))
+}
+
+fn decompress_woff2_brotli(
+    compressed: &[u8],
+    expected_size: usize,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // wuff validates this exact size before calling us. A fixed output slice
+    // preserves its decompression limit while sharing the native Brotli codec.
+    let mut output = vec![0; expected_size];
+    let written = brotlic::decompress(compressed, &mut output)?;
+    if written != expected_size {
+        return Err(wuff::WuffErr::GenericError.into());
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1190,6 +1206,44 @@ mod tests {
                 "{slot} should decode and register"
             );
             assert!(has_family(&mut services, family));
+        }
+    }
+
+    #[test]
+    fn woff2_brotli_requires_exact_decoded_size() {
+        let compressed = [11, 2, 128, b'h', b'e', b'l', b'l', b'o', 3];
+        assert_eq!(decompress_woff2_brotli(&compressed, 5).unwrap(), b"hello");
+        for expected_size in [0, 4, 6] {
+            assert!(
+                decompress_woff2_brotli(&compressed, expected_size).is_err(),
+                "decoded length must match {expected_size} exactly"
+            );
+        }
+    }
+
+    #[test]
+    fn woff2_brotli_rejects_incomplete_and_corrupt_streams() {
+        let compressed = [11, 2, 128, b'h', b'e', b'l', b'l', b'o', 3];
+        for end in 0..compressed.len() {
+            assert!(
+                decompress_woff2_brotli(&compressed[..end], 5).is_err(),
+                "a {end}-byte prefix must not decode successfully"
+            );
+        }
+        assert!(decompress_woff2_brotli(&[0; 9], 5).is_err());
+    }
+
+    #[test]
+    fn woff2_accepts_padding_inside_declared_compressed_block() {
+        let expected = decode_web_font_bytes(TEST_WOFF2).unwrap();
+        let compressed_size = u32::from_be_bytes(TEST_WOFF2[20..24].try_into().unwrap());
+        assert_eq!(compressed_size, 573);
+        // The fixture has three padding bytes after its Brotli stream. Some
+        // encoders count this padding in totalCompressedSize; wuff accepts it.
+        for padding in 1..=3 {
+            let mut padded_font = TEST_WOFF2.to_vec();
+            padded_font[20..24].copy_from_slice(&(compressed_size + padding).to_be_bytes());
+            assert_eq!(decode_web_font_bytes(&padded_font).unwrap(), expected);
         }
     }
 

@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+brotlic = "0.8.2"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
@@ -14,7 +15,7 @@ stylo = "0.20"
 stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "5081c65811a4396f5a99b2e0aca542a4a4a6606f", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
 taffy = { version = "=0.13.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }
 thiserror = "2.0.17"
-wuff = "0.2.9"
+wuff = { version = "0.2.9", default-features = false, features = ["z"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 yeslogic-fontconfig-sys = "=6.0.1"
