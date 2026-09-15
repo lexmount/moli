@@ -1256,6 +1256,7 @@ mod tests {
                 .to_owned(),
             response_time_ms: 7,
             mime_type: Some("text/javascript".to_owned()),
+            classic_script: None,
         }
     }
 
@@ -1271,6 +1272,7 @@ mod tests {
                 .to_owned(),
             response_time_ms: 7,
             mime_type: Some("text/javascript".to_owned()),
+            classic_script: None,
         }
     }
 
