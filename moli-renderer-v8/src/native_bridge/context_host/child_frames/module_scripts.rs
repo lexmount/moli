@@ -129,7 +129,9 @@ impl JsContextHost {
         self.cancel_child_classic_document_script_work(handle);
     }
 
-    pub(in crate::native_bridge::context_host) fn queue_child_parser_module_root_for_current_document(
+    /// Parser and runtime insertions share the module graph pipeline. Only
+    /// ModuleDefer reserves parser order and delays DOMContentLoaded.
+    pub(in crate::native_bridge::context_host) fn queue_child_module_script_for_current_document(
         &mut self,
         handle: DomHandle,
         script_handle: DomHandle,
@@ -168,6 +170,7 @@ impl JsContextHost {
         let load_delay_token = if parser_ordered {
             self.frame_owner_store
                 .acquire_current_child_parser_deferred_script_load_delay(handle, owner)
+                .map(Into::into)
         } else {
             self.frame_owner_store
                 .acquire_current_child_async_module_script_load_delay(handle, owner)
@@ -324,9 +327,12 @@ impl JsContextHost {
     pub(crate) fn release_child_module_script_load_delay(
         &mut self,
         owner: FrameDocumentTaskOwner,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
         parser_ordered: bool,
     ) -> bool {
+        let Some(load_delay_token) = load_delay.token() else {
+            return false;
+        };
         if parser_ordered {
             self.frame_owner_store
                 .release_parser_deferred_script_load_delay(owner, load_delay_token)

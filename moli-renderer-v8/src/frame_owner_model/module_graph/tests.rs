@@ -160,8 +160,8 @@ fn parser_root_script(handle: usize, url: &Url) -> PreparedScript {
 
 fn parser_root_load_delay_token(
     handle: usize,
-) -> crate::frame_owner_model::DocumentLoadDelayTokenId {
-    crate::frame_owner_model::DocumentLoadDelayTokenId(handle as u64 + 1)
+) -> crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay {
+    crate::frame_owner_model::DocumentLoadDelayTokenId(handle as u64 + 1).into()
 }
 
 fn parser_root_client(handle: usize, url: &Url) -> FrameDocumentParserRootModuleClient {
