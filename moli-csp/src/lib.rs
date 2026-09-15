@@ -4,6 +4,7 @@
 
 mod checks;
 mod integrity;
+mod inheritance;
 mod policy;
 mod reporting;
 mod types;
@@ -16,3 +17,5 @@ pub use policy::{
 };
 pub use reporting::*;
 pub use types::*;
+
+pub use inheritance::{ContentSecurityPolicySource, InheritedContentSecurityPolicy};
