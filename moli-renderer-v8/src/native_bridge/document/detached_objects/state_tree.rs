@@ -1191,7 +1191,7 @@ pub(in crate::native_bridge::document) fn detached_tree_query_version<'s>(
     value.uint32_value(scope).map(u64::from)
 }
 
-pub(in crate::native_bridge::document) fn detached_record_tree_mutation<'s>(
+pub(in crate::native_bridge) fn detached_record_tree_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) {

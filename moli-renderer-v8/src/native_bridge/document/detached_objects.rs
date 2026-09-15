@@ -49,7 +49,8 @@ pub(crate) use self::state_tree::{
 pub(in crate::native_bridge) use self::state_tree::{
     define_detached_native_handle, detached_doctype_name, detached_doctype_public_id,
     detached_doctype_system_id, detached_parent_node_object,
-    detached_processing_instruction_target, detached_set_owner_document,
+    detached_processing_instruction_target, detached_record_tree_mutation,
+    detached_set_owner_document,
 };
 pub(crate) use self::state_tree::{
     detached_native_handle_for_runtime, detached_native_object_for_handle,
