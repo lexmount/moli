@@ -3995,10 +3995,12 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   body.textContent = "";
   body.append(
     document.createTextNode("Here is a text node you can't select while the dialog is open."),
-    document.createElement("dialog"),
+    document.createElement("div"),
     document.createTextNode("Trailing text.")
   );
-  const dialog = body.querySelector("dialog");
+  const wrapper = body.querySelector("div");
+  const dialog = document.createElement("dialog");
+  wrapper.appendChild(dialog);
   dialog.textContent = "I'm selectable.";
   const selection = getSelection();
 
@@ -4016,6 +4018,11 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandRange.endContainer === dialog &&
     commandRange.endOffset === dialog.childNodes.length;
 
+  wrapper.inert = true;
+  selection.selectAllChildren(body);
+  const inertAncestorText = selection.toString();
+  wrapper.inert = false;
+
   dialog.close();
   selection.selectAllChildren(body);
   const afterCloseText = selection.toString();
@@ -4025,6 +4032,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandReturned,
     commandText,
     commandRangeSpansDialog,
+    inertAncestorText,
     afterCloseHasOutside: afterCloseText.includes("text node you can't select"),
     afterCloseHasDialog: afterCloseText.includes("I'm selectable."),
     afterCloseHasTrailing: afterCloseText.includes("Trailing text.")
@@ -4036,7 +4044,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
 
     assert_eq!(
         result,
-        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
+        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"inertAncestorText":"I'm selectable.","afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
     );
 }
 
@@ -4281,6 +4289,69 @@ fn selection_to_string_uses_rendered_native_range_projection() {
         result,
         "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext||alpha beta gamma"
     );
+}
+
+#[test]
+fn selection_only_applies_inert_attribute_to_html_elements() {
+    let mut vm = new_storage_test_vm("https://selection-html-inert-namespace.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const root = document.createElement('div');
+  body.appendChild(root);
+  const selection = getSelection();
+  const mathml = 'http://www.w3.org/1998/Math/MathML';
+
+  const selectedText = element => {
+    selection.removeAllRanges();
+    selection.selectAllChildren(element);
+    return selection.toString();
+  };
+  const mathWithText = text => {
+    const math = document.createElementNS(mathml, 'math');
+    const mi = document.createElementNS(mathml, 'mi');
+    mi.textContent = text;
+    math.appendChild(mi);
+    return { math, mi };
+  };
+
+  const own = mathWithText('math own');
+  own.math.setAttribute('inert', '');
+  own.mi.setAttribute('inert', '');
+  root.appendChild(own.math);
+
+  const nested = mathWithText('math ancestors');
+  nested.math.setAttribute('inert', '');
+  nested.mi.setAttribute('inert', '');
+  root.appendChild(nested.math);
+
+  const htmlChild = document.createElement('span');
+  htmlChild.textContent = 'html child';
+  htmlChild.inert = true;
+  root.appendChild(htmlChild);
+
+  const htmlAncestor = document.createElement('div');
+  htmlAncestor.inert = true;
+  const inherited = mathWithText('html ancestor');
+  htmlAncestor.appendChild(inherited.math);
+  root.appendChild(htmlAncestor);
+
+  return [
+    selectedText(own.math),
+    selectedText(nested.math),
+    selectedText(htmlChild),
+    selectedText(htmlAncestor)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("Selection inert namespace probe should evaluate");
+
+    assert_eq!(result, "math own|math ancestors||");
 }
 
 #[test]
