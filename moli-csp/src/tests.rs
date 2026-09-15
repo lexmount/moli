@@ -3028,3 +3028,20 @@ fn sandbox_download_permission_requires_every_policy_to_allow_downloads() {
         );
     }
 }
+
+#[test]
+fn worker_imported_scripts_select_the_script_element_directive() {
+    let kind = ContentSecurityPolicyResourceKind::WorkerScript;
+    let url = "https://app.test/worker-import.js";
+    assert!(!allowed(
+        "script-src 'self'; script-src-elem 'none'",
+        kind,
+        url
+    ));
+    assert!(allowed(
+        "script-src 'none'; script-src-elem 'self'",
+        kind,
+        url
+    ));
+    assert!(!allowed("script-src 'none'", kind, url));
+}
