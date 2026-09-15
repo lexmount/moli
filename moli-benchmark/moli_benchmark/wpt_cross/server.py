@@ -140,9 +140,6 @@ FETCH_RANGE_RESOURCE_PATHS = {
     "/fetch/range/resources/long-wav.py",
     "/fetch/range/resources/stash-take.py",
 }
-LINK_STYLESHEET_COUNTER_PATH = (
-    "/html/semantics/document-metadata/the-link-element/stylesheet.py"
-)
 JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
 JSON_LOAD_ERROR_PATH = (
     "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
@@ -1628,7 +1625,6 @@ class FetchStash:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[tuple[str, uuid.UUID], object] = {}
-        self._counts: dict[tuple[str, uuid.UUID], int] = {}
 
     def put(
         self, key: str, value: object, *, overwrite: bool = False,
@@ -1641,14 +1637,6 @@ class FetchStash:
             if not overwrite and parsed_key in self._values:
                 raise ValueError("Tried to overwrite existing shared stash value")
             self._values[parsed_key] = value
-
-    def increment(self, key: str, *, path: str) -> int:
-        parsed_key = (path, uuid.UUID(key))
-        with self._lock:
-            value = int(self._counts.get(parsed_key, 0)) + 1
-            self._counts[parsed_key] = value
-            return value
-
 
     def take(self, key: str, *, path: str = "/fetch/api/resources/") -> object:
         parsed_key = (path, uuid.UUID(key))
@@ -1733,7 +1721,6 @@ def _make_handler(
     fetch_stash: FetchStash,
     stopping: threading.Event,
 ) -> type[BaseHTTPRequestHandler]:
-    link_stylesheet_stash = FetchStash()
     range_stash = FetchStash()
 
     class WptHandler(BaseHTTPRequestHandler):
@@ -2734,30 +2721,6 @@ def _make_handler(
             self.close_connection = True
             self.send_error(status_code)
             return False
-
-        def _serve_link_stylesheet_counter(self, query: str, *, emit_body: bool) -> None:
-            params = parse_qs(query, keep_blank_values=True)
-            try:
-                count = int(link_stylesheet_stash.take(params["id"][0]))
-            except (KeyError, TypeError, ValueError):
-                count = 0
-            if "count" in params:
-                self._send_bytes(
-                    "text/html", str(count).encode("ascii"),
-                    emit_body=emit_body, cache_control=None,
-                )
-                return
-            try:
-                link_stylesheet_stash.put(
-                    params["id"][0], str(count + 1),
-                )
-            except (KeyError, ValueError):
-                self.send_error(500)
-                return
-            self._send_bytes(
-                "text/css", b"body {color: red;}",
-                emit_body=emit_body, cache_control=None,
-            )
 
         def _serve_xhr_resource(self, *, emit_body: bool) -> bool:
             parsed = urlsplit(self.path)
