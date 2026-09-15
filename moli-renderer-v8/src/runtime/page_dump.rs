@@ -1,4 +1,4 @@
-use crate::dom::native::{NativeDom, NativeNodeId, NodeData};
+use crate::dom::native::{NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
@@ -8,6 +8,13 @@ use super::page_vm::PageVm;
 
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
+        if options.format == RendererPageDumpFormat::Markdown
+            && !options.with_base
+            && !options.with_frames
+            && options.strip == RendererPageDumpStripOptions::default()
+        {
+            return render_markdown_document(self.vm().document_runtime.dom_host().dom());
+        }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
         if options.with_base {
@@ -178,408 +185,12 @@ fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<Native
 
 fn render_markdown_document(dom: &NativeDom) -> String {
     let root = dom.body_node_id().unwrap_or(dom.document_node_id());
-    let mut out = String::new();
-    render_markdown_node(dom, root, &mut out, 0, MAX_DOM_OUTPUT_TREE_DEPTH);
-    normalize_markdown(&out)
-}
-
-enum MarkdownFrame {
-    Enter {
-        node_id: NativeNodeId,
-        list_depth: usize,
-        remaining_tree_depth: usize,
-        target: usize,
-    },
-    Append {
-        target: usize,
-        text: &'static str,
-    },
-    FinishInline {
-        source: usize,
-        target: usize,
-        kind: MarkdownInlineKind,
-    },
-}
-
-enum MarkdownInlineKind {
-    Paragraph,
-    Anchor { href: String },
-    ListItem { list_depth: usize },
-    Strong,
-    Emphasis,
-    Code,
-}
-
-fn render_markdown_node(
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    out: &mut String,
-    list_depth: usize,
-    remaining_tree_depth: usize,
-) {
-    render_markdown_nodes(dom, [node_id], out, list_depth, remaining_tree_depth);
-}
-
-fn render_markdown_nodes(
-    dom: &NativeDom,
-    roots: impl IntoIterator<Item = NativeNodeId>,
-    out: &mut String,
-    list_depth: usize,
-    remaining_tree_depth: usize,
-) {
-    let mut buffers = vec![String::new()];
-    let mut stack = roots
-        .into_iter()
-        .map(|node_id| MarkdownFrame::Enter {
-            node_id,
-            list_depth,
-            remaining_tree_depth,
-            target: 0,
-        })
-        .collect::<Vec<_>>();
-    stack.reverse();
-
-    while let Some(frame) = stack.pop() {
-        match frame {
-            MarkdownFrame::Enter {
-                node_id,
-                list_depth,
-                remaining_tree_depth,
-                target,
-            } => render_markdown_enter_node(
-                dom,
-                node_id,
-                &mut buffers,
-                &mut stack,
-                list_depth,
-                remaining_tree_depth,
-                target,
-            ),
-            MarkdownFrame::Append { target, text } => buffers[target].push_str(text),
-            MarkdownFrame::FinishInline {
-                source,
-                target,
-                kind,
-            } => {
-                let text = std::mem::take(&mut buffers[source]);
-                finish_inline_markdown(kind, &text, &mut buffers[target]);
-            }
-        }
-    }
-
-    out.push_str(&buffers[0]);
-}
-
-fn render_markdown_enter_node(
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    buffers: &mut Vec<String>,
-    stack: &mut Vec<MarkdownFrame>,
-    list_depth: usize,
-    remaining_tree_depth: usize,
-    target: usize,
-) {
-    let Some(next_tree_depth) = remaining_tree_depth.checked_sub(1) else {
-        return;
-    };
-    let Some(node) = dom.node(node_id) else {
-        return;
-    };
-
-    match node.kind() {
-        NodeData::Document(_) | NodeData::DocumentFragment(_) => {
-            push_child_markdown_frames(stack, dom, node_id, list_depth, next_tree_depth, target);
-        }
-        NodeData::Text(text) => {
-            push_markdown_text(&mut buffers[target], text.data());
-        }
-        NodeData::CDataSection(cdata) => {
-            push_markdown_text(&mut buffers[target], cdata.data());
-        }
-        NodeData::Comment(_) | NodeData::DocumentType(_) | NodeData::ProcessingInstruction(_) => {}
-        NodeData::Element(element) => match element.local_name() {
-            "head" | "script" | "style" | "noscript" => {}
-            "br" => buffers[target].push('\n'),
-            "hr" => buffers[target].push_str("\n---\n"),
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                let level = element.local_name()[1..].parse::<usize>().unwrap_or(1);
-                let text = collapse_whitespace(&dom.text_content(node_id).unwrap_or_default());
-                if !text.is_empty() {
-                    buffers[target].push('\n');
-                    buffers[target].push_str(&"#".repeat(level));
-                    buffers[target].push(' ');
-                    buffers[target].push_str(&text);
-                    buffers[target].push_str("\n\n");
-                }
-            }
-            "p" => {
-                push_inline_children_markdown_frames(
-                    buffers,
-                    stack,
-                    dom,
-                    node_id,
-                    next_tree_depth,
-                    target,
-                    MarkdownInlineKind::Paragraph,
-                );
-            }
-            "pre" => {
-                let text = dom.text_content(node_id).unwrap_or_default();
-                if !text.trim().is_empty() {
-                    buffers[target].push_str("\n```text\n");
-                    buffers[target].push_str(text.trim_end());
-                    buffers[target].push_str("\n```\n\n");
-                }
-            }
-            "code" => {
-                let text = dom.text_content(node_id).unwrap_or_default();
-                finish_inline_markdown(MarkdownInlineKind::Code, &text, &mut buffers[target]);
-            }
-            "a" => {
-                let href = dom.get_attribute(node_id, "href").unwrap_or_default();
-                push_inline_children_markdown_frames(
-                    buffers,
-                    stack,
-                    dom,
-                    node_id,
-                    next_tree_depth,
-                    target,
-                    MarkdownInlineKind::Anchor { href },
-                );
-            }
-            "img" => {
-                let alt = dom.get_attribute(node_id, "alt").unwrap_or_default();
-                let src = dom.get_attribute(node_id, "src").unwrap_or_default();
-                buffers[target].push_str("![");
-                buffers[target].push_str(&alt);
-                buffers[target].push_str("](");
-                buffers[target].push_str(&src);
-                buffers[target].push(')');
-            }
-            "ul" => {
-                stack.push(MarkdownFrame::Append { target, text: "\n" });
-                push_child_markdown_frames(
-                    stack,
-                    dom,
-                    node_id,
-                    list_depth + 1,
-                    next_tree_depth,
-                    target,
-                );
-                stack.push(MarkdownFrame::Append { target, text: "\n" });
-            }
-            "ol" => {
-                stack.push(MarkdownFrame::Append { target, text: "\n" });
-                push_child_markdown_frames(
-                    stack,
-                    dom,
-                    node_id,
-                    list_depth + 1,
-                    next_tree_depth,
-                    target,
-                );
-                stack.push(MarkdownFrame::Append { target, text: "\n" });
-            }
-            "li" => {
-                push_inline_children_markdown_frames(
-                    buffers,
-                    stack,
-                    dom,
-                    node_id,
-                    next_tree_depth,
-                    target,
-                    MarkdownInlineKind::ListItem { list_depth },
-                );
-            }
-            "strong" | "b" => {
-                push_inline_children_markdown_frames(
-                    buffers,
-                    stack,
-                    dom,
-                    node_id,
-                    next_tree_depth,
-                    target,
-                    MarkdownInlineKind::Strong,
-                );
-            }
-            "em" | "i" => {
-                push_inline_children_markdown_frames(
-                    buffers,
-                    stack,
-                    dom,
-                    node_id,
-                    next_tree_depth,
-                    target,
-                    MarkdownInlineKind::Emphasis,
-                );
-            }
-            _ => {
-                if matches!(
-                    element.local_name(),
-                    "div" | "section" | "article" | "main" | "header" | "footer" | "aside" | "nav"
-                ) {
-                    buffers[target].push('\n');
-                    stack.push(MarkdownFrame::Append { target, text: "\n" });
-                }
-                push_child_markdown_frames(
-                    stack,
-                    dom,
-                    node_id,
-                    list_depth,
-                    next_tree_depth,
-                    target,
-                );
-            }
-        },
-    }
-}
-
-fn push_inline_children_markdown_frames(
-    buffers: &mut Vec<String>,
-    stack: &mut Vec<MarkdownFrame>,
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    remaining_tree_depth: usize,
-    target: usize,
-    kind: MarkdownInlineKind,
-) {
-    let source = buffers.len();
-    buffers.push(String::new());
-    stack.push(MarkdownFrame::FinishInline {
-        source,
-        target,
-        kind,
-    });
-    push_child_markdown_frames(stack, dom, node_id, 0, remaining_tree_depth, source);
-}
-
-fn push_child_markdown_frames(
-    stack: &mut Vec<MarkdownFrame>,
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    list_depth: usize,
-    remaining_tree_depth: usize,
-    target: usize,
-) {
-    let child_ids = dom.child_ids(node_id).collect::<Vec<_>>();
-    for child_id in child_ids.into_iter().rev() {
-        stack.push(MarkdownFrame::Enter {
-            node_id: child_id,
-            list_depth,
-            remaining_tree_depth,
-            target,
-        });
-    }
-}
-
-fn finish_inline_markdown(kind: MarkdownInlineKind, text: &str, out: &mut String) {
-    // Spaces at inline element edges belong outside Markdown delimiters, but
-    // still separate this element's text from its siblings. Block edges trim.
-    let preserve_spacing = matches!(
-        kind,
-        MarkdownInlineKind::Anchor { .. }
-            | MarkdownInlineKind::Strong
-            | MarkdownInlineKind::Emphasis
-            | MarkdownInlineKind::Code
-    );
-    let trailing_space = preserve_spacing && text.ends_with(char::is_whitespace);
-    if preserve_spacing && text.starts_with(char::is_whitespace) {
-        push_markdown_text(out, " ");
-    }
-    let text = collapse_whitespace(text);
-    let text = text.as_str();
-    match kind {
-        MarkdownInlineKind::Paragraph => {
-            if !text.is_empty() {
-                out.push('\n');
-                out.push_str(text);
-                out.push_str("\n\n");
-            }
-        }
-        MarkdownInlineKind::Anchor { href } => {
-            if href.is_empty() {
-                out.push_str(text);
-            } else {
-                let label = if text.is_empty() { href.as_str() } else { text };
-                out.push('[');
-                out.push_str(label);
-                out.push_str("](");
-                out.push_str(&href);
-                out.push(')');
-            }
-        }
-        MarkdownInlineKind::ListItem { list_depth } => {
-            if !text.is_empty() {
-                out.push_str(&"  ".repeat(list_depth.saturating_sub(1)));
-                out.push_str("- ");
-                out.push_str(text);
-                out.push('\n');
-            }
-        }
-        MarkdownInlineKind::Strong => {
-            if !text.is_empty() {
-                out.push_str("**");
-                out.push_str(text);
-                out.push_str("**");
-            }
-        }
-        MarkdownInlineKind::Emphasis => {
-            if !text.is_empty() {
-                out.push('*');
-                out.push_str(text);
-                out.push('*');
-            }
-        }
-        MarkdownInlineKind::Code => {
-            if !text.is_empty() {
-                out.push('`');
-                out.push_str(text);
-                out.push('`');
-            }
-        }
-    }
-    if trailing_space {
-        push_markdown_text(out, " ");
-    }
-}
-
-fn push_markdown_text(out: &mut String, text: &str) {
-    // Collapse whitespace across text nodes without discarding leading,
-    // trailing, or whitespace-only separators in the source inline flow.
-    for character in text.chars() {
-        if character.is_whitespace() {
-            if !out.ends_with(char::is_whitespace) {
-                out.push(' ');
-            }
-        } else {
-            out.push(character);
-        }
-    }
-}
-
-fn normalize_markdown(input: &str) -> String {
-    let mut out = String::new();
-    let mut previous_blank = false;
-    for line in input.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            if !previous_blank && !out.is_empty() {
-                out.push('\n');
-            }
-            previous_blank = true;
-            continue;
-        }
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(trimmed);
-        previous_blank = false;
-    }
-    out.trim().to_owned()
-}
-
-fn collapse_whitespace(input: &str) -> String {
-    input.split_whitespace().collect::<Vec<_>>().join(" ")
+    moli_html2md::Converter::new(moli_html2md::Options {
+        max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
+        default_code_language: Some("text".to_owned()),
+        ..Default::default()
+    })
+    .convert(dom, root)
 }
 
 #[cfg(test)]
@@ -653,7 +264,7 @@ mod tests {
                 "<p>a<span> </span>b<strong> </strong>c<em> </em>d<a> </a>e</p>",
                 "a b c d e",
             ),
-            ("<p>one&nbsp;<span>two</span></p>", "one two"),
+            ("<p>one&nbsp;<span>two</span></p>", "one\u{00a0}two"),
             (
                 "<p><span>one</span><!-- comment --> <span>two</span></p>",
                 "one two",
@@ -673,6 +284,10 @@ mod tests {
             (
                 "<p>before<a href='/docs'> docs </a>after</p>",
                 "before [docs](/docs) after",
+            ),
+            (
+                "<p>before<a href='/docs'><em> docs </em></a>after</p>",
+                "before [*docs*](/docs) after",
             ),
             (
                 "<p>before<strong> bold </strong>after</p>",
@@ -716,12 +331,15 @@ mod tests {
         for (html, expected) in [
             (
                 "<span>Main menu</span><div>Main menu</div>",
-                "Main menu\nMain menu",
+                "Main menu\n\nMain menu",
             ),
-            ("<div>outer<div>inner</div>tail</div>", "outer\ninner\ntail"),
+            (
+                "<div>outer<div>inner</div>tail</div>",
+                "outer\n\ninner\n\ntail",
+            ),
             (
                 "<span>by <small>Albert Einstein</small></span><div>Tags:\n <a>change</a>\n <a>deep-thoughts</a> <a>thinking</a> <a>world</a></div>",
-                "by Albert Einstein\nTags: change deep-thoughts thinking world",
+                "by Albert Einstein\n\nTags: change deep-thoughts thinking world",
             ),
         ] {
             assert_eq!(markdown_from_html(html), expected, "HTML: {html}");
@@ -755,19 +373,196 @@ mod tests {
     }
 
     #[test]
-    fn markdown_renderer_truncates_deep_tree_with_heap_stack_walk() {
+    fn markdown_renderer_expands_table_cells() {
+        assert_eq!(
+            markdown_from_html(
+                "<table><tr><th>Name</th><th>Count</th></tr><tr><td>moli</td><td>2</td></tr></table>"
+            ),
+            "Name\n\nCount\n\nmoli\n\n2"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_flattens_hacker_news_layout_tables() {
+        let dom = HtmlParser::SCRIPTING_DISABLED.parse(
+            test_url(),
+            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
+        );
+        let before = dom.serialize_document();
+        assert_eq!(
+            render_markdown_document(&dom),
+            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+        );
+        assert_eq!(dom.serialize_document(), before);
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_ordered_and_nested_lists() {
+        assert_eq!(
+            markdown_from_html(
+                "<ol start='3'><li>three<ul><li>nested</li></ul></li><li>four</li></ol>"
+            ),
+            "3. three\n   - nested\n4. four"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_blockquotes_and_hard_breaks() {
+        assert_eq!(
+            markdown_from_html("<blockquote><p>first<br>second</p></blockquote>"),
+            "> first  \n> second"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_code_language_fences_and_blank_lines() {
+        assert_eq!(
+            markdown_from_html(
+                "<pre><code class='language-rust'>let s = \"```\";\n\n\nend\n</code></pre>"
+            ),
+            "````rust\nlet s = \"```\";\n\n\nend\n````"
+        );
+        assert_eq!(
+            markdown_from_html("<p>before<code> a`b </code>after</p>"),
+            "before ``a`b`` after"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_skips_non_content_tags() {
+        assert_eq!(
+            markdown_from_html(
+                "<head><title>title</title></head><body><script>script</script><style>style</style><noscript>noscript</noscript><p>Visible</p></body>"
+            ),
+            "Visible"
+        );
+    }
+
+    #[test]
+    fn markdown_renderer_keeps_boundaries_around_empty_blocks() {
+        for tag in ["p", "div", "h2", "blockquote", "ul", "ol", "pre", "table"] {
+            for content in ["", " \n\t "] {
+                let html = format!("before<{tag}>{content}</{tag}>after");
+                assert_eq!(markdown_from_html(&html), "before\n\nafter", "{html}");
+            }
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_keeps_empty_links_and_links_around_blocks() {
+        for (html, expected) in [
+            ("<a href='/a'></a><a href='/b'></a>", "[](/a)[](/b)"),
+            ("<a href=''>label</a>", "label"),
+            ("<a id='target'>label</a>", "label"),
+            ("<a href='/a'><h2>heading</h2></a>", "## [heading](/a)"),
+            (
+                "<a href='/a'><blockquote>quote</blockquote></a>",
+                "> [quote](/a)",
+            ),
+            ("<a href='/a'><ul><li>item</li></ul></a>", "- [item](/a)"),
+            ("<a href='/a'><img src='/i'></a>", "[![](/i)](/a)"),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_keeps_paragraphs_in_list_items() {
+        for (html, expected) in [
+            ("<ul><li><p>one</p></li><li>two</li></ul>", "- one\n\n- two"),
+            ("<ul><li>one</li><li><p>two</p></li></ul>", "- one\n\n- two"),
+            ("<ol start='3'><li></li><li>four</li></ol>", "4. four"),
+            (
+                "<ul><li>parent<ul><li>child</li></ul>tail</li></ul>",
+                "- parent\n  - child\n\n  tail",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_normalizes_image_and_link_attribute_newlines() {
+        for (html, expected) in [
+            (
+                "<a href='/a' title='one\n  two'>link</a>",
+                "[link](/a \"one\ntwo\")",
+            ),
+            (
+                "<img src='/i' alt='one\n  two' title='one\n  two'>",
+                "![one\ntwo](/i \"one\ntwo\")",
+            ),
+            (
+                "<h2><a href='/a' title='one\n  two'>link</a></h2>",
+                "## [link](/a \"one&#10;two\")",
+            ),
+            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_preserves_literal_entities_and_split_list_markers() {
+        assert_eq!(
+            markdown_from_html("<p>&amp;copy; &lt;b&gt;literal&lt;/b&gt;</p>"),
+            "&amp;copy; \\<b\\>literal\\</b\\>"
+        );
         let mut dom = NativeDom::new_html(test_url());
         let body = dom.create_element("body");
         assert!(dom.append_child(dom.document_node_id(), body));
-
-        let mut parent = body;
-        for _ in 0..(MAX_DOM_OUTPUT_TREE_DEPTH + 32) {
-            let child = dom.create_element("div");
-            assert!(dom.append_child(parent, child));
-            parent = child;
+        for chunk in ["12", ".", " ", "item"] {
+            append_text(&mut dom, body, chunk);
         }
-        append_text(&mut dom, parent, "too deep");
+        assert_eq!(render_markdown_document(&dom), "12\\. item");
+    }
 
-        assert_eq!(render_markdown_document(&dom), "");
+    #[test]
+    fn markdown_converter_supports_preformatted_inline_code_on_native_dom() {
+        let dom = HtmlParser::SCRIPTING_DISABLED.parse(
+            test_url(),
+            "<body>before<code> a  b </code>after</body>".to_owned(),
+        );
+        let before = dom.serialize_document();
+        let root = dom.body_node_id().expect("body");
+        let converter = moli_html2md::Converter::new(moli_html2md::Options {
+            preformatted_code: true,
+            ..Default::default()
+        });
+        assert_eq!(converter.convert(&dom, root), "before`  a  b  `after");
+        assert_eq!(render_markdown_document(&dom), "before `a b` after");
+        assert_eq!(dom.serialize_document(), before);
+    }
+
+    #[test]
+    fn markdown_renderer_reads_dom_without_mutating_nodes() {
+        let dom = HtmlParser::SCRIPTING_DISABLED.parse(
+            test_url(),
+            "<body><p><em>foo</em><i>bar</i></p><pre>  a  b\n</pre></body>".to_owned(),
+        );
+        let before = dom.serialize_document();
+        assert_eq!(
+            render_markdown_document(&dom),
+            "*foobar*\n\n```text\n  a  b\n```"
+        );
+        assert_eq!(dom.serialize_document(), before);
+    }
+
+    #[test]
+    fn markdown_renderer_truncates_deep_tree() {
+        for tag in ["div", "span", "strong", "blockquote"] {
+            let mut dom = NativeDom::new_html(test_url());
+            let body = dom.create_element("body");
+            assert!(dom.append_child(dom.document_node_id(), body));
+            append_text(&mut dom, body, "Visible");
+            let mut parent = body;
+            for _ in 0..(MAX_DOM_OUTPUT_TREE_DEPTH + 32) {
+                let child = dom.create_element(tag);
+                assert!(dom.append_child(parent, child));
+                parent = child;
+            }
+            append_text(&mut dom, parent, "too deep");
+            assert_eq!(render_markdown_document(&dom), "Visible", "tag: {tag}");
+        }
     }
 }

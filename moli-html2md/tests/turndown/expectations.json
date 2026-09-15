@@ -1,0 +1,50 @@
+{
+  "upstream_058": {
+    "markdown": "```\n~~~ foo\n```",
+    "reason": "Moli fences bare pre elements as well as pre/code, preserving preformatted text. Turndown only recognizes a pre/code pair."
+  },
+  "extra_adjacent_code": {
+    "markdown": "`ab`",
+    "reason": "Adjacent code elements contain ab. Turndown joins their delimiters into one code span whose text contains two extra backticks."
+  },
+  "extra_code_nested_format": {
+    "markdown": "`ab`",
+    "reason": "Code captures raw descendant text. Turndown includes the Markdown markers of nested strong/em elements in the code text."
+  },
+  "extra_emphasis_intraword_link": {
+    "markdown": "before<em>[text](/)</em>after",
+    "reason": "Turndown's star delimiters do not open emphasis at this punctuation boundary. Inline HTML preserves the original emphasized link."
+  },
+  "extra_emphasis_intraword_punctuation": {
+    "markdown": "before<em>(text)</em>after",
+    "reason": "CommonMark does not recognize Turndown's intraword delimiters next to punctuation. Inline HTML preserves emphasis without literal stars."
+  },
+  "extra_empty_block_inside_inline": {
+    "markdown": "**a**\n\n**b**",
+    "reason": "Emphasis must close and reopen across paragraph boundaries; delimiters spanning the blank line become literal text."
+  },
+  "extra_list_nested_tail": {
+    "markdown": "- start\n  - inner\n\n  end",
+    "reason": "The trailing text belongs to the outer item. Turndown appends it to the nested item, losing the block boundary and joining words."
+  },
+  "extra_literal_entities": {
+    "markdown": "&amp;copy; &amp;lt; &amp;#32;",
+    "reason": "DOM text is already decoded. Escape literal entity syntax so a Markdown reader does not decode it a second time."
+  },
+  "extra_literal_html": {
+    "markdown": "\\<b\\>literal\\</b\\>",
+    "reason": "Escaped HTML in the source is visible text, not markup. Turndown turns the decoded text into executable Markdown HTML tags."
+  },
+  "extra_link_entities": {
+    "markdown": "[link](/?q=&amp;copy;)",
+    "reason": "The literal entity syntax in the decoded href must not be decoded again into a different URL."
+  },
+  "extra_preformatted_blank": {
+    "markdown": "before`   `after",
+    "reason": "Explicit preformatted-code mode preserves the spaces inside code. Turndown removes a whitespace-only code element entirely."
+  },
+  "extra_split_list_marker": {
+    "markdown": "12\\. text",
+    "reason": "Escape list markers across text-node boundaries. Turndown escapes nodes individually and accidentally creates an ordered list."
+  }
+}

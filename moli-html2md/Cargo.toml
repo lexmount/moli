@@ -1,0 +1,15 @@
+[package]
+name = "moli-html2md"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Read-only DOM to Markdown conversion with an iterative state machine"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde_json = "1.0.145"
