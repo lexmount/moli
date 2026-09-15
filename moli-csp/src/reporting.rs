@@ -138,11 +138,13 @@ pub fn content_security_policy_violation_report_body(
             "original-policy": fields.original_policy,
             "disposition": fields.disposition.as_str(),
             "blocked-uri": fields.blocked_uri,
-            "source-file": fields.source_file,
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
     });
+    if !fields.source_file.is_empty() {
+        report["csp-report"]["source-file"] = json!(fields.source_file);
+    }
     if fields.line_number != 0 {
         report["csp-report"]["line-number"] = json!(fields.line_number);
     }
