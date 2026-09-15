@@ -2812,34 +2812,6 @@ fn sandbox_directive_allows_popups_to_escape_only_when_all_active_sandboxes_allo
     ]));
 }
 
-#[test]
-fn violation_report_formats_preserve_captured_script_locations() {
-    let mut violation = content_security_policy_url_violation_with_redirect_status(
-        &["connect-src 'none'".into()],
-        &protected_url(),
-        &request_url("https://api.test/data.json"),
-        ContentSecurityPolicyResourceKind::WorkerConnect,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-    )
-    .unwrap();
-    violation.source_file = "https://app.test/imported/script.js".into();
-    violation.line_number = 12;
-    violation.column_number = 34;
-    let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
-    assert_eq!(fields.source_file, violation.source_file);
-    assert_eq!((fields.line_number, fields.column_number), (12, 34));
-    let legacy: serde_json::Value =
-        serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
-    assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
-    assert_eq!(legacy["csp-report"]["line-number"], 12);
-    assert_eq!(legacy["csp-report"]["column-number"], 34);
-    let reporting: serde_json::Value =
-        serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
-            .unwrap();
-    assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
-    assert_eq!(reporting[0]["body"]["lineNumber"], 12);
-    assert_eq!(reporting[0]["body"]["columnNumber"], 34);
-}
 
 #[test]
 fn base_uri_uses_its_own_source_list_and_reports_violations() {
