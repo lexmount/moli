@@ -41,11 +41,12 @@ impl<OwnerId, PartitionId> Default for BlobEntries<OwnerId, PartitionId> {
 }
 
 #[derive(Debug)]
-struct ObjectUrlState<OwnerId, AccessKey> {
+struct ObjectUrlState<OwnerId, AccessKey, Metadata> {
     owner_id: Option<OwnerId>,
     lifetime_id: Option<u64>,
     blob_id: BlobId,
     access_key: Option<AccessKey>,
+    metadata: Option<Metadata>,
 }
 
 /// Renderer-neutral Blob and object URL backing store.
@@ -54,13 +55,15 @@ struct ObjectUrlState<OwnerId, AccessKey> {
 /// counts. The embedding layer owns JS wrappers and calls the retain/release
 /// hooks from its finalizers.
 #[derive(Debug)]
-pub struct BlobStore<OwnerId, PartitionId, AccessKey = ()> {
+pub struct BlobStore<OwnerId, PartitionId, AccessKey = (), Metadata = ()> {
     blobs: Mutex<BlobEntries<OwnerId, PartitionId>>,
     next_blob_id: AtomicU64,
-    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey>>>,
+    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey, Metadata>>>,
 }
 
-impl<OwnerId, PartitionId, AccessKey> Default for BlobStore<OwnerId, PartitionId, AccessKey> {
+impl<OwnerId, PartitionId, AccessKey, Metadata> Default
+    for BlobStore<OwnerId, PartitionId, AccessKey, Metadata>
+{
     fn default() -> Self {
         Self {
             blobs: Mutex::default(),
@@ -70,7 +73,7 @@ impl<OwnerId, PartitionId, AccessKey> Default for BlobStore<OwnerId, PartitionId
     }
 }
 
-impl<OwnerId, PartitionId, AccessKey> BlobStore<OwnerId, PartitionId, AccessKey>
+impl<OwnerId, PartitionId, AccessKey, Metadata> BlobStore<OwnerId, PartitionId, AccessKey, Metadata>
 where
     OwnerId: Copy + Eq + Hash,
     PartitionId: Eq,
@@ -197,6 +200,26 @@ where
         origin: &str,
         access_key: Option<AccessKey>,
     ) -> Option<String> {
+        self.create_object_url_with_metadata(
+            owner_id,
+            lifetime_id,
+            blob_id,
+            origin,
+            access_key,
+            None,
+        )
+    }
+
+    /// Metadata belongs to the URL's creating environment and shares its lifetime.
+    pub fn create_object_url_with_metadata(
+        &self,
+        owner_id: Option<OwnerId>,
+        lifetime_id: Option<u64>,
+        blob_id: BlobId,
+        origin: &str,
+        access_key: Option<AccessKey>,
+        metadata: Option<Metadata>,
+    ) -> Option<String> {
         self.retain_blob_object_url_ref(blob_id)?;
         let mut object_urls = self.object_urls.lock();
         let object_url = loop {
@@ -212,6 +235,7 @@ where
                 lifetime_id,
                 blob_id,
                 access_key,
+                metadata,
             },
         );
         Some(object_url)
@@ -234,7 +258,7 @@ where
     fn revoke_object_url_if(
         &self,
         url: &str,
-        is_authorized: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey>) -> bool,
+        is_authorized: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey, Metadata>) -> bool,
     ) -> bool {
         let state = {
             let mut object_urls = self.object_urls.lock();
@@ -245,6 +269,14 @@ where
         };
         self.release_blob_object_url_ref(state.blob_id);
         true
+    }
+
+    pub fn object_url_metadata(&self, url: &str) -> Option<Metadata>
+    where
+        Metadata: Clone,
+    {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
+        self.object_urls.lock().get(url)?.metadata.clone()
     }
 
     /// Return object URL bytes and MIME type, excluding its fragment.
@@ -393,6 +425,39 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_url_metadata_follows_url_lifetime_and_preserves_captured_environment() {
+        let store = BlobStore::<u64, u64, (), Arc<Mutex<String>>>::default();
+        let blob = store.create_blob(Some(1), None, b"source".to_vec(), String::new());
+        let environment = Arc::new(Mutex::new("initial policy".to_owned()));
+        let weak = Arc::downgrade(&environment);
+        let url = store
+            .create_object_url_with_metadata(
+                Some(2),
+                Some(9),
+                blob,
+                "https://example.test",
+                None,
+                Some(environment.clone()),
+            )
+            .unwrap();
+        *environment.lock() = "updated policy".to_owned();
+        let captured = store.object_url_metadata(&format!("{url}#worker")).unwrap();
+        assert_eq!(*captured.lock(), "updated policy");
+        drop(environment);
+        assert_eq!(store.cleanup_object_url_lifetime(2, 9), 1);
+        assert!(store.object_url_metadata(&url).is_none());
+        assert!(
+            weak.upgrade().is_some(),
+            "the consumer retains its captured environment"
+        );
+        drop(captured);
+        assert!(
+            weak.upgrade().is_none(),
+            "cleanup must release URL environment metadata"
+        );
+    }
 
     #[test]
     fn object_url_access_keys_preserve_unauthorized_entries_and_release_authorized_entries() {

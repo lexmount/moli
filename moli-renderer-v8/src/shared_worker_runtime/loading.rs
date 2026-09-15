@@ -35,6 +35,8 @@ pub(crate) struct SharedWorkerScriptLoad {
 pub(super) struct SharedWorkerLoadedScript {
     pub(super) script_url: String,
     pub(super) source: String,
+    pub(super) content_security_policy_snapshot:
+        Option<Box<crate::content_security_policy::InheritedContentSecurityPolicy>>,
     pub(super) response_referrer_policy: Option<String>,
     pub(super) response_policy_context: Option<SubresourcePolicyContext>,
     pub(super) response_content_security_policies: Vec<String>,
@@ -303,6 +305,7 @@ impl SharedWorkerLoadedScript {
         Self {
             script_url,
             source,
+            content_security_policy_snapshot: None,
             response_referrer_policy: None,
             response_policy_context: None,
             response_content_security_policies: Vec::new(),
@@ -356,6 +359,16 @@ impl SharedWorkerLoadedScript {
 }
 
 impl SharedWorkerScriptLoad {
+    pub(crate) fn with_ready_content_security_policy(
+        mut self,
+        policy: crate::content_security_policy::InheritedContentSecurityPolicy,
+    ) -> Self {
+        if let SharedWorkerScriptLoadKind::Ready(script) = &mut self.kind {
+            script.content_security_policy_snapshot = Some(Box::new(policy));
+        }
+        self
+    }
+
     pub(crate) fn ready(script_url: String, script_source: String) -> Self {
         Self {
             kind: SharedWorkerScriptLoadKind::Ready(SharedWorkerLoadedScript::new(
@@ -595,8 +608,14 @@ pub(super) fn load_shared_worker_blob_script_source(
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);
+    let policy =
+        crate::blob::object_url_content_security_policy(resource_url.as_str()).unwrap_or_default();
     crate::blob::object_url_body_and_type(resource_url.as_str())
-        .map(|(body, _)| SharedWorkerLoadedScript::new(script_url.to_string(), body))
+        .map(|(body, _)| {
+            let mut script = SharedWorkerLoadedScript::new(script_url.to_string(), body);
+            script.content_security_policy_snapshot = Some(Box::new(policy));
+            script
+        })
         .ok_or_else(|| {
             format!("Failed to load shared worker script `{script_url}`: blob URL is unavailable.")
         })
