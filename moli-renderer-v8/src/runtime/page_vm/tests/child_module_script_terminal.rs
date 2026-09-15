@@ -52,6 +52,69 @@ pub(super) async fn queue_real_child_module_terminal(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn child_parser_modules_check_preparation_document_before_execution() {
+    run_page_vm_async_test(async {
+        for fetch_fails in [false, true] {
+            for movement in ["before", "return", "during"] {
+                let source = if movement == "during" {
+                    "parent.__adoptionEvents.push('execute'); parent.document.body.append(parent.__movedModule);"
+                } else {
+                    "parent.__adoptionEvents.push('execute');"
+                };
+                let (base_url, server) = spawn_path_response_http_server(vec![(
+                    "/adopted.mjs",
+                    if fetch_fails { "HTTP/1.1 404 Not Found" } else { "HTTP/1.1 200 OK" },
+                    source.to_owned(), Duration::ZERO,
+                )]).await;
+                let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+                let (mut page_vm, mut resource_source, mut owner_wake_rx) =
+                    page_vm_with_bound_task_sources_and_owner_wake(
+                        &loader, Url::parse(&format!("{base_url}/page"))?,
+                    );
+                queue_real_child_module_terminal(
+                    &mut page_vm, &mut resource_source, &mut owner_wake_rx,
+                    "adopted-child", &format!("{base_url}/adopted.mjs"),
+                ).await?;
+                page_vm.vm_mut().eval(r#"
+                    globalThis.__adoptionEvents = [];
+                    globalThis.__childDocument = document.getElementById('adopted-child').contentDocument;
+                    globalThis.__movedModule = __childDocument.querySelector('script');
+                    __movedModule.onload = () => __adoptionEvents.push('load');
+                    __movedModule.onerror = () => __adoptionEvents.push('error');
+                "#)?;
+                if movement != "during" {
+                    page_vm.vm_mut().eval("document.body.append(__movedModule)")?;
+                    if movement == "return" {
+                        page_vm.vm_mut().eval("__childDocument.body.append(__movedModule)")?;
+                    }
+                }
+                run_expected_child_module_script_terminal_turn(
+                    &mut page_vm, "adopted child module source terminal",
+                ).await;
+                assert!(page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader,
+                ).await?);
+                let expected = if movement == "before" { "" } else if fetch_fails { "error" } else { "execute|load" };
+                assert_eq!(page_vm.vm_mut().eval("__adoptionEvents.join('|')")?, expected,
+                    "fetch_fails={fetch_fails}, movement={movement}");
+                for source in [
+                    ChildFrameSemanticTurnKind::DocumentLifecycle,
+                    ChildFrameSemanticTurnKind::DocumentLifecycle,
+                    ChildFrameSemanticTurnKind::HostLoad,
+                ] {
+                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                        &mut page_vm, source, "lifecycle after adopted module",
+                    ).await;
+                }
+                assert_eq!(page_vm.vm_mut().eval("__childDocument.readyState")?, "complete");
+                server.await?;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn child_parser_module_roots_compile_binary_wasm_responses() {
     run_page_vm_async_test(async {
         for (path, body, expected) in [
