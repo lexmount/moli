@@ -148,6 +148,7 @@ pub use locker::Locker;
 pub use locker::SharedIsolate;
 pub use microtask::MicrotaskQueue;
 pub use microtask::MicrotaskQueueHandle;
+pub use microtask::{MicrotasksScope, MicrotasksScopeType};
 pub use module::*;
 pub use object::*;
 pub use platform::IdleTask;

@@ -1,6 +1,164 @@
 use super::*;
 use crate::custom_elements::CustomElementRegistryKey;
 
+#[tokio::test]
+async fn popup_classic_script_custom_element_microtasks_wait_for_outer_javascript() {
+    assert_popup_custom_element_microtask_order(false).await;
+}
+
+#[tokio::test]
+async fn popup_javascript_url_custom_element_microtasks_wait_for_outer_javascript() {
+    assert_popup_custom_element_microtask_order(true).await;
+}
+
+async fn assert_popup_custom_element_microtask_order(javascript_url: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://popup-custom-element-microtasks.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        globalThis.__popupCeLog = [];
+        globalThis.PopupElement = class extends HTMLElement {
+          constructor() {
+            super();
+            __popupCeLog.push("constructor");
+            Promise.resolve().then(() => {
+              __popupCeLog.push("constructor-microtask");
+              this.setAttribute("data-constructed", "yes");
+            });
+          }
+        };
+        customElements.define("popup-microtask-element", PopupElement);
+        "ready";
+        "#,
+    )
+    .expect("popup custom element definition should register");
+
+    let source = r#"
+        Promise.resolve().then(() => opener.__popupCeLog.push("earlier-microtask"));
+        const element = opener.document.createElement("popup-microtask-element");
+        opener.__popupCeElement = element;
+        opener.__popupCeLog.push("after-create", element instanceof opener.PopupElement,
+                                element.hasAttribute("data-constructed"));
+        void 0;
+    "#;
+    let navigation = if javascript_url {
+        format!("open({:?})", format!("javascript:{source}"))
+    } else {
+        let html = format!("<!doctype html><script>{source}</script>");
+        format!("open(URL.createObjectURL(new Blob([{html:?}], {{type: 'text/html'}})))")
+    };
+    vm.eval(&format!(
+        "globalThis.__popupCeWindow = {navigation}; 'queued'"
+    ))
+    .expect("host-owned popup execution should queue");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupCeLog.includes('constructor-microtask'))",
+        "true",
+        "popup custom element constructor microtask",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("JSON.stringify({log: __popupCeLog, custom: __popupCeElement instanceof PopupElement, value: __popupCeElement.getAttribute('data-constructed')})")
+            .expect("popup custom element result should be observable"),
+        r#"{"log":["constructor","after-create",true,false,"earlier-microtask","constructor-microtask"],"custom":true,"value":"yes"}"#,
+        "popup source must finish before constructor microtasks (javascript URL: {javascript_url})",
+    );
+}
+
+#[test]
+fn custom_element_document_write_microtasks_wait_for_outer_javascript() {
+    let mut vm = new_storage_test_vm("https://custom-element-microtasks.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            globalThis.constructorMicrotaskLog = [];
+            class WrittenElement extends HTMLElement {
+              constructor() {
+                super();
+                constructorMicrotaskLog.push("constructor");
+                Promise.resolve().then(() => {
+                  constructorMicrotaskLog.push("constructor-microtask");
+                  this.setAttribute("data-constructed", "yes");
+                });
+              }
+            }
+            customElements.define("microtask-written-element", WrittenElement);
+            Promise.resolve().then(() => constructorMicrotaskLog.push("earlier-microtask"));
+            document.write("<microtask-written-element></microtask-written-element>");
+            constructorMicrotaskLog.push("after-write");
+            const written = document.querySelector("microtask-written-element");
+            JSON.stringify({
+              log: constructorMicrotaskLog,
+              custom: written instanceof WrittenElement,
+              hasAttribute: written.hasAttribute("data-constructed")
+            });
+            "#,
+        )
+        .expect("document.write custom element should preserve the outer script boundary");
+
+    assert_eq!(
+        result,
+        r#"{"log":["constructor","after-write"],"custom":true,"hasAttribute":false}"#
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify({log: constructorMicrotaskLog, value: written.getAttribute('data-constructed')})"
+        )
+        .expect("constructor microtasks should run after the outer script"),
+        r#"{"log":["constructor","after-write","earlier-microtask","constructor-microtask"],"value":"yes"}"#
+    );
+}
+
+#[test]
+fn custom_element_create_element_microtasks_wait_for_outer_javascript() {
+    let mut vm = new_storage_test_vm("https://custom-element-microtasks.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            globalThis.constructorMicrotaskLog = [];
+            class CreatedElement extends HTMLElement {
+              constructor() {
+                super();
+                constructorMicrotaskLog.push("constructor");
+                queueMicrotask(() => {
+                  constructorMicrotaskLog.push("microtask");
+                  this.setAttribute("data-constructed", "yes");
+                });
+              }
+            }
+            customElements.define("microtask-created-element", CreatedElement);
+            const created = document.createElement("microtask-created-element");
+            constructorMicrotaskLog.push("after-create");
+            JSON.stringify({
+              log: constructorMicrotaskLog,
+              custom: created instanceof CreatedElement,
+              hasAttribute: created.hasAttribute("data-constructed")
+            });
+            "#,
+        )
+        .expect("createElement should preserve the outer script boundary");
+
+    assert_eq!(
+        result,
+        r#"{"log":["constructor","after-create"],"custom":true,"hasAttribute":false}"#
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify({log: constructorMicrotaskLog, value: created.getAttribute('data-constructed')})"
+        )
+        .expect("constructor microtasks should run after createElement's caller"),
+        r#"{"log":["constructor","after-create","microtask"],"value":"yes"}"#
+    );
+}
+
 #[test]
 fn custom_elements_registry_shape_matches_chromium_probe() {
     let mut vm = new_storage_test_vm("https://example.com/");
@@ -1310,6 +1468,206 @@ fn child_custom_elements_upgrade_accepts_child_document_node_root() {
     assert_eq!(
         result,
         r#"{"prototype":true,"log":["constructed:true:true"]}"#
+    );
+}
+
+#[test]
+fn custom_element_constructor_selected_prototypes_survive_wrapper_lookup() {
+    let mut vm = new_storage_test_vm("https://ce-selected-prototypes.test/");
+    let result = vm.eval(r#"
+        (() => {
+          window.addEventListener("error", event => event.preventDefault());
+          const html = document.documentElement || document.appendChild(document.createElement("html"));
+          const body = document.body || html.appendChild(document.createElement("body"));
+          const frame = body.appendChild(document.createElement("iframe"));
+          const failures = [];
+          let cases = 0;
+          for (const [realm, w] of [["main", window], ["child", frame.contentWindow]]) {
+            const doc = w.document;
+            const root = doc.body || doc.documentElement || doc;
+            for (const mode of ["create", "upgrade", "failed-upgrade"]) {
+              for (const kind of ["null", "object", "inherited", "base", "same-name", "html-name", "getter"]) {
+                const name = `selected-${mode}-${kind}`;
+                let selected;
+                let constructorReads = 0;
+                let sameDuring = false;
+                let prototypeDuring = false;
+                const callbacks = [];
+                class SelectedElement extends w.HTMLElement {
+                  constructor() {
+                    super();
+                    Object.setPrototypeOf(this, selected);
+                    const lookedUp = mode === "create" ? doc.adoptNode(this) : doc.querySelector(name);
+                    sameDuring = lookedUp === this;
+                    prototypeDuring = Object.getPrototypeOf(lookedUp) === selected;
+                    if (mode === "failed-upgrade") throw new Error("after super");
+                  }
+                  connectedCallback() { callbacks.push(Object.getPrototypeOf(this) === selected); }
+                }
+                switch (kind) {
+                  case "null": selected = null; break;
+                  case "object": selected = {}; break;
+                  case "inherited": selected = Object.create(SelectedElement.prototype); break;
+                  case "base": selected = w.HTMLElement.prototype; break;
+                  case "same-name": selected = (class SelectedElement extends w.HTMLElement {}).prototype; break;
+                  case "html-name": selected = (class HTMLReplacementElement extends w.HTMLElement {}).prototype; break;
+                  case "getter":
+                    selected = Object.create(w.HTMLElement.prototype);
+                    Object.defineProperty(selected, "constructor", {get() {
+                      constructorReads++;
+                      throw new Error("prototype.constructor must not be read");
+                    }});
+                    break;
+                }
+                let element;
+                if (mode !== "create") {
+                  element = doc.createElement(name);
+                  root.appendChild(element);
+                }
+                w.customElements.define(name, SelectedElement);
+                if (mode === "create") {
+                  element = doc.createElement(name);
+                  root.appendChild(element);
+                }
+                const lookedUp = doc.querySelector(name);
+                const after = Object.getPrototypeOf(element) === selected;
+                const afterLookup = Object.getPrototypeOf(lookedUp) === selected;
+                const sameAfter = lookedUp === element;
+                const callbacksCorrect = JSON.stringify(callbacks) ===
+                    (mode === "failed-upgrade" ? "[]" : "[true]");
+                if (!sameDuring || !prototypeDuring || !after || !afterLookup || !sameAfter ||
+                    constructorReads !== 0 || !callbacksCorrect) {
+                  failures.push({realm, mode, kind, sameDuring, prototypeDuring, after, afterLookup,
+                                 sameAfter, constructorReads, callbacks});
+                }
+                cases++;
+              }
+            }
+          }
+          return JSON.stringify({cases, failures});
+        })()
+    "#).expect("constructor-selected prototypes should remain observable");
+    assert_eq!(result, r#"{"cases":42,"failures":[]}"#);
+}
+
+#[test]
+fn child_failed_custom_element_creation_preserves_original_and_fallback_prototypes() {
+    let mut vm = new_storage_test_vm("https://ce-fallback-prototype.test/");
+    let result = vm
+        .eval(
+            r#"
+        (() => {
+          window.addEventListener("error", event => event.preventDefault());
+          const html = document.documentElement || document.appendChild(document.createElement("html"));
+          const body = document.body || html.appendChild(document.createElement("body"));
+          const frame = body.appendChild(document.createElement("iframe"));
+          const w = frame.contentWindow;
+          let constructed;
+          class InvalidElement extends w.HTMLElement {
+            constructor() {
+              super();
+              constructed = this;
+              this.setAttribute("invalid", "yes");
+              Object.setPrototypeOf(this, null);
+            }
+          }
+          w.customElements.define("invalid-created-element", InvalidElement);
+          const element = w.document.createElement("invalid-created-element");
+          (w.document.body || w.document.documentElement).appendChild(element);
+          const lookedUp = w.document.querySelector("invalid-created-element");
+          const original = w.document.adoptNode(constructed);
+          return [element instanceof w.HTMLUnknownElement,
+                  Object.getPrototypeOf(element) === w.HTMLUnknownElement.prototype,
+                  element instanceof InvalidElement, element.hasAttribute("invalid"),
+                  lookedUp === element, element !== constructed, original === constructed,
+                  Object.getPrototypeOf(original) === null].join(":");
+        })()
+    "#,
+        )
+        .expect("failed construction should preserve the original and initialize its fallback");
+    assert_eq!(result, "true:true:false:false:true:true:true:true");
+}
+
+#[test]
+fn existing_upgrade_preserves_prototype_selected_by_wrapping_constructor() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.documentElement || document.appendChild(document.createElement("html"));
+              const body = document.body || html.appendChild(document.createElement("body"));
+              const element = document.createElement("wrapped-upgrade-element");
+              body.appendChild(element);
+              const log = [];
+
+              class RealElement extends HTMLElement {
+                polymerMethod() { return "available"; }
+              }
+              class WrappingElement extends HTMLElement {
+                constructor() {
+                  super();
+                  Object.setPrototypeOf(this, RealElement.prototype);
+                }
+                connectedCallback() {
+                  log.push(this.polymerMethod());
+                }
+              }
+
+              customElements.define("wrapped-upgrade-element", WrappingElement);
+              return JSON.stringify({
+                realPrototype: Object.getPrototypeOf(element) === RealElement.prototype,
+                wrapperPrototype: Object.getPrototypeOf(element) === WrappingElement.prototype,
+                realInstance: element instanceof RealElement,
+                method: element.polymerMethod(),
+                log
+              });
+            })()
+            "#,
+        )
+        .expect("wrapping constructor prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"realPrototype":true,"wrapperPrototype":false,"realInstance":true,"method":"available","log":["available"]}"#
+    );
+}
+
+#[test]
+fn synchronous_creation_preserves_prototype_selected_by_constructor() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              class RealElement extends HTMLElement {
+                polymerMethod() { return "available"; }
+              }
+              class WrappingElement extends HTMLElement {
+                constructor() {
+                  super();
+                  Object.setPrototypeOf(this, RealElement.prototype);
+                }
+              }
+
+              customElements.define("wrapped-created-element", WrappingElement);
+              const element = document.createElement("wrapped-created-element");
+              return JSON.stringify({
+                realPrototype: Object.getPrototypeOf(element) === RealElement.prototype,
+                wrapperPrototype: Object.getPrototypeOf(element) === WrappingElement.prototype,
+                realInstance: element instanceof RealElement,
+                method: element.polymerMethod()
+              });
+            })()
+            "#,
+        )
+        .expect("synchronous wrapping constructor prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"realPrototype":true,"wrapperPrototype":false,"realInstance":true,"method":"available"}"#
     );
 }
 
@@ -6646,6 +7004,58 @@ fn custom_element_constructor_error_reports_to_definition_window() {
         result,
         r#"{"unknown":true,"events":[{"targetA":true,"targetB":false,"hasError":true,"errorIsDefinitionRealm":true,"errorCtorType":"function"}]}"#
     );
+}
+
+#[test]
+fn failed_existing_upgrade_before_super_keeps_original_prototype() {
+    let mut vm = new_storage_test_vm("https://ce-before-super.test/");
+    let result = vm.eval(r#"
+        (() => {
+          window.addEventListener("error", event => event.preventDefault());
+          const html = document.documentElement || document.appendChild(document.createElement("html"));
+          const body = document.body || html.appendChild(document.createElement("body"));
+          const frame = body.appendChild(document.createElement("iframe"));
+          const results = [];
+          for (const [realm, w] of [["main", window], ["child", frame.contentWindow]]) {
+            for (const failure of ["throw", "return-object"]) {
+              const doc = w.document;
+              const name = `before-super-${failure}`;
+              const element = doc.createElement(name);
+              element.setAttribute("data-value", "before");
+              (doc.body || doc.documentElement || doc).appendChild(element);
+              const original = Object.getPrototypeOf(element);
+              const log = [];
+              class FailedBeforeSuper extends w.HTMLElement {
+                constructor() {
+                  log.push("constructor");
+                  if (failure === "throw") throw new Error("before super");
+                  return {};
+                }
+                static get observedAttributes() { return ["data-value"]; }
+                attributeChangedCallback() { log.push("attribute"); }
+                connectedCallback() { log.push("connected"); }
+              }
+              w.customElements.define(name, FailedBeforeSuper);
+              results.push({realm, failure,
+                unchanged: Object.getPrototypeOf(element) === original,
+                custom: element instanceof FailedBeforeSuper, log});
+            }
+          }
+          return JSON.stringify(results);
+        })()
+    "#).expect("failed upgrades before super should report their original prototypes");
+    let results: serde_json::Value = serde_json::from_str(&result).expect("upgrade results");
+    let results = results.as_array().expect("four upgrade cases");
+    assert_eq!(results.len(), 4);
+    for result in results {
+        assert_eq!(result["unchanged"], true, "{result}");
+        assert_eq!(result["custom"], false, "{result}");
+        assert_eq!(
+            result["log"],
+            serde_json::json!(["constructor"]),
+            "{result}"
+        );
+    }
 }
 
 #[test]

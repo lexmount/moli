@@ -35,7 +35,9 @@ pub(in crate::native_bridge) fn detached_iframe_content_document<'s>(
     if let Some((runtime_ptr, handle)) =
         live_child_browsing_context_handle_for_detached_iframe(scope, iframe)
     {
-        return unsafe { &mut *runtime_ptr }.child_browsing_context_document_wrapper(scope, handle);
+        let runtime = unsafe { &mut *runtime_ptr };
+        runtime.child_browsing_context_window_wrapper(scope, handle)?;
+        return runtime.child_browsing_context_document_wrapper(scope, handle);
     }
     let snapshot = detached_iframe_snapshot(scope, iframe)?;
     let parsed_base_url = snapshot_base_url(snapshot.url.clone(), &snapshot.markup);

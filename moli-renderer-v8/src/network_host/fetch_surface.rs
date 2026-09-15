@@ -1179,8 +1179,7 @@ fn install_body_stream_consumer_runtime(scope: &mut v8::PinScope<'_, '_>) -> any
     };
     let script = v8::Script::compile(scope, source, None)
         .ok_or_else(|| anyhow::anyhow!("failed to compile Fetch body stream consumer runtime"))?;
-    script
-        .run(scope)
+    crate::script_execution::execute_compiled_script(scope, script)
         .ok_or_else(|| anyhow::anyhow!("failed to run Fetch body stream consumer runtime"))?;
     Ok(())
 }

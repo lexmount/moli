@@ -6,7 +6,7 @@
 //! - the original callback object;
 //! - its relevant and incumbent V8 contexts;
 //! - the `IsCallable` result captured during Web IDL conversion;
-//! - relevant/incumbent context entry;
+//! - relevant/incumbent context entry and microtask nesting during invocation;
 //! - function versus callback-interface invocation semantics.
 //!
 //! It deliberately does not own EventTarget registration order, Page/Document

@@ -160,7 +160,7 @@ impl DocumentRuntime {
                 let source = v8::String::new(scope, &source)?;
                 let origin = create_script_origin(scope, self.document_url().as_str(), 0);
                 let script = v8::Script::compile(scope, source, Some(&origin))?;
-                script.run(scope)
+                crate::script_execution::execute_compiled_script(scope, script)
             })()
         };
         let script_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;

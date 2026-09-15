@@ -4,6 +4,7 @@ use crate::native_bridge::document::{
     detached_create_cdata_section_html_method_callback,
     detached_create_cdata_section_method_callback,
 };
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(in crate::native_bridge) fn node_create_text_node_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -24,7 +25,7 @@ pub(in crate::native_bridge) fn node_create_text_node_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime.create_text_node_for_document(document_handle, &parsed.data);
     runtime.capture_node_creation_stack_trace(scope, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(handle));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
 
 pub(in crate::native_bridge) fn node_create_comment_callback<'s>(
@@ -46,7 +47,7 @@ pub(in crate::native_bridge) fn node_create_comment_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime.create_comment_for_document(document_handle, &parsed.data);
     runtime.capture_node_creation_stack_trace(scope, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(handle));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
 
 pub(in crate::native_bridge) fn node_create_document_fragment_callback<'s>(
@@ -65,7 +66,7 @@ pub(in crate::native_bridge) fn node_create_document_fragment_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime.create_document_fragment_for_document(document_handle);
     runtime.capture_node_creation_stack_trace(scope, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(handle));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
 
 pub(in crate::native_bridge) fn node_create_processing_instruction_callback<'s>(
@@ -110,7 +111,7 @@ pub(in crate::native_bridge) fn node_create_processing_instruction_callback<'s>(
         &parsed.data,
     );
     runtime.capture_node_creation_stack_trace(scope, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(handle));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
 
 pub(in crate::native_bridge) fn node_create_cdata_section_callback<'s>(

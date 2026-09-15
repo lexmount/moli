@@ -353,7 +353,7 @@ pub(super) fn call_global_bridge_method<'s>(
     let bridge = global_bridge_object(scope)?;
     let method = bridge.get(scope, v8_string(scope, name)?.into())?;
     let method = v8::Local::<v8::Function>::try_from(method).ok()?;
-    method.call(scope, bridge.into(), args)
+    crate::script_execution::call_function(scope, method, bridge.into(), args)
 }
 
 /// Obtain a raw `*mut JsContextHost` pointer from the V8 global bridge.
@@ -447,7 +447,7 @@ pub(crate) fn call_script_visible_function<'s>(
     action: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     debug_assert_script_visible_callback_outside_structural_mutation(scope, action);
-    function.call(scope, receiver, args)
+    crate::script_execution::call_function(scope, function, receiver, args)
 }
 
 pub(super) fn context_host_ptr_from_window_object(

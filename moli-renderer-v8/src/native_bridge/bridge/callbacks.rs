@@ -27,25 +27,35 @@ pub(crate) fn set_wrapped_handle_or_null(
     }
 }
 
-pub(crate) fn set_wrapped_handle_or_null_for_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(crate) fn set_wrapped_handle_or_null_for_receiver(
+    scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     runtime_ptr: *mut JsContextHost,
-    receiver: v8::Local<'s, v8::Object>,
+    receiver: v8::Local<'_, v8::Object>,
     handle: Option<DomHandle>,
 ) {
     let Some(handle) = handle else {
         rv.set_null();
         return;
     };
-    let runtime = unsafe { &mut *runtime_ptr };
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle_for_receiver(scope, runtime_ptr, receiver, handle)
-    {
-        Some(node) => rv.set(node.into()),
+    match wrapped_handle_value_for_receiver(scope, runtime_ptr, receiver, handle) {
+        Some(node) => rv.set(node),
         None => rv.set_null(),
     }
+}
+
+pub(crate) fn wrapped_handle_value_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    receiver: v8::Local<'_, v8::Object>,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let context = receiver.get_creation_context(scope)?;
+    if context == scope.get_current_context() {
+        return wrapped_handle_value(scope, runtime_ptr, handle);
+    }
+    let scope = &mut v8::ContextScope::new(scope, context);
+    wrapped_handle_value(scope, runtime_ptr, handle)
 }
 
 pub(crate) fn wrapped_handle_value<'s>(

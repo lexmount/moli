@@ -1,14 +1,11 @@
-use super::connected_lifecycle::dispatch_connected_callback;
 use super::element_state::definition_name_for_handle;
-use super::existing_upgrade::upgrade_handle_if_defined;
+use super::reactions::{CustomElementReaction, enqueue_custom_element_reaction};
 use super::registry_roots::{
     is_shadow_including_rooted_in_browsing_context_document, shadow_including_root_document_handle,
 };
 use super::traversal::shadow_including_subtree_handles;
+use super::with_custom_element_reaction_scope;
 use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
-use super::{
-    dispatch_form_association_callback_if_needed, dispatch_form_disabled_callback_if_needed,
-};
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 use std::collections::HashSet;
 
@@ -31,17 +28,16 @@ pub(crate) fn upgrade_existing_definition_for_child(
     };
     let mut handles = Vec::new();
     collect_matching_definition_handles(host_ptr, document_handle, definition_name, &mut handles);
-    for handle in handles {
-        let was_connected = unsafe { &*host_ptr }.dom_host().is_connected(handle);
-        if !upgrade_handle_if_defined(scope, host_ptr, handle) {
-            continue;
+    with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+        for handle in handles {
+            enqueue_custom_element_reaction(
+                scope,
+                host_ptr,
+                handle,
+                CustomElementReaction::Upgrade,
+            );
         }
-        if was_connected {
-            dispatch_connected_callback(scope, host_ptr, handle);
-        }
-        dispatch_form_association_callback_if_needed(scope, host_ptr, handle);
-        dispatch_form_disabled_callback_if_needed(scope, host_ptr, handle);
-    }
+    });
 }
 
 pub(crate) fn upgrade_existing_definition_for_registry(
@@ -55,23 +51,16 @@ pub(crate) fn upgrade_existing_definition_for_registry(
         registry_key,
         definition_name,
     );
-    for handle in handles {
-        let was_upgraded = unsafe { &*host_ptr }
-            .custom_elements_for_node_handle(handle)
-            .is_some_and(|store| store.is_upgraded_handle(handle));
-        if !upgrade_handle_if_defined(scope, host_ptr, handle) {
-            continue;
+    with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+        for handle in handles {
+            enqueue_custom_element_reaction(
+                scope,
+                host_ptr,
+                handle,
+                CustomElementReaction::Upgrade,
+            );
         }
-        if !was_upgraded
-            && unsafe { &*host_ptr }
-                .custom_elements_for_node_handle(handle)
-                .is_some_and(|store| store.is_upgraded_handle(handle))
-        {
-            dispatch_connected_callback(scope, host_ptr, handle);
-            dispatch_form_association_callback_if_needed(scope, host_ptr, handle);
-            dispatch_form_disabled_callback_if_needed(scope, host_ptr, handle);
-        }
-    }
+    });
 }
 
 fn matching_definition_handles_for_registry_in_upgrade_order(

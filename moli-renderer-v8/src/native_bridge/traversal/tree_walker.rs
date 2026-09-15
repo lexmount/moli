@@ -1,3 +1,4 @@
+use super::set_wrapped_traversal_node_or_null;
 use super::{
     TreeWalkerSnapshot,
     algorithms::{
@@ -9,7 +10,7 @@ use super::{
 };
 use crate::native_bridge::{
     bridge::throw_dom_exception, callback_value_dom_handle,
-    node::node_or_foreign_arg_handle_preserve_detached, set_wrapped_handle_or_null,
+    node::node_or_foreign_arg_handle_preserve_detached,
 };
 use crate::util::throw_type_error;
 
@@ -48,10 +49,11 @@ pub(super) fn tree_walker_root_getter(
         rv.set_null();
         return;
     };
-    set_wrapped_handle_or_null(
+    set_wrapped_traversal_node_or_null(
         scope,
         &mut rv,
         snapshot.runtime_ptr,
+        snapshot.state.root,
         Some(snapshot.state.root),
     );
 }
@@ -96,10 +98,11 @@ pub(super) fn tree_walker_current_node_getter(
         rv.set_null();
         return;
     };
-    set_wrapped_handle_or_null(
+    set_wrapped_traversal_node_or_null(
         scope,
         &mut rv,
         snapshot.runtime_ptr,
+        snapshot.state.root,
         Some(snapshot.state.current_node),
     );
 }
@@ -151,7 +154,13 @@ pub(super) fn tree_walker_parent_node_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_first_child_callback(
@@ -183,7 +192,13 @@ pub(super) fn tree_walker_first_child_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_last_child_callback(
@@ -215,7 +230,13 @@ pub(super) fn tree_walker_last_child_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_next_sibling_callback(
@@ -241,7 +262,13 @@ pub(super) fn tree_walker_next_sibling_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_previous_sibling_callback(
@@ -268,7 +295,13 @@ pub(super) fn tree_walker_previous_sibling_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_next_node_callback(
@@ -294,7 +327,13 @@ pub(super) fn tree_walker_next_node_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn tree_walker_previous_node_callback(
@@ -320,5 +359,11 @@ pub(super) fn tree_walker_previous_node_callback(
             .set_tree_walker_current_node(snapshot.id, handle);
     }
     tree_walker_end(&snapshot);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }

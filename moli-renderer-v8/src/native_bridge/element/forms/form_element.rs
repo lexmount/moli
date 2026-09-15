@@ -1,5 +1,6 @@
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
+use crate::native_bridge::bridge::wrapped_handle_value_for_receiver;
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
 use crate::util::throw_type_error;
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
@@ -560,6 +561,10 @@ pub(in crate::native_bridge) fn form_named_getter(
     {
         return v8::Intercepted::kNo;
     }
+    let Some(context) = args.holder().get_creation_context(scope) else {
+        return v8::Intercepted::kNo;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
     let matches = form_named_item_matches(runtime, handle, &key);
     if matches.len() > 1 {
@@ -619,6 +624,10 @@ pub(in crate::native_bridge) fn form_named_descriptor(
     {
         return v8::Intercepted::kNo;
     }
+    let Some(context) = args.holder().get_creation_context(scope) else {
+        return v8::Intercepted::kNo;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
     let matches = form_named_item_matches(runtime, handle, &key);
     let value = if matches.len() > 1 {
@@ -809,13 +818,12 @@ pub(in crate::native_bridge) fn form_indexed_getter(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(control) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, control_handle)
+    let Some(control) =
+        wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), control_handle)
     else {
         return v8::Intercepted::kNo;
     };
-    rv.set(control.into());
+    rv.set(control);
     v8::Intercepted::kYes
 }
 
@@ -879,14 +887,12 @@ pub(in crate::native_bridge) fn form_indexed_descriptor(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(control) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, control_handle)
+    let Some(control) =
+        wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), control_handle)
     else {
         return v8::Intercepted::kNo;
     };
-    let Ok(descriptor) =
-        DataPropertyDescriptorDeclaration::new(control.into(), false, true).bind(scope)
+    let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(control, false, true).bind(scope)
     else {
         return v8::Intercepted::kNo;
     };

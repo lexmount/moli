@@ -927,9 +927,9 @@ fn xml_http_request_send_body_applies_webidl_conversion() {
                     .expect("throwing body source should allocate");
             let script = v8::Script::compile(&scope, source, None)
                 .expect("throwing body script should compile");
-            let throwing_body = script
-                .run(&scope)
-                .expect("throwing body object should create");
+            let throwing_body =
+                crate::script_execution::execute_compiled_script(&mut scope, script)
+                    .expect("throwing body object should create");
             let throwing_error =
                 match crate::network_host::prepare_xhr_send_body(&mut scope, throwing_body) {
                     Ok(_) => panic!("throwing stringifier should propagate as a pending exception"),

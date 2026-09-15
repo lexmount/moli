@@ -287,7 +287,7 @@ fn image_selected_source_candidate(
             .attribute("href")
             .or_else(|| element.attribute("xlink:href"))
             .map(str::trim)
-            .filter(|href| !href.is_empty())
+            .filter(|href| image_source_is_fetchable(href))
             .map(|href| SelectedImageSource {
                 url: href.to_owned(),
                 density: 1.0,
@@ -313,7 +313,7 @@ fn image_selected_source_candidate(
     element
         .attribute("src")
         .map(str::trim)
-        .filter(|src| !src.is_empty())
+        .filter(|src| image_source_is_fetchable(src))
         .map(|src| SelectedImageSource {
             url: src.to_owned(),
             density: 1.0,
@@ -701,6 +701,7 @@ fn selected_srcset_candidate(
     viewport: ImageSelectionViewport,
 ) -> Option<SelectedImageSource> {
     let mut candidates = parse_srcset_candidates(srcset);
+    candidates.retain(|candidate| image_source_is_fetchable(&candidate.url));
     if candidates.is_empty() {
         return None;
     }
@@ -749,6 +750,10 @@ fn selected_srcset_candidate(
             url: candidate.url,
             density: candidate.descriptor.density.unwrap_or(1.0),
         })
+}
+
+fn image_source_is_fetchable(source: &str) -> bool {
+    !source.is_empty() && source != "undefined"
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1280,6 +1285,18 @@ mod tests {
         assert_eq!(select("data:,a 0w", None), None);
         assert_eq!(select("data:,a 1h", None), None);
         assert_eq!(select("data:,a 1w 1h", None).as_deref(), Some("data:,a"));
+    }
+
+    #[test]
+    fn image_selection_drops_undefined_template_binding_sources() {
+        assert_eq!(select("undefined", None), None);
+        assert_eq!(select("undefined 1x", None), None);
+        assert_eq!(
+            select("undefined 1x, actual.png 2x", None).as_deref(),
+            Some("actual.png")
+        );
+        assert!(!image_source_is_fetchable("undefined"));
+        assert!(image_source_is_fetchable("undefined.png"));
     }
 
     #[test]

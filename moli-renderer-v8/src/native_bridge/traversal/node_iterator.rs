@@ -1,8 +1,9 @@
+use super::set_wrapped_traversal_node_or_null;
 use super::{
     algorithms::{node_iterator_next_node, node_iterator_previous_node},
     identity::node_iterator_snapshot_from_object,
 };
-use crate::native_bridge::bridge::{set_wrapped_handle_or_null, throw_dom_exception};
+use crate::native_bridge::bridge::throw_dom_exception;
 
 pub(super) fn node_iterator_root_getter(
     scope: &mut v8::PinScope<'_, '_>,
@@ -14,10 +15,11 @@ pub(super) fn node_iterator_root_getter(
         rv.set_null();
         return;
     };
-    set_wrapped_handle_or_null(
+    set_wrapped_traversal_node_or_null(
         scope,
         &mut rv,
         snapshot.runtime_ptr,
+        snapshot.state.root,
         Some(snapshot.state.root),
     );
 }
@@ -62,10 +64,11 @@ pub(super) fn node_iterator_reference_node_getter(
         rv.set_null();
         return;
     };
-    set_wrapped_handle_or_null(
+    set_wrapped_traversal_node_or_null(
         scope,
         &mut rv,
         snapshot.runtime_ptr,
+        snapshot.state.root,
         Some(snapshot.state.reference_node),
     );
 }
@@ -116,7 +119,13 @@ pub(super) fn node_iterator_next_node_callback(
     let bridge = unsafe { &mut *snapshot.runtime_ptr }.native_bridge_mut();
     bridge.set_node_iterator_position(snapshot.id, reference_node, pointer_before_reference_node);
     bridge.node_iterator_end(snapshot.id);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn node_iterator_previous_node_callback(
@@ -152,7 +161,13 @@ pub(super) fn node_iterator_previous_node_callback(
     let bridge = unsafe { &mut *snapshot.runtime_ptr }.native_bridge_mut();
     bridge.set_node_iterator_position(snapshot.id, reference_node, pointer_before_reference_node);
     bridge.node_iterator_end(snapshot.id);
-    set_wrapped_handle_or_null(scope, &mut rv, snapshot.runtime_ptr, result);
+    set_wrapped_traversal_node_or_null(
+        scope,
+        &mut rv,
+        snapshot.runtime_ptr,
+        snapshot.state.root,
+        result,
+    );
 }
 
 pub(super) fn node_iterator_detach_callback(

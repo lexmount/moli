@@ -2287,9 +2287,9 @@ impl ScriptVmDefaultWorldBootstrap {
             .ok_or_else(|| anyhow!("failed to allocate v8 baseline snapshot source string"))?;
             let baseline_script = v8::Script::compile(scope, baseline_source, None)
                 .ok_or_else(|| anyhow!("v8 failed to compile baseline snapshot script"))?;
-            let baseline_value = baseline_script
-                .run(scope)
-                .ok_or_else(|| anyhow!("v8 failed to execute baseline snapshot script"))?;
+            let baseline_value =
+                crate::script_execution::execute_compiled_script(scope, baseline_script)
+                    .ok_or_else(|| anyhow!("v8 failed to execute baseline snapshot script"))?;
             let baseline_json = baseline_value
                 .to_string(scope)
                 .ok_or_else(|| anyhow!("v8 baseline snapshot did not return a string"))?

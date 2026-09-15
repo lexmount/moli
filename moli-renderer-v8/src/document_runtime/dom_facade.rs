@@ -624,7 +624,11 @@ impl DocumentRuntime {
         let registry_retargets =
             custom_elements::registry_association_retargets_for_clone(host_ptr, handle, clone);
         custom_elements::apply_registry_association_retargets(host_ptr, &registry_retargets);
-        if !custom_elements::upgrade_subtree_if_defined(scope, host_ptr, clone) {
+        let upgraded =
+            custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                custom_elements::upgrade_subtree_if_defined(scope, host_ptr, clone)
+            });
+        if !upgraded {
             return None;
         }
         Some(clone)
@@ -648,7 +652,11 @@ impl DocumentRuntime {
             fallback_registry,
         );
         custom_elements::apply_registry_association_retargets(host_ptr, &registry_retargets);
-        if !custom_elements::upgrade_subtree_if_defined(scope, host_ptr, clone) {
+        let upgraded =
+            custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                custom_elements::upgrade_subtree_if_defined(scope, host_ptr, clone)
+            });
+        if !upgraded {
             return None;
         }
         Some(clone)

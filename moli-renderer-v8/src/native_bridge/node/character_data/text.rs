@@ -81,12 +81,11 @@ pub(in crate::native_bridge) fn node_split_text_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(wrapper) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, new_handle)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(wrapper.into());
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(new_handle),
+    );
 }

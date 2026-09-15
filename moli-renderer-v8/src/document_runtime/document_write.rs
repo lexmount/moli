@@ -629,10 +629,17 @@ impl DocumentRuntime {
         if custom_element_upgrade_timing
             == HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment
         {
-            for root in fragment_roots {
-                if !custom_elements::upgrade_subtree_if_defined(scope, host_ptr, root) {
-                    return None;
-                }
+            let upgraded =
+                custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                    for root in fragment_roots {
+                        if !custom_elements::upgrade_subtree_if_defined(scope, host_ptr, root) {
+                            return false;
+                        }
+                    }
+                    true
+                });
+            if !upgraded {
+                return None;
             }
         }
         unsafe { &mut *host_ptr }.capture_node_creation_stack_traces_since(scope, first_node_index);

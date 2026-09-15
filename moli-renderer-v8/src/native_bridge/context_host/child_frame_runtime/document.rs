@@ -1,12 +1,12 @@
-use super::super::JsContextHost;
+use super::super::{JsContextHost, WindowExecutionContextOwner};
 use super::document_slots::sync_child_document_window_slots;
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
 use crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT;
 use crate::native_bridge::{
-    document::detached_native_handle_for_runtime, node::remove_child_to_current_reaction_queue,
-    throw_dom_exception,
+    OwnerDispatchScope, document::detached_native_handle_for_runtime,
+    node::remove_child_to_current_reaction_queue, throw_dom_exception,
 };
 use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
@@ -67,13 +67,31 @@ impl JsContextHost {
             .refresh_child_browsing_context(scope, handle)
             .into_iter()
             .collect::<Vec<_>>();
-        let live_window = self.child_window_proxy_records.live_window(scope, handle);
         let current_realm_child =
             crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope);
+        let context = if current_realm_child == Some(handle) {
+            scope.get_current_context()
+        } else {
+            let context = self
+                .current_child_document_task_owner(handle)
+                .and_then(|owner| {
+                    self.window_execution_context(
+                        scope,
+                        WindowExecutionContextOwner::Frame(owner.local_window_id),
+                        OwnerDispatchScope::Child(handle),
+                    )
+                });
+            let Some((_, context)) = context else {
+                // Lifecycle bookkeeping can run before an initial empty frame needs
+                // a realm. Defer its wrapper instead of creating it in the caller's realm.
+                return (None, ready_work);
+            };
+            context
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let live_window = self.child_window_proxy_records.live_window(scope, handle);
         let current_global = scope.get_current_context().global(scope);
-        let window = live_window.filter(|window| {
-            current_realm_child != Some(handle) || window.strict_equals(current_global.into())
-        });
+        let window = live_window.filter(|window| window.strict_equals(current_global.into()));
         if let Some(document_handle) =
             self.child_browsing_context_document_handle(handle)
                 .filter(|document_handle| {

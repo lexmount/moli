@@ -28,4 +28,25 @@ pub(super) enum CustomElementReaction {
         disabled: bool,
     },
     FormReset,
+    #[allow(dead_code)]
+    FormStateRestore {
+        value: String,
+        mode: FormStateRestoreMode,
+    },
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FormStateRestoreMode {
+    Restore,
+    Autocomplete,
+}
+
+impl FormStateRestoreMode {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Restore => "restore",
+            Self::Autocomplete => "autocomplete",
+        }
+    }
 }

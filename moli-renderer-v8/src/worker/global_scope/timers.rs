@@ -150,7 +150,7 @@ fn worker_timer_callback_from_arg<'s>(
         return Ok(None);
     };
     Ok(v8::Script::compile(scope, source, None)
-        .and_then(|script| script.run(scope))
+        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
         .map(|callback| WorkerTimerCallback::browser_function(scope, callback)))
 }

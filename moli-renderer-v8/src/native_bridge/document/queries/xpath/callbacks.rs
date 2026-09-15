@@ -154,6 +154,7 @@ pub(super) fn install_xpath_evaluator_template_bindings<'s>(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_xpath<'a>(
     scope: &mut v8::PinScope<'a, '_>,
+    receiver: v8::Local<'a, v8::Object>,
     root: v8::Local<'a, v8::Object>,
     live_runtime_ptr: Option<*mut JsContextHost>,
     expression: &str,
@@ -172,36 +173,37 @@ fn evaluate_xpath<'a>(
         return;
     }
 
-    if let Some(runtime_ptr) = live_runtime_ptr
-        && let Some(context_handle) = node_arg_handle(scope, runtime_ptr, context_node.into())
-    {
+    let Some(context) = receiver.get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let result = {
+        let scope = &mut v8::ContextScope::new(scope, context);
         let namespace_resolver =
             namespace_resolver.map(|callback| V8XPathNamespaceResolver::new(scope, callback));
-        match evaluate_xpath_over_live_dom(
-            scope,
-            runtime_ptr,
-            expression,
-            context_handle,
-            namespace_resolver,
-            requested_result_type,
-        ) {
-            Ok(Some(result)) => rv.set(result.into()),
-            Ok(None) => rv.set_null(),
-            Err(error) => throw_xpath_evaluation_error(scope, error),
+        if let Some(runtime_ptr) = live_runtime_ptr
+            && let Some(context_handle) = node_arg_handle(scope, runtime_ptr, context_node.into())
+        {
+            evaluate_xpath_over_live_dom(
+                scope,
+                runtime_ptr,
+                expression,
+                context_handle,
+                namespace_resolver,
+                requested_result_type,
+            )
+        } else {
+            evaluate_xpath_over_object_tree(
+                scope,
+                root,
+                expression,
+                Some(context_node),
+                namespace_resolver,
+                requested_result_type,
+            )
         }
-        return;
-    }
-
-    let namespace_resolver =
-        namespace_resolver.map(|callback| V8XPathNamespaceResolver::new(scope, callback));
-    match evaluate_xpath_over_object_tree(
-        scope,
-        root,
-        expression,
-        Some(context_node),
-        namespace_resolver,
-        requested_result_type,
-    ) {
+    };
+    match result {
         Ok(Some(result)) => rv.set(result.into()),
         Ok(None) => rv.set_null(),
         Err(error) => throw_xpath_evaluation_error(scope, error),
@@ -246,6 +248,7 @@ pub(in crate::native_bridge) fn bridge_detached_document_evaluate_callback<'a>(
     evaluate_xpath(
         scope,
         root,
+        root,
         None,
         &parsed.expression,
         parsed.context_node,
@@ -269,6 +272,7 @@ pub(in crate::native_bridge) fn node_document_evaluate_callback<'a>(
         .map(|(runtime_ptr, _)| runtime_ptr);
     evaluate_xpath(
         scope,
+        root,
         root,
         live_runtime_ptr,
         &parsed.expression,
@@ -297,6 +301,7 @@ fn xpath_evaluator_evaluate_callback<'a>(
     };
     evaluate_xpath(
         scope,
+        args.this(),
         root,
         live_runtime_ptr,
         &parsed.expression,

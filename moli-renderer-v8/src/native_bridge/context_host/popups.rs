@@ -3507,7 +3507,7 @@ impl JsContextHost {
             anyhow::bail!("failed to allocate popup script wrapper source");
         };
         let Some(function) = v8::Script::compile(scope, source, None)
-            .and_then(|script| script.run(scope))
+            .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
         else {
             anyhow::bail!("v8 failed to materialize popup script wrapper");
@@ -3528,20 +3528,21 @@ impl JsContextHost {
         let previous_message_source = self.enter_window_message_source_scope(
             super::PendingWindowMessageEndpoint::LightweightPopup(popup_id),
         );
-        let run_succeeded = function
-            .call(
-                scope,
+        let run_succeeded = crate::util::call_script_visible_function(
+            scope,
+            function,
+            window.into(),
+            &[
+                scope_bindings.into(),
                 window.into(),
-                &[
-                    scope_bindings.into(),
-                    window.into(),
-                    document.into(),
-                    current_script,
-                    enter_active_popup.into(),
-                    restore_active_popup.into(),
-                ],
-            )
-            .is_some();
+                document.into(),
+                current_script,
+                enter_active_popup.into(),
+                restore_active_popup.into(),
+            ],
+            "popup classic script",
+        )
+        .is_some();
         self.restore_window_message_source_scope(previous_message_source);
 
         if !self.lightweight_popup_document_owner_is_current(script_document_owner) {
@@ -3692,7 +3693,7 @@ impl JsContextHost {
             anyhow::bail!("failed to allocate popup javascript URL wrapper");
         };
         let Some(function) = v8::Script::compile(scope, wrapper_source, None)
-            .and_then(|script| script.run(scope))
+            .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
         else {
             anyhow::bail!("v8 failed to compile popup javascript URL wrapper");
@@ -3702,7 +3703,13 @@ impl JsContextHost {
             super::PendingWindowMessageEndpoint::LightweightPopup(popup_id),
         );
         let eval_permit = crate::context_bootstrap::arm_internal_javascript_url_eval(scope);
-        let completion = function.call(scope, window.into(), &[window.into(), source_value.into()]);
+        let completion = crate::util::call_script_visible_function(
+            scope,
+            function,
+            window.into(),
+            &[window.into(), source_value.into()],
+            "popup javascript URL",
+        );
         crate::context_bootstrap::restore_internal_javascript_url_eval(scope, eval_permit);
         self.restore_window_message_source_scope(previous_message_source);
         restore_active_lightweight_popup_scope(scope, previous_popup);

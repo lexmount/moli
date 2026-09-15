@@ -683,12 +683,13 @@ fn element_internals_shadow_root_getter_callback<'s>(
         rv.set_null();
         return;
     }
-    let shadow_root = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, root_handle)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(shadow_root);
+    crate::native_bridge::set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(root_handle),
+    );
 }
 
 fn element_internals_states_getter_callback<'s>(
@@ -1174,13 +1175,13 @@ fn element_internals_form_getter_callback<'s>(
         rv.set_null();
         return;
     };
-    match unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, form_handle)
-    {
-        Some(form) => rv.set(form.into()),
-        None => rv.set_null(),
-    }
+    crate::native_bridge::set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(form_handle),
+    );
 }
 
 fn element_internals_will_validate_getter_callback<'s>(

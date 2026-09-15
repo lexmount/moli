@@ -83,7 +83,7 @@ pub(in crate::native_bridge) fn node_get_element_by_id_callback<'s>(
         }
         return;
     }
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, result);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), result);
 }
 
 fn find_element_by_id_in_subtree(

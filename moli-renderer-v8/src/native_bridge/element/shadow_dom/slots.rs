@@ -7,6 +7,7 @@ use crate::util::v8str;
 
 use super::super::super::{
     JsContextHost,
+    bridge::wrapped_handle_value_for_receiver,
     node::{
         node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached,
@@ -77,10 +78,7 @@ fn assigned_slot_for_object<'s>(
     if document::detached_native_handle_for_runtime(scope, runtime_ptr, object).is_some() {
         document::detached_native_object_for_handle(scope, runtime_ptr, slot_handle).map(Into::into)
     } else {
-        runtime
-            .native_bridge_mut()
-            .wrap_handle(scope, runtime_ptr, slot_handle)
-            .map(Into::into)
+        wrapped_handle_value_for_receiver(scope, runtime_ptr, object, slot_handle)
     }
 }
 
@@ -100,7 +98,14 @@ pub(in crate::native_bridge) fn slot_assigned_nodes_callback<'s>(
         .assigned_nodes_for_slot_with_options(handle, flatten);
     let receiver_is_detached =
         document::detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some();
-    set_slot_handle_array(scope, &mut rv, runtime_ptr, &handles, receiver_is_detached);
+    set_slot_handle_array(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        &handles,
+        receiver_is_detached,
+    );
 }
 
 pub(in crate::native_bridge) fn slot_assigned_elements_callback<'s>(
@@ -127,7 +132,14 @@ pub(in crate::native_bridge) fn slot_assigned_elements_callback<'s>(
         .collect::<Vec<_>>();
     let receiver_is_detached =
         document::detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some();
-    set_slot_handle_array(scope, &mut rv, runtime_ptr, &handles, receiver_is_detached);
+    set_slot_handle_array(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        &handles,
+        receiver_is_detached,
+    );
 }
 
 pub(in crate::native_bridge) fn slot_assign_callback<'s>(
@@ -227,13 +239,19 @@ fn slot_flatten_option(
     })
 }
 
-fn set_slot_handle_array(
-    scope: &mut v8::PinScope<'_, '_>,
+fn set_slot_handle_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     runtime_ptr: *mut JsContextHost,
+    receiver: v8::Local<'s, v8::Object>,
     handles: &[DomHandle],
     detached_objects: bool,
 ) {
+    let Some(context) = receiver.get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let mut values = Vec::with_capacity(handles.len());
     for handle in handles.iter().copied() {
         let node = if detached_objects {

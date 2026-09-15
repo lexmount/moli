@@ -1909,7 +1909,7 @@ fn execute_committed_inline_classic_script(
         return;
     };
     unsafe { &mut *host_ptr }.push_current_inline_script(node);
-    let run_result = script.run(scope);
+    let run_result = crate::script_execution::execute_compiled_script(scope, script);
     unsafe { &mut *host_ptr }.pop_current_inline_script(node);
     if run_result.is_some() {
         let _ = runtime.enqueue_script_event_lifecycle_work(

@@ -282,7 +282,7 @@ pub(super) fn evaluate_worker_script(
                 });
             return Err(error);
         };
-        let _ = script.run(&scope);
+        let _ = crate::script_execution::execute_compiled_script(&mut scope, script);
         if scope.has_caught() {
             if muted_errors {
                 return Err(WorkerImportScriptError::network(format!(

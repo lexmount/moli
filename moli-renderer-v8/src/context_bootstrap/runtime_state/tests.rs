@@ -19,7 +19,7 @@ fn failed_child_eval_capture_never_exposes_the_intrinsic_eval() {
         })"#,
     );
     let window = v8::Script::compile(scope, source, None)
-        .and_then(|script| script.run(scope))
+        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .expect("Window-like object with a throwing eval getter");
     let eval_key = v8str(scope, "eval");
@@ -69,7 +69,7 @@ fn child_eval_error_restores_the_wrapper_before_returning() {
         v8str(scope, "(function childEvalWrapper() {})"),
         None,
     )
-    .and_then(|script| script.run(scope))
+    .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
     .expect("child eval wrapper");
     assert_eq!(
         window.define_own_property(

@@ -2,11 +2,10 @@ use super::super::*;
 use crate::native_bridge::document::{
     parse_import_node_options, validate_registry_association_for_document,
 };
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::context_host_ptr_from_global_bridge;
 
-use super::super::super::super::node::{
-    node_runtime_and_handle_from_object, set_wrapped_node_or_null,
-};
+use super::super::super::super::node::node_runtime_and_handle_from_object;
 
 fn native_clone_source_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -146,7 +145,13 @@ pub(in crate::native_bridge) fn bridge_clone_node_into_document_callback<'a>(
             rv.set_null();
             return;
         };
-        set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(imported));
+        set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            Some(imported),
+        );
         return;
     }
     match clone_js_node_like_into_document_object(scope, document, node, deep) {

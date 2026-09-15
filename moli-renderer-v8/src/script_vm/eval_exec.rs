@@ -237,7 +237,7 @@ fn execute_source_text_on_current_stack_with_completion(
         SCRIPT_TURN_WATCHDOG_TIMEOUT,
     );
     let watchdog_timeout = watchdog.timeout();
-    let run_result = script.run(&scope);
+    let run_result = crate::script_execution::execute_compiled_script(&mut scope, script);
     let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
     scope.set_continuation_preserved_embedder_data(previous_continuation_data);
     let value = run_result.ok_or_else(|| {
@@ -822,7 +822,7 @@ impl ScriptVm {
                         );
                         uncaught_script_error(report, "compile")
                     })?;
-                    let value = script.run(&scope).ok_or_else(|| {
+                    let value = crate::script_execution::execute_compiled_script(&mut scope, script).ok_or_else(|| {
                         let exception = scope.exception();
                         let message = scope.message();
                         let stack_trace = scope.stack_trace();

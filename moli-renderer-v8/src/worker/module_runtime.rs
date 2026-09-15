@@ -576,7 +576,7 @@ fn finish_worker_module_bootstrap(
         }
     }
 
-    let Some(value) = root_module.evaluate(scope) else {
+    let Some(value) = crate::script_execution::evaluate_module(scope, root_module) else {
         let exception = scope.exception();
         let message = scope.message();
         let stack_trace = scope.stack_trace();
@@ -1260,7 +1260,7 @@ fn finish_worker_dynamic_module_import_evaluation(
             "dynamic import module evaluation failed",
         ));
     }
-    let Some(value) = root_module.evaluate(scope) else {
+    let Some(value) = crate::script_execution::evaluate_module(scope, root_module) else {
         let exception = scope.exception();
         return Err(WorkerDynamicModuleImportError::caught_evaluation_exception(
             scope,

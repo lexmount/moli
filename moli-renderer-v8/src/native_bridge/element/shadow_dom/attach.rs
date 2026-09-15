@@ -5,7 +5,7 @@ use crate::util::{throw_type_error, v8str};
 use super::super::super::{
     document::{self, validate_registry_association_for_document},
     node::node_runtime_and_handle_from_args,
-    throw_dom_exception,
+    set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
 };
 use super::super::property_string_value;
 
@@ -151,11 +151,11 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
     let root_registry_association = registry_association
         .unwrap_or_else(|| runtime.effective_custom_element_registry_association(document_handle));
     runtime.set_custom_element_registry_association(root_handle, root_registry_association);
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, root_handle)
-    {
-        Some(root) => rv.set(root.into()),
-        None => rv.set_null(),
-    }
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(root_handle),
+    );
 }

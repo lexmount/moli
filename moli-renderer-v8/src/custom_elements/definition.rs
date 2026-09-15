@@ -44,7 +44,6 @@ pub(crate) struct CustomElementStore {
     pub(super) definitions: HashMap<String, CustomElementDefinition>,
     pub(super) upgraded_handles: HashSet<DomHandle>,
     pub(super) upgraded_definition_names: HashMap<DomHandle, String>,
-    pub(super) pending_initial_attributes: HashMap<DomHandle, Vec<PendingInitialAttribute>>,
     pub(super) form_association_states: HashMap<DomHandle, Option<DomHandle>>,
     pub(super) form_disabled_states: HashMap<DomHandle, bool>,
     pub(super) pending_when_defined: HashMap<String, PendingWhenDefined>,

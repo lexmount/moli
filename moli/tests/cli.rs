@@ -614,6 +614,7 @@ fn infers_serve_mode_when_called_without_args() {
             host: "127.0.0.1".to_owned(),
             port: 9222,
             timeout: 10,
+            cdp_screencast_fps: None,
             common: CommonArgs::default(),
         }))
     );
@@ -639,6 +640,7 @@ fn parses_serve_flags_with_explicit_command() {
             host: "0.0.0.0".to_owned(),
             port: 9333,
             timeout: 42,
+            cdp_screencast_fps: None,
             common: CommonArgs::default(),
         }))
     );
@@ -1565,6 +1567,30 @@ fn layout_selects_on_demand_policy_for_fetch_and_serve() {
             config.browser.layout_policy(),
             moli_core::LayoutPolicy::OnDemand
         );
+    }
+}
+
+#[test]
+fn cdp_screencast_fps_requires_layout_and_accepts_one_through_sixty() {
+    for fps in ["1", "30", "60"] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "serve",
+            "--layout",
+            "--cdp-screencast-fps",
+            fps,
+        ]))
+        .unwrap();
+        let config = AppConfig::from_cli(&cli).unwrap();
+        assert_eq!(config.server.cdp_screencast_fps, fps.parse::<u8>().unwrap());
+    }
+
+    for args in [
+        vec!["moli", "serve", "--cdp-screencast-fps", "30"],
+        vec!["moli", "serve", "--layout", "--cdp-screencast-fps", "0"],
+        vec!["moli", "serve", "--layout", "--cdp-screencast-fps", "61"],
+    ] {
+        assert!(Cli::try_parse_from(normalize_args_for_compat(args)).is_err());
     }
 }
 

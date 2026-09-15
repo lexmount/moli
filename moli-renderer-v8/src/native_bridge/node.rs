@@ -15,7 +15,8 @@ use super::super::{
 };
 use super::{
     CollectionKind, JsContextHost, LiveCollectionQueryKind, callback_arg_string,
-    runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
+    runtime_ptr_from_object, set_wrapped_handle_or_null, set_wrapped_handle_or_null_for_receiver,
+    throw_dom_exception,
 };
 
 mod bridge_callbacks;
@@ -603,7 +604,7 @@ fn node_owner_document_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::owner_document);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, owner);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), owner);
 }
 
 fn node_base_uri_getter_function<'s>(
@@ -678,7 +679,7 @@ fn node_parent_node_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::parent_node);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, parent);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
 }
 
 fn node_parent_element_getter_function<'s>(
@@ -704,7 +705,7 @@ fn node_parent_element_getter_function<'s>(
         .node(handle)
         .and_then(Node::parent_node)
         .filter(|parent| node_is_element(unsafe { &*runtime_ptr }, *parent));
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, parent);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), parent);
 }
 
 fn node_child_nodes_getter_function<'s>(
@@ -725,6 +726,11 @@ fn node_child_nodes_getter_function<'s>(
         rv.set_null();
         return;
     };
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = super::collections::build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -759,7 +765,7 @@ fn node_first_child_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::first_child);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, child);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
 }
 
 fn node_last_child_getter_function<'s>(
@@ -784,7 +790,7 @@ fn node_last_child_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::last_child);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, child);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
 }
 
 fn node_previous_sibling_getter_function<'s>(
@@ -809,7 +815,7 @@ fn node_previous_sibling_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::prev_sibling);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, sibling);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
 }
 
 fn node_next_sibling_getter_function<'s>(
@@ -834,7 +840,7 @@ fn node_next_sibling_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::next_sibling);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, sibling);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
 }
 
 pub(in crate::native_bridge) fn node_text_content_getter_function<'s>(
@@ -960,6 +966,11 @@ fn parent_node_children_getter_function<'s>(
         rv.set_null();
         return;
     }
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = super::collections::build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -1004,7 +1015,7 @@ fn parent_node_first_element_child_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(|node| node.first_element_child(unsafe { &*runtime_ptr }.dom_host().dom()));
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, child);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
 }
 
 fn parent_node_last_element_child_getter_function<'s>(
@@ -1039,7 +1050,7 @@ fn parent_node_last_element_child_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(|node| node.last_element_child(unsafe { &*runtime_ptr }.dom_host().dom()));
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, child);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), child);
 }
 
 fn parent_node_child_element_count_getter_function<'s>(
@@ -1113,7 +1124,7 @@ fn non_document_type_child_node_previous_element_sibling_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(|node| node.previous_element_sibling(unsafe { &*runtime_ptr }.dom_host().dom()));
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, sibling);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
 }
 
 fn non_document_type_child_node_next_element_sibling_getter_function<'s>(
@@ -1147,7 +1158,7 @@ fn non_document_type_child_node_next_element_sibling_getter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(|node| node.next_element_sibling(unsafe { &*runtime_ptr }.dom_host().dom()));
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, sibling);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), sibling);
 }
 
 fn node_append_child_prototype_callback<'s>(

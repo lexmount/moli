@@ -6612,13 +6612,12 @@ fn small_static_nodelist_array_indexof_remains_fast_after_length_tamper() {
 }
 
 #[test]
-fn main_document_static_nodelist_reads_skip_child_realm_prototype_sync() {
+fn main_document_static_nodelist_reads_preserve_wrapper_identity() {
     let markup = format!(
         "<!doctype html><html><body>{}</body></html>",
         "<span class=hit></span>".repeat(1_100)
     );
     let mut vm = new_parsed_test_vm("https://example.test/", &markup);
-    crate::native_bridge::bindings::reset_wrapper_owner_realm_custom_element_checks_for_test();
 
     let result = vm
         .eval(
@@ -6638,11 +6637,6 @@ fn main_document_static_nodelist_reads_skip_child_realm_prototype_sync() {
         .expect("large static NodeList iteration should evaluate");
 
     assert_eq!(result, "1100|2200|true");
-    assert_eq!(
-        crate::native_bridge::bindings::wrapper_owner_realm_custom_element_checks_for_test(),
-        0,
-        "main-document wrappers cannot require a child-realm prototype"
-    );
 }
 
 #[test]

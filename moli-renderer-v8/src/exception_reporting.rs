@@ -527,11 +527,11 @@ fn eval_debug_probe(scope: &mut v8::PinScope<'_, '_>, source: &str) -> String {
         return "<alloc failed>".to_owned();
     };
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
+    let mut scope = try_catch.init();
     let Some(script) = v8::Script::compile(&scope, source, None) else {
         return "<compile failed>".to_owned();
     };
-    let Some(result) = script.run(&scope) else {
+    let Some(result) = crate::script_execution::execute_compiled_script(&mut scope, script) else {
         return scope
             .exception()
             .and_then(|value| value.to_string(&scope))
@@ -721,7 +721,9 @@ fn invoke_callback_with_report_inner<'s>(
     {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let mut scope = try_catch.init();
-        if let Some(returned) = handler.call(&scope, receiver, args) {
+        if let Some(returned) =
+            crate::script_execution::call_function(&mut scope, handler, receiver, args)
+        {
             returned_value = Some(v8::Global::new(&scope, returned));
         } else {
             if scope.is_execution_terminating() {

@@ -6,6 +6,7 @@ use super::helpers::{
 };
 use super::*;
 use crate::native_bridge::document::validate_registry_association_for_document;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(in crate::native_bridge) fn node_create_element_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -68,11 +69,18 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
             return;
         };
         unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
-        set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(created_handle));
+        set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            Some(created_handle),
+        );
         return;
     }
     match create_element_wrapper_for_document(
         scope,
+        args.this(),
         runtime_ptr,
         handle,
         &parsed.local_name,
@@ -154,11 +162,18 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
                 return;
             };
             unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
-            set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(created_handle));
+            set_wrapped_handle_or_null_for_receiver(
+                scope,
+                &mut rv,
+                runtime_ptr,
+                args.this(),
+                Some(created_handle),
+            );
             return;
         }
         match create_element_wrapper_for_document(
             scope,
+            args.this(),
             runtime_ptr,
             handle,
             local_name,
@@ -181,5 +196,11 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
         return;
     };
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(created_handle));
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(created_handle),
+    );
 }

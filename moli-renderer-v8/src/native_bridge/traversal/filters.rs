@@ -6,9 +6,7 @@ use crate::{
     dom::native::NodeType,
     {
         document_runtime::DomHandle,
-        native_bridge::{
-            JsContextHost, WindowExecutionContextIdentity, bridge::wrapped_handle_value,
-        },
+        native_bridge::{JsContextHost, WindowExecutionContextIdentity},
         util::throw_type_error,
         webidl,
     },
@@ -146,7 +144,8 @@ fn call_traversal_filter(
         );
         return TraversalFilterResult::Exception;
     }
-    let Some(node_wrapper) = wrapped_handle_value(scope, runtime_ptr, node) else {
+    let Some(node_wrapper) = super::wrapped_traversal_node_value(scope, runtime_ptr, node, node)
+    else {
         return TraversalFilterResult::Accept;
     };
     let callback_this = v8::undefined(scope).into();

@@ -40,22 +40,30 @@ use super::{
 };
 
 #[test]
-fn screencast_deadlines_are_one_hz_downsampled_without_catch_up() {
+fn screencast_deadlines_respect_configured_fps_without_catch_up() {
     let started = tokio::time::Instant::now();
     assert_eq!(
-        page_screencast_interval(1),
+        page_screencast_interval(1, 1),
         std::time::Duration::from_secs(1)
     );
     assert_eq!(
-        page_screencast_interval(3),
+        page_screencast_interval(1, 3),
         std::time::Duration::from_secs(3)
     );
 
     let completion = started + std::time::Duration::from_secs(10);
     assert_eq!(
-        next_page_screencast_deadline(completion, page_screencast_interval(1)),
+        next_page_screencast_deadline(completion, page_screencast_interval(1, 1)),
         started + std::time::Duration::from_secs(11),
         "an overdue capture schedules from completion instead of catching up"
+    );
+    assert_eq!(
+        page_screencast_interval(20, 1),
+        std::time::Duration::from_millis(50)
+    );
+    assert_eq!(
+        page_screencast_interval(20, 3),
+        std::time::Duration::from_millis(150)
     );
 }
 

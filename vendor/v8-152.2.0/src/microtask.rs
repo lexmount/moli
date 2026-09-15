@@ -4,16 +4,24 @@ use crate::Function;
 use crate::Isolate;
 use crate::Local;
 use crate::MicrotasksPolicy;
+use crate::{Context, PinScope};
 use crate::isolate::RealIsolate;
 use crate::support::Opaque;
 use crate::support::int;
 use std::ops::Deref;
+use std::{marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 use std::ptr::NonNull;
 
 #[repr(C)]
 struct MicrotaskQueueHandleRaw(Opaque);
 
 unsafe extern "C" {
+  fn v8__MicrotasksScope__CONSTRUCT(
+    storage: *mut [MaybeUninit<usize>; 3],
+    context: *const Context,
+    kind: MicrotasksScopeType,
+  );
+  fn v8__MicrotasksScope__DESTRUCT(storage: *mut [MaybeUninit<usize>; 3]);
   fn v8__MicrotaskQueueHandle__New(
     isolate: *mut RealIsolate,
     policy: MicrotasksPolicy,
@@ -37,6 +45,65 @@ unsafe extern "C" {
     queue: *const MicrotaskQueue,
     microtask: *const Function,
   );
+}
+
+/// Whether this scope participates in the depth that controls microtasks.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub enum MicrotasksScopeType {
+  RunMicrotasks = 0,
+  DoNotRunMicrotasks = 1,
+}
+
+/// A native V8 microtask scope, borrowed from the current context's handle scope.
+///
+/// Pin this value and call [`Self::init`] before executing JavaScript. Dropping
+/// an initialized RunMicrotasks scope decrements the queue's scope depth. With
+/// Scoped policy V8 checkpoints at the outermost return; with Explicit policy
+/// the embedder remains responsible for scheduling checkpoints.
+pub struct MicrotasksScope<'a, 's, 'i> {
+  storage: [MaybeUninit<usize>; 3],
+  scope: &'a mut PinScope<'s, 'i>,
+  kind: MicrotasksScopeType,
+  initialized: bool,
+  _pinned: PhantomPinned,
+}
+
+impl<'a, 's, 'i> MicrotasksScope<'a, 's, 'i> {
+  pub fn new(scope: &'a mut PinScope<'s, 'i>, kind: MicrotasksScopeType) -> Self {
+    Self {
+      storage: [MaybeUninit::uninit(); 3],
+      scope,
+      kind,
+      initialized: false,
+      _pinned: PhantomPinned,
+    }
+  }
+
+  /// Constructs the native scope at its pinned address. May be called once.
+  pub fn init(self: Pin<&mut Self>) -> &mut PinScope<'s, 'i> {
+    // SAFETY: storage remains pinned until Drop, and borrowing the parent scope
+    // keeps both its context and isolate alive throughout the native scope.
+    let this = unsafe { self.get_unchecked_mut() };
+    assert!(!this.initialized, "MicrotasksScope is already initialized");
+    unsafe {
+      v8__MicrotasksScope__CONSTRUCT(
+        &mut this.storage,
+        &*this.scope.get_current_context(),
+        this.kind,
+      );
+    }
+    this.initialized = true;
+    this.scope
+  }
+}
+
+impl Drop for MicrotasksScope<'_, '_, '_> {
+  fn drop(&mut self) {
+    if self.initialized {
+      unsafe { v8__MicrotasksScope__DESTRUCT(&mut self.storage) };
+    }
+  }
 }
 
 /// Represents the microtask queue, where microtasks are stored and processed.

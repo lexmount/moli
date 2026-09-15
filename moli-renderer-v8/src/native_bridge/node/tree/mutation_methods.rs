@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(in crate::native_bridge) fn node_normalize_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -39,5 +40,5 @@ pub(in crate::native_bridge) fn node_clone_node_callback<'s>(
         throw_dom_exception(scope, "NotSupportedError", 9, "Not supported");
         return;
     };
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(clone));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(clone));
 }

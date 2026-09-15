@@ -1,4 +1,3 @@
-use super::connected_lifecycle::enqueue_connected_callback;
 use super::form_lifecycle::{
     enqueue_form_association_callback_if_needed, enqueue_form_disabled_callback_if_needed,
 };
@@ -17,8 +16,7 @@ pub(super) fn invoke_upgrade_reaction(
     let is_upgraded = unsafe { &*host_ptr }
         .custom_elements_for_node_handle(handle)
         .is_some_and(|store| store.is_upgraded_handle(handle));
-    if !was_upgraded && is_upgraded && unsafe { &*host_ptr }.dom_host().is_connected(handle) {
-        enqueue_connected_callback(scope, host_ptr, handle);
+    if !was_upgraded && is_upgraded {
         enqueue_form_association_callback_if_needed(scope, host_ptr, handle);
         enqueue_form_disabled_callback_if_needed(scope, host_ptr, handle);
     }

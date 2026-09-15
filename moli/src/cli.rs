@@ -443,6 +443,15 @@ pub struct ServeArgs {
     #[arg(short, long, default_value_t = 10)]
     pub timeout: u32,
 
+    /// Set the DevTools screencast frame rate. Only valid with --layout.
+    #[arg(
+        long,
+        value_name = "FPS",
+        value_parser = clap::value_parser!(u8).range(1..=60),
+        requires = "layout"
+    )]
+    pub cdp_screencast_fps: Option<u8>,
+
     #[command(flatten)]
     pub common: CommonArgs,
 }

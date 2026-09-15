@@ -29,7 +29,7 @@ pub(in crate::native_bridge) fn node_document_active_element_getter_function<'s>
                         .document_element_handle_for_document(handle)
                 })
         });
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, handle);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), handle);
 }
 
 fn retarget_active_element_to_document(

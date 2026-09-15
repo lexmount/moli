@@ -3,6 +3,7 @@ use super::adopted_lifecycle::call_adopted_callback;
 use super::attribute_lifecycle::call_attribute_changed_callback;
 use super::form_lifecycle_callbacks::{
     call_form_associated_callback, call_form_disabled_callback, call_form_reset_callback,
+    call_form_state_restore_callback,
 };
 use super::lifecycle::call_lifecycle_callback;
 use super::reaction_upgrade::invoke_upgrade_reaction;
@@ -72,6 +73,9 @@ pub(super) fn invoke_custom_element_reactions_for_handle(
             }
             CustomElementReaction::FormReset => {
                 call_form_reset_callback(scope, host_ptr, handle);
+            }
+            CustomElementReaction::FormStateRestore { value, mode } => {
+                call_form_state_restore_callback(scope, host_ptr, handle, &value, mode);
             }
         }
     }

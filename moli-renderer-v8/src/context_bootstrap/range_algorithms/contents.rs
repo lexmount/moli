@@ -145,7 +145,7 @@ fn process_contents_from_snapshot<'s>(
     if snapshot.start_container == snapshot.end_container
         && snapshot.start_offset == snapshot.end_offset
     {
-        return finish_fragment(scope, fragment);
+        return finish_fragment(scope, range, fragment);
     }
 
     if snapshot.start_container == snapshot.end_container {
@@ -166,7 +166,7 @@ fn process_contents_from_snapshot<'s>(
                 Some(&snapshot),
             )?;
         }
-        return finish_fragment(scope, fragment);
+        return finish_fragment(scope, range, fragment);
     }
 
     let common_root =
@@ -273,7 +273,7 @@ fn process_contents_from_snapshot<'s>(
         collapse_range_to_handle(scope, range, container, offset, Some(&snapshot))?;
     }
 
-    finish_fragment(scope, fragment)
+    finish_fragment(scope, range, fragment)
 }
 
 fn range_partially_contains_non_text_node(
@@ -790,10 +790,15 @@ fn range_clone_character_data(
 
 fn finish_fragment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
     fragment: Option<DomHandle>,
 ) -> Option<Option<v8::Local<'s, v8::Object>>> {
     match fragment {
-        Some(fragment) => Some(Some(node_wrapper_for_handle(scope, fragment)?)),
+        Some(fragment) => {
+            let context = range.get_creation_context(scope)?;
+            let scope = &mut v8::ContextScope::new(scope, context);
+            Some(Some(node_wrapper_for_handle(scope, fragment)?))
+        }
         None => Some(None),
     }
 }

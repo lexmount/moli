@@ -107,8 +107,47 @@ pub(crate) fn set_wrapper_custom_element_constructor_prototype<'s>(
     let Ok(prototype) = custom_element_constructor_prototype(scope, constructor) else {
         return;
     };
-    set_wrapper_custom_element_prototype(scope, wrapper, prototype);
+    set_wrapper_custom_element_prototype(scope, wrapper, prototype.into());
     if let Some(foreign) = get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT) {
+        set_wrapper_custom_element_prototype(scope, foreign, prototype.into());
+    }
+}
+
+pub(super) fn synchronize_custom_element_prototype_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    source: v8::Local<'s, v8::Object>,
+) {
+    synchronize_wrapper_custom_element_prototype(scope, source);
+    if let Some(canonical) = unsafe { &mut *host_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, host_ptr, handle)
+        && !canonical.strict_equals(source.into())
+    {
+        synchronize_custom_element_prototype_between_wrappers(scope, source, canonical);
+    }
+}
+
+pub(super) fn synchronize_wrapper_custom_element_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+) {
+    synchronize_custom_element_prototype_between_wrappers(scope, wrapper, wrapper);
+}
+
+fn synchronize_custom_element_prototype_between_wrappers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    target: v8::Local<'s, v8::Object>,
+) {
+    let Some(prototype) = source.get_prototype(scope) else {
+        return;
+    };
+    if !source.strict_equals(target.into()) {
+        set_wrapper_custom_element_prototype(scope, target, prototype);
+    }
+    if let Some(foreign) = get_private_object(scope, target, DOM_PARSER_FOREIGN_NODE_SLOT) {
         set_wrapper_custom_element_prototype(scope, foreign, prototype);
     }
 }
@@ -116,8 +155,10 @@ pub(crate) fn set_wrapper_custom_element_constructor_prototype<'s>(
 fn set_wrapper_custom_element_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     wrapper: v8::Local<'s, v8::Object>,
-    prototype: v8::Local<'s, v8::Object>,
+    prototype: v8::Local<'s, v8::Value>,
 ) {
-    preserve_detached_element_bridge_for_custom_prototype(scope, wrapper, prototype);
-    let _ = wrapper.set_prototype(scope, prototype.into());
+    if let Ok(object) = v8::Local::<v8::Object>::try_from(prototype) {
+        preserve_detached_element_bridge_for_custom_prototype(scope, wrapper, object);
+    }
+    let _ = wrapper.set_prototype(scope, prototype);
 }

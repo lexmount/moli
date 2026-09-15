@@ -1,5 +1,6 @@
 use super::*;
 use crate::native_bridge::document::{detached_form_owner_object, detached_label_control_object};
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 fn is_labelable_element(element: &Element) -> bool {
     if element.namespace() != "http://www.w3.org/1999/xhtml" {
@@ -384,7 +385,7 @@ pub(in crate::native_bridge) fn label_control_getter_function<'s>(
         return;
     };
     let owner = label_reflected_control_handle(unsafe { &*runtime_ptr }, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, owner);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), owner);
 }
 
 pub(in crate::native_bridge) fn label_form_getter_function<'s>(
@@ -408,7 +409,7 @@ pub(in crate::native_bridge) fn label_form_getter_function<'s>(
     let runtime = unsafe { &*runtime_ptr };
     let owner = label_control_handle(runtime, handle)
         .and_then(|control| super::owner::form_associated_form_owner(runtime, control));
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, owner);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), owner);
 }
 
 pub(in crate::native_bridge) fn control_labels_getter_function<'s>(

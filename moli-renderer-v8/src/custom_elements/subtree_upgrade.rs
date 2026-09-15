@@ -34,16 +34,20 @@ pub(crate) fn upgrade_subtree_if_defined_for_registry(
     registry_key: CustomElementRegistryKey,
 ) -> bool {
     let target_association = CustomElementRegistryAssociation::Registry(registry_key);
-    let mut stack = vec![root];
-    while let Some(handle) = stack.pop() {
-        let children = shadow_including_child_handles(host_ptr, handle);
+    let mut handles = Vec::new();
+    collect_shadow_including_subtree_handles(host_ptr, root, &mut handles);
+    for handle in handles {
         if unsafe { &*host_ptr }.effective_custom_element_registry_association(handle)
             == target_association
-            && !upgrade_handle_with_immediate_form_lifecycle_if_defined(scope, host_ptr, handle)
+            && can_upgrade_handle(host_ptr, handle)
         {
-            return false;
+            enqueue_custom_element_reaction(
+                scope,
+                host_ptr,
+                handle,
+                CustomElementReaction::Upgrade,
+            );
         }
-        stack.extend(children.into_iter().rev());
     }
     true
 }

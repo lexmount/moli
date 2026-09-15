@@ -4,6 +4,7 @@ use crate::native_bridge::document::{
     detached_native_handle_for_runtime, detached_node_type, detached_set_owner_document,
     object_is_shadow_root, parse_import_node_options, validate_registry_association_for_document,
 };
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(in crate::native_bridge) fn node_import_node_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
@@ -48,7 +49,13 @@ pub(in crate::native_bridge) fn node_import_node_callback<'a>(
             if let Some(imported) =
                 import_cross_runtime_node_with_shadow_roots(scope, runtime_ptr, handle, node, deep)
             {
-                set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(imported));
+                set_wrapped_handle_or_null_for_receiver(
+                    scope,
+                    &mut rv,
+                    runtime_ptr,
+                    args.this(),
+                    Some(imported),
+                );
                 return;
             }
             if let Some(source_handle) =
@@ -65,7 +72,13 @@ pub(in crate::native_bridge) fn node_import_node_callback<'a>(
                     rv.set_null();
                     return;
                 };
-                set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(imported));
+                set_wrapped_handle_or_null_for_receiver(
+                    scope,
+                    &mut rv,
+                    runtime_ptr,
+                    args.this(),
+                    Some(imported),
+                );
                 return;
             }
             if let Some(cloned) =
@@ -98,7 +111,13 @@ pub(in crate::native_bridge) fn node_import_node_callback<'a>(
         rv.set_null();
         return;
     };
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(imported));
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(imported),
+    );
 }
 
 fn import_cross_runtime_node_with_shadow_roots(
@@ -205,5 +224,11 @@ pub(in crate::native_bridge) fn node_adopt_node_callback<'a>(
         rv.set_null();
         return;
     };
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(adopted));
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(adopted),
+    );
 }

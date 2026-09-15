@@ -2,6 +2,7 @@ use super::helpers::{
     effective_option_selected, element_option_value, select_is_multiple, select_option_handles,
 };
 use super::*;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::native_bridge::{
     document::{
         detached_element_local_name, detached_form_owner_object, detached_parent_node_object,
@@ -261,7 +262,7 @@ pub(in crate::native_bridge) fn option_form_getter_function<'s>(
             .is_some_and(Element::is_html_select)
         {
             let form = form_associated_form_owner(runtime, parent);
-            set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, form);
+            set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), form);
             return;
         }
         current = runtime.dom_host().parent_node(parent);

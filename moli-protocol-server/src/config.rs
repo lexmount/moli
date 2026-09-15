@@ -4,6 +4,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub timeout_secs: u32,
+    pub cdp_screencast_fps: u8,
 }
 
 impl ServerConfig {
@@ -18,6 +19,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 9222,
             timeout_secs: 10,
+            cdp_screencast_fps: 1,
         }
     }
 }

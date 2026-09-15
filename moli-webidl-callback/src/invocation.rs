@@ -64,9 +64,13 @@ impl<'s, 'a> WebIdlCallbackResolutionFailure<'s, 'a> {
     }
 }
 
-/// Enters the callback's relevant Realm and captured incumbent settings object.
+/// Enters the callback's relevant Realm, microtask scope, and captured incumbent
+/// settings object, in that order.
 ///
-/// The supplied operation runs synchronously while both RAII scopes are alive.
+/// The supplied operation includes operation lookup, invocation, and return
+/// conversion. The incumbent scope is removed before a Scoped-policy checkpoint
+/// can run on microtask-scope exit. Explicit policy leaves checkpoints to the
+/// embedder; Auto policy retains V8's existing per-API-call behavior.
 /// Renderer-specific ambient state, such as `window.event`, can be installed
 /// inside `operation` without moving that policy into this crate.
 pub fn with_webidl_callback_contexts<'s, R>(
@@ -76,6 +80,21 @@ pub fn with_webidl_callback_contexts<'s, R>(
     operation: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
 ) -> R {
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
+    if scope.get_microtasks_policy() == v8::MicrotasksPolicy::Auto {
+        return with_incumbent_context(scope, incumbent_context, operation);
+    }
+    let microtasks = pin!(v8::MicrotasksScope::new(
+        scope,
+        v8::MicrotasksScopeType::RunMicrotasks,
+    ));
+    with_incumbent_context(microtasks.init(), incumbent_context, operation)
+}
+
+fn with_incumbent_context<'s, R>(
+    scope: &mut v8::PinScope<'s, '_>,
+    incumbent_context: v8::Local<'s, v8::Context>,
+    operation: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
+) -> R {
     let incumbent_scope = std::pin::pin!(v8::BackupIncumbentScope::new(incumbent_context));
     let _incumbent_scope = incumbent_scope.init();
     operation(scope)

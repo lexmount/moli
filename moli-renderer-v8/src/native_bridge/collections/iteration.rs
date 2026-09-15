@@ -21,6 +21,8 @@ pub(in crate::native_bridge::collections) fn collection_value_at<'s>(
     object: v8::Local<'s, v8::Object>,
     index: usize,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let context = object.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Ok((runtime_ptr, descriptor)) = live_collection_descriptor_from_object(scope, object) {
         let handle = descriptor
             .resolve(unsafe { &*runtime_ptr })
@@ -55,6 +57,8 @@ fn collection_named_value<'s>(
     object: v8::Local<'s, v8::Object>,
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let context = object.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Ok((runtime_ptr, descriptor)) = live_collection_descriptor_from_object(scope, object) {
         let runtime = unsafe { &mut *runtime_ptr };
         let matches = named_item_matches(runtime, &descriptor, key);

@@ -1252,7 +1252,7 @@ fn run_window_timer_source(
             stack_trace,
         )));
     };
-    if script.run(&scope).is_some() {
+    if crate::script_execution::execute_compiled_script(&mut scope, script).is_some() {
         Ok(())
     } else {
         let exception = scope.exception();

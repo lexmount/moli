@@ -2204,11 +2204,6 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn custom_element_handle_is_upgraded(&self, handle: DomHandle) -> bool {
-        self.custom_elements_for_node_handle(handle)
-            .is_some_and(|store| store.is_upgraded_handle(handle))
-    }
-
     pub(crate) fn custom_elements_mut_for_node_handle(
         &mut self,
         handle: DomHandle,

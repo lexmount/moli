@@ -1,5 +1,7 @@
 use super::helpers::{element_option_value, select_option_handles, selected_index_for_select};
 use super::*;
+use crate::native_bridge::bridge::wrapped_handle_value_for_receiver;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::{
     native_bridge::{
         callback_value_dom_handle,
@@ -215,13 +217,11 @@ pub(in crate::native_bridge) fn select_indexed_getter<'s>(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(node) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, option)
+    let Some(node) = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), option)
     else {
         return v8::Intercepted::kNo;
     };
-    rv.set(node.into());
+    rv.set(node);
     v8::Intercepted::kYes
 }
 
@@ -330,14 +330,11 @@ pub(in crate::native_bridge) fn select_indexed_descriptor<'s>(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, option)
+    let Some(value) = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), option)
     else {
         return v8::Intercepted::kNo;
     };
-    let Ok(descriptor) =
-        DataPropertyDescriptorDeclaration::new(value.into(), true, true).bind(scope)
+    let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, true, true).bind(scope)
     else {
         return v8::Intercepted::kNo;
     };
@@ -395,7 +392,7 @@ pub(in crate::native_bridge) fn select_item_callback<'s>(
         rv.set_null();
         return;
     };
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(option));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(option));
 }
 
 pub(in crate::native_bridge) fn select_named_item_callback<'s>(
@@ -423,7 +420,7 @@ pub(in crate::native_bridge) fn select_named_item_callback<'s>(
                 .and_then(Node::as_element)
                 .is_some_and(|element| element.matches_named_item_key(&parsed.name))
         });
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, option);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), option);
 }
 
 pub(in crate::native_bridge) fn select_remove_callback<'s>(

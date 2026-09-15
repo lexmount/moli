@@ -5,6 +5,7 @@ use crate::util::{
 
 pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     context_node: v8::Local<'s, v8::Object>,
     html: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -24,7 +25,7 @@ pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     )?;
     runtime
         .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, fragment)
+        .wrap_handle_for_receiver(scope, host_ptr, receiver, fragment)
 }
 
 fn create_detached_contextual_fragment<'s>(

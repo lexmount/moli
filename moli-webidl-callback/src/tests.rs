@@ -1,5 +1,201 @@
 use super::*;
 
+fn attempt_checkpoint(
+    scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments<'_>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    scope.perform_microtask_checkpoint();
+}
+
+#[test]
+fn callback_scope_defers_checkpoints_through_lookup_call_and_return_conversion() {
+    moli_v8_test_util::ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let checkpoint = v8::Function::new(scope, attempt_checkpoint).expect("checkpoint function");
+    let key = v8::String::new(scope, "checkpoint").expect("checkpoint key");
+    assert_eq!(
+        context
+            .global(scope)
+            .set(scope, key.into(), checkpoint.into()),
+        Some(true)
+    );
+    let callback = v8::Local::<v8::Object>::try_from(eval(
+        scope,
+        r#"
+        globalThis.log = [];
+        ({ get handleEvent() {
+          log.push("lookup");
+          Promise.resolve().then(() => log.push("microtask"));
+          checkpoint();
+          return function () {
+            log.push("call");
+            checkpoint();
+            return { valueOf() { log.push("convert"); checkpoint(); return 7; } };
+          };
+        } })
+    "#,
+    ))
+    .expect("callback interface");
+    let receiver = v8::undefined(scope).into();
+    let result = with_webidl_callback_contexts(scope, context, context, |scope| {
+        invoke_webidl_callback(
+            scope,
+            WebIdlCallbackInvocation::new(callback, receiver, false, "handleEvent", &[]),
+            |scope, function, receiver, arguments| {
+                function
+                    .call(scope, receiver, arguments)
+                    .and_then(|result| result.integer_value(scope))
+                    .ok_or("callback or conversion failed")
+            },
+            |_, _| "callback resolution failed",
+        )
+    })
+    .expect("callback should return");
+    assert_eq!(result, 7);
+    assert_eq!(
+        eval(scope, "log.join(',')").to_rust_string_lossy(scope),
+        "lookup,call,convert"
+    );
+    scope.perform_microtask_checkpoint();
+    assert_eq!(
+        eval(scope, "log.join(',')").to_rust_string_lossy(scope),
+        "lookup,call,convert,microtask"
+    );
+}
+
+#[test]
+fn callback_scope_preserves_auto_policy_checkpoint_timing() {
+    moli_v8_test_util::ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    assert_eq!(isolate.get_microtasks_policy(), v8::MicrotasksPolicy::Auto);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let callback = v8::Local::<v8::Object>::try_from(eval(
+        scope,
+        r#"
+        globalThis.log = [];
+        (function () {
+          log.push("call");
+          Promise.resolve().then(() => log.push("microtask"));
+          return { valueOf() { log.push("convert"); return 7; } };
+        })
+    "#,
+    ))
+    .expect("callback function");
+    let callback = WebIdlCallbackFunction::try_new(scope, callback, context, context)
+        .expect("callable")
+        .prepare(scope);
+    let receiver = v8::undefined(scope).into();
+    invoke_webidl_callback_function(
+        scope,
+        &callback,
+        receiver,
+        &[],
+        |scope, function, receiver, args| {
+            function
+                .call(scope, receiver, args)
+                .and_then(|result| result.integer_value(scope))
+                .ok_or("callback or conversion failed")
+        },
+    )
+    .expect("callback should return");
+    assert_eq!(
+        eval(scope, "log.join(',')").to_rust_string_lossy(scope),
+        "call,microtask,convert"
+    );
+}
+
+#[test]
+fn callback_scope_cleans_up_after_throwing_operation_lookup() {
+    moli_v8_test_util::ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let caller = v8::Context::new(scope, Default::default());
+    let relevant = v8::Context::new(scope, Default::default());
+    let incumbent = v8::Context::new(scope, Default::default());
+    let callback = {
+        let scope = &mut v8::ContextScope::new(scope, relevant);
+        v8::Local::<v8::Object>::try_from(eval(
+            scope,
+            "({ get handleEvent() { throw Error('lookup'); } })",
+        ))
+        .expect("callback interface")
+    };
+    let scope = &mut v8::ContextScope::new(scope, caller);
+    let result = with_webidl_callback_contexts(scope, relevant, incumbent, |scope| {
+        let receiver = v8::undefined(scope).into();
+        invoke_for_test(
+            scope,
+            WebIdlCallbackInvocation::new(callback, receiver, false, "handleEvent", &[]),
+        )
+    });
+    assert!(result.expect_err("lookup must throw").contains("lookup"));
+    assert_eq!(scope.get_current_context(), caller);
+    assert_eq!(
+        relevant
+            .get_microtask_queue()
+            .unwrap()
+            .get_microtasks_scope_depth(),
+        0
+    );
+    assert_ne!(scope.get_incumbent_context(), Some(incumbent));
+}
+
+#[test]
+fn callback_scope_exits_incumbent_before_scoped_policy_checkpoint() {
+    moli_v8_test_util::ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Scoped);
+    isolate.set_slot(std::cell::Cell::new(None::<bool>));
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let caller = v8::Context::new(scope, Default::default());
+    let relevant = v8::Context::new(scope, Default::default());
+    let incumbent = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, caller);
+    let caller_global = caller.global(scope);
+    let microtask = v8::Function::builder(
+        |scope: &mut v8::PinScope<'_, '_>,
+         args: v8::FunctionCallbackArguments<'_>,
+         _rv: v8::ReturnValue<'_, v8::Value>| {
+            let restored = scope
+                .get_incumbent_context()
+                .is_some_and(|context| context.global(scope).strict_equals(args.data()));
+            scope
+                .get_slot::<std::cell::Cell<Option<bool>>>()
+                .unwrap()
+                .set(Some(restored));
+        },
+    )
+    .data(caller_global.into())
+    .build(scope)
+    .expect("microtask");
+    let outer_incumbent = std::pin::pin!(v8::BackupIncumbentScope::new(caller));
+    let _outer_incumbent = outer_incumbent.init();
+    with_webidl_callback_contexts(scope, relevant, incumbent, |scope| {
+        assert_eq!(scope.get_incumbent_context(), Some(incumbent));
+        scope.enqueue_microtask(microtask);
+    });
+    assert_eq!(
+        scope
+            .get_slot::<std::cell::Cell<Option<bool>>>()
+            .unwrap()
+            .get(),
+        Some(true)
+    );
+    assert_eq!(scope.get_current_context(), caller);
+}
+
 fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
     let source = v8::String::new(scope, source).expect("test source");
     let script = v8::Script::compile(scope, source, None).expect("compile test source");

@@ -3567,7 +3567,7 @@ fn evaluate_classic_worker_bootstrap_script(
     let compiled = v8::Script::compile(&scope, source_str, Some(&origin));
     match compiled {
         Some(script) => {
-            let _result = script.run(&scope);
+            let _result = crate::script_execution::execute_compiled_script(&mut scope, script);
             if scope.has_caught() {
                 let exception = scope.exception();
                 let message = scope.message();

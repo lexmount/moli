@@ -376,6 +376,12 @@ fn run_chrome_app_install_state_callback<'s>(
         .expect("chrome.app.installState trampoline must retain its callback");
     let receiver = v8::undefined(scope);
     let state: v8::Local<'s, v8::Value> = v8str(scope, INSTALL_STATE_NOT_INSTALLED).into();
-    let _ = callback.call(scope, receiver.into(), &[state]);
+    let _ = crate::util::call_script_visible_function(
+        scope,
+        callback,
+        receiver.into(),
+        &[state],
+        "chrome.app.installState callback",
+    );
     rv.set_undefined();
 }

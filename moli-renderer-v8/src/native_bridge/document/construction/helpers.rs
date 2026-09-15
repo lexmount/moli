@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn create_element_wrapper_for_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     runtime_ptr: *mut JsContextHost,
     document_handle: crate::document_runtime::DomHandle,
     local_name: &str,
@@ -9,6 +10,8 @@ pub(super) fn create_element_wrapper_for_document<'s>(
     registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
     post_construction_prefix: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = receiver.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let element = custom_elements::create_element_for_document_local_name_is_and_registry(
         scope,
         runtime_ptr,

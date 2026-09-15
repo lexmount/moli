@@ -1,5 +1,6 @@
 use crate::custom_elements;
 use crate::dom::native::Node;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::throw_type_error;
 use crate::webidl;
 
@@ -10,12 +11,12 @@ use super::super::super::node::{
     append_child_to_current_reaction_queue, insert_before_to_current_reaction_queue,
     node_or_existing_detached_arg_handle, node_runtime_and_handle_from_object_or_detached,
     remove_child_in_reaction_scope, remove_child_to_current_reaction_queue,
-    set_wrapped_node_or_null, throw_incompatible_getter_receiver,
-    throw_incompatible_method_receiver, throw_incompatible_setter_receiver,
+    throw_incompatible_getter_receiver, throw_incompatible_method_receiver,
+    throw_incompatible_setter_receiver,
 };
 use super::super::super::{
     CollectionKind, LiveCollectionQueryKind, collections::build_live_collection_for_node,
-    set_wrapped_handle_or_null, throw_dom_exception,
+    throw_dom_exception,
 };
 use super::super::set_reflected_attribute;
 use super::{DomHandle, JsContextHost, parse_i32_attribute_or};
@@ -595,7 +596,15 @@ pub(in crate::native_bridge::element) fn table_create_t_body_callback<'s>(
     };
     let tbody = unsafe { &mut *runtime_ptr }.create_element("tbody");
     let reference = create_tbody_reference(unsafe { &*runtime_ptr }, table);
-    insert_table_child(scope, runtime_ptr, table, tbody, reference, &mut rv);
+    insert_table_child(
+        scope,
+        args.this(),
+        runtime_ptr,
+        table,
+        tbody,
+        reference,
+        &mut rv,
+    );
 }
 
 pub(in crate::native_bridge::element) fn table_insert_row_callback<'s>(
@@ -639,7 +648,13 @@ pub(in crate::native_bridge::element) fn table_insert_row_callback<'s>(
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return;
         }
-        set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(row));
+        set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            Some(row),
+        );
         return;
     }
     let reference = (index != -1 && index < len).then(|| rows[index as usize]);
@@ -648,7 +663,15 @@ pub(in crate::native_bridge::element) fn table_insert_row_callback<'s>(
         .and_then(|row| unsafe { &*runtime_ptr }.dom_host().node(row))
         .and_then(Node::parent_node)
         .unwrap_or(table);
-    insert_table_child(scope, runtime_ptr, parent, row, reference, &mut rv);
+    insert_table_child(
+        scope,
+        args.this(),
+        runtime_ptr,
+        parent,
+        row,
+        reference,
+        &mut rv,
+    );
 }
 
 pub(in crate::native_bridge::element) fn table_delete_row_callback<'s>(
@@ -701,7 +724,15 @@ pub(in crate::native_bridge::element) fn table_section_insert_row_callback<'s>(
     }
     let row = unsafe { &mut *runtime_ptr }.create_element("tr");
     let reference = (index != -1 && index < len).then(|| rows[index as usize]);
-    insert_table_child(scope, runtime_ptr, section, row, reference, &mut rv);
+    insert_table_child(
+        scope,
+        args.this(),
+        runtime_ptr,
+        section,
+        row,
+        reference,
+        &mut rv,
+    );
 }
 
 pub(in crate::native_bridge::element) fn table_section_delete_row_callback<'s>(
@@ -753,7 +784,15 @@ pub(in crate::native_bridge::element) fn table_row_insert_cell_callback<'s>(
     }
     let cell = unsafe { &mut *runtime_ptr }.create_element("td");
     let reference = (index != -1 && index < len).then(|| cells[index as usize]);
-    insert_table_child(scope, runtime_ptr, row, cell, reference, &mut rv);
+    insert_table_child(
+        scope,
+        args.this(),
+        runtime_ptr,
+        row,
+        cell,
+        reference,
+        &mut rv,
+    );
 }
 
 pub(in crate::native_bridge::element) fn table_row_delete_cell_callback<'s>(
@@ -812,6 +851,11 @@ fn set_table_collection_for_object<'s>(
         rv.set_null();
         return;
     };
+    let Some(context) = object.get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -866,7 +910,7 @@ fn set_table_slot_for_object<'s>(
         return;
     };
     let child = first_direct_html_child(unsafe { &*runtime_ptr }, handle, local_name);
-    set_wrapped_handle_or_null(scope, rv, runtime_ptr, child);
+    set_wrapped_handle_or_null_for_receiver(scope, rv, runtime_ptr, object, child);
 }
 
 fn set_table_slot_on_object<'s>(
@@ -985,12 +1029,18 @@ fn create_or_return_table_slot<'s>(
         return;
     };
     if let Some(existing) = first_direct_html_child(unsafe { &*runtime_ptr }, table, local_name) {
-        set_wrapped_node_or_null(scope, rv, runtime_ptr, Some(existing));
+        set_wrapped_handle_or_null_for_receiver(
+            scope,
+            rv,
+            runtime_ptr,
+            args.this(),
+            Some(existing),
+        );
         return;
     }
     let child = unsafe { &mut *runtime_ptr }.create_element(local_name);
     let reference = table_slot_reference(unsafe { &*runtime_ptr }, table, placement, None);
-    insert_table_child(scope, runtime_ptr, table, child, reference, rv);
+    insert_table_child(scope, args.this(), runtime_ptr, table, child, reference, rv);
 }
 
 fn delete_table_slot<'s>(
@@ -1020,6 +1070,7 @@ fn delete_direct_html_child(
 
 fn insert_table_child<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     runtime_ptr: *mut JsContextHost,
     parent: DomHandle,
     child: DomHandle,
@@ -1040,7 +1091,7 @@ fn insert_table_child<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    set_wrapped_node_or_null(scope, rv, runtime_ptr, Some(child));
+    set_wrapped_handle_or_null_for_receiver(scope, rv, runtime_ptr, receiver, Some(child));
 }
 
 fn insert_table_child_to_current_reaction_queue(

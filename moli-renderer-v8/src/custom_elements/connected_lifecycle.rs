@@ -1,4 +1,3 @@
-use super::connected_lifecycle_initial_attributes::enqueue_pending_initial_attribute_callbacks;
 use super::reactions::{enqueue_custom_element_reaction, with_custom_element_reaction_scope};
 use super::{CustomElementReaction, has_pending_upgrade_reaction};
 
@@ -38,17 +37,13 @@ pub(crate) fn enqueue_connected_callback(
     if has_pending_upgrade_reaction(host_ptr, handle) {
         return false;
     }
-    let mut enqueued = enqueue_pending_initial_attribute_callbacks(scope, host_ptr, handle);
-    if enqueue_lifecycle_callback(
+    enqueue_lifecycle_callback(
         scope,
         host_ptr,
         handle,
         "connectedCallback",
         CustomElementReaction::Connected,
-    ) {
-        enqueued = true;
-    }
-    enqueued
+    )
 }
 
 pub(crate) fn enqueue_disconnected_callback(

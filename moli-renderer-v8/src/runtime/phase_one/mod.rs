@@ -16764,6 +16764,7 @@ window.WptWrittenTiming = class extends HTMLElement {
 };
 customElements.define('wpt-written-timing', window.WptWrittenTiming);
 document.write('<wpt-written-timing data-token="owned"></wpt-written-timing><span id="after-write"></span>');
+window.writeCeEvents.push('after-write');
 </script>
 <script>
 const element = document.querySelector('wpt-written-timing');
@@ -16809,8 +16810,8 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
             );
             assert_eq!(
                 body_element.attribute("data-events"),
-                Some("false|false|false|InvalidStateError|attr:data-token:null:owned|mo:data-token:owned|promise:owned|connected|owned|0|false|true"),
-                "document.write token attributes should queue initial attribute reactions and run the resulting microtask checkpoint before connectedCallback, then flush connected before child or following sibling tokens"
+                Some("false|false|false|InvalidStateError|attr:data-token:null:owned|connected|owned|0|false|true|after-write|mo:data-token:owned|promise:owned"),
+                "document.write must deliver reactions before following tokens, then defer mutation observers and promises until its outer script returns"
             );
             assert_eq!(
                 body_element.attribute("data-connected-event"),

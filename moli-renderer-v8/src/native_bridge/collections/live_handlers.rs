@@ -16,7 +16,8 @@ pub(in crate::native_bridge::collections) fn live_collection_indexed_getter(
     let Some(handle) = handles.get(index as usize).copied() else {
         return v8::Intercepted::kNo;
     };
-    let Some(node) = wrapped_handle_value(scope, runtime_ptr, handle) else {
+    let Some(node) = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), handle)
+    else {
         return v8::Intercepted::kNo;
     };
     rv.set(node);
@@ -101,7 +102,8 @@ pub(in crate::native_bridge::collections) fn live_collection_indexed_descriptor(
     else {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = wrapped_handle_value(scope, runtime_ptr, handle) else {
+    let Some(value) = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), handle)
+    else {
         return v8::Intercepted::kNo;
     };
     let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(
@@ -209,7 +211,9 @@ pub(in crate::native_bridge::collections) fn live_collection_named_getter(
     if is_array_index_property_name(&key) || key == "length" {
         return v8::Intercepted::kNo;
     };
-    let Some(value) = live_collection_named_value(scope, runtime_ptr, &descriptor, key) else {
+    let Some(value) =
+        live_collection_named_value(scope, args.holder(), runtime_ptr, &descriptor, key)
+    else {
         return v8::Intercepted::kNo;
     };
     rv.set(value);
@@ -301,7 +305,9 @@ pub(in crate::native_bridge::collections) fn live_collection_named_descriptor(
     if is_array_index_property_name(&key) || key == "length" {
         return v8::Intercepted::kNo;
     }
-    let Some(value) = live_collection_named_value(scope, runtime_ptr, &descriptor, key) else {
+    let Some(value) =
+        live_collection_named_value(scope, args.holder(), runtime_ptr, &descriptor, key)
+    else {
         return v8::Intercepted::kNo;
     };
     let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, false, false).bind(scope)
@@ -358,10 +364,13 @@ fn live_collection_has_named_property(
 
 fn live_collection_named_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'_, v8::Object>,
     runtime_ptr: *mut JsContextHost,
     descriptor: &LiveCollectionDescriptor,
     key: String,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let context = receiver.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
     let matches = named_item_matches(runtime, descriptor, &key);
     if descriptor.collection_kind == CollectionKind::FormControlsCollection && matches.len() > 1 {
@@ -394,9 +403,10 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_indexed_ge
     else {
         return v8::Intercepted::kNo;
     };
-    let node = wrapped_handle_value(scope, runtime_ptr, handle).unwrap_or_else(|| {
-        panic!("failed to materialize handle-backed static NodeList index `{index}`")
-    });
+    let node = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), handle)
+        .unwrap_or_else(|| {
+            panic!("failed to materialize handle-backed static NodeList index `{index}`")
+        });
     rv.set(node);
     v8::Intercepted::kYes
 }
@@ -462,9 +472,10 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_indexed_de
     else {
         return v8::Intercepted::kNo;
     };
-    let value = wrapped_handle_value(scope, runtime_ptr, handle).unwrap_or_else(|| {
-        panic!("failed to materialize handle-backed static NodeList index `{index}`")
-    });
+    let value = wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), handle)
+        .unwrap_or_else(|| {
+            panic!("failed to materialize handle-backed static NodeList index `{index}`")
+        });
     let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, false, true).bind(scope)
     else {
         return v8::Intercepted::kNo;

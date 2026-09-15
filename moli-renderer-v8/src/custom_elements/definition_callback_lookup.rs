@@ -63,4 +63,15 @@ impl CustomElementStore {
         let callback = definition.callbacks.form_reset.as_ref()?;
         Some(v8::Local::new(scope, callback))
     }
+
+    pub(super) fn form_state_restore_callback_for_handle<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Function>> {
+        let definition = self.definition_for_handle(host_ptr, handle)?;
+        let callback = definition.callbacks.form_state_restore.as_ref()?;
+        Some(v8::Local::new(scope, callback))
+    }
 }

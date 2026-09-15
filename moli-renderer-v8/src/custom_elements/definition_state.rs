@@ -1,18 +1,15 @@
 use super::super::document_runtime::DomHandle;
 use super::PendingCustomElementConstruction;
-use super::definition::{CustomElementStore, PendingInitialAttribute};
+use super::definition::CustomElementStore;
 
 impl CustomElementStore {
     /// Returns true when there is nothing for the upgrade / lifecycle pipeline
     /// to do for newly inserted subtrees: no constructors are registered, no
-    /// elements have been upgraded, and there are no pending initial-attribute
-    /// observations. The vast majority of pages never call
+    /// elements have been upgraded. The vast majority of pages never call
     /// `customElements.define(...)` at all, in which case every appendChild /
     /// insertBefore can skip the recursive subtree scan entirely.
     pub(crate) fn is_subtree_lifecycle_quiescent(&self) -> bool {
-        self.definitions.is_empty()
-            && self.upgraded_handles.is_empty()
-            && self.pending_initial_attributes.is_empty()
+        self.definitions.is_empty() && self.upgraded_handles.is_empty()
     }
 
     pub(crate) fn begin_construction(
@@ -91,7 +88,6 @@ impl CustomElementStore {
     pub(crate) fn owns_custom_element_handle(&self, handle: DomHandle) -> bool {
         self.upgraded_handles.contains(&handle)
             || self.upgraded_definition_names.contains_key(&handle)
-            || self.pending_initial_attributes.contains_key(&handle)
             || self.form_association_states.contains_key(&handle)
             || self.form_disabled_states.contains_key(&handle)
             || self.construction_stack.owns_handle(handle)
@@ -115,26 +111,6 @@ impl CustomElementStore {
 
     pub(super) fn set_form_disabled_state(&mut self, handle: DomHandle, disabled: bool) {
         self.form_disabled_states.insert(handle, disabled);
-    }
-
-    pub(super) fn mark_pending_initial_attributes(
-        &mut self,
-        handle: DomHandle,
-        attributes: Vec<PendingInitialAttribute>,
-    ) {
-        if attributes.is_empty() {
-            return;
-        }
-        self.pending_initial_attributes.insert(handle, attributes);
-    }
-
-    pub(super) fn take_pending_initial_attributes(
-        &mut self,
-        handle: DomHandle,
-    ) -> Vec<PendingInitialAttribute> {
-        self.pending_initial_attributes
-            .remove(&handle)
-            .unwrap_or_default()
     }
 
     pub(super) fn mark_upgraded_handle(&mut self, handle: DomHandle, definition_name: &str) {

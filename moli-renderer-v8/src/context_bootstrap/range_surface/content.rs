@@ -118,7 +118,9 @@ pub(super) fn range_create_contextual_fragment_callback<'s>(
         } else {
             start_container
         };
-    let Some(fragment) = create_contextual_fragment_internal(scope, context_node, &markup) else {
+    let Some(fragment) =
+        create_contextual_fragment_internal(scope, args.this(), context_node, &markup)
+    else {
         rv.set_undefined();
         return;
     };

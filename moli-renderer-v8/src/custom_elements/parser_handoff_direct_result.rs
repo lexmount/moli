@@ -4,11 +4,10 @@ use super::{
     ConstructionFailure, CustomElementRegistryKey, FailedExistingConstructionPrototype,
     dispatch_form_association_callback_if_needed, dispatch_form_disabled_callback_if_needed,
     fail_existing_custom_element_construction, set_dom_custom_element_state,
-    set_wrapper_custom_element_constructor_prototype, validate_custom_element_construction_result,
+    synchronize_wrapper_custom_element_prototype, validate_custom_element_construction_result,
 };
 use crate::{
     document_runtime::DomHandle, dom::native::CustomElementState, native_bridge::JsContextHost,
-    script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections,
 };
 
 pub(super) struct ParserDirectConstructionContext<'s, 'a> {
@@ -61,10 +60,6 @@ fn handle_parser_direct_created_element<'s>(
     created: v8::Global<v8::Object>,
     context: ParserDirectConstructionContext<'s, '_>,
 ) -> DomHandle {
-    // Parser-created construction runs a checkpoint before validation so
-    // constructor-scheduled microtasks can still invalidate the result before
-    // parser attributes or children are transferred.
-    perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     let created = v8::Local::new(scope, &created);
     match validate_custom_element_construction_result(
         scope,
@@ -76,13 +71,12 @@ fn handle_parser_direct_created_element<'s>(
         context.initial_owner_document,
     ) {
         Ok(constructed_handle) => {
+            synchronize_wrapper_custom_element_prototype(scope, created);
             mark_parser_direct_construction_success(
                 scope,
                 host_ptr,
                 context.original_handle,
                 constructed_handle,
-                created,
-                context.constructor,
                 context.registry_key,
                 context.definition_name,
             );
@@ -111,8 +105,6 @@ fn mark_parser_direct_construction_success<'s>(
     host_ptr: *mut JsContextHost,
     original_handle: DomHandle,
     constructed_handle: DomHandle,
-    created: v8::Local<'s, v8::Object>,
-    constructor: v8::Local<'s, v8::Function>,
     registry_key: CustomElementRegistryKey,
     definition_name: &str,
 ) {
@@ -128,7 +120,6 @@ fn mark_parser_direct_construction_success<'s>(
     unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)
         .mark_upgraded_handle(constructed_handle, definition_name);
-    set_wrapper_custom_element_constructor_prototype(scope, created, constructor);
     set_dom_custom_element_state(host_ptr, constructed_handle, CustomElementState::Custom);
     unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)

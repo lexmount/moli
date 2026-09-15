@@ -16,10 +16,8 @@ use std::{
 enum DirectCallOwner {
     /// Shared renderer adapter for a typed Web IDL callback.
     TypedWebIdlAdapter,
-    /// Callback accepted by a Chromium-specific API outside Web IDL.
-    VendorApiCallback,
-    /// HTML event-handler or reaction policy owned by the renderer.
-    EventHandlerOrReaction,
+    /// Shared renderer entry point that owns native JavaScript nesting.
+    JavaScriptEntryPoint,
     /// Promise capability or browser-created algorithm function.
     BrowserAlgorithm,
     /// Captured native intrinsic, DOM forwarding method, or compiled script.
@@ -70,19 +68,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::TypedWebIdlAdapter,
     ),
+    // Ordinary calls, including HTML-owned callbacks and script wrappers,
+    // enter through the common JavaScript execution boundary.
     allowed(
-        "context_bootstrap/chrome_runtime.rs",
+        "script_execution.rs",
         1,
-        DirectCallOwner::VendorApiCallback,
+        DirectCallOwner::JavaScriptEntryPoint,
     ),
-    // Event-handler/reaction policy. These are HTML-owned callbacks rather
-    // than values accepted through a Web IDL callback parameter.
-    allowed(
-        "exception_reporting.rs",
-        1,
-        DirectCallOwner::EventHandlerOrReaction,
-    ),
-    allowed("util.rs", 2, DirectCallOwner::EventHandlerOrReaction),
     // Browser-created functions, Promise capabilities, and algorithm steps.
     allowed("blob.rs", 1, DirectCallOwner::BrowserAlgorithm),
     allowed(
@@ -184,8 +176,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/runtime_state.rs",
-        2,
-        DirectCallOwner::NativeForwardingOrScript,
+        1,
+        DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
         "context_bootstrap/web_storage/interceptors.rs",
@@ -220,11 +212,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     allowed(
         "native_bridge/context_host/host_loads.rs",
         1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
-        "native_bridge/context_host/popups.rs",
-        2,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
@@ -321,6 +308,46 @@ fn direct_v8_call_inventory_is_frozen() {
             .map(|entry| (entry.path, entry.matches, entry.owner))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn script_and_module_execution_use_the_shared_entry_points() {
+    let expected = BTreeMap::from([("script_execution.rs".to_owned(), 1)]);
+    assert_eq!(
+        renderer_source_inventory(count_script_runs),
+        expected,
+        "execute compiled scripts through script_execution::execute_compiled_script"
+    );
+    assert_eq!(
+        renderer_source_inventory(count_module_evaluations),
+        expected,
+        "evaluate modules through script_execution::evaluate_module"
+    );
+    assert_eq!(
+        renderer_source_inventory(count_microtask_scopes),
+        expected,
+        "execution scopes belong to the shared entry points, not individual callers"
+    );
+}
+
+fn count_script_runs(source: &str) -> usize {
+    let source = compact_source(source);
+    source.matches(concat!(".run(", "scope")).count()
+        + source.matches(concat!(".run(&", "scope")).count()
+        + source.matches(concat!(".run(&mut", "scope")).count()
+}
+
+fn count_module_evaluations(source: &str) -> usize {
+    let source = compact_source(source);
+    source.matches(concat!(".evaluate(", "scope")).count()
+        + source.matches(concat!(".evaluate(&", "scope")).count()
+        + source.matches(concat!(".evaluate(&mut", "scope")).count()
+}
+
+fn count_microtask_scopes(source: &str) -> usize {
+    compact_source(source)
+        .matches(concat!("v8::MicrotasksScope::", "new("))
+        .count()
 }
 
 fn renderer_source_inventory(count: fn(&str) -> usize) -> BTreeMap<String, usize> {

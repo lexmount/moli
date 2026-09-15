@@ -1235,7 +1235,7 @@ fn run_child_window_eval_expression<'s>(
         create_script_origin_with_base_url(scope, base_url.as_str(), 0, Some(base_url))
     });
     let function = v8::Script::compile(scope, source, origin.as_ref())
-        .and_then(|script| script.run(scope))
+        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let expression = v8_string(scope, expression)?;
 
@@ -1250,7 +1250,13 @@ fn run_child_window_eval_expression<'s>(
     {
         scope.set_continuation_preserved_embedder_data(value);
     }
-    let result = function.call(scope, window.into(), &[window.into(), expression.into()]);
+    let result = crate::util::call_script_visible_function(
+        scope,
+        function,
+        window.into(),
+        &[window.into(), expression.into()],
+        "child Window eval",
+    );
     scope.set_continuation_preserved_embedder_data(previous_continuation_data);
     let previous_active_child = v8::Local::new(scope, &previous_active_child);
     native_bridge::restore_active_child_window_scope(scope, previous_active_child);

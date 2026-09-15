@@ -1,5 +1,6 @@
 use super::construction_invocation::{
-    CustomElementConstructorInvocation, invoke_custom_element_constructor,
+    CustomElementConstructorInvocation, can_perform_custom_element_microtask_checkpoint,
+    invoke_custom_element_constructor,
 };
 use super::parser_handoff_attributes::append_parser_custom_element_token_attributes;
 use super::parser_handoff_definition::ParserCustomElementDefinitionMatch;
@@ -73,7 +74,9 @@ pub(super) fn construct_parser_created_custom_element_direct(
         .owner_document_handle(handle);
     let _dynamic_markup = enter_upgrade_dynamic_markup_insertion(host_ptr, handle);
     let _parser_pause = unsafe { &mut *host_ptr }.enter_parser_pause();
-    if unsafe { &*host_ptr }.should_checkpoint_before_parser_custom_element_constructor() {
+    if unsafe { &*host_ptr }.should_checkpoint_before_parser_custom_element_constructor()
+        && can_perform_custom_element_microtask_checkpoint(scope)
+    {
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     }
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {

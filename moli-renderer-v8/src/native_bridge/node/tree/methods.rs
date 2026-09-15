@@ -478,11 +478,11 @@ pub(in crate::native_bridge) fn node_get_root_node_callback(
         }
         return;
     }
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, root_handle)
-    {
-        Some(root) => rv.set(root.into()),
-        None => rv.set_null(),
-    }
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        Some(root_handle),
+    );
 }

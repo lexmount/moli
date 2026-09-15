@@ -19,7 +19,7 @@ use super::node::{
 use super::{
     JsContextHost, callback_arg_namespace, callback_arg_string, collections,
     identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind},
-    runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
+    runtime_ptr_from_object, set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
     validate_qualified_name_and_namespace,
 };
@@ -560,7 +560,7 @@ fn set_document_node_return_value_for_receiver<'s>(
             None => rv.set_null(),
         }
     } else {
-        set_wrapped_handle_or_null(scope, rv, runtime_ptr, Some(handle));
+        set_wrapped_handle_or_null_for_receiver(scope, rv, runtime_ptr, receiver, Some(handle));
     }
 }
 
@@ -1064,7 +1064,13 @@ fn document_current_script_getter_function<'s>(
         return;
     }
     let current_script = current_script_handle_for_document(runtime, handle);
-    set_wrapped_handle_or_null(scope, &mut rv, runtime_ptr, current_script);
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        args.this(),
+        current_script,
+    );
 }
 
 fn current_script_handle_for_document(

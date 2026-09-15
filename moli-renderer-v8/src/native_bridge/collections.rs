@@ -15,7 +15,7 @@ use super::element::{
 use super::identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};
 use super::{
     JsContextHost,
-    bridge::wrapped_handle_value,
+    bridge::{wrapped_handle_value, wrapped_handle_value_for_receiver},
     callback_arg_dom_handle, callback_arg_namespace, callback_arg_optional_string,
     callback_arg_string, callback_value_dom_handle, current_or_live_delegate_node_arg_handle,
     node::{

@@ -4,7 +4,7 @@ use super::super::super::{
 };
 use super::super::node::{
     node_arg_handle, node_is_document, node_or_foreign_arg_handle_preserve_detached,
-    node_runtime_and_handle_from_args_or_detached, set_wrapped_node_or_null,
+    node_runtime_and_handle_from_args_or_detached,
 };
 use super::super::traversal;
 use super::super::{

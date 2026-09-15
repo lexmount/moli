@@ -3729,7 +3729,8 @@ impl ScriptVm {
                 let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
-                let Some(value) = root_module.evaluate(&scope) else {
+                let Some(value) = crate::script_execution::evaluate_module(&mut scope, root_module)
+                else {
                     let error = scope
                         .exception()
                         .map(|exception| {
@@ -6603,7 +6604,8 @@ __selectedDynamicImportPromise.catch(() => {
         );
         let patch_script =
             v8::Script::compile(scope, patch_source, None).expect("patch script should compile");
-        patch_script.run(scope).expect("patch script should run");
+        crate::script_execution::execute_compiled_script(scope, patch_script)
+            .expect("patch script should run");
 
         let try_catch = pin!(v8::TryCatch::new(scope));
         let scope = try_catch.init();

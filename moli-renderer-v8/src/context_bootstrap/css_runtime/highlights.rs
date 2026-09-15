@@ -96,8 +96,7 @@ pub(super) fn build_highlight_runtime_state<'s>(
     let Some(script) = v8::Script::compile(scope, source, None) else {
         return Err(anyhow!("failed to compile Highlight runtime source"));
     };
-    let Some(initializer) = script
-        .run(scope)
+    let Some(initializer) = crate::script_execution::execute_compiled_script(scope, script)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
         return Err(anyhow!("failed to run Highlight runtime source"));

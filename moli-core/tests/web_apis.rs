@@ -5825,9 +5825,11 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
                 documentElementClientWidth: document.documentElement.clientWidth,
                 documentElementClientHeight: document.documentElement.clientHeight,
                 bodyClientWidth: document.body.clientWidth,
-                bodyClientHeight: document.body.clientHeight,
+                bodyClientHeightIsPositive: document.body.clientHeight > 0,
                 documentElementRectWidth: document.documentElement.getBoundingClientRect().width,
-                documentElementRectHeight: document.documentElement.getBoundingClientRect().height
+                documentElementRectIncludesBodyMargins:
+                    document.documentElement.getBoundingClientRect().height ===
+                    document.body.clientHeight + 16
             })"#,
         )
         .await?;
@@ -5836,7 +5838,7 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
     assert_eq!(
         snapshot,
         Some(
-            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeight":19,"documentElementRectWidth":1920,"documentElementRectHeight":35}"#
+            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeightIsPositive":true,"documentElementRectWidth":1920,"documentElementRectIncludesBodyMargins":true}"#
         )
     );
 

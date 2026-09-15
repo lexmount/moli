@@ -930,7 +930,7 @@ fn eval_object<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let source = v8str(scope, source);
     v8::Script::compile(scope, source, None)
-        .and_then(|script| script.run(scope))
+        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
@@ -957,7 +957,7 @@ fn trusted_types_function_constructor_callback<'s>(
     let Some(script) = v8::Script::compile(scope, source, None) else {
         return;
     };
-    if let Some(function) = script.run(scope) {
+    if let Some(function) = crate::script_execution::execute_compiled_script(scope, script) {
         rv.set(function);
     }
 }

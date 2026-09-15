@@ -906,7 +906,7 @@ fn dispatch_child_body_storage_attribute<'s>(
         return;
     };
     let Some(handler) = v8::Script::compile(scope, script_source, None)
-        .and_then(|script| script.run(scope))
+        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
         return;

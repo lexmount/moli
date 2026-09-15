@@ -1,7 +1,6 @@
 mod adopted_lifecycle;
 mod attribute_lifecycle;
 mod connected_lifecycle;
-mod connected_lifecycle_initial_attributes;
 mod connected_subtree_lifecycle;
 mod construction;
 mod construction_failure;
@@ -27,7 +26,8 @@ pub(crate) use construction_failure::throw_already_constructed_custom_element_er
 use construction_failure::{ConstructionFailure, report_custom_element_construction_failure};
 pub(crate) use construction_result::set_wrapper_custom_element_constructor_prototype;
 use construction_result::{
-    FailedExistingConstructionPrototype, validate_custom_element_construction_result,
+    FailedExistingConstructionPrototype, synchronize_wrapper_custom_element_prototype,
+    validate_custom_element_construction_result,
 };
 use construction_runtime::construct_custom_element_directly;
 use definition::PendingInitialAttribute;

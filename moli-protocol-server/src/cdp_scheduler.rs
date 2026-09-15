@@ -114,6 +114,7 @@ pub(crate) struct CdpScheduler {
     runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
+    page_screencast_fps: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -153,9 +154,10 @@ pub(crate) struct ScheduledPageScreencastFrame {
     visual_state: RendererVisualStateToken,
 }
 
-fn page_screencast_interval(every_nth_frame: u32) -> Duration {
+fn page_screencast_interval(fps: u8, every_nth_frame: u32) -> Duration {
+    debug_assert!((1..=60).contains(&fps));
     debug_assert!(every_nth_frame > 0);
-    Duration::from_secs(u64::from(every_nth_frame))
+    Duration::from_secs_f64(f64::from(every_nth_frame) / f64::from(fps))
 }
 
 fn next_page_screencast_deadline(now: TokioInstant, interval: Duration) -> TokioInstant {
@@ -501,7 +503,8 @@ impl CdpScheduler {
         now: TokioInstant,
     ) {
         let session_id = registration.session_id().map(str::to_owned);
-        let interval = page_screencast_interval(registration.every_nth_frame());
+        let interval =
+            page_screencast_interval(self.page_screencast_fps, registration.every_nth_frame());
         self.page_screencasts.insert(
             session_id,
             PageScreencastSchedule {
@@ -693,14 +696,20 @@ impl CdpScheduler {
         output
     }
 
-    fn new(conn: CdpConnection) -> Self {
+    fn new_with_screencast_fps(conn: CdpConnection, page_screencast_fps: u8) -> Self {
         Self {
             conn,
             pending_navigation_background_events: VecDeque::new(),
             runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
+            page_screencast_fps,
         }
+    }
+
+    #[cfg(test)]
+    fn new(conn: CdpConnection) -> Self {
+        Self::new_with_screencast_fps(conn, 1)
     }
 
     pub(crate) fn new_with_initial_state_runtime_config(
@@ -724,19 +733,22 @@ impl CdpScheduler {
             navigation_runtime_config,
             target_host_integration,
             DefaultTargetRuntimeInitialization::Materialized,
+            1,
         )
     }
 
-    pub(crate) fn new_with_deferred_default_target_runtime(
+    pub(crate) fn new_with_deferred_default_target_runtime_and_screencast_fps(
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
+        page_screencast_fps: u8,
     ) -> (Self, CdpSchedulerEventReceivers) {
         Self::new_with_default_target_runtime_initialization(
             initial_storage_partition,
             navigation_runtime_config,
             target_host_integration,
             DefaultTargetRuntimeInitialization::Deferred,
+            page_screencast_fps,
         )
     }
 
@@ -745,6 +757,7 @@ impl CdpScheduler {
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
         initialization: DefaultTargetRuntimeInitialization,
+        page_screencast_fps: u8,
     ) -> (Self, CdpSchedulerEventReceivers) {
         let conn = match initialization {
             DefaultTargetRuntimeInitialization::Materialized => {
@@ -760,7 +773,7 @@ impl CdpScheduler {
                 )
             }
         };
-        let mut scheduler = Self::new(conn);
+        let mut scheduler = Self::new_with_screencast_fps(conn, page_screencast_fps);
         if let Some(target_host_integration) = target_host_integration {
             target_host_integration.install(&mut scheduler.conn);
         }

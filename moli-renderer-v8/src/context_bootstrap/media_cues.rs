@@ -457,9 +457,10 @@ fn text_track_cue_get_cue_as_html_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let fragment = runtime.create_document_fragment();
     append_vtt_cue_fragment(scope, runtime_ptr, runtime, fragment, &text);
-    if let Some(fragment) = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, fragment)
+    if let Some(fragment) =
+        runtime
+            .native_bridge_mut()
+            .wrap_handle_for_receiver(scope, runtime_ptr, receiver, fragment)
     {
         rv.set(fragment.into());
     }

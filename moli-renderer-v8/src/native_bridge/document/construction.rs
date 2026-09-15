@@ -5,7 +5,7 @@ use super::super::super::{
 use super::super::node::{
     node_arg_handle, node_is_document, node_or_foreign_arg_handle_allow_detached,
     node_runtime_and_handle_from_args, node_runtime_and_handle_from_args_or_detached,
-    node_runtime_and_handle_from_object, set_wrapped_node_or_null,
+    node_runtime_and_handle_from_object,
 };
 use super::super::{
     JsContextHost, throw_dom_exception, validate_attribute_name, validate_element_name,

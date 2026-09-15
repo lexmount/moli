@@ -47,5 +47,11 @@ fn set_wrapped_input_association_or_null<'s>(
         rv.set(object.into());
         return;
     }
-    set_wrapped_node_or_null(scope, rv, runtime_ptr, Some(target));
+    crate::native_bridge::set_wrapped_handle_or_null_for_receiver(
+        scope,
+        rv,
+        runtime_ptr,
+        source,
+        Some(target),
+    );
 }

@@ -1,7 +1,9 @@
 use crate::dom::native::Node;
 use crate::util::v8_string;
 
-use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
+use super::super::super::{
+    node::node_runtime_and_handle_from_object_or_detached, set_wrapped_handle_or_null_for_receiver,
+};
 use super::super::{
     element_attribute, property_string_value, set_reflected_attribute,
     set_reflected_boolean_attribute,
@@ -164,13 +166,13 @@ fn template_content_for_object<'s>(
         rv.set_null();
         return;
     };
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, contents_handle)
-    {
-        Some(contents) => rv.set(contents.into()),
-        None => rv.set_null(),
-    }
+    set_wrapped_handle_or_null_for_receiver(
+        scope,
+        &mut rv,
+        runtime_ptr,
+        object,
+        Some(contents_handle),
+    );
 }
 
 pub(in crate::native_bridge) fn template_content_getter_function<'s>(

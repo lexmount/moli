@@ -6,7 +6,7 @@ use super::super::element::{
 };
 use super::super::node::{node_is_document, node_runtime_and_handle_from_args};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::{JsContextHost, set_wrapped_handle_or_null_for_receiver};
 use crate::util::{
     context_host_ptr_from_global_bridge, get_private_value, node_wrapper_from_handle,
     serialize_v8_array, throw_type_error, v8_string, v8str,
@@ -419,10 +419,13 @@ pub(crate) fn install_caret_position_template_bindings<'s>(
 
 fn build_caret_position_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     node: DomHandle,
     offset: u32,
     rect: ClientRect,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = receiver.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let wrapper = node_wrapper_from_handle(scope, node)?;
     CaretPositionDeclaration::new(
         wrapper,
@@ -595,8 +598,11 @@ fn throw_hit_test_layout_error(scope: &mut v8::PinScope<'_, '_>, error: moli_lay
 
 fn element_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     elements: impl IntoIterator<Item = DomHandle>,
 ) -> Option<v8::Local<'s, v8::Array>> {
+    let context = receiver.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let wrappers = elements
         .into_iter()
         .filter_map(|handle| node_wrapper_from_handle(scope, handle))
@@ -623,13 +629,13 @@ pub(in crate::native_bridge) fn node_document_element_from_point_callback<'s>(
     let runtime = unsafe { &*runtime_ptr };
     match element_at_point(runtime, handle, handle, parsed.x, parsed.y) {
         Ok(element) => {
-            if let Some(element) =
-                element.and_then(|element| node_wrapper_from_handle(scope, element))
-            {
-                rv.set(element.into());
-            } else {
-                rv.set_null();
-            }
+            set_wrapped_handle_or_null_for_receiver(
+                scope,
+                &mut rv,
+                runtime_ptr,
+                args.this(),
+                element,
+            );
         }
         Err(error) => {
             throw_hit_test_layout_error(scope, error);
@@ -657,7 +663,8 @@ pub(in crate::native_bridge) fn node_document_elements_from_point_callback<'s>(
     let runtime = unsafe { &*runtime_ptr };
     match elements_at_point(runtime, handle, handle, parsed.x, parsed.y) {
         Ok(elements) => {
-            let array = element_array(scope, elements).unwrap_or_else(|| v8::Array::new(scope, 0));
+            let array = element_array(scope, args.this(), elements)
+                .unwrap_or_else(|| v8::Array::new(scope, 0));
             rv.set(array.into());
         }
         Err(error) => {
@@ -705,7 +712,8 @@ pub(in crate::native_bridge) fn node_document_caret_position_from_point_callback
                 &shadow_roots,
                 &position.ancestor_boxes,
             );
-            if let Some(caret) = build_caret_position_object(scope, node, offset, rect) {
+            if let Some(caret) = build_caret_position_object(scope, args.this(), node, offset, rect)
+            {
                 rv.set(caret.into());
             } else {
                 rv.set_null();
@@ -742,13 +750,13 @@ pub(in crate::native_bridge) fn node_shadow_root_element_from_point_callback<'s>
     };
     match element_at_point(runtime, document, handle, parsed.x, parsed.y) {
         Ok(element) => {
-            if let Some(element) =
-                element.and_then(|element| node_wrapper_from_handle(scope, element))
-            {
-                rv.set(element.into());
-            } else {
-                rv.set_null();
-            }
+            set_wrapped_handle_or_null_for_receiver(
+                scope,
+                &mut rv,
+                runtime_ptr,
+                args.this(),
+                element,
+            );
         }
         Err(error) => {
             throw_hit_test_layout_error(scope, error);
@@ -780,7 +788,8 @@ pub(in crate::native_bridge) fn node_shadow_root_elements_from_point_callback<'s
     };
     match elements_at_point(runtime, document, handle, parsed.x, parsed.y) {
         Ok(elements) => {
-            let array = element_array(scope, elements).unwrap_or_else(|| v8::Array::new(scope, 0));
+            let array = element_array(scope, args.this(), elements)
+                .unwrap_or_else(|| v8::Array::new(scope, 0));
             rv.set(array.into());
         }
         Err(error) => {

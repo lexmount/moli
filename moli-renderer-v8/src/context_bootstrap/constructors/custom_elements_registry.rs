@@ -300,22 +300,26 @@ pub(in crate::context_bootstrap) fn custom_elements_upgrade_callback<'s>(
         parsed.root,
     ) {
         let registry_key = custom_elements::registry_store_key(scope, args.this());
-        let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
-            scope,
-            host_ptr,
-            root_handle,
-            registry_key,
-        );
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
+                scope,
+                host_ptr,
+                root_handle,
+                registry_key,
+            );
+        });
         return;
     }
     if let Ok((host_ptr, root_handle)) = node_runtime_and_handle_from_object(scope, parsed.root) {
         let registry_key = custom_elements::registry_store_key(scope, args.this());
-        let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
-            scope,
-            host_ptr,
-            root_handle,
-            registry_key,
-        );
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
+                scope,
+                host_ptr,
+                root_handle,
+                registry_key,
+            );
+        });
         return;
     }
     throw_type_error(scope, "customElements.upgrade(root) requires a Node root");
@@ -382,12 +386,14 @@ pub(in crate::context_bootstrap) fn custom_elements_initialize_callback<'s>(
         scope.throw_exception(exception);
         return;
     }
-    let _ = custom_elements::initialize_registry_for_subtree(
-        scope,
-        host_ptr,
-        root_handle,
-        registry_key,
-    );
+    custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+        let _ = custom_elements::initialize_registry_for_subtree(
+            scope,
+            host_ptr,
+            root_handle,
+            registry_key,
+        );
+    });
 }
 
 fn invalid_custom_element_name_promise<'s>(

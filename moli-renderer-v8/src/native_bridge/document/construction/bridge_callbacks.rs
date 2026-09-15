@@ -29,6 +29,7 @@ pub(in crate::native_bridge) fn bridge_create_element_callback<'s>(
     }
     match create_element_wrapper_for_document(
         scope,
+        args.this(),
         runtime_ptr,
         document_handle,
         &parsed.local_name,
@@ -95,7 +96,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
             unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, handle);
             match unsafe { &mut *runtime_ptr }
                 .native_bridge_mut()
-                .wrap_handle(scope, runtime_ptr, handle)
+                .wrap_handle_for_receiver(scope, runtime_ptr, args.this(), handle)
             {
                 Some(element) => rv.set(element.into()),
                 None => rv.set_null(),
@@ -104,6 +105,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         }
         match create_element_wrapper_for_document(
             scope,
+            args.this(),
             runtime_ptr,
             document_handle,
             local_name,
@@ -128,7 +130,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, handle);
     match unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
+        .wrap_handle_for_receiver(scope, runtime_ptr, args.this(), handle)
     {
         Some(element) => rv.set(element.into()),
         None => rv.set_null(),
@@ -152,10 +154,12 @@ pub(in crate::native_bridge) fn bridge_create_text_node_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime.create_text_node_for_document(document_handle, &parsed.data);
     runtime.capture_node_creation_stack_trace(scope, handle);
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
-    {
+    match runtime.native_bridge_mut().wrap_handle_for_receiver(
+        scope,
+        runtime_ptr,
+        args.this(),
+        handle,
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
@@ -178,10 +182,12 @@ pub(in crate::native_bridge) fn bridge_create_comment_callback<'s>(
     let runtime = unsafe { &mut *runtime_ptr };
     let handle = runtime.create_comment_for_document(document_handle, &parsed.data);
     runtime.capture_node_creation_stack_trace(scope, handle);
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
-    {
+    match runtime.native_bridge_mut().wrap_handle_for_receiver(
+        scope,
+        runtime_ptr,
+        args.this(),
+        handle,
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }
@@ -227,10 +233,12 @@ pub(in crate::native_bridge) fn bridge_create_processing_instruction_callback<'s
         &parsed.data,
     );
     runtime.capture_node_creation_stack_trace(scope, handle);
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
-    {
+    match runtime.native_bridge_mut().wrap_handle_for_receiver(
+        scope,
+        runtime_ptr,
+        args.this(),
+        handle,
+    ) {
         Some(node) => rv.set(node.into()),
         None => rv.set_null(),
     }

@@ -6,4 +6,5 @@ mod dom_surface;
 mod focus;
 mod live_document;
 mod text_controls;
+mod wrapper_identity;
 mod zhihu_probe;

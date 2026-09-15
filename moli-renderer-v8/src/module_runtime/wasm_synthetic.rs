@@ -363,8 +363,7 @@ fn evaluate_wasm_dependency_module<'s>(
     perform_microtasks: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Option<()>,
     messages: WasmDependencyModuleMessages,
 ) -> Option<()> {
-    let value = module
-        .evaluate(scope)
+    let value = crate::script_execution::evaluate_module(scope, module)
         .or_else(|| preserve_current_v8_module_exception(scope))?;
     perform_microtasks(scope)?;
     finish_wasm_dependency_module_evaluation(

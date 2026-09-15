@@ -3648,6 +3648,55 @@ customElements.define("wpt-parser-throws", globalThis.__ThrowsElement);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn parser_custom_element_document_write_microtasks_wait_for_outer_script() {
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let url =
+        url::Url::parse("https://example.test/parser-custom-element-write-microtasks").unwrap();
+    let html = r#"<!doctype html><body>
+<script>
+window.onerror = () => true;
+globalThis.constructorMicrotaskLog = [];
+class WrittenElement extends HTMLElement {
+  constructor() {
+    super();
+    constructorMicrotaskLog.push("constructor");
+    Promise.resolve().then(() => {
+      constructorMicrotaskLog.push("microtask");
+      this.setAttribute("data-constructed", "yes");
+    });
+  }
+}
+customElements.define("microtask-written-element", WrittenElement);
+document.write("<microtask-written-element></microtask-written-element>");
+constructorMicrotaskLog.push("after-write");
+constructorMicrotaskLog.push(document.querySelector("microtask-written-element") instanceof WrittenElement);
+</script>
+<script>constructorMicrotaskLog.push("following-script");</script>
+</body>"#;
+    let mut page = create_test_html_page(&runtime, &loader, url, html).await;
+
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify({log: constructorMicrotaskLog, value: document.querySelector('microtask-written-element').getAttribute('data-constructed')})".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("parser document.write microtask order should evaluate");
+
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!(
+            r#"{"log":["constructor","after-write",true,"microtask","following-script"],"value":"yes"}"#
+        ))
+    );
+    page.close_async()
+        .await
+        .expect("parser document.write microtask page should close");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn parser_custom_element_microtask_mutation_fails_before_validation() {
     let runtime = JsRuntime::initialize();
     let loader =

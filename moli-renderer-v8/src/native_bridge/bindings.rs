@@ -24,31 +24,6 @@ struct NativeBridgeGlobalDeclaration<'scope> {
     bridge: v8::Local<'scope, v8::Object>,
 }
 
-#[cfg(test)]
-thread_local! {
-    static WRAPPER_OWNER_REALM_CUSTOM_ELEMENT_CHECKS: std::cell::Cell<u64> =
-        const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_wrapper_owner_realm_custom_element_checks_for_test() {
-    WRAPPER_OWNER_REALM_CUSTOM_ELEMENT_CHECKS.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn wrapper_owner_realm_custom_element_checks_for_test() -> u64 {
-    WRAPPER_OWNER_REALM_CUSTOM_ELEMENT_CHECKS.get()
-}
-
-#[cfg(test)]
-fn record_wrapper_owner_realm_custom_element_check_for_test() {
-    WRAPPER_OWNER_REALM_CUSTOM_ELEMENT_CHECKS.set(
-        WRAPPER_OWNER_REALM_CUSTOM_ELEMENT_CHECKS
-            .get()
-            .saturating_add(1),
-    );
-}
-
 pub(crate) struct NativeBridgeBindings {
     isolate_ptr: v8::UnsafeRawIsolatePtr,
     window_global_template: v8::Global<v8::ObjectTemplate>,
@@ -283,7 +258,9 @@ impl NativeBridgeBindings {
         web_api_interfaces::initialize(scope, wrapper, prototype_name)
             .expect("native wrapper identity should initialize");
         set_named_constructor_prototype(scope, wrapper, prototype_name);
-        self.sync_wrapper_owner_realm_prototype(scope, host_ptr, &handle, wrapper);
+        if matches!(wrapper_kind, WrapperKind::Window) {
+            window::sync_window_wrapper_function_identity(scope, wrapper);
+        }
         if matches!(wrapper_kind, WrapperKind::Node) {
             let descriptor = node_bridge_descriptor(prototype_name).unwrap_or_else(|| {
                 panic!("missing native bridge descriptor for `{prototype_name}`")
@@ -295,51 +272,6 @@ impl NativeBridgeBindings {
             );
         }
         wrapper
-    }
-
-    pub(super) fn sync_wrapper_owner_realm_prototype(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        handle: &BridgeHandle,
-        wrapper: v8::Local<'_, v8::Object>,
-    ) {
-        if matches!(handle, BridgeHandle::Window) {
-            window::sync_window_wrapper_function_identity(scope, wrapper);
-            return;
-        }
-        let BridgeHandle::Node(node_handle) = handle else {
-            return;
-        };
-        let child_handle = {
-            let host = unsafe { &*host_ptr };
-            let Some(document_handle) = host.dom_host().owner_document_handle(*node_handle) else {
-                return;
-            };
-            let Some(child_handle) =
-                host.child_browsing_context_host_for_document_handle(document_handle)
-            else {
-                return;
-            };
-            child_handle
-        };
-        #[cfg(test)]
-        record_wrapper_owner_realm_custom_element_check_for_test();
-        if unsafe { &*host_ptr }.custom_element_handle_is_upgraded(*node_handle) {
-            return;
-        }
-        let prototype_name = prototype_name_for_handle(host_ptr, handle);
-        if let Some(prototype) = unsafe { &mut *host_ptr }
-            .child_browsing_context_constructor_prototype(scope, child_handle, prototype_name)
-        {
-            let updated = wrapper.set_prototype(scope, prototype).unwrap_or_else(|| {
-                panic!("failed to set child-realm `{prototype_name}` wrapper prototype")
-            });
-            assert!(
-                updated,
-                "V8 rejected the child-realm `{prototype_name}` wrapper prototype"
-            );
-        }
     }
 
     pub(super) fn instantiate_window_shell<'s, 'i>(

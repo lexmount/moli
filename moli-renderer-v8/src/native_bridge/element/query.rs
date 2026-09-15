@@ -4,11 +4,12 @@ use super::super::{
         node_is_document, node_runtime_and_handle_from_args,
         node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached, receiver_has_detached_state,
-        require_element_method_receiver, require_parent_node_receiver, set_wrapped_node_or_null,
+        require_element_method_receiver, require_parent_node_receiver,
         throw_incompatible_method_receiver, throw_native_selector_error_for_selector,
     },
 };
 use super::forms::control_matches_validity_pseudo;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::{
     util::{
         call_object_method, object_number_property, object_property_as_object, v8_string, v8str,
@@ -119,7 +120,13 @@ pub(in crate::native_bridge) fn node_query_selector_callback<'s>(
         return;
     };
     match unsafe { &*runtime_ptr }.query_selector(Some(handle), &parsed.selectors) {
-        Ok(handle) => set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, handle),
+        Ok(handle) => set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            handle,
+        ),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
 }
@@ -170,6 +177,11 @@ pub(in crate::native_bridge) fn node_query_selector_all_callback<'s>(
     };
     match unsafe { &*runtime_ptr }.query_selector_all(Some(handle), &parsed.selectors) {
         Ok(handles) => {
+            let Some(context) = args.this().get_creation_context(scope) else {
+                rv.set_null();
+                return;
+            };
+            let scope = &mut v8::ContextScope::new(scope, context);
             let list = collections::build_node_list_from_handles(scope, runtime_ptr, &handles);
             rv.set(list.into());
         }
@@ -319,7 +331,13 @@ pub(in crate::native_bridge) fn node_closest_callback<'s>(
                 None => rv.set_null(),
             }
         }
-        Ok(handle) => set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, handle),
+        Ok(handle) => set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            handle,
+        ),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
 }
@@ -359,6 +377,11 @@ pub(in crate::native_bridge) fn node_get_elements_by_tag_name_callback<'s>(
         return;
     };
     let include_root = node_is_document(unsafe { &*runtime_ptr }, handle);
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = collections::build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -408,6 +431,11 @@ pub(in crate::native_bridge) fn node_get_elements_by_tag_name_ns_callback<'s>(
         return;
     };
     let include_root = node_is_document(unsafe { &*runtime_ptr }, handle);
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = collections::build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -460,6 +488,11 @@ pub(in crate::native_bridge) fn node_get_elements_by_class_name_callback<'s>(
         return;
     };
     let include_root = node_is_document(unsafe { &*runtime_ptr }, handle);
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = collections::build_live_collection_for_node(
         scope,
         runtime_ptr,
@@ -499,6 +532,11 @@ pub(in crate::native_bridge) fn node_get_elements_by_name_callback<'s>(
         return;
     };
     let include_root = node_is_document(unsafe { &*runtime_ptr }, handle);
+    let Some(context) = args.this().get_creation_context(scope) else {
+        rv.set_null();
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let collection = collections::build_live_collection_for_node(
         scope,
         runtime_ptr,

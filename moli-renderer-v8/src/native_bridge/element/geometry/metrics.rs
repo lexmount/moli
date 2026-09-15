@@ -3,6 +3,7 @@ use crate::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8s
 use super::super::super::{
     document,
     node::{node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached},
+    set_wrapped_handle_or_null_for_receiver,
 };
 use super::super::styles::raw_inline_style_property_value;
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
@@ -581,13 +582,7 @@ pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>(
         rv.set_null();
         return;
     };
-    match runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, parent)
-    {
-        Some(parent) => rv.set(parent.into()),
-        None => rv.set_null(),
-    }
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(parent));
 }
 
 pub(in crate::native_bridge) fn node_offset_top_getter_function<'s>(

@@ -1,6 +1,7 @@
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
 use crate::native_bridge::document::detached_form_owner_object;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(crate) fn form_associated_form_owner(
     runtime: &JsContextHost,
@@ -244,5 +245,5 @@ pub(in crate::native_bridge) fn form_associated_form_getter_function<'s>(
         return;
     };
     let owner = form_associated_reflected_form_owner(unsafe { &*runtime_ptr }, handle);
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, owner);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), owner);
 }

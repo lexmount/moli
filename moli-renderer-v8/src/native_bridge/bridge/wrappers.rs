@@ -51,10 +51,6 @@ impl NativeDomBridge {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let reflector_id = self.identity.reflector_id(&handle);
         if let Some(wrapper) = self.identity.cached_wrapper(scope, reflector_id) {
-            if !matches!(&handle, BridgeHandle::Window) {
-                self.bindings
-                    .sync_wrapper_owner_realm_prototype(scope, host_ptr, &handle, wrapper);
-            }
             return Some(wrapper);
         }
 

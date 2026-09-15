@@ -138,7 +138,8 @@ fn serialize_test_value(expression: &str) -> V8StructuredClonePayload {
     let scope = &mut v8::ContextScope::new(scope, context);
     let source = v8::String::new(scope, expression).expect("v8 string allocation");
     let script = v8::Script::compile(scope, source, None).expect("test script should compile");
-    let value = script.run(scope).expect("test script should evaluate");
+    let value = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("test script should evaluate");
     structured_serialize_value(scope, value)
         .expect("test value should serialize through structured clone")
 }
@@ -161,7 +162,8 @@ fn serialize_test_crypto_value(expression: &str) -> V8StructuredClonePayload {
         .expect("crypto runtime should install in test context");
     let source = v8::String::new(scope, expression).expect("test script should allocate");
     let script = v8::Script::compile(scope, source, None).expect("test script should compile");
-    let mut value = script.run(scope).expect("test script should evaluate");
+    let mut value = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("test script should evaluate");
     if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
         for _ in 0..8 {
             if promise.state() != v8::PromiseState::Pending {
@@ -195,7 +197,8 @@ fn serialize_test_post_message_value(expression: &str) -> V8StructuredClonePaylo
     let scope = &mut v8::ContextScope::new(scope, context);
     let source = v8::String::new(scope, expression).expect("v8 string allocation");
     let script = v8::Script::compile(scope, source, None).expect("test script should compile");
-    let value = script.run(scope).expect("test script should evaluate");
+    let value = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("test script should evaluate");
     structured_serialize_value_for_post_message(scope, value, None, "Worker")
         .expect("test postMessage value should serialize through structured clone")
 }
@@ -226,7 +229,8 @@ fn inspect_payload(payload: &V8StructuredClonePayload, expression: &str) -> Stri
     let _ = global.set(scope, key.into(), value);
     let source = v8::String::new(scope, expression).expect("inspection expression");
     let script = v8::Script::compile(scope, source, None).expect("inspection should compile");
-    let result = script.run(scope).expect("inspection should run");
+    let result = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("inspection should run");
     result.to_rust_string_lossy(scope)
 }
 
@@ -250,7 +254,8 @@ fn inspect_payload_with_image_data(payload: &V8StructuredClonePayload, expressio
     let _ = global.set(scope, key.into(), value);
     let source = v8::String::new(scope, expression).expect("inspection expression");
     let script = v8::Script::compile(scope, source, None).expect("inspection should compile");
-    let result = script.run(scope).expect("inspection should run");
+    let result = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("inspection should run");
     result.to_rust_string_lossy(scope)
 }
 

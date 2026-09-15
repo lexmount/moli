@@ -1,11 +1,12 @@
 use crate::dom::native::Node;
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::throw_type_error;
 use crate::webidl;
 
 use super::super::super::{
     node::{
         node_is_element, node_or_foreign_arg_handle_allow_detached,
-        node_runtime_and_handle_from_args_or_detached, set_wrapped_node_or_null,
+        node_runtime_and_handle_from_args_or_detached,
     },
     throw_dom_exception,
 };
@@ -146,7 +147,7 @@ pub(in crate::native_bridge) fn node_insert_adjacent_element_callback<'s>(
         }
         return;
     }
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, Some(handle));
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), Some(handle));
 }
 
 pub(in crate::native_bridge) fn node_insert_adjacent_text_callback<'s>(

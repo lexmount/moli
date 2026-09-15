@@ -216,6 +216,8 @@ fn window_named_access_value<'s>(
             stage = "window_named_property_lookup",
         );
     }
+    let context = holder.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     match handles.as_slice() {
         [] => None,
         [handle] => unsafe { &mut *host_ptr }

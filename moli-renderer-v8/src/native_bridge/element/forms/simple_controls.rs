@@ -4,6 +4,7 @@ use crate::native_bridge::document::{
     detached_native_object_for_handle, detached_parent_node_object,
 };
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
+use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::{get_private_value, node_wrapper_from_handle, set_private_value};
 use moli_dom::forms::{
     MeterElementValues, ProgressElementValues, meter_element_values, progress_element_values,
@@ -175,7 +176,7 @@ pub(in crate::native_bridge) fn legend_form_getter_function<'s>(
     let runtime = unsafe { &*runtime_ptr };
     let form = legend_fieldset_ancestor(runtime, handle)
         .and_then(|fieldset| runtime.dom_host().form_control_owner(fieldset));
-    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, form);
+    set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), form);
 }
 
 fn detached_legend_fieldset_object<'s>(
@@ -1088,13 +1089,7 @@ fn set_wrapped_button_element_or_null<'s>(
         rv.set(object.into());
         return;
     }
-    match unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)
-    {
-        Some(value) => rv.set(value.into()),
-        None => rv.set_null(),
-    }
+    set_wrapped_handle_or_null_for_receiver(scope, rv, runtime_ptr, source, Some(target));
 }
 
 pub(in crate::native_bridge) fn button_interest_for_element_getter_function<'s>(

@@ -141,7 +141,7 @@ fn eval(
 
     let source = v8::String::new(scope, code)?;
     let script = v8::Script::compile(scope, source, None)?;
-    let result = script.run(scope)?;
+    let result = crate::script_execution::execute_compiled_script(scope, script)?;
     Some(result.to_rust_string_lossy(scope))
 }
 
@@ -166,12 +166,12 @@ fn eval_throws(
     let scope = &mut v8::ContextScope::new(scope, ctx);
 
     let try_catch = pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
+    let mut scope = try_catch.init();
 
     let source = v8::String::new(&scope, code).unwrap();
     let script = v8::Script::compile(&scope, source, None);
     if let Some(script) = script {
-        let _result = script.run(&scope);
+        let _result = crate::script_execution::execute_compiled_script(&mut scope, script);
     }
     assert!(scope.has_caught(), "expected exception for: {code}");
     scope
