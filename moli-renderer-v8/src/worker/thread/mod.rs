@@ -201,6 +201,8 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) broadcast_channel_top_level_site: Option<String>,
     pub(crate) creator_storage_key: Option<MoliStorageKey>,
     pub(crate) service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    pub(crate) service_worker_script_resources: Vec<WorkerScriptResource>,
+    pub(crate) service_worker_can_import_new_scripts: bool,
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -336,6 +338,8 @@ impl WorkerSpawnOptions {
             broadcast_channel_top_level_site: None,
             creator_storage_key: None,
             service_worker_runtime: None,
+            service_worker_script_resources: Vec::new(),
+            service_worker_can_import_new_scripts: true,
             reserved_service_worker_client_id: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
@@ -450,6 +454,16 @@ impl WorkerSpawnOptions {
 
     pub(crate) fn with_global_kind(mut self, global_kind: WorkerGlobalKind) -> Self {
         self.global_kind = global_kind;
+        self
+    }
+
+    pub(crate) fn with_service_worker_script_resources(
+        mut self,
+        resources: Vec<WorkerScriptResource>,
+        can_import_new_scripts: bool,
+    ) -> Self {
+        self.service_worker_script_resources = resources;
+        self.service_worker_can_import_new_scripts = can_import_new_scripts;
         self
     }
 
@@ -1321,6 +1335,8 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         broadcast_channel_top_level_site,
         creator_storage_key,
         service_worker_runtime,
+        service_worker_script_resources,
+        service_worker_can_import_new_scripts,
         reserved_service_worker_client_id,
         indexed_db_manager,
         storage_bucket_store,
@@ -1373,6 +1389,8 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 broadcast_channel_top_level_site,
                 creator_storage_key,
                 service_worker_runtime,
+                service_worker_script_resources,
+                service_worker_can_import_new_scripts,
                 reserved_service_worker_client_id,
                 indexed_db_manager,
                 storage_bucket_store,
@@ -1507,6 +1525,8 @@ async fn worker_main(
     broadcast_channel_top_level_site: Option<String>,
     creator_storage_key: Option<MoliStorageKey>,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    service_worker_script_resources: Vec<WorkerScriptResource>,
+    service_worker_can_import_new_scripts: bool,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -1627,6 +1647,11 @@ async fn worker_main(
         global_kind,
         script_kind,
         current_script_url,
+        service_worker_script_resources: service_worker_script_resources
+            .into_iter()
+            .map(|resource| (resource.request_url.clone(), resource))
+            .collect(),
+        service_worker_can_import_new_scripts,
         referrer_policy,
         module_static_import_content_security_policies,
         content_security_policies,

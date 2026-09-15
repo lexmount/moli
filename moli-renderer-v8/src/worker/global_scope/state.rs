@@ -33,6 +33,9 @@ pub(crate) struct WorkerGlobalState {
     /// Worker global URL and settings base, unchanged by importScripts().
     /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(in crate::worker) current_script_url: Option<Url>,
+    /// Version-specific classic ServiceWorker script resources.
+    pub(in crate::worker) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(in crate::worker) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
     /// CSP policies from outside settings used for module static imports.
