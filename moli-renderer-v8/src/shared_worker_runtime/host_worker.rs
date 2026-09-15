@@ -60,6 +60,11 @@ impl RendererSharedWorkerHost {
         .with_creator_storage_key(params.key.storage_key().clone())
         .with_indexed_db_manager(execution_policy.indexed_db_manager)
         .with_storage_bucket_store(execution_policy.storage_bucket_store);
+        let options = if let Some(policy) = script.content_security_policy_snapshot {
+            options.with_content_security_policy_snapshot(*policy)
+        } else {
+            options
+        };
         let options = if let Some(runtime) = execution_policy.service_worker_runtime {
             options.with_service_worker_runtime(runtime)
         } else {

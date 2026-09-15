@@ -740,8 +740,15 @@ pub(super) struct DocumentRuntime {
     author_styles_disabled: bool,
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
-    delivered_meta_content_security_policies:
-        RefCell<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>,
+    delivered_meta_content_security_policies: RefCell<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>,
+    local_worker_policy_sources: RefCell<
+        HashMap<
+            DomHandle,
+            std::sync::Weak<
+                parking_lot::RwLock<crate::content_security_policy::InheritedContentSecurityPolicy>,
+            >,
+        >,
+    >,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
