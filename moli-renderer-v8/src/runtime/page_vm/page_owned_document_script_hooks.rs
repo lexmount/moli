@@ -21,6 +21,7 @@ use super::{
     PageOwnedScriptFailureClassification, PageVm,
     complete_page_owned_prepared_script_execution_failure_body,
     complete_prepared_script_execution_failure_report_with_activity,
+    complete_prepared_script_execution_success_with_activity,
     execute_prepared_script_on_script_execution_lane,
 };
 
@@ -112,6 +113,18 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
         failure: PageOwnedDocumentScriptSourceFailure,
         runtime_script_claim: Option<DynamicScriptPageTaskClaim>,
     ) -> PageOwnedDocumentScriptBodyExecution {
+        if self.page_vm.vm().prepared_script_changed_documents(&script) {
+            if let Some(claim) = runtime_script_claim {
+                self.page_vm
+                    .vm_mut()
+                    .cancel_claimed_runtime_owned_script_load_delay_body(claim, &script);
+            }
+            return complete_prepared_script_execution_success_with_activity(
+                script,
+                crate::script_vm::PreparedScriptBodyActivity::NotEntered,
+            )
+            .into_body_execution();
+        }
         let (error, module_failure_policy, error_value) = failure.into_parts();
         if let Some(claim) = runtime_script_claim {
             let terminal_activity = self

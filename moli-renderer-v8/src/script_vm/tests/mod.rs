@@ -6952,7 +6952,7 @@ async fn child_dynamic_execution_action_requires_materialized_current_realm() {
         &mut vm,
         "child dynamic current-realm setup",
     );
-    let (child_handle, task_owner, owner_realm_id) = {
+    let (child_handle, task_owner, owner_realm_id, child_document_handle) = {
         let realm = vm
             .child_frame_realm_store
             .get(&child_context_id)
@@ -6970,9 +6970,19 @@ async fn child_dynamic_execution_action_requires_materialized_current_realm() {
                 snapshot.document_id,
             ),
             realm.owner_realm_id,
+            snapshot.document_handle,
         )
     };
-    let script_handle = DomHandle::new(9001);
+    let script_handle = {
+        let mut host = vm._context_host.borrow_mut();
+        let script = host.dom_host_mut().create_element("script");
+        assert_eq!(
+            host.dom_host_mut()
+                .adopt_node(child_document_handle, script),
+            Some(script),
+        );
+        script
+    };
     let work_without_realm = PendingChildDynamicDocumentScript {
         child_handle,
         owner: task_owner,
@@ -6999,6 +7009,36 @@ async fn child_dynamic_execution_action_requires_materialized_current_realm() {
         job.script_integrity.as_deref(),
         Some("sha256-captured-integrity")
     );
+
+    {
+        let mut host = vm._context_host.borrow_mut();
+        let main_document = host.dom_host().document_handle();
+        assert_eq!(
+            host.dom_host_mut().adopt_node(main_document, script_handle),
+            Some(script_handle)
+        );
+        assert!(
+            host.child_dynamic_classic_script_execution_action_for_owner(
+                &work_without_realm,
+                owner_realm_id,
+            )
+            .is_none(),
+            "adopted work must not execute in its preparation realm"
+        );
+        assert_eq!(
+            host.dom_host_mut()
+                .adopt_node(child_document_handle, script_handle),
+            Some(script_handle)
+        );
+        assert!(
+            host.child_dynamic_classic_script_execution_action_for_owner(
+                &work_without_realm,
+                owner_realm_id,
+            )
+            .is_some(),
+            "moving back before execution must restore eligibility"
+        );
+    }
 
     let stale_work = PendingChildDynamicDocumentScript {
         realm_id: Some(FrameRealmId(owner_realm_id.0 + 1)),
