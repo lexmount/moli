@@ -2244,10 +2244,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
 
     let connect_policy = {
         let state = state.borrow();
-        crate::document_runtime::DocumentConnectPolicySnapshot::from_policies(
-            state.content_security_policies.clone(),
-            state.content_security_report_only_policies.clone(),
-            state.content_security_reporting_endpoints.clone(),
+        crate::document_runtime::DocumentConnectPolicySnapshot::from_inherited_policy(
+            &super::content_security_policy::worker_policy_snapshot(&state),
         )
     };
     // Local URLs are resolved by the worker fetch task without interception.

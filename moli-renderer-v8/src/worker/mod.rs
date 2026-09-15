@@ -44,7 +44,7 @@ pub(crate) use global_scope::{
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
     worker_broadcast_channel_registry, worker_broadcast_channel_storage_key,
     worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
-    worker_current_script_url, worker_global_is_closed,
+    worker_content_security_policy_snapshot, worker_current_script_url, worker_global_is_closed,
     worker_message_port_event_listener_snapshots, worker_message_port_registry,
     worker_message_port_wake_sender, worker_message_port_wrapper,
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,

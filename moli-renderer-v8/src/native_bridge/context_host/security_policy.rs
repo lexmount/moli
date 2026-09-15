@@ -162,6 +162,31 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn local_worker_content_security_policy_source_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::content_security_policy::ContentSecurityPolicySource> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        // SAFETY: this host and its DocumentRuntime belong to the same ScriptVm.
+        Some(
+            unsafe { &*self.runtime }.local_worker_content_security_policy_source(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+            ),
+        )
+    }
+
+    pub(crate) fn local_worker_content_security_policy_source_for_global<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+    ) -> Option<crate::content_security_policy::ContentSecurityPolicySource> {
+        self.local_worker_content_security_policy_source_for_owner(
+            policy_owner_dispatch_scope_for_global(scope, global),
+        )
+    }
+
     pub(crate) fn document_permissions_policy_for_owner(
         &self,
         owner: OwnerDispatchScope,

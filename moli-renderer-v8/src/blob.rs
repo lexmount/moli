@@ -50,8 +50,12 @@ struct ObjectUrlAccessKey {
     storage_key: moli_storage_key::MoliStorageKey,
 }
 
-type RendererBlobStore =
-    BlobStore<ResourceOwnerId, RendererStoragePartitionIdentity, ObjectUrlAccessKey>;
+type RendererBlobStore = BlobStore<
+    ResourceOwnerId,
+    RendererStoragePartitionIdentity,
+    ObjectUrlAccessKey,
+    crate::content_security_policy::ContentSecurityPolicySource,
+>;
 
 static BLOB_STORE: OnceLock<RendererBlobStore> = OnceLock::new();
 
@@ -406,7 +410,17 @@ pub(super) fn create_object_url_for_object<'s>(
     let origin = storage_key.origin().to_owned();
     let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
         .map(native_bridge::RuntimeObservableContextToken::as_u64);
-    blob_store().create_object_url_with_lifetime_and_access_key(
+    let policy_source = if let Some(host_ptr) =
+        crate::util::context_host_ptr_from_global_bridge(scope)
+    {
+        let global = scope.get_current_context().global(scope);
+        // SAFETY: the Window callback keeps its host alive for this call.
+        unsafe { &*host_ptr }.local_worker_content_security_policy_source_for_global(scope, global)
+    } else {
+        crate::worker::worker_content_security_policy_snapshot(scope)
+            .map(|policy| Arc::new(parking_lot::RwLock::new(policy)))
+    };
+    blob_store().create_object_url_with_metadata(
         owner_id,
         lifetime_id,
         blob_id,
@@ -415,7 +429,14 @@ pub(super) fn create_object_url_for_object<'s>(
             partition,
             storage_key,
         }),
+        policy_source,
     )
+}
+
+pub(crate) fn object_url_content_security_policy(
+    url: &str,
+) -> Option<crate::content_security_policy::InheritedContentSecurityPolicy> {
+    Some(blob_store().object_url_metadata(url)?.read().clone())
 }
 
 pub(super) fn revoke_object_url(

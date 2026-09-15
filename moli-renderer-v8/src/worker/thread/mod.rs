@@ -21,7 +21,6 @@ use crate::broadcast_channel_runtime::{
 use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
     ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyUrlViolation,
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
 };
 use crate::context_bootstrap::flush_one_pending_file_reader;
 use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
@@ -192,6 +191,8 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) content_security_policies: Vec<String>,
     pub(crate) content_security_report_only_policies: Vec<String>,
     pub(crate) content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    pub(crate) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     pub(crate) network_policy: WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
     pub(crate) worker_context_runtime: RendererWorkerContextRuntime,
@@ -319,6 +320,7 @@ impl WorkerSpawnOptions {
             module_credentials_mode: RequestCredentialsMode::SameOrigin,
             referrer_policy: None,
             module_static_import_content_security_policies: Vec::new(),
+            content_security_policy_snapshot: None,
             content_security_policies: Vec::new(),
             content_security_report_only_policies: Vec::new(),
             content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints::default(
@@ -405,6 +407,17 @@ impl WorkerSpawnOptions {
         policies: Vec<String>,
     ) -> Self {
         self.content_security_report_only_policies = policies;
+        self
+    }
+
+    pub(crate) fn with_content_security_policy_snapshot(
+        mut self,
+        policy: crate::content_security_policy::InheritedContentSecurityPolicy,
+    ) -> Self {
+        self.content_security_policies = policy.enforced_strings();
+        self.content_security_report_only_policies = policy.report_only_policies.clone();
+        self.content_security_reporting_endpoints = policy.reporting_endpoints.clone();
+        self.content_security_policy_snapshot = Some(policy);
         self
     }
 
@@ -590,50 +603,37 @@ fn start_worker_module_graph_fetch(
     loader: WorkerResourceLoader,
     network_partition_key: Option<String>,
     module_static_import_content_security_policies: Vec<String>,
-    worker_global_content_security_policies: Vec<String>,
-    worker_global_content_security_report_only_policies: Vec<String>,
-    worker_global_content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    worker_global_policy: crate::content_security_policy::InheritedContentSecurityPolicy,
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let (
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        resource_kind,
-    ) =
-        match request.csp_source() {
+    let (policy, resource_kind) = match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
-            module_static_import_content_security_policies,
-            Vec::new(),
-            ContentSecurityPolicyReportingEndpoints::default(),
+            crate::content_security_policy::InheritedContentSecurityPolicy {
+                self_url: Some(request.initiator_url().clone()),
+                header_policies: module_static_import_content_security_policies,
+                ..Default::default()
+            },
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
         ),
         WorkerModuleGraphFetchCspSource::DynamicImportGraph => (
-            worker_global_content_security_policies,
-            worker_global_content_security_report_only_policies,
-            worker_global_content_security_reporting_endpoints,
+            worker_global_policy,
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
-    let initial_csp_report_only_violation =
-        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-            &content_security_report_only_policies,
-            request.initiator_url(),
-            request.url(),
-            resource_kind,
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Report,
-            &content_security_reporting_endpoints,
-        );
-    if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-        &content_security_policies,
+    let initial_csp_report_only_violation = policy.url_violation(
+        request.initiator_url(),
+        request.url(),
+        resource_kind,
+        ContentSecurityPolicyRedirectStatus::NoRedirect,
+        ContentSecurityPolicyDisposition::Report,
+    );
+    if let Some(violation) = policy.url_violation(
         request.initiator_url(),
         request.url(),
         resource_kind,
         ContentSecurityPolicyRedirectStatus::NoRedirect,
         ContentSecurityPolicyDisposition::Enforce,
-        &content_security_reporting_endpoints,
     ) {
         let message = module_graph_csp_violation_message(&violation);
         let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
@@ -675,11 +675,7 @@ fn start_worker_module_graph_fetch(
     let requested_module_type = request.module_type().map(str::to_owned);
     let requested_kind = request.kind();
     let request_credentials_mode = request.credentials_mode();
-    let response_content_security_policies = content_security_policies.clone();
-    let response_content_security_report_only_policies =
-        content_security_report_only_policies.clone();
-    let response_content_security_reporting_endpoints =
-        content_security_reporting_endpoints.clone();
+    let response_policy = policy.clone();
     let response_resource_kind = resource_kind;
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
@@ -705,25 +701,20 @@ fn start_worker_module_graph_fetch(
                 if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
                     && csp_report_only_violation.is_none()
                 {
-                    csp_report_only_violation =
-                        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                            &response_content_security_report_only_policies,
-                            &request_initiator_url,
-                            &response.final_url,
-                            response_resource_kind,
-                            redirect_status,
-                            ContentSecurityPolicyDisposition::Report,
-                            &response_content_security_reporting_endpoints,
-                        );
+                    csp_report_only_violation = response_policy.url_violation(
+                        &request_initiator_url,
+                        &response.final_url,
+                        response_resource_kind,
+                        redirect_status,
+                        ContentSecurityPolicyDisposition::Report,
+                    );
                 }
-                if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                    &response_content_security_policies,
+                if let Some(violation) = response_policy.url_violation(
                     &request_initiator_url,
                     &response.final_url,
                     response_resource_kind,
                     redirect_status,
                     ContentSecurityPolicyDisposition::Enforce,
-                    &response_content_security_reporting_endpoints,
                 ) {
                     let message = module_graph_csp_violation_message(&violation);
                     csp_violation = Some(violation);
@@ -809,17 +800,13 @@ fn start_worker_module_graph_fetch(
                 request.url()
             )),
         );
-        if let Some(violation) =
-            content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                &content_security_report_only_policies,
-                request.initiator_url(),
-                request.url(),
-                resource_kind,
-                ContentSecurityPolicyRedirectStatus::NoRedirect,
-                ContentSecurityPolicyDisposition::Report,
-                &content_security_reporting_endpoints,
-            )
-        {
+        if let Some(violation) = policy.url_violation(
+            request.initiator_url(),
+            request.url(),
+            resource_kind,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Report,
+        ) {
             completion = completion.with_csp_report_only_violation(violation);
         }
         let _ = completion_tx.send(completion);
@@ -840,9 +827,9 @@ fn start_worker_module_graph_fetch_batch(
                 .borrow()
                 .module_static_import_content_security_policies
                 .clone(),
-            state.borrow().content_security_policies.clone(),
-            state.borrow().content_security_report_only_policies.clone(),
-            state.borrow().content_security_reporting_endpoints.clone(),
+            state
+                .borrow()
+                .content_security_policy_snapshot_for_inheritance(),
             module_graph_fetch_tx.clone(),
         );
     }
@@ -1353,6 +1340,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         content_security_policies,
         content_security_report_only_policies,
         content_security_reporting_endpoints,
+        content_security_policy_snapshot,
         network_policy,
         policy_context,
         worker_context_runtime,
@@ -1404,6 +1392,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 content_security_policies,
                 content_security_report_only_policies,
                 content_security_reporting_endpoints,
+                content_security_policy_snapshot,
                 network_policy,
                 policy_context,
                 worker_context_runtime,
@@ -1535,6 +1524,9 @@ async fn worker_main(
     content_security_policies: Vec<String>,
     content_security_report_only_policies: Vec<String>,
     content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    content_security_policy_snapshot: Option<
+        crate::content_security_policy::InheritedContentSecurityPolicy,
+    >,
     network_policy: WorkerNetworkPolicy,
     policy_context: crate::types::SubresourcePolicyContext,
     worker_context_runtime: RendererWorkerContextRuntime,
@@ -1667,6 +1659,7 @@ async fn worker_main(
         content_security_policies,
         content_security_report_only_policies,
         content_security_reporting_endpoints,
+        content_security_policy_snapshot,
         secure_context,
         permission_overrides: network_policy.permission_overrides,
         extra_http_headers: network_policy.extra_http_headers,
