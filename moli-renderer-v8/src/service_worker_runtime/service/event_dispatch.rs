@@ -249,7 +249,7 @@ impl ServiceWorkerRuntimeService {
         let fetch_job = ServiceWorkerFetchJob {
             request: {
                 let origin = dispatch.network_context.request_origin.clone();
-                moli_fetch::Request::new_browser(
+                let network_request = moli_fetch::Request::new_browser(
                     &request.method,
                     request.url.clone(),
                     request.body.clone(),
@@ -261,7 +261,11 @@ impl ServiceWorkerRuntimeService {
                 .with_request_mode(request.request_mode)
                 .with_credentials_mode(request.credentials_mode)
                 .with_redirect_mode(request.redirect_mode)
-                .with_fetch_priority_hint(request.priority)
+                .with_fetch_priority_hint(request.priority);
+                match dispatch.redirect_check {
+                    Some(check) => network_request.with_redirect_check(check),
+                    None => network_request,
+                }
             },
             internal_id: dispatch.internal_id,
             owner: None,

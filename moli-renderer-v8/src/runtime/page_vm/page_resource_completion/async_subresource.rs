@@ -20,12 +20,13 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            // Observed records are producer-captured historical Network facts;
-            // they remain observable after Document replacement but never
-            // acquire authority over the replacement Document's request state.
+            // Network facts and CSP violations retain their captured source
+            // authority after Document replacement. CSP event delivery checks
+            // the exact source Document separately from network reporting.
             let output_effect = if matches!(
                 event.target(),
                 AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
+                    | AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation
             ) {
                 let _ = self
                     .vm_mut()
