@@ -57,8 +57,9 @@ pub(crate) use handle::{
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
     WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
     WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
-    WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
+    WorkerScriptResource, WorkerScriptResourceKind, WorkerStoredClassicScript,
+    WorkerToParentMessage, WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+    worker_secure_context_for_script_url,
 };
 pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{

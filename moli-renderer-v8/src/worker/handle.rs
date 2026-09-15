@@ -401,6 +401,14 @@ pub(crate) struct WorkerScriptResource {
     pub(crate) body_sha256: String,
     pub(crate) response_time_ms: u64,
     pub(crate) mime_type: Option<String>,
+    pub(crate) classic_script: Option<WorkerStoredClassicScript>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct WorkerStoredClassicScript {
+    pub(crate) source: Arc<str>,
+    pub(crate) muted_errors: bool,
+    pub(crate) redirect_urls: Vec<Url>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -443,6 +451,7 @@ impl WorkerScriptResource {
             body_sha256,
             response_time_ms,
             mime_type,
+            classic_script: None,
         }
     }
 
