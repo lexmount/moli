@@ -183,8 +183,8 @@ pub(in crate::native_bridge) use detached_objects::{
     detached_clone_node_method_callback, detached_doctype_name, detached_doctype_public_id,
     detached_doctype_system_id, detached_insert_before_method_callback,
     detached_parent_node_object, detached_processing_instruction_target,
-    detached_remove_child_method_callback, detached_replace_child_method_callback,
-    detached_set_owner_document,
+    detached_record_tree_mutation, detached_remove_child_method_callback,
+    detached_replace_child_method_callback, detached_set_owner_document,
 };
 pub(in crate::native_bridge) use detached_objects::{
     detached_attach_shadow_method_callback, detached_blur_method_callback,
@@ -510,7 +510,7 @@ struct DocumentMetadataPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentStructurePrototypeDeclaration {
     #[webapi(
         accessor_property,

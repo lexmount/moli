@@ -266,10 +266,6 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if args.this().is_proxy() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_add_event_listener_callback(scope, args, rv);
         return;
@@ -384,10 +380,6 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if args.this().is_proxy() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_remove_event_listener_callback(scope, args, rv);
         return;
@@ -424,10 +416,6 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if args.this().is_proxy() {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;

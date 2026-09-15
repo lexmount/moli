@@ -1591,7 +1591,7 @@ struct HtmlElementStandardPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLElement)]
+#[webapi(interface = web_api_interfaces::HTMLElement, receiver)]
 struct HtmlElementActionPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
@@ -4415,7 +4415,7 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLStyleElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLStyleElement, enumerable, receiver)]
 struct HtmlStyleElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5464,7 +5464,7 @@ struct HtmlOptionElementLabelPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable, receiver)]
 struct HtmlTrackElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "default",

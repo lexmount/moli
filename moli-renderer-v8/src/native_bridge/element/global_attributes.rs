@@ -2482,13 +2482,8 @@ pub(in crate::native_bridge) fn node_hidden_getter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
-        return;
-    }
     match element_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
         Some(value) if value.eq_ignore_ascii_case("until-found") => {
             if let Some(value) = v8_string(scope, "until-found") {
@@ -2508,13 +2503,8 @@ pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
-        return;
-    }
     let value = args.get(0);
     if value.is_null_or_undefined() || value.is_boolean() || value.is_number() {
         set_reflected_boolean_attribute(

@@ -1,4 +1,4 @@
-use crate::{context_bootstrap, webidl};
+use crate::{context_bootstrap, native_bridge::document, webidl};
 
 use super::helpers::{
     character_data_utf16_units, dom_string_utf16_value_or_throw, set_utf16_return_value,
@@ -43,7 +43,8 @@ pub(in crate::native_bridge) fn node_append_data_callback<'s>(
     if !require_argument_count(scope, &args, "CharacterData", "appendData", 1) {
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         return;
     };
     let Some(mut next) = character_data_utf16_units(unsafe { &*runtime_ptr }, handle) else {
@@ -59,7 +60,9 @@ pub(in crate::native_bridge) fn node_append_data_callback<'s>(
     };
     next.extend_from_slice(&data);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next);
+    if runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next) {
+        document::detached_record_tree_mutation(scope, args.this());
+    }
 }
 
 pub(in crate::native_bridge) fn node_delete_data_callback<'s>(
@@ -71,7 +74,8 @@ pub(in crate::native_bridge) fn node_delete_data_callback<'s>(
     else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         return;
     };
     let Some(units) = character_data_utf16_units(unsafe { &*runtime_ptr }, handle) else {
@@ -86,7 +90,9 @@ pub(in crate::native_bridge) fn node_delete_data_callback<'s>(
     next.extend_from_slice(&units[..start]);
     next.extend_from_slice(&units[end..]);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next);
+    if runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next) {
+        document::detached_record_tree_mutation(scope, args.this());
+    }
     context_bootstrap::live_ranges_character_data_edit(
         scope,
         handle,
@@ -104,7 +110,8 @@ pub(in crate::native_bridge) fn node_insert_data_callback<'s>(
     if !require_argument_count(scope, &args, "CharacterData", "insertData", 2) {
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         return;
     };
     let Some(units) = character_data_utf16_units(unsafe { &*runtime_ptr }, handle) else {
@@ -131,7 +138,9 @@ pub(in crate::native_bridge) fn node_insert_data_callback<'s>(
     next.extend_from_slice(&insert);
     next.extend_from_slice(&units[start..]);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next);
+    if runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next) {
+        document::detached_record_tree_mutation(scope, args.this());
+    }
     context_bootstrap::live_ranges_character_data_edit(
         scope,
         handle,
@@ -149,7 +158,8 @@ pub(in crate::native_bridge) fn node_replace_data_callback<'s>(
     if !require_argument_count(scope, &args, "CharacterData", "replaceData", 3) {
         return;
     }
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         return;
     };
     let Some(units) = character_data_utf16_units(unsafe { &*runtime_ptr }, handle) else {
@@ -184,7 +194,9 @@ pub(in crate::native_bridge) fn node_replace_data_callback<'s>(
     next.extend_from_slice(&replacement);
     next.extend_from_slice(&units[end..]);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next);
+    if runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &next) {
+        document::detached_record_tree_mutation(scope, args.this());
+    }
     context_bootstrap::live_ranges_character_data_edit(
         scope,
         handle,
@@ -203,7 +215,8 @@ pub(in crate::native_bridge) fn node_substring_data_callback<'s>(
     else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
         return;
     };
     let Some(units) = character_data_utf16_units(unsafe { &*runtime_ptr }, handle) else {
