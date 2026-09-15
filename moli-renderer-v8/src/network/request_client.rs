@@ -291,7 +291,10 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<Response>> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport()
+            || (!request.follow_redirects
+                && request.redirect_mode != moli_fetch::RequestRedirectMode::Error)
+        {
             return self
                 .resource_runtime
                 .client()
@@ -714,12 +717,16 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport()
+            || (!request.follow_redirects
+                && request.redirect_mode != moli_fetch::RequestRedirectMode::Error)
+        {
             // Challenge-response schemes still need libcurl's buffered auth
             // retry behavior until the streaming collector models
             // intermediate authentication challenges explicitly. Manual
             // redirect callers need the intermediate 3xx response before raw
-            // streaming starts.
+            // streaming starts. Error-mode script fetches can use the raw
+            // stream and its HTTP cache; their caller rejects any 3xx status.
             return self
                 .resource_runtime
                 .client()
@@ -999,7 +1006,10 @@ impl ResourceRequestClient {
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
+        if request.auth_requires_buffered_transport()
+            || (!request.follow_redirects
+                && request.redirect_mode != moli_fetch::RequestRedirectMode::Error)
+        {
             // Digest auth retries are still completed inside libcurl on the
             // buffered path. Keep auth requests there until the streaming
             // collector can distinguish intermediate auth challenges from

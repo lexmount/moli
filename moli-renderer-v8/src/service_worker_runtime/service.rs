@@ -770,7 +770,6 @@ mod tests {
         ServiceWorkerQueuedLaunch {
             params,
             host: new_loading_test_host(version_id, &run),
-            lifecycle_notifications: Vec::new(),
             preloaded_script: None,
         }
     }
@@ -1349,6 +1348,7 @@ mod tests {
 
     fn test_loaded_script(script_url: &Url, source: &str) -> LoadedServiceWorkerScript {
         LoadedServiceWorkerScript {
+            updated_imports: Default::default(),
             resource: test_script_resource(script_url),
             source: source.to_owned(),
             response_referrer_policy: None,
@@ -1381,6 +1381,7 @@ mod tests {
         scope_url: Url,
     ) -> ServiceWorkerQueuedRegisterJob {
         ServiceWorkerQueuedRegisterJob {
+            update_registration_id: None,
             script_url,
             document_url: scope_url.join("page.html").expect("document url"),
             storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
@@ -1393,11 +1394,11 @@ mod tests {
             force_update_page_load_waiter_ids: Vec::new(),
             request_client: test_request_client(service),
             network_policy: WorkerNetworkPolicy::default(),
-            browser_context_runtime: service.browser_context_runtime(),
+            worker_context_runtime: service.browser_context_runtime().worker_context_runtime(),
             broadcast_channel_top_level_site: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
-            callbacks: vec![ServiceWorkerRegisterJob {
+            callbacks: vec![ServiceWorkerRegisterJob::Page {
                 request_id: 1,
                 document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx: test_completion_sender(),
@@ -1417,6 +1418,7 @@ mod tests {
         let document_url = scope_url.join("page.html").expect("document url");
         let browser_context_runtime = service.browser_context_runtime();
         let queued_job = ServiceWorkerQueuedRegisterJob {
+            update_registration_id: None,
             script_url: script_url.clone(),
             scope_url: scope_url.clone(),
             document_url,
@@ -1429,11 +1431,11 @@ mod tests {
             force_update_page_load_waiter_ids: Vec::new(),
             request_client: test_request_client(service),
             network_policy: WorkerNetworkPolicy::default(),
-            browser_context_runtime,
+            worker_context_runtime: browser_context_runtime.worker_context_runtime(),
             broadcast_channel_top_level_site: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
-            callbacks: vec![ServiceWorkerRegisterJob {
+            callbacks: vec![ServiceWorkerRegisterJob::Page {
                 request_id,
                 document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx,
@@ -1610,7 +1612,7 @@ mod tests {
         registration.scope_url = scope_url.clone();
         registration.installing_version_id = Some(version_id);
         let mut pending_register_job =
-            ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
+            ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob::Page {
                 request_id,
                 document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx,
@@ -1665,6 +1667,7 @@ mod tests {
         state.job_coordinator.enqueue_register(
             registration_key.clone(),
             ServiceWorkerQueuedRegisterJob {
+                update_registration_id: None,
                 script_url,
                 scope_url: scope_url.clone(),
                 document_url: scope_url.join("page.html").expect("document url"),
@@ -1677,11 +1680,11 @@ mod tests {
                 force_update_page_load_waiter_ids: Vec::new(),
                 request_client: test_request_client(service),
                 network_policy: WorkerNetworkPolicy::default(),
-                browser_context_runtime: service.browser_context_runtime(),
+                worker_context_runtime: service.browser_context_runtime().worker_context_runtime(),
                 broadcast_channel_top_level_site: None,
                 indexed_db_manager: None,
                 storage_bucket_store: None,
-                callbacks: vec![ServiceWorkerRegisterJob {
+                callbacks: vec![ServiceWorkerRegisterJob::Page {
                     request_id,
                     document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                     completion_tx,
@@ -5294,6 +5297,191 @@ self.addEventListener("message", event => {
         assert_eq!(
             service.all_registrations(&url("https://example.test/app/page.html")),
             vec![app]
+        );
+    }
+
+    #[test]
+    fn registration_update_rejects_wrong_identity_partition_and_installing_worker() {
+        use crate::service_worker_runtime::{
+            ServiceWorkerRegistrationErrorKind, ServiceWorkerRegistrationUpdate,
+        };
+        for invalid in ["identity", "partition", "installing"] {
+            let service = new_service_worker_runtime_service();
+            let (registration_id, version_id) = insert_running_installing_version(&service);
+            let mut queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+            let scope_url = url("https://example.test/app/");
+            let mut request = ServiceWorkerRegistrationUpdate {
+                registration_id,
+                caller_version_id: None,
+                storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
+                document_url: scope_url.join("page.html").unwrap(),
+                request_client: test_request_client(&service),
+                network_policy: WorkerNetworkPolicy::default(),
+                worker_context_runtime: service.browser_context_runtime().worker_context_runtime(),
+                broadcast_channel_top_level_site: None,
+                indexed_db_manager: None,
+                storage_bucket_store: None,
+                completion: ServiceWorkerRegisterJob::Page {
+                    request_id: 7,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
+                    completion_tx: queue.sender(),
+                },
+            };
+            match invalid {
+                "identity" => request.registration_id = ServiceWorkerRegistrationId(999),
+                "partition" => request.storage_key = "another-partition".into(),
+                "installing" => request.caller_version_id = Some(version_id),
+                _ => unreachable!(),
+            }
+            service.start_registration_update(request);
+            let completion = pop_register_completion(&mut queue);
+            assert_eq!(completion.request_id, 7);
+            assert_eq!(
+                completion.result.err().unwrap().kind,
+                ServiceWorkerRegistrationErrorKind::InvalidState,
+                "{invalid}"
+            );
+            let diagnostics = service.diagnostics_snapshot();
+            assert_eq!(diagnostics.registration_count, 1);
+            assert_eq!(diagnostics.queued_register_job_count, 0);
+        }
+    }
+
+    #[test]
+    fn queued_registration_update_revalidates_after_installation() {
+        for unregister in [false, true] {
+            let service = new_service_worker_runtime_service();
+            let (registration_id, version_id) = insert_running_installing_version(&service);
+            let mut queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+            let mut job = test_queued_register_job(
+                &service,
+                url("https://example.test/app/sw.js"),
+                url("https://example.test/app/"),
+            );
+            job.update_registration_id = Some(registration_id);
+            job.callbacks = vec![ServiceWorkerRegisterJob::Page {
+                request_id: 3,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
+                completion_tx: queue.sender(),
+            }];
+            service.start_queued_register_job(job);
+            assert!(!queue.has_ready_task());
+            assert_eq!(service.diagnostics_snapshot().queued_register_job_count, 1);
+            let progress = {
+                let mut state = service.inner.state.lock();
+                let registration = state.registrations.get_mut(&registration_id).unwrap();
+                registration.installing_version_id = None;
+                registration.active_version_id = Some(version_id);
+                registration.pending_unregistration = unregister;
+                let version = state.versions.get_mut(&version_id).unwrap();
+                version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activated;
+                if !unregister {
+                    version.script_url = url("https://example.test/app/replaced.js");
+                }
+                service.advance_registration_job_queue_locked(&mut state, registration_id)
+            };
+            for action in progress {
+                service.run_lifecycle_progress(action);
+            }
+            let error = pop_register_completion(&mut queue).result.err().unwrap();
+            assert_eq!(
+                error.kind,
+                crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Type
+            );
+            assert_eq!(service.diagnostics_snapshot().queued_register_job_count, 0);
+            assert_eq!(service.diagnostics_snapshot().version_count, 1);
+        }
+    }
+
+    #[test]
+    fn register_queues_behind_an_installing_update_job() {
+        let service = new_service_worker_runtime_service();
+        let script_url = url("https://example.test/app/sw.js");
+        let scope_url = url("https://example.test/app/");
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        insert_starting_version_with_register_job(
+            &service,
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url.clone(),
+            1,
+            test_completion_sender(),
+        );
+        service
+            .inner
+            .state
+            .lock()
+            .registrations
+            .get_mut(&registration_id)
+            .unwrap()
+            .pending_register_jobs
+            .get_mut(&version_id)
+            .unwrap()
+            .is_update = true;
+        let mut queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+        let mut job = test_queued_register_job(&service, script_url, scope_url);
+        job.callbacks = vec![ServiceWorkerRegisterJob::Page {
+            request_id: 2,
+            document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
+            completion_tx: queue.sender(),
+        }];
+        service.start_queued_register_job(job);
+        assert_eq!(service.diagnostics_snapshot().queued_register_job_count, 1);
+        assert!(!queue.has_ready_task());
+        let progress = {
+            let mut state = service.inner.state.lock();
+            let registration = state.registrations.get_mut(&registration_id).unwrap();
+            registration.installing_version_id = None;
+            registration.active_version_id = Some(version_id);
+            service.advance_registration_job_queue_locked(&mut state, registration_id)
+        };
+        for action in progress {
+            service.run_lifecycle_progress(action);
+        }
+        assert_eq!(pop_register_completion(&mut queue).request_id, 2);
+        assert_eq!(service.diagnostics_snapshot().queued_register_job_count, 0);
+        assert_eq!(
+            service
+                .diagnostics_snapshot()
+                .pending_main_script_update_check_count,
+            0
+        );
+        service.terminate_all_for_context_shutdown();
+    }
+
+    #[test]
+    fn queued_forced_update_keeps_the_script_check() {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(42);
+        let version_id = ServiceWorkerVersionId(17);
+        let script_url = url("https://example.test/app/sw.js");
+        let scope_url = url("https://example.test/app/");
+        insert_registered_version(
+            &service,
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url.clone(),
+            [],
+        );
+        make_version_persistable(&service, version_id);
+        let mut job = test_queued_register_job(&service, script_url, scope_url);
+        job.force_bypass_cache = true;
+        job.skip_script_comparison = true;
+        let mut state = service.inner.state.lock();
+        state
+            .job_coordinator
+            .enqueue_register(job.registration_key(), job);
+        let progress = service.advance_registration_job_queue_locked(&mut state, registration_id);
+        let [LifecycleProgress::StartMainScriptUpdateCheck(check)] = progress.as_slice() else {
+            panic!("queued forced update must not take the register shortcut");
+        };
+        assert!(check.1.skip_script_comparison);
+        assert_eq!(
+            check.1.main_script.cache_mode,
+            moli_fetch::RequestCacheMode::Validate
         );
     }
 
