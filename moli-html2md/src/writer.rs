@@ -17,6 +17,7 @@ struct OpenStyle<'a> {
     style: Style<'a>,
     start: usize,
     html: bool,
+    has_closed_child: bool,
 }
 
 #[derive(Default)]
@@ -306,7 +307,12 @@ impl<'a> Writer<'a> {
                     self.output.push('[');
                 }
             }
-            self.emitted.push(OpenStyle { style, start, html });
+            self.emitted.push(OpenStyle {
+                style,
+                start,
+                html,
+                has_closed_child: false,
+            });
         }
     }
 
@@ -331,10 +337,10 @@ impl<'a> Writer<'a> {
     }
 
     fn close_to(&mut self, count: usize, next: Option<char>) {
+        let mut closing_run = None;
+        let closed_child = self.emitted.len() > count;
         while self.emitted.len() > count {
             let opened = self.emitted.pop().expect("nonempty style stack");
-            let closing_needs_html = next.is_some_and(char::is_alphanumeric)
-                && self.output.chars().next_back().is_some_and(is_punctuation);
             let delimiters = match opened.style {
                 Style::Strong => Some(("**", "<strong>", "</strong>")),
                 Style::Emphasis => Some(("*", "<em>", "</em>")),
@@ -343,21 +349,48 @@ impl<'a> Writer<'a> {
                     self.output.push_str("](");
                     destination(&mut self.output, href, title, self.single_line_attributes);
                     self.output.push(')');
+                    closing_run = None;
                     None
                 }
             };
             if let Some((marker, open, close)) = delimiters {
-                if opened.html {
+                // Nested strong/emphasis closes with a single run of '*'. Its
+                // left edge is the character before the run, not a delimiter
+                // just emitted for the inner style. Links, HTML and a different
+                // marker end that run and retain their own punctuation edge.
+                let marker_byte = marker.as_bytes()[0];
+                let preceding = match closing_run {
+                    Some((previous, preceding))
+                        if previous == marker_byte && !opened.has_closed_child =>
+                    {
+                        preceding
+                    }
+                    _ => self.output.chars().next_back(),
+                };
+                let closing_needs_html = next.is_some_and(char::is_alphanumeric)
+                    && preceding.is_some_and(is_punctuation);
+                if opened.html || closing_needs_html {
+                    if !opened.html {
+                        // Only the converter's output changes. Remaining open
+                        // ancestors precede this offset, so their offsets stay valid.
+                        self.output
+                            .replace_range(opened.start..opened.start + marker.len(), open);
+                    }
                     self.output.push_str(close);
-                } else if closing_needs_html {
-                    // Only the converter's output changes. Remaining open
-                    // ancestors precede this offset, so their offsets stay valid.
-                    self.output
-                        .replace_range(opened.start..opened.start + marker.len(), open);
-                    self.output.push_str(close);
+                    closing_run = None;
                 } else {
                     self.output.push_str(marker);
+                    closing_run = Some((marker_byte, preceding));
                 }
+            }
+        }
+        if closed_child {
+            // Earlier child delimiters can pair with a later sibling before
+            // the parent's closer is reached: ***a**b**c***d loses emphasis.
+            // A child rewritten as HTML can also change the opening edge.
+            // Keep the conservative edge check for those interrupted spans.
+            for opened in &mut self.emitted {
+                opened.has_closed_child = true;
             }
         }
     }

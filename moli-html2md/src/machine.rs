@@ -11,7 +11,7 @@ enum Task<'a, Id> {
     EndHeading(usize),
     EndList(usize),
     EndItem(String),
-    RawChildren(Option<Id>, usize),
+    RawChildren(Option<Id>, usize, bool),
     EndCode,
     EndPre(Option<&'a str>),
 }
@@ -59,7 +59,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                         .push(Task::Children(self.dom.next_sibling(node), depth));
                     self.tasks.push(Task::Visit(node, depth));
                 }
-                Task::Children(None, _) | Task::RawChildren(None, _) => {}
+                Task::Children(None, _) | Task::RawChildren(None, _, _) => {}
                 Task::Boundary => self.writer().boundary(2),
                 Task::PopStyle => self.writer().pop_style(),
                 Task::EndLink(serial) => self.writer().end_link(serial),
@@ -123,7 +123,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     list.loose |= loose;
                     self.writer().block(&item, separation, separation);
                 }
-                Task::RawChildren(Some(node), depth) => self.raw_node(node, depth),
+                Task::RawChildren(Some(node), depth, inline) => self.raw_node(node, depth, inline),
                 Task::EndCode => {
                     let text = std::mem::take(&mut self.raw);
                     let preformatted = self.options.preformatted_code;
@@ -232,8 +232,11 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 };
                 self.tasks.push(end);
                 if depth + 1 < self.options.max_depth {
-                    self.tasks
-                        .push(Task::RawChildren(self.dom.first_child(node), depth + 1));
+                    self.tasks.push(Task::RawChildren(
+                        self.dom.first_child(node),
+                        depth + 1,
+                        tag == "code",
+                    ));
                 }
                 return;
             }
@@ -318,17 +321,26 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             .or(self.options.default_code_language.as_deref())
     }
 
-    fn raw_node(&mut self, node: D::NodeId, depth: usize) {
-        self.tasks
-            .push(Task::RawChildren(self.dom.next_sibling(node), depth));
+    fn raw_node(&mut self, node: D::NodeId, depth: usize, inline: bool) {
+        self.tasks.push(Task::RawChildren(
+            self.dom.next_sibling(node),
+            depth,
+            inline,
+        ));
         if depth >= self.options.max_depth {
             return;
         }
         match self.dom.node_kind(node) {
             NodeKind::Text(text) => self.raw.push_str(text),
+            // Inline code normalizes line endings to spaces. Keep explicit
+            // breaks without converting descendant formatting into Markdown.
+            NodeKind::Element("br") if inline => self.raw.push('\n'),
             NodeKind::Document | NodeKind::Element(_) if depth + 1 < self.options.max_depth => {
-                self.tasks
-                    .push(Task::RawChildren(self.dom.first_child(node), depth + 1));
+                self.tasks.push(Task::RawChildren(
+                    self.dom.first_child(node),
+                    depth + 1,
+                    inline,
+                ));
             }
             _ => {}
         }
