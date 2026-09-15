@@ -73,6 +73,7 @@ from .case_set import (
     WINDOW_JS_WINDOW_QUERY_VALUE,
     parse_any_js_meta,
 )
+from .pipes import WptPipeError, parse_pipe_commands
 
 
 # Match wptserve's bounded header count for both requests and responses.
@@ -630,9 +631,7 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = (
 """
 )
 
-_TRICKLE_PIPE_RE = re.compile(r"(?:^|[|,])trickle\(d([0-9]+(?:\.[0-9]+)?)\)(?:$|[|,])")
-_HEADER_PIPE_RE = re.compile(r"^header\(([^,()]+),([^()]*)\)$")
-_STATUS_PIPE_RE = re.compile(r"^status\(([0-9]{3})\)$")
+_TRICKLE_DELAY_RE = re.compile(r"d([0-9]+(?:\.[0-9]+)?)")
 _GET_TEMPLATE_RE = re.compile(rb"\{\{GET\[([^\]\r\n]+)\]\}\}")
 _REQUEST_TEMPLATE_RE = re.compile(
     rb"\{\{(?:GET\[(?P<query>[^\]\r\n]+)\]|"
@@ -760,10 +759,11 @@ def _pipe_trickle_delay_seconds(query: str) -> float:
     """
 
     delay = 0.0
-    for name, value in parse_qsl(query, keep_blank_values=True):
-        if name != "pipe":
+    for name, args in parse_pipe_commands(query):
+        if name != "trickle":
             continue
-        for match in _TRICKLE_PIPE_RE.finditer(value):
+        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
+        if match is not None:
             delay = max(delay, float(match.group(1)))
     return min(delay, _MAX_TRICKLE_DELAY_SECONDS)
 
@@ -772,37 +772,18 @@ def _pipe_response_header_operations(query: str) -> list[tuple[str, str, bool]]:
     """Parse WPT ``pipe=header(Name,Value[,Append])`` operations."""
 
     operations: list[tuple[str, str, bool]] = []
-    for name, value in parse_qsl(query, keep_blank_values=True):
-        if name != "pipe":
+    for name, args in parse_pipe_commands(query):
+        if name != "header":
             continue
-        for command in value.split("|"):
-            match = _HEADER_PIPE_RE.match(command.strip())
-            if match is None:
-                continue
-            header_name = match.group(1).strip()
-            raw_header_value = match.group(2)
-            header_value_without_append, separator, raw_append = (
-                raw_header_value.rpartition(",")
-            )
-            normalized_append = raw_append.strip().lower()
-            has_append_argument = separator != "" and normalized_append in {
-                "true",
-                "false",
-                "1",
-                "0",
-            }
-            append = has_append_argument and normalized_append in {"true", "1"}
-            if has_append_argument:
-                raw_header_value = header_value_without_append
-            # wptserve writes pipe values byte-for-byte, including encoded
-            # CR/LF used by parser tests. Python's static HTTP server cannot
-            # safely do that, so preserve their whitespace semantics without
-            # allowing a query string to inject another response header.
-            header_value = (
-                raw_header_value.strip().replace("\r", " ").replace("\n", " ")
-            )
-            if _valid_static_response_header(header_name, header_value):
-                operations.append((header_name, header_value, append))
+        header_name, raw_header_value = args[:2]
+        append = len(args) == 3 and args[2].lower() in {"true", "1"}
+        # wptserve writes pipe values byte-for-byte, including encoded
+        # CR/LF used by parser tests. Python's static HTTP server cannot
+        # safely do that, so preserve their whitespace semantics without
+        # allowing a query string to inject another response header.
+        header_value = raw_header_value.replace("\r", " ").replace("\n", " ")
+        if _valid_static_response_header(header_name, header_value):
+            operations.append((header_name, header_value, append))
     return operations
 
 
@@ -826,14 +807,9 @@ def _pipe_response_status(query: str) -> int | None:
     """Return a valid WPT ``pipe=status(NNN)`` response status, if present."""
 
     status: int | None = None
-    for name, value in parse_qsl(query, keep_blank_values=True):
-        if name != "pipe":
-            continue
-        for command in value.split("|"):
-            match = _STATUS_PIPE_RE.match(command.strip())
-            if match is None:
-                continue
-            code = int(match.group(1))
+    for name, args in parse_pipe_commands(query):
+        if name == "status":
+            code = int(args[0])
             if 100 <= code <= 599:
                 status = code
     return status
@@ -3271,6 +3247,11 @@ def _make_handler(
             )
 
         def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
+            try:
+                status_code = _pipe_response_status(query) or 200
+            except WptPipeError:
+                self.send_error(500, "Invalid WPT pipe")
+                return
             headers = _inspect_headers_response_headers(query, list(self.headers.items()))
             # The upstream handler only reads headers. Return immediately and
             # close connections with unread uploads, as for redirect fixtures.
@@ -3280,7 +3261,7 @@ def _make_handler(
                 headers.append(("Connection", "close"))
             self._send_bytes(
                 "text/plain", b"", emit_body=emit_body, extra_headers=headers,
-                status_code=_pipe_response_status(query) or 200,
+                status_code=status_code,
             )
 
         def _serve_fetch_redirect_resource(self, query: str, *, emit_body: bool) -> None:
