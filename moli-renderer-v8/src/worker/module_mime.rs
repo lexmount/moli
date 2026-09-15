@@ -1,4 +1,4 @@
-use moli_web_mime::{is_css_mime, is_json_module_mime, is_text_mime, response_header_values};
+use moli_web_mime::{is_text_mime, response_header_values};
 
 pub(crate) fn ensure_worker_wasm_module_mime(
     response: &moli_fetch::Response,
@@ -24,33 +24,11 @@ pub(crate) fn ensure_worker_json_module_mime(
 pub(super) fn ensure_worker_json_module_mime_from_headers(
     headers: &[(String, String)],
 ) -> Result<(), String> {
-    let content_type = worker_module_response_content_type(headers);
-    let Some(content_type) = content_type else {
-        return Err(
-            "non-JSON module response for JSON import attribute: missing Content-Type".to_owned(),
-        );
-    };
-    if is_json_module_mime(&content_type) {
-        return Ok(());
-    }
-    Err(format!(
-        "non-JSON module response for JSON import attribute: `{content_type}`"
-    ))
+    crate::module_runtime::validate_json_module_response_mime(headers)
 }
 
 pub(crate) fn ensure_worker_css_module_mime(response: &moli_fetch::Response) -> Result<(), String> {
-    let content_type = worker_module_response_content_type(&response.headers);
-    let Some(content_type) = content_type else {
-        return Err(
-            "non-CSS module response for CSS import attribute: missing Content-Type".to_owned(),
-        );
-    };
-    if is_css_mime(&content_type) {
-        return Ok(());
-    }
-    Err(format!(
-        "non-CSS module response for CSS import attribute: `{content_type}`"
-    ))
+    crate::module_runtime::validate_css_module_response_mime(&response.headers)
 }
 
 pub(crate) fn ensure_worker_text_module_mime(
