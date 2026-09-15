@@ -30,7 +30,12 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
             (self.root / "resources" / name).write_text("// harness")
         resources = self.root / DIRECTORY / "resources"
         resources.mkdir(parents=True)
-        for name in ("redirect.py", "update-worker.py", "import-scripts-version.py"):
+        for name in (
+            "redirect.py", "update-worker.py", "import-scripts-version.py",
+            "import-scripts-get.py", "import-scripts-echo.py",
+            "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
+        ):
+            (resources / name).parent.mkdir(exist_ok=True)
             (resources / name).write_text("# Python source must not be sent as a script")
         self.stack.enter_context(patch(
             "moli_benchmark.wpt_cross.server._global_ipv6_address", return_value=None
@@ -176,6 +181,26 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
         self.assertLess(versions[0], versions[1])
         self.assertLess(versions[1], versions[2])
 
+    def test_imported_assignments_preserve_raw_parameters_and_directory(self) -> None:
+        server = self.server()
+        for resource, query, expected in (
+            ("import-scripts-get.py", "output=echo1&msg=test1", b'echo1 = "test1";\n'),
+            ("import-scripts-get.py", "output=x&output=y&msg=%FF%22&msg=ignored", b'x = "\xff\"";\n'),
+            ("import-scripts-echo.py", "msg=top+level", b'echo_output = "top level";\n'),
+            ("import-scripts-echo.py", "msg=", b'echo_output = "";\n'),
+            ("subdir/import-scripts-echo.py", "msg=install", b'echo_output = "install (subdir/)";\n'),
+            ("scope2/import-scripts-echo.py", "msg=message", b'echo_output = "message (scope2/)";\n'),
+        ):
+            for method in ("GET", "HEAD", "POST", "OPTIONS"):
+                with self.subTest(resource=resource, query=query, method=method):
+                    status, headers, body = self.request(server.port, resource, query, method=method)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(body, b"" if method == "HEAD" else expected)
+                    self.assertEqual(dict(headers)["content-length"], str(len(expected)))
+                    self.assertEqual(dict(headers)["content-type"], "application/javascript")
+                    self.assertEqual(dict(headers)["cache-control"], "no-cache, must-revalidate")
+                    self.assertEqual(dict(headers)["pragma"], "no-cache")
+
     def test_malformed_parameters_are_not_served_as_javascript(self) -> None:
         server = self.server()
         for resource, query in (
@@ -187,6 +212,9 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
             ("update-worker.py", "Mode=normal"),
             ("update-worker.py", "Key=invalid&Mode=normal"),
             ("update-worker.py", "Key=" + str(uuid.uuid4())),
+            ("import-scripts-get.py", "output=x"),
+            ("import-scripts-get.py", "msg=x"),
+            ("import-scripts-echo.py", ""),
         ):
             with self.subTest(resource=resource, query=query):
                 self.assertEqual(self.request(server.port, resource, query)[0], 400)
@@ -200,6 +228,11 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
             "sub/redirect-wrong-relative.html": ("resources/redirect.py", False),
             "redirect-suffix.html": ("resources/redirect.py.extra", False),
             "redirect-other.html": ("/unrelated/resources/redirect.py", False),
+            "get.html": ("resources/import-scripts-get.py", True),
+            "echo.html": ("resources/import-scripts-echo.py", True),
+            "echo-subdir.html": ("resources/subdir/import-scripts-echo.py", True),
+            "echo-scope2.html": (RESOURCES + "scope2/import-scripts-echo.py", True),
+            "echo-wrong.html": ("resources/wrong/import-scripts-echo.py", False),
             "unknown.html": ("resources/unknown.py", False),
         }
         for name, (reference, _) in cases.items():
