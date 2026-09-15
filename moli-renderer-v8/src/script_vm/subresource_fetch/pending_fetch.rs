@@ -463,6 +463,7 @@ impl ScriptVm {
         let request_client = pending.load.request_client();
         let resource_task_runner = pending.load.task_runner();
         let dispatch = crate::service_worker_runtime::ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id,
             request: self._context_host.borrow().service_worker_fetch_request(
                 client_id,

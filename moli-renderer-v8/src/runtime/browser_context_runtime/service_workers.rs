@@ -198,6 +198,7 @@ impl RendererBrowserContextRuntime {
         let redirect_mode =
             main_resource_fetch_event_redirect_mode(destination, request.redirect_mode);
         let dispatch = ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -269,6 +270,7 @@ impl RendererBrowserContextRuntime {
             crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 client_id,

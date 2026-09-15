@@ -678,6 +678,7 @@ fn resource_store_restores_no_fetch_handler_metadata_for_controlled_fetch() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         second_service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 89,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -1621,6 +1622,7 @@ fn no_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 88,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -1688,7 +1690,8 @@ fn controlled_fetch_waits_for_activating_active_version() {
     let document_url = url("https://example.test/app/page.html");
     let request_url = url("https://example.test/app/");
     let mut completion_queue = async_subresource_completion_queue();
-    let (direct_completion_tx, mut main_resource_completion_rx) = tokio::sync::oneshot::channel();
+    let (direct_completion_tx, mut main_resource_completion_rx) =
+        tokio::sync::oneshot::channel();
     insert_registered_version(
         &service,
         registration_id,
@@ -1712,6 +1715,7 @@ fn controlled_fetch_waits_for_activating_active_version() {
 
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 91,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -1821,6 +1825,7 @@ fn empty_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 89,
             request: ServiceWorkerFetchRequest {
                 client_id,

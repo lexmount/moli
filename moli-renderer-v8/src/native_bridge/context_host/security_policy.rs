@@ -153,8 +153,10 @@ impl JsContextHost {
         owner: OwnerDispatchScope,
     ) -> Option<crate::document_runtime::DocumentConnectPolicySnapshot> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
+        // SAFETY: JsContextHost belongs to the ScriptVm that owns this runtime.
         Some(
-            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
+            unsafe { &*self.runtime }.document_connect_policy_snapshot_for_document(
+                snapshot.document_handle,
                 &snapshot.policy_container,
             ),
         )

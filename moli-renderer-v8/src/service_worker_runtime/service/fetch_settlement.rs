@@ -205,6 +205,7 @@ impl ServiceWorkerRuntimeService {
             crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 client_id,
@@ -2005,6 +2006,66 @@ mod tests {
             redirected_job.request.redirect_chain()[0].to_url,
             url("https://example.test/app/next.txt")
         );
+    }
+
+    #[test]
+    fn synthetic_redirect_checks_policy_and_retains_it_for_network_fallback() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(31);
+        let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        insert_active_fetch_job(
+            &service,
+            event_id,
+            ServiceWorkerVersionId(1),
+            &RendererServiceWorkerRunIdentity::fresh(),
+            313,
+            completion_queue.sender(),
+        );
+        let mut job = service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .remove(&event_id)
+            .unwrap();
+        let checked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let observed = checked.clone();
+        job.request = job
+            .request
+            .with_redirect_check(moli_fetch::RequestRedirectCheck::new(move |next_url| {
+                observed.lock().push(next_url.clone());
+                if next_url.host_str() == Some("blocked.test") {
+                    Err("blocked by redirect policy".to_owned())
+                } else {
+                    Ok(())
+                }
+            }));
+        let redirect = || ServiceWorkerFetchResponse {
+            cors_exposed_header_names: None,
+            final_url: None,
+            response_type: "default".to_owned(),
+            redirected: false,
+            status: 302,
+            status_text: "Found".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let allowed = url("https://example.test/app/allowed");
+        let blocked = url("https://blocked.test/target");
+        apply_service_worker_synthetic_redirect(&mut job, redirect(), allowed.clone()).unwrap();
+        let fallback = service_worker_network_fallback_request_for_job(&job);
+        assert_eq!(
+            fallback.check_redirect_target(&blocked).unwrap_err(),
+            "blocked by redirect policy",
+        );
+        assert_eq!(
+            apply_service_worker_synthetic_redirect(&mut job, redirect(), blocked.clone())
+                .unwrap_err(),
+            "blocked by redirect policy",
+        );
+        assert_eq!(job.request.url, allowed);
+        assert_eq!(job.request.redirect_count(), 1);
+        assert_eq!(*checked.lock(), vec![allowed, blocked.clone(), blocked]);
     }
 
     #[test]
