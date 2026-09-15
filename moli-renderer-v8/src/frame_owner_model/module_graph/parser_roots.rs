@@ -70,7 +70,7 @@ impl ChildDocumentModulatorStore {
         parent_key: ModuleMapKey,
         requests: Vec<ModuleRequestRecord>,
         effective_fetch_metadata: ModuleFetchMetadata,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> module_tree::ModuleTreeId {
         assert_eq!(pending_script_id.owner(), owner.document_owner());
         let document_owner = owner.document_owner();

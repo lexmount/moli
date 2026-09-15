@@ -7,7 +7,7 @@ use crate::{
 
 impl JsContextHost {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn queue_child_dynamic_external_classic_script_for_current_document(
+    pub(crate) fn queue_child_dynamic_document_script_for_current_document(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         owner_document_handle: DomHandle,
@@ -18,7 +18,9 @@ impl JsContextHost {
         mode: ScriptMode,
         source_kind: ScriptSourceKind,
     ) -> std::result::Result<bool, String> {
-        if kind != ScriptKind::Classic || source_kind != ScriptSourceKind::External {
+        if kind != ScriptKind::Module
+            && (kind != ScriptKind::Classic || source_kind != ScriptSourceKind::External)
+        {
             return Ok(false);
         }
         let Some(child_handle) =
@@ -26,9 +28,17 @@ impl JsContextHost {
         else {
             return Ok(false);
         };
-        // Frame-document scheduling owns ordering and exact Document identities.
-        // This load payload is intentionally unbound to the main scheduler.
-        let script = build_runtime_prepared_script(
+        if !self.child_browsing_context_is_live(child_handle)
+            || self.child_browsing_context_document_handle(child_handle)
+                != Some(owner_document_handle)
+            || self.dom_host().owner_document_handle(script_handle) != Some(owner_document_handle)
+        {
+            return Ok(false);
+        }
+        let Some(owner) = self.current_child_document_task_owner(child_handle) else {
+            return Ok(false);
+        };
+        let mut script = build_runtime_prepared_script(
             preparation,
             script_handle,
             0,
@@ -38,14 +48,34 @@ impl JsContextHost {
             kind,
             mode,
         )?;
-        Ok(
+        // Classic and module scripts with async=false share insertion order.
+        // Node allocation order does not determine execution order.
+        script.position = self
+            .child_runtime_script_order
+            .register(owner, script_handle, mode);
+        let accepted = if kind == ScriptKind::Module {
+            self.queue_child_module_script_for_current_document(
+                child_handle,
+                script_handle,
+                Default::default(),
+                script,
+            )
+        } else {
             self.queue_child_external_classic_document_script_for_current_document(
                 child_handle,
                 owner_document_handle,
                 script_handle,
                 script,
-            ),
-        )
+            )
+        };
+        if accepted {
+            let _ = self
+                .dom_host_mut()
+                .set_script_already_started(script_handle, true);
+        } else {
+            self.finish_child_runtime_script(owner, script_handle);
+        }
+        Ok(accepted)
     }
 
     pub(crate) fn execute_child_dynamic_inline_classic_script_on_current_stack(

@@ -80,6 +80,7 @@ mod child_dynamic_scripts;
 mod child_events;
 mod child_frame_navigation;
 mod child_frame_runtime;
+mod child_runtime_script_order;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
 mod child_frame_snapshots;
 mod child_frames;
@@ -969,6 +970,7 @@ pub(crate) struct JsContextHost {
     text_track_default_modes: text_track_default_modes::TextTrackDefaultModeState,
     child_document_script_ready_tasks:
         document_script_ready_inputs::ChildDocumentScriptReadyTaskLedger,
+    child_runtime_script_order: child_runtime_script_order::ChildRuntimeScriptOrder,
     pending_child_external_classic_document_scripts:
         HashMap<u64, child_frames::PendingChildExternalClassicDocumentScriptLoad>,
     pending_child_modulepreload_work_awaiting_realm:

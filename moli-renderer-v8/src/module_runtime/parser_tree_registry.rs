@@ -6,7 +6,9 @@ use moli_module_script_tree as module_tree;
 use crate::document_module_graph::{ModuleEntryId, ModuleMapKey};
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::{ParserPendingScriptId, ParserPendingScriptKey};
-use crate::frame_owner_model::{DocumentLoadDelayTokenId, FrameDocumentTaskOwner, FrameRealmId};
+use crate::frame_owner_model::{
+    ChildDocumentModuleScriptLoadDelay, FrameDocumentTaskOwner, FrameRealmId,
+};
 use crate::planning::PreparedScript;
 
 use super::NativeModuleGraphJob;
@@ -22,7 +24,7 @@ pub(crate) struct NativeParserModuleTreeRoot {
     entry_id: ModuleEntryId,
     request_count: usize,
     dependency_count: usize,
-    load_delay_token: DocumentLoadDelayTokenId,
+    load_delay_token: ChildDocumentModuleScriptLoadDelay,
 }
 
 impl NativeParserModuleTreeRoot {
@@ -36,7 +38,7 @@ impl NativeParserModuleTreeRoot {
         tree_id: module_tree::ModuleTreeId,
         entry_id: ModuleEntryId,
         request_count: usize,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: ChildDocumentModuleScriptLoadDelay,
     ) -> Self {
         Self {
             owner,
@@ -95,7 +97,7 @@ impl NativeParserModuleTreeRoot {
         self.dependency_count
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.load_delay_token
     }
 
