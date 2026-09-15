@@ -84,6 +84,32 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
+    pub(crate) fn base_url_content_security_policy_check(
+        &self,
+        check: &crate::dom::native::DocumentBaseUrlPolicyCheck,
+    ) -> Option<(
+        crate::frame_owner_model::FrameDocumentTaskOwner,
+        DocumentContentSecurityPolicyCheck,
+    )> {
+        if unsafe { &*self.runtime }.bypass_content_security_policy() {
+            return None;
+        }
+        let dispatch_scope = self.owner_dispatch_scope_for_node(check.document)?;
+        let owner = match dispatch_scope {
+            OwnerDispatchScope::Top => self.current_main_document_task_owner()?,
+            OwnerDispatchScope::Child(handle) => self.current_child_document_task_owner(handle)?,
+            OwnerDispatchScope::LightweightPopup(_) => return None,
+        };
+        let snapshot = self.owner_document_policy_snapshot(dispatch_scope)?;
+        let result = unsafe { &*self.runtime }.base_url_content_security_policy_check_for_document(
+            check.document,
+            &snapshot.document_url,
+            &snapshot.policy_container,
+            &check.url,
+        );
+        Some((owner, result))
+    }
+
     fn owner_document_policy_snapshot(
         &self,
         owner: OwnerDispatchScope,
