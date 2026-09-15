@@ -76,6 +76,7 @@ impl Drop for DocumentResourceLoaderAuthority {
 pub struct DocumentResourceLoader {
     request_client: ResourceRequestClient,
     authority: Arc<DocumentResourceLoaderAuthority>,
+    csp_reports: Arc<crate::content_security_policy::ContentSecurityPolicyReports>,
 }
 
 /// Inputs that exist before the initial committed Document owner is known.
@@ -147,6 +148,7 @@ impl DocumentResourceLoader {
         );
         Self {
             request_client,
+            csp_reports: Default::default(),
             authority: Arc::new(DocumentResourceLoaderAuthority {
                 id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)
@@ -193,6 +195,24 @@ impl DocumentResourceLoader {
         Self::new(self.request_client.clone(), self.task_runner(), context)
     }
 
+    pub(crate) fn for_document_open(
+        context: DocumentFetchContext,
+        source: DocumentResourceAuthoritySource,
+        previous: &Self,
+    ) -> Self {
+        let mut replacement = Self::for_committed_document(context, source);
+        // document.open() rotates Moli's load owner, but keeps the Document's
+        // CSP. In-flight requests and new requests must share its report history.
+        replacement.csp_reports = previous.csp_reports.clone();
+        replacement
+    }
+
+    pub(crate) fn content_security_policy_reports(
+        &self,
+    ) -> &crate::content_security_policy::ContentSecurityPolicyReports {
+        &self.csp_reports
+    }
+
     pub(crate) fn transfer_existing_loads_to(&self, replacement: &Self) -> usize {
         assert_eq!(
             self.state(),
@@ -226,6 +246,7 @@ impl DocumentResourceLoader {
         Self {
             request_client,
             authority: Arc::clone(&self.authority),
+            csp_reports: self.csp_reports.clone(),
         }
     }
 
