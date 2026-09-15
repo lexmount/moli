@@ -12,6 +12,7 @@ fn viewport_input_vm() -> StandaloneScriptVmHarness {
         screen_height: 600,
         screen_avail_width: 800,
         screen_avail_height: 600,
+        ..Default::default()
     }))
     .unwrap();
     vm.force_fresh_layout_reads_for_test();
