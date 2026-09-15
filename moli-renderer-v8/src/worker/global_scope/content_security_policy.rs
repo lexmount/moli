@@ -63,7 +63,7 @@ fn worker_policy_url<'a>(state: &'a WorkerGlobalState, protected_url: &'a Url) -
         .unwrap_or(protected_url)
 }
 
-fn worker_policy_violation(
+pub(super) fn worker_policy_violation(
     protected_url: &Url,
     report_uri_enabled: bool,
     mut violation: ContentSecurityPolicyUrlViolation,
