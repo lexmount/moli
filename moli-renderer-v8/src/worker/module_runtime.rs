@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::pin;
 use std::rc::Rc;
 
-use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
+use crate::exception_reporting::{
+    V8ExceptionReport, build_event_handler_exception_report, build_exception_report_without_stack,
+};
 use crate::module_runtime::{
     ModuleAttributesKey, ModuleImportPhase, WasmDependencyModuleMessages, WasmImportRecord,
     WasmModuleRecord, ensure_wasm_dependency_module_namespace_ready,
@@ -187,6 +189,21 @@ impl WorkerDynamicModuleImportError {
 impl From<String> for WorkerDynamicModuleImportError {
     fn from(message: String) -> Self {
         Self::type_error(message)
+    }
+}
+
+impl From<Box<WorkerBootstrapError>> for WorkerDynamicModuleImportError {
+    fn from(error: Box<WorkerBootstrapError>) -> Self {
+        let (report, _, _) = *error;
+        Self {
+            message: report.summary,
+            kind: WorkerDynamicModuleImportErrorKind::Type,
+            // Bootstrap failures can contain a synthesized parent-facing
+            // SyntaxError. Only a captured native exception supersedes the
+            // dynamic import TypeError fallback.
+            rejection: report.exception,
+            stage: WorkerDynamicModuleImportErrorStage::Graph,
+        }
     }
 }
 
@@ -1071,6 +1088,9 @@ fn advance_worker_dynamic_module_import(
     let module_url = resolve_worker_module_specifier(&job.specifier, &job.base_url)?;
     let module_key = worker_module_key_for_attributes(&module_url, &job.attributes)
         .map_err(|message| format!("{message} for dynamic import `{}`", job.specifier))?;
+    if let Some(error) = graph.borrow().compile_error(&module_key) {
+        return Err(error.into());
+    }
     if let Some(error) = graph.borrow().source_fetch_failure(&module_key) {
         return Err(WorkerDynamicModuleImportError::type_error(format!(
             "Failed to dynamically import module worker dependency `{module_url}`: {error}"
@@ -1107,8 +1127,7 @@ fn advance_worker_dynamic_module_import(
                     key,
                     url,
                     inherited_referrer_policy.clone(),
-                )
-                .map_err(|error| error.0.summary)?
+                )?
             }
             WorkerModuleDependencyLoad::NeedFetch(_) => {
                 let fetch_id = reserve_worker_module_graph_fetch_id(scope);
@@ -1140,9 +1159,7 @@ fn advance_worker_dynamic_module_import(
         &job.fetch_initiator_url,
         WorkerModuleGraphFetchCspSource::DynamicImportGraph,
         job.browser_request_metadata(),
-    )
-    .map_err(|error| error.0.summary)?
-    {
+    )? {
         WorkerModuleGraphBuild::Ready => {
             finish_worker_dynamic_module_import_evaluation(scope, root_entry)
         }
@@ -1176,23 +1193,14 @@ fn job_finish_fetch(
         }
     };
     let referrer_policy = fetched_source.effective_referrer_policy(request.referrer_policy());
-    let target_entry = match ensure_worker_module_entry(
+    let target_entry = ensure_worker_module_entry(
         scope,
         &graph,
         fetched_source.source(),
         request.key.clone(),
         fetched_source.final_url().clone(),
         referrer_policy,
-    ) {
-        Ok(entry) => entry,
-        Err(error) => {
-            let message = error.0.summary.clone();
-            graph
-                .borrow_mut()
-                .mark_source_fetch_failed(&request.key, message.clone());
-            return Err(message.into());
-        }
-    };
+    )?;
     if let Some(parent_entry) = request.parent_entry {
         graph.borrow_mut().add_dependency(
             parent_entry,
@@ -1245,9 +1253,7 @@ fn job_resume_fetch_with_pending_keys(
         request.csp_source(),
         request.graph_browser_request_metadata(),
         pending_keys,
-    )
-    .map_err(|error| error.0.summary)?
-    {
+    )? {
         WorkerModuleGraphBuild::Ready => {
             if has_pending_requests {
                 return Ok(WorkerDynamicModuleImportAdvance::WaitingFetches);
@@ -1336,8 +1342,7 @@ fn finish_worker_dynamic_module_import_evaluation(
             v8::PromiseState::Pending => {
                 let evaluation_id = reserve_worker_module_evaluation_id(scope)?;
                 let promise = v8::Global::new(scope, promise);
-                attach_worker_module_evaluation_reactions(scope, evaluation_id, promise)
-                    .map_err(|error| error.0.summary)?;
+                attach_worker_module_evaluation_reactions(scope, evaluation_id, promise)?;
                 Ok(WorkerDynamicModuleImportAdvance::WaitingEvaluation { evaluation_id })
             }
         }
@@ -1799,6 +1804,7 @@ struct WorkerModuleGraph {
     credentials_mode: RequestCredentialsMode,
     root_referrer_policy: Option<String>,
     failed_source_fetches: HashMap<WorkerModuleKey, String>,
+    failed_compiles: HashMap<WorkerModuleKey, WorkerBootstrapError>,
     records: Vec<WorkerModuleRecord>,
     entries_by_key: HashMap<WorkerModuleKey, usize>,
     module_to_entries: HashMap<i32, Vec<usize>>,
@@ -1807,7 +1813,7 @@ struct WorkerModuleGraph {
 struct WorkerModuleRecord {
     key: WorkerModuleKey,
     source_url: Url,
-    source: WorkerModuleSource,
+    json_value: Option<v8::Global<v8::Value>>,
     module: v8::Global<v8::Module>,
     requests: Vec<WorkerModuleRequest>,
     dependencies: Vec<WorkerModuleDependency>,
@@ -1892,7 +1898,7 @@ struct WorkerModuleDependency {
 }
 
 enum WorkerSyntheticModuleRecord {
-    Json(String),
+    Json(v8::Global<v8::Value>),
     WebAssembly(WasmModuleRecord),
 }
 
@@ -1902,6 +1908,7 @@ impl WorkerModuleGraph {
             credentials_mode,
             root_referrer_policy,
             failed_source_fetches: HashMap::new(),
+            failed_compiles: HashMap::new(),
             records: Vec::new(),
             entries_by_key: HashMap::new(),
             module_to_entries: HashMap::new(),
@@ -1936,6 +1943,10 @@ impl WorkerModuleGraph {
         self.failed_source_fetches.get(key).cloned()
     }
 
+    fn compile_error(&self, key: &WorkerModuleKey) -> Option<Box<WorkerBootstrapError>> {
+        self.failed_compiles.get(key).cloned().map(Box::new)
+    }
+
     fn mark_source_fetch_failed(&mut self, key: &WorkerModuleKey, message: String) {
         self.failed_source_fetches.insert(key.clone(), message);
     }
@@ -1944,7 +1955,7 @@ impl WorkerModuleGraph {
         &mut self,
         key: WorkerModuleKey,
         source_url: Url,
-        source: WorkerModuleSource,
+        json_value: Option<v8::Global<v8::Value>>,
         module: v8::Global<v8::Module>,
         identity_hash: i32,
         requests: Vec<WorkerModuleRequest>,
@@ -1955,7 +1966,7 @@ impl WorkerModuleGraph {
         self.records.push(WorkerModuleRecord {
             key: key.clone(),
             source_url,
-            source,
+            json_value,
             module,
             requests,
             dependencies: Vec::new(),
@@ -2081,9 +2092,9 @@ impl WorkerModuleGraph {
         }
         match record.key.module_type {
             WorkerModuleType::Json => record
-                .source
-                .text_source()
-                .map(|source| WorkerSyntheticModuleRecord::Json(source.to_owned())),
+                .json_value
+                .clone()
+                .map(WorkerSyntheticModuleRecord::Json),
             WorkerModuleType::JavaScriptOrWebAssembly => None,
         }
     }
@@ -2147,16 +2158,24 @@ fn ensure_worker_module_entry(
     source_url: Url,
     referrer_policy: Option<String>,
 ) -> WorkerModuleBootstrapResult<usize> {
+    if let Some(error) = graph.borrow().compile_error(&key) {
+        return Err(error);
+    }
     let existing_entry = graph.borrow().entry_for_key(&key);
     if let Some(entry) = existing_entry {
         return Ok(entry);
     }
-    let (module, identity_hash, requests, wasm_module) =
-        compile_worker_module_record(scope, source, &key, &source_url)?;
+    let (module, identity_hash, requests, wasm_module, json_value) =
+        compile_worker_module_record(scope, source, &key, &source_url).inspect_err(|error| {
+            graph
+                .borrow_mut()
+                .failed_compiles
+                .insert(key.clone(), *error.clone());
+        })?;
     Ok(graph.borrow_mut().insert(
         key,
         source_url,
-        source.clone(),
+        json_value,
         module,
         identity_hash,
         requests,
@@ -2276,6 +2295,9 @@ fn resolve_worker_module_dependency(
                 WorkerParentErrorEventKind::Event,
             ))
         })?;
+    if let Some(error) = graph.borrow().compile_error(&dependency_key) {
+        return Err(error);
+    }
     let (dependency_key, dependency_source) = match load_worker_static_module_dependency(
         dependency_url,
         dependency_key.module_type,
@@ -2445,9 +2467,18 @@ fn compile_worker_module_record(
     i32,
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
+    Option<v8::Global<v8::Value>>,
 )> {
     if key.module_type == WorkerModuleType::Json {
-        return compile_worker_synthetic_module_record(scope, source_url);
+        let Some(source) = source.text_source() else {
+            return Err(Box::new(worker_bootstrap_error(
+                scope,
+                source_url.as_str(),
+                "JSON module worker source is not text",
+                WorkerParentErrorEventKind::Event,
+            )));
+        };
+        return compile_worker_synthetic_module_record(scope, source, source_url);
     }
     if let Some(bytes) = source.binary_source() {
         return compile_worker_wasm_module_record(scope, bytes, source_url);
@@ -2484,20 +2515,36 @@ fn compile_worker_module_record(
         identity_hash,
         requests,
         None,
+        None,
     ))
 }
 
 fn compile_worker_synthetic_module_record(
     scope: &mut v8::PinScope<'_, '_>,
+    source: &str,
     source_url: &Url,
 ) -> WorkerModuleBootstrapResult<(
     v8::Global<v8::Module>,
     i32,
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
+    Option<v8::Global<v8::Value>>,
 )> {
     let try_catch = pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
+    let mut scope = try_catch.init();
+    let Some(value) =
+        crate::module_runtime::parse_json_module(&mut scope, source, source_url.as_str())
+    else {
+        let exception = scope.exception();
+        let message = scope.message();
+        let report = build_exception_report_without_stack(&mut scope, exception, message);
+        return Err(Box::new((
+            report,
+            exception.map(|value| v8::Global::new(&scope, value)),
+            WorkerParentErrorEventKind::Event,
+        )));
+    };
+    let value = v8::Global::new(&scope, value);
     let module_name = v8::String::new(&scope, source_url.as_str()).expect("v8 string allocation");
     let default_export = v8::String::new(&scope, "default").expect("v8 string allocation");
     let module = v8::Module::create_synthetic_module(
@@ -2512,6 +2559,7 @@ fn compile_worker_synthetic_module_record(
         identity_hash,
         Vec::new(),
         None,
+        Some(value),
     ))
 }
 
@@ -2524,6 +2572,7 @@ fn compile_worker_wasm_module_record(
     i32,
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
+    Option<v8::Global<v8::Value>>,
 )> {
     let try_catch = pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
@@ -2586,6 +2635,7 @@ fn compile_worker_wasm_module_record(
         identity_hash,
         requests,
         Some(prepared.record),
+        None,
     ))
 }
 
@@ -2970,8 +3020,9 @@ fn worker_synthetic_module_evaluation_steps<'s>(
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .and_then(|graph| graph.borrow().synthetic_module_record_for(module))?;
     match synthetic {
-        WorkerSyntheticModuleRecord::Json(source) => {
-            evaluate_worker_json_synthetic_module(scope, module, &source)
+        WorkerSyntheticModuleRecord::Json(value) => {
+            let value = v8::Local::new(scope, value);
+            set_worker_synthetic_default_export(scope, module, value)
         }
         WorkerSyntheticModuleRecord::WebAssembly(wasm_record) => {
             evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
@@ -2979,18 +3030,6 @@ fn worker_synthetic_module_evaluation_steps<'s>(
             })
         }
     }
-}
-
-fn evaluate_worker_json_synthetic_module<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    module: v8::Local<'s, v8::Module>,
-    source: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let Some(json_source) = v8::String::new(scope, source) else {
-        return throw_worker_synthetic_module_error(scope, "failed to allocate JSON module source");
-    };
-    let value = v8::json::parse(scope, json_source)?;
-    set_worker_synthetic_default_export(scope, module, value)
 }
 
 fn set_worker_synthetic_default_export<'s>(
