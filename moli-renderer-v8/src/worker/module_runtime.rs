@@ -959,6 +959,7 @@ impl WorkerDynamicModuleResolver {
     fn take_joined_root_imports(
         &mut self,
         key: &WorkerModuleKey,
+        phase: Option<ModuleImportPhase>,
     ) -> Vec<WorkerDynamicModuleImportJob> {
         let mut joined = Vec::new();
         let mut remaining = VecDeque::with_capacity(self.pending_imports.len());
@@ -967,7 +968,8 @@ impl WorkerDynamicModuleResolver {
                 &job.state,
                 WorkerDynamicModuleImportJobState::JoinedRoot { key: joined_key }
                     if joined_key == key
-            ) {
+            ) && phase.is_none_or(|phase| job.phase == phase)
+            {
                 joined.push(job);
             } else {
                 remaining.push_back(job);
@@ -1051,12 +1053,25 @@ fn advance_worker_dynamic_module_import(
     let module_url = resolve_worker_module_specifier(&job.specifier, &job.base_url)?;
     let module_key = worker_module_key_for_attributes(&module_url, &job.attributes)
         .map_err(|message| format!("{message} for dynamic import `{}`", job.specifier))?;
-    job.root_key = Some(module_key.clone());
+    if job.phase == ModuleImportPhase::Source && module_key.kind != WorkerModuleKind::WebAssembly {
+        return Err(WorkerDynamicModuleImportError::syntax_error(format!(
+            "source-phase dynamic import `{}` does not resolve to a WebAssembly module",
+            job.specifier
+        )));
+    }
     if let Some(error) = graph.borrow().source_fetch_failure(&module_key) {
         return Err(WorkerDynamicModuleImportError::type_error(format!(
             "Failed to dynamically import module worker dependency `{module_url}`: {error}"
         )));
     }
+    let existing_root_entry = graph.borrow().entry_for_key(&module_key);
+    if job.phase == ModuleImportPhase::Source && existing_root_entry.is_some() {
+        // A compiled source is available even while another job is loading or
+        // evaluating its dependencies. This job does not own that root's waiters.
+        job.resolved_entry = existing_root_entry;
+        return Ok(WorkerDynamicModuleImportAdvance::Complete);
+    }
+    job.root_key = Some(module_key.clone());
     if context
         .get_slot::<RefCell<WorkerDynamicModuleResolver>>()
         .is_some_and(|dynamic_imports| dynamic_imports.borrow().root_import_in_flight(&module_key))
@@ -1064,14 +1079,7 @@ fn advance_worker_dynamic_module_import(
         job.state = WorkerDynamicModuleImportJobState::JoinedRoot { key: module_key };
         return Ok(WorkerDynamicModuleImportAdvance::WaitingFetches);
     }
-    if job.phase == ModuleImportPhase::Source && module_key.kind != WorkerModuleKind::WebAssembly {
-        return Err(WorkerDynamicModuleImportError::syntax_error(format!(
-            "source-phase dynamic import `{}` does not resolve to a WebAssembly module",
-            job.specifier
-        )));
-    }
     let inherited_referrer_policy = graph.borrow().referrer_policy_for_url(&job.base_url);
-    let existing_root_entry = graph.borrow().entry_for_key(&module_key);
     let root_entry = match existing_root_entry {
         Some(entry) => entry,
         None => match load_worker_static_module_dependency(module_url)? {
@@ -1110,18 +1118,19 @@ fn advance_worker_dynamic_module_import(
         },
     };
     job.resolved_entry = Some(root_entry);
+    if job.phase == ModuleImportPhase::Source {
+        return Ok(WorkerDynamicModuleImportAdvance::Complete);
+    }
     match continue_worker_module_graph(
         scope,
         &graph,
+        root_entry,
         &job.fetch_initiator_url,
         WorkerModuleGraphFetchCspSource::DynamicImportGraph,
         job.browser_request_metadata(),
     )
     .map_err(|error| error.0.summary)?
     {
-        WorkerModuleGraphBuild::Ready if job.phase == ModuleImportPhase::Source => {
-            Ok(WorkerDynamicModuleImportAdvance::Complete)
-        }
         WorkerModuleGraphBuild::Ready => {
             finish_worker_dynamic_module_import_evaluation(scope, root_entry)
         }
@@ -1181,6 +1190,18 @@ fn job_finish_fetch(
         );
     } else {
         job.resolved_entry = Some(target_entry);
+        // Source imports only share the root fetch, not dependency loading or
+        // evaluation. Wake them before either of those steps can wait or fail.
+        if let Some(imports) = context.get_slot::<RefCell<WorkerDynamicModuleResolver>>() {
+            let mut imports = imports.borrow_mut();
+            let sources =
+                imports.take_joined_root_imports(&request.key, Some(ModuleImportPhase::Source));
+            for mut source in sources {
+                source.root_key = None;
+                source.state = WorkerDynamicModuleImportJobState::Graph;
+                imports.pending_imports.push_back(source);
+            }
+        }
     }
     Ok(())
 }
@@ -1201,9 +1222,13 @@ fn job_resume_fetch_with_pending_keys(
     let root_entry = job
         .resolved_entry
         .ok_or_else(|| "dynamic import root module is not compiled".to_owned())?;
+    if job.phase == ModuleImportPhase::Source {
+        return Ok(WorkerDynamicModuleImportAdvance::Complete);
+    }
     match continue_worker_module_graph_with_pending_keys(
         scope,
         &graph,
+        root_entry,
         &request.initiator_url,
         request.csp_source(),
         request.graph_browser_request_metadata(),
@@ -1211,12 +1236,6 @@ fn job_resume_fetch_with_pending_keys(
     )
     .map_err(|error| error.0.summary)?
     {
-        WorkerModuleGraphBuild::Ready if job.phase == ModuleImportPhase::Source => {
-            if has_pending_requests {
-                return Ok(WorkerDynamicModuleImportAdvance::WaitingFetches);
-            }
-            Ok(WorkerDynamicModuleImportAdvance::Complete)
-        }
         WorkerModuleGraphBuild::Ready => {
             if has_pending_requests {
                 return Ok(WorkerDynamicModuleImportAdvance::WaitingFetches);
@@ -1320,10 +1339,23 @@ fn resolve_worker_dynamic_module_import(
     job: WorkerDynamicModuleImportJob,
 ) {
     let resolved_entry = job.resolved_entry;
+    let phase = job.phase;
     let joined_imports = take_worker_dynamic_module_imports_joined_to_root(scope, &job);
     resolve_single_worker_dynamic_module_import(scope, job);
     for mut joined_job in joined_imports {
         joined_job.resolved_entry = resolved_entry;
+        if phase == ModuleImportPhase::Source && joined_job.phase == ModuleImportPhase::Evaluation {
+            // Sharing a source fetch does not link or evaluate the module. Resume
+            // evaluation jobs from the cached root instead of reading its namespace.
+            let context = v8::Local::new(scope, &joined_job.context);
+            let imports = context
+                .get_slot::<RefCell<WorkerDynamicModuleResolver>>()
+                .expect("dynamic import resolver should be installed");
+            joined_job.root_key = None;
+            joined_job.state = WorkerDynamicModuleImportJobState::Graph;
+            imports.borrow_mut().pending_imports.push_back(joined_job);
+            continue;
+        }
         resolve_single_worker_dynamic_module_import(scope, joined_job);
     }
 }
@@ -1404,7 +1436,7 @@ fn take_worker_dynamic_module_imports_joined_to_root(
     };
     dynamic_imports
         .borrow_mut()
-        .take_joined_root_imports(root_key)
+        .take_joined_root_imports(root_key, None)
 }
 
 fn reject_worker_dynamic_module_import(
@@ -1497,6 +1529,7 @@ impl WorkerModuleBootstrapJob {
         match continue_worker_module_graph(
             scope,
             &self.runtime.graph,
+            root_entry,
             &self.static_import_initiator_url,
             WorkerModuleGraphFetchCspSource::StaticModuleGraph,
             BrowserRequestMetadata::Fetch,
@@ -1573,6 +1606,7 @@ impl WorkerModuleBootstrapJob {
         match continue_worker_module_graph_with_pending_keys(
             scope,
             &self.runtime.graph,
+            root_entry,
             &self.static_import_initiator_url,
             WorkerModuleGraphFetchCspSource::StaticModuleGraph,
             BrowserRequestMetadata::Fetch,
@@ -1961,23 +1995,23 @@ impl WorkerModuleGraph {
             });
     }
 
-    fn len(&self) -> usize {
-        self.records.len()
-    }
-
     fn url(&self, entry: usize) -> &Url {
         &self.records[entry].source_url
     }
 
-    fn has_dependency(
+    fn dependency_entry(
         &self,
         entry: usize,
         specifier: &str,
         attributes: &ModuleAttributesKey,
-    ) -> bool {
-        self.records[entry].dependencies.iter().any(|dependency| {
-            dependency.specifier == specifier && dependency.attributes == *attributes
-        })
+    ) -> Option<usize> {
+        self.records[entry]
+            .dependencies
+            .iter()
+            .find(|dependency| {
+                dependency.specifier == specifier && dependency.attributes == *attributes
+            })
+            .map(|dependency| dependency.target_entry)
     }
 
     fn module_url_for(&self, module: v8::Local<'_, v8::Module>) -> Option<Url> {
@@ -2037,13 +2071,7 @@ impl WorkerModuleGraph {
         attributes: &ModuleAttributesKey,
     ) -> Option<usize> {
         let referrer_entry = self.entry_for_module(referrer)?;
-        let dependency = self.records[referrer_entry]
-            .dependencies
-            .iter()
-            .find(|dependency| {
-                dependency.specifier == specifier && dependency.attributes == *attributes
-            })?;
-        Some(dependency.target_entry)
+        self.dependency_entry(referrer_entry, specifier, attributes)
     }
 
     fn resolve_static_dependency_record(
@@ -2116,6 +2144,7 @@ fn ensure_worker_module_entry(
 fn continue_worker_module_graph(
     scope: &mut v8::PinScope<'_, '_>,
     graph: &Rc<RefCell<WorkerModuleGraph>>,
+    root_entry: usize,
     fetch_initiator_url: &Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     browser_request_metadata: BrowserRequestMetadata,
@@ -2123,6 +2152,7 @@ fn continue_worker_module_graph(
     continue_worker_module_graph_with_pending_keys(
         scope,
         graph,
+        root_entry,
         fetch_initiator_url,
         csp_source,
         browser_request_metadata,
@@ -2133,41 +2163,55 @@ fn continue_worker_module_graph(
 fn continue_worker_module_graph_with_pending_keys(
     scope: &mut v8::PinScope<'_, '_>,
     graph: &Rc<RefCell<WorkerModuleGraph>>,
+    root_entry: usize,
     fetch_initiator_url: &Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     browser_request_metadata: BrowserRequestMetadata,
     mut pending_keys: HashSet<WorkerModuleKey>,
 ) -> WorkerModuleBootstrapResult<WorkerModuleGraphBuild> {
-    let mut entry = 0;
+    // The module map also contains source-only and unrelated dynamic imports.
+    // Expand only evaluation edges reachable from this job's root.
+    let mut pending_entries = vec![root_entry];
+    let mut visited = HashSet::new();
     let mut pending_requests = Vec::new();
-    while entry < graph.borrow().len() {
+    while let Some(entry) = pending_entries.pop() {
+        if !visited.insert(entry) {
+            continue;
+        }
         let url = graph.borrow().url(entry).clone();
         let requests = graph.borrow().requests(entry);
         for request in requests {
             if graph
                 .borrow()
-                .has_dependency(entry, &request.specifier, &request.attributes)
+                .dependency_entry(entry, &request.specifier, &request.attributes)
+                .is_none()
             {
-                continue;
-            }
-            match resolve_worker_module_dependency(
-                scope,
-                graph,
-                entry,
-                &url,
-                fetch_initiator_url,
-                csp_source,
-                browser_request_metadata,
-                request,
-                &mut pending_keys,
-            )? {
-                WorkerModuleGraphBuild::Ready => {}
-                WorkerModuleGraphBuild::NeedFetches(requests) => {
-                    pending_requests.extend(requests.requests);
+                match resolve_worker_module_dependency(
+                    scope,
+                    graph,
+                    entry,
+                    &url,
+                    fetch_initiator_url,
+                    csp_source,
+                    browser_request_metadata,
+                    &request,
+                    &mut pending_keys,
+                )? {
+                    WorkerModuleGraphBuild::Ready => {}
+                    WorkerModuleGraphBuild::NeedFetches(requests) => {
+                        pending_requests.extend(requests.requests);
+                    }
                 }
             }
+            if request.phase == ModuleImportPhase::Evaluation
+                && let Some(dependency) =
+                    graph
+                        .borrow()
+                        .dependency_entry(entry, &request.specifier, &request.attributes)
+            {
+                pending_entries.push(dependency);
+            }
         }
-        entry += 1;
     }
     if !pending_requests.is_empty() {
         return Ok(WorkerModuleGraphBuild::NeedFetches(
@@ -2185,7 +2229,7 @@ fn resolve_worker_module_dependency(
     fetch_initiator_url: &Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     browser_request_metadata: BrowserRequestMetadata,
-    request: WorkerModuleRequest,
+    request: &WorkerModuleRequest,
     pending_keys: &mut HashSet<WorkerModuleKey>,
 ) -> WorkerModuleBootstrapResult<WorkerModuleGraphBuild> {
     let dependency_url =
@@ -2255,8 +2299,8 @@ fn resolve_worker_module_dependency(
                 if let Some(target_entry) = existing_entry {
                     graph.borrow_mut().add_dependency(
                         entry,
-                        request.specifier,
-                        request.attributes,
+                        request.specifier.clone(),
+                        request.attributes.clone(),
                         target_entry,
                     );
                     return Ok(WorkerModuleGraphBuild::Ready);
@@ -2273,8 +2317,8 @@ fn resolve_worker_module_dependency(
                         fetch_initiator_url.clone(),
                         csp_source,
                         Some(entry),
-                        request.specifier,
-                        request.attributes,
+                        request.specifier.clone(),
+                        request.attributes.clone(),
                         graph.borrow().credentials_mode(),
                         referrer_policy,
                         browser_request_metadata,
@@ -2291,9 +2335,12 @@ fn resolve_worker_module_dependency(
         dependency_key.url.clone(),
         referrer_policy,
     )?;
-    graph
-        .borrow_mut()
-        .add_dependency(entry, request.specifier, request.attributes, target_entry);
+    graph.borrow_mut().add_dependency(
+        entry,
+        request.specifier.clone(),
+        request.attributes.clone(),
+        target_entry,
+    );
     Ok(WorkerModuleGraphBuild::Ready)
 }
 
