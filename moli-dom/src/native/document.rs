@@ -10,6 +10,7 @@ mod referrer_policy;
 #[cfg(test)]
 mod tests;
 
+pub use base_url::DocumentBaseUrlPolicyCheck;
 use base_url::DocumentBaseUrlState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
