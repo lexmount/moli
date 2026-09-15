@@ -2062,6 +2062,9 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
                     blockedURI: event.blockedURI,
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition,
+                    sourceFile: event.sourceFile,
+                    lineNumber: event.lineNumber,
+                    columnNumber: event.columnNumber,
                 }});
             }});
             try {{
@@ -2123,7 +2126,7 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
     assert_eq!(
         post.expect("worker fetch CSP redirect should post rejection surface"),
         format!(
-            r#"{{"name":"TypeError","isTypeError":true,"hasCspMessage":true,"events":[{{"blockedURI":"{url}","effectiveDirective":"connect-src","disposition":"enforce"}}]}}"#
+            r#"{{"name":"TypeError","isTypeError":true,"hasCspMessage":true,"events":[{{"blockedURI":"{url}","effectiveDirective":"connect-src","disposition":"enforce","sourceFile":"","lineNumber":0,"columnNumber":0}}]}}"#
         )
     );
 }

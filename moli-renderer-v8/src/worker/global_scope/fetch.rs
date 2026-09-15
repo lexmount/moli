@@ -873,13 +873,15 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
-        scope,
-        &state,
-        &document_url,
-        &resolved_url,
-        crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-    );
+    let report_only_violation = {
+        let state_ref = state.borrow();
+        worker_content_security_policy_report_only_violation(
+            &state_ref,
+            &document_url,
+            &resolved_url,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        )
+    };
     let csp_violation = {
         let state_ref = state.borrow();
         worker_content_security_policy_violation(
@@ -889,7 +891,19 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
         )
     };
-    if let Some(violation) = csp_violation {
+    let csp_source_location = if report_only_violation.is_none() && csp_violation.is_none() {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+    } else {
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(scope)
+    };
+    if let Some(mut violation) = report_only_violation {
+        csp_source_location.apply_to(&mut violation);
+        dispatch_worker_content_security_policy_violation_event_for_state(
+            scope, &state, &violation,
+        );
+    }
+    if let Some(mut violation) = csp_violation {
+        csp_source_location.apply_to(&mut violation);
         dispatch_worker_content_security_policy_violation_event_for_state(
             scope, &state, &violation,
         );
