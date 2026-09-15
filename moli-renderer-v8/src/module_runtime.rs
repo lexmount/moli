@@ -6,6 +6,7 @@ mod graph;
 mod graph_fetch_store;
 mod host_callbacks;
 mod import_map;
+mod json;
 mod modulator;
 mod owner_ids;
 mod parser_tree_registry;
@@ -46,6 +47,7 @@ pub(crate) use self::dynamic_resolver::{
 };
 pub(crate) use self::evaluation::ModuleEvaluationRecord;
 pub(crate) use self::import_map::ImportMapRegistryState;
+pub(crate) use self::json::{json_module_exception_source_url, parse_json_module};
 pub(crate) use self::modulator::{
     NativeDocumentModulator, NativeFrameDocumentDependencyFetchBuildFailure,
 };
@@ -59,7 +61,7 @@ pub(crate) use self::response_mime::{
     validate_css_module_response_mime, validate_json_module_response_mime,
 };
 pub(crate) use self::single_module_fetch::NativeModuleSingleFetchRequest;
-pub(crate) use self::synthetic_text::SyntheticTextModuleSource;
+pub(crate) use self::synthetic_text::{SyntheticTextModuleSource, SyntheticTextModuleValue};
 pub(crate) use self::tree_owner::{
     NativeModuleTreeDocumentOwnerAdapter, NativeModuleTreeFrameDocumentOwner,
 };
