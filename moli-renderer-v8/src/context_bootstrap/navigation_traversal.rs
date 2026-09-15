@@ -32,15 +32,15 @@ use super::navigation_result::{
     navigation_rejected_value_result, navigation_result_with_pending_commit,
 };
 use super::navigation_traversal_execution::{
-    queue_history_traversal_without_result, queue_navigation_traversal_with_result,
+    queue_history_traversal_by_delta, queue_navigation_traversal_with_result,
 };
 use super::navigation_traversal_plan::{
     NavigationTraversalPlan, history_delta_traversal_target, navigation_delta_traversal_plan,
     navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_document_can_update_current_entry, navigation_document_is_active,
-    navigation_unload_event_active, runtime_window_is_global, runtime_window_owner,
+    history_owner_if_fully_active, navigation_document_can_update_current_entry,
+    navigation_document_is_active, navigation_unload_event_active, runtime_window_owner,
     window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
@@ -69,14 +69,19 @@ pub(super) fn history_go_callback<'s>(
         );
         return;
     }
-    let delta = if args.length() == 0 {
+    let action = if args.length() == 0 {
         Some(HistoryGoAction::Reload)
     } else {
         coerce_history_go_delta(scope, args.get(0))
     };
-    match delta {
-        Some(HistoryGoAction::Reload) => {
-            let owner = runtime_window_owner(scope, args.this());
+    let Some(action) = action else {
+        return;
+    };
+    let Some(owner) = history_owner_if_fully_active(scope, args.this()) else {
+        return;
+    };
+    match action {
+        HistoryGoAction::Reload => {
             let Some(location) = window_location_for_holder(scope, owner) else {
                 return;
             };
@@ -87,9 +92,8 @@ pub(super) fn history_go_callback<'s>(
                 None,
             );
         }
-        Some(HistoryGoAction::Traverse(delta)) => history_traverse(scope, args.this(), delta),
-        Some(HistoryGoAction::Noop) => {}
-        None => {}
+        HistoryGoAction::Traverse(delta) => history_traverse(scope, args.this(), delta),
+        HistoryGoAction::Noop => {}
     }
 }
 
@@ -98,6 +102,9 @@ pub(super) fn history_back_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if history_owner_if_fully_active(scope, args.this()).is_none() {
+        return;
+    }
     history_traverse(scope, args.this(), -1);
 }
 
@@ -106,6 +113,9 @@ pub(super) fn history_forward_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if history_owner_if_fully_active(scope, args.this()).is_none() {
+        return;
+    }
     history_traverse(scope, args.this(), 1);
 }
 
@@ -524,26 +534,7 @@ fn history_traverse<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) {
-    let Some(target) = history_delta_traversal_target(scope, history, delta) else {
-        queue_browser_owned_top_level_history_traversal(scope, history, delta);
-        return;
-    };
-    queue_history_traversal_without_result(scope, target);
-}
-
-fn queue_browser_owned_top_level_history_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    delta: i64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    if !runtime_window_is_global(scope, owner) {
-        return;
-    }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    unsafe { &mut *host_ptr }.record_pending_top_level_history_traversal(delta);
+    queue_history_traversal_by_delta(scope, history, delta);
 }
 
 pub(crate) fn queue_top_level_history_traversal_by_delta(
@@ -575,7 +566,7 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     if !navigation_entries_share_document(scope, current_entry, target_entry) {
         return false;
     }
-    queue_history_traversal_without_result(scope, target);
+    queue_history_traversal_by_delta(scope, history, delta);
     true
 }
 

@@ -45,8 +45,10 @@ media/canvas documents during the initial static baseline.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from itertools import chain
@@ -713,16 +715,94 @@ def _html_path_is_supported(
     return not any(token in rel for token in excluded)
 
 
+@lru_cache(maxsize=None)
+def _fetch_resource_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    names = (
+        "preflight.py", "clean-stash.py", "inspect-headers.py", "redirect.py",
+        "redirect-empty-location.py",
+    )
+    references = []
+    for name in names:
+        resource = "fetch/api/resources/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    patterns = [
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    ]
+    # The Fetch API's shared utils.js defines RESOURCES_DIR. Keep the
+    # concatenation intact in this match; a bare filename is not sufficient.
+    patterns.append(re.compile(
+        r"(?<![\w$.])RESOURCES_DIR\s*\+\s*['\"](?:"
+        + "|".join(re.escape(name) for name in names)
+        + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    ))
+    patterns.append(re.compile(
+        r"`\$\{\s*RESOURCES_DIR\s*\}(?:"
+        + "|".join(re.escape(name) for name in names)
+        + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    ))
+    return tuple(patterns)
+
+
+@lru_cache(maxsize=None)
+def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in (
+        "requri.py", "redirect.py", "inspect-headers.py", "echo-headers.py", "content.py",
+        "echo-content-type.py", "corsenabled.py", "win-1252-xml.py", "win-1252-html.py",
+        "access-control-basic-put-allow.py",
+        "access-control-preflight-request-allow-headers-returns-star.py",
+        "invalid-utf8-html.py", "shift-jis-html.py", "img-utf8-html.py",
+        "empty-div-utf8-html.py", "status.py", "last-modified.py",
+        "bad-chunk-encoding.py", "infinite-redirects.py",
+    ):
+        resource = f"xhr/resources/{name}"
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
+
+@lru_cache(maxsize=None)
+def _script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in ("serve-with-content-type.py", "resources/load-error-events.py"):
+        resource = "html/semantics/scripting-1/the-script-element/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
+
 def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
     supported: tuple[re.Pattern[str], ...] = ()
+    if rel is not None:
+        supported += _script_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None and rel.startswith("fetch/api/"):
+        supported += _fetch_resource_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None and rel.startswith("wasm/webapi/"):
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("xhr/"):
         supported += SUPPORTED_XHR_DELAY_WPTSERVE_HANDLER_PATTERNS
+        supported += _xhr_handler_reference_patterns(rel.rsplit("/", 1)[0])
     if rel is not None and rel.startswith(
         "html/semantics/scripting-1/the-script-element/module/"
     ):

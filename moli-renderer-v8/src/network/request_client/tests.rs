@@ -50,6 +50,7 @@ fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     owner.handle().apply_network_policy(browser)?;
     Ok(())
 }
+mod script_cors;
 
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
@@ -171,6 +172,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let (mut completion_tx, completion_rx) = oneshot::channel();
     let inner = StreamingRawResponse::new_with_head(
         ResponseHead {
+            status_text: None,
             final_url: request.url.clone(),
             status: 200,
             headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -995,6 +997,69 @@ async fn text_stream_fetch_handles_local_data_stylesheet_urls() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Result<()> {
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let origin = moli_url::WebOrigin::from_url(&Url::parse("https://method.test/page")?);
+    for method in [
+        "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "CUSTOM",
+    ] {
+        let request = Request::new_browser_bytes(
+            method,
+            "blob:https://method.test/unregistered",
+            None,
+            Vec::new(),
+            origin.clone(),
+        )?;
+        let expected = format!("blob URL fetch requires GET, got `{method}`");
+        let error = loader.fetch_text_stream(request.clone()).await.unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_cacheable_script_text_stream(request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_raw_stream_with_cancel(request.clone(), FetchCancelHandle::new())
+            .await
+            .expect_err("raw stream must reject non-GET blob requests");
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_raw_stream_with_cancel_and_network_metadata(
+                request.clone(),
+                FetchCancelHandle::new(),
+            )
+            .await
+            .expect_err("observed raw stream must reject non-GET blob requests");
+        assert_eq!(error.to_string(), expected);
+        let (tx, rx) = oneshot::channel();
+        loader.fetch_text_callback(request, move |result| {
+            tx.send(result).expect("callback receiver is live");
+        })?;
+        let error = rx.await?.unwrap_err();
+        assert_eq!(error.to_string(), expected);
+
+        let data = loader
+            .fetch_text_stream(Request::new_browser_bytes(
+                method,
+                "data:text/plain,payload",
+                None,
+                Vec::new(),
+                origin.clone(),
+            )?)
+            .await?;
+        assert_eq!(
+            data.status, 200,
+            "data: must not inherit the blob method restriction"
+        );
+        assert_eq!(
+            data.body_text(),
+            if method == "HEAD" { "" } else { "payload" }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -1406,6 +1471,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
     let final_url = Url::parse("http://example.test/final.txt")?;
     let response = RawResponse::from_head_and_body(
         ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

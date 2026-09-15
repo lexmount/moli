@@ -240,6 +240,7 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         url: &Url,
+        initiator_url: Option<Url>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -252,6 +253,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url.clone()),
+                initiator_url,
                 true,
             )
             .is_none()
@@ -279,6 +281,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Request(request),
+                None,
                 true,
             )
             .is_none()
@@ -355,7 +358,11 @@ impl JsContextHost {
             let dispatch_load_on_no_string_completion =
                 entry_snapshot.navigation_seed_is_initial_about_blank_commit();
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
-            entry.set_pending_navigation(ChildBrowsingContextBootstrap::Url(url.clone()), true);
+            entry.set_pending_navigation(
+                ChildBrowsingContextBootstrap::Url(url.clone()),
+                None,
+                true,
+            );
             self.queue_child_browsing_context_javascript_url_execution(
                 handle,
                 url.clone(),
@@ -382,6 +389,7 @@ impl JsContextHost {
             attribute_bootstrap,
             navigation_load,
             ChildDocumentNavigationInitiator::FrameOwnerElement,
+            None,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
@@ -395,6 +403,7 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let entry_snapshot = self.child_browsing_contexts.get(&handle).cloned()?;
         let pending_bootstrap = entry_snapshot.pending_live_navigation()?;
+        let initiator_url = entry_snapshot.pending_live_navigation_initiator_url();
         if self.current_child_navigation_load(handle) != Some(navigation_load) {
             tracing::debug!(
                 ?handle,
@@ -416,10 +425,6 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let increment_top_level_history_length = self
-            .child_browsing_contexts
-            .get_mut(&handle)
-            .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
@@ -428,14 +433,32 @@ impl JsContextHost {
             pending_bootstrap,
             navigation_load,
             ChildDocumentNavigationInitiator::BrowsingContext,
+            initiator_url,
         );
+        if commit_result
+            .as_ref()
+            .is_some_and(|result| result.state == ChildDocumentCommitState::Ready)
+        {
+            self.commit_pending_child_joint_history_push(scope, handle);
+        }
         self.sync_existing_child_browsing_context_window_state(scope, handle);
-        if increment_top_level_history_length
+        commit_result
+    }
+
+    pub(in crate::native_bridge::context_host) fn commit_pending_child_joint_history_push(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) {
+        let increments_joint_history = self
+            .child_browsing_contexts
+            .get_mut(&handle)
+            .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
+        if increments_joint_history
             && let Some(window) = self.child_browsing_context_window_wrapper(scope, handle)
         {
             increment_top_level_history_length_for_runtime_owner(scope, window);
         }
-        commit_result
     }
 
     pub(crate) fn queue_child_browsing_context_javascript_url_execution(
@@ -620,7 +643,12 @@ impl JsContextHost {
         preserve_window_event_state: bool,
     ) -> FrameDocumentJavascriptUrlPostExecutionApplication {
         let attempted_script_job = true;
-        if !self.frame_document_task_owner_is_current(target.child_handle(), target.task_owner()) {
+        // The script can start another navigation without replacing its
+        // Document yet. Its completion must not clear that newer request.
+        if !self.frame_document_task_owner_is_current(target.child_handle(), target.task_owner())
+            || self.current_child_navigation_load(target.child_handle())
+                != Some(target.navigation_load())
+        {
             return FrameDocumentJavascriptUrlPostExecutionApplication {
                 attempted_script_job,
                 failed_script_job: false,
@@ -674,7 +702,7 @@ impl JsContextHost {
             self.child_document_credentialless_storage_nonce(document_credentialless);
 
         self.clear_pending_child_document_loads_for_handle(handle);
-        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+        self.dispatch_child_javascript_url_unload_lifecycle(scope, handle);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ = self.finish_child_frame_navigation_without_load_dispatch(
@@ -744,9 +772,10 @@ impl JsContextHost {
             };
         };
         let initial_classic_ready_work = install.initial_classic_ready_work;
-        let parser_stop_queued = install
-            .parser_stop_action
-            .is_some_and(|action| self.queue_child_document_interactive_lifecycle_action(action));
+        let parser_stop_queued = install.parser_stop_action.is_some_and(|action| {
+            self.finish_child_document_parser_stop(scope, action)
+                != crate::frame_owner_model::FrameDocumentLifecycleTaskEffect::NotApplied
+        });
         self.promote_pending_service_worker_child_client(handle);
         self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);

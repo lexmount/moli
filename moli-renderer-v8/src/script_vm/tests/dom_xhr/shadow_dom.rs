@@ -2045,25 +2045,42 @@ fn document_design_mode_controls_content_editable_without_crossing_shadow_roots(
   const inside = document.createElement('span');
   root.appendChild(inside);
   document.body.append(inherited, disabled);
-  const before = [document.designMode, inherited.isContentEditable].join(':');
+  const before = [
+    document.designMode,
+    inherited.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only')
+  ].join(':');
   document.designMode = 'ON';
   const enabled = [
     document.designMode,
     inherited.isContentEditable,
     disabled.isContentEditable,
-    inside.isContentEditable
+    inside.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only'),
+    disabled.matches(':read-write'),
+    inside.matches(':read-write')
   ].join(':');
   document.designMode = 'invalid';
   const afterInvalid = document.designMode;
   document.designMode = 'off';
-  const disabledAgain = [document.designMode, inherited.isContentEditable].join(':');
+  const disabledAgain = [
+    document.designMode,
+    inherited.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only')
+  ].join(':');
   return [before, enabled, afterInvalid, disabledAgain].join('|');
 })()
 "#,
         )
         .expect("Document designMode contenteditable probe should evaluate");
 
-    assert_eq!(result, "off:false|on:true:false:false|on|off:false");
+    assert_eq!(
+        result,
+        "off:false:false:true|on:true:false:false:true:false:false:false|on|off:false:false:true"
+    );
 }
 
 #[test]
@@ -2517,6 +2534,78 @@ async fn focused_display_none_blur_listener_sees_updated_focus_state() {
 
     assert_eq!(sync_state, "none|true|true");
     assert_eq!(blur_state, "block,true,true|block");
+}
+
+#[tokio::test]
+async fn focused_element_blurs_after_it_becomes_inert() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_test_vm_with_loader("https://dynamic-inert-focus-fixup.test/", &loader);
+
+    let direct_sync_state = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const wrapper = document.createElement('div');
+  const input = document.createElement('input');
+  wrapper.appendChild(input);
+  body.appendChild(wrapper);
+  globalThis.__dynamicInertFocus = { wrapper, input, blurCount: 0 };
+  input.addEventListener('blur', () => globalThis.__dynamicInertFocus.blurCount++);
+  input.focus();
+  input.inert = true;
+  return [document.activeElement === input, globalThis.__dynamicInertFocus.blurCount].join('|');
+})()
+"#,
+        )
+        .expect("direct inert focus setup should evaluate");
+
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .expect("direct inert focus-fixup timer should run")
+    );
+    let direct_async_state = vm
+        .eval(
+            r#"
+[document.activeElement === document.body, globalThis.__dynamicInertFocus.blurCount].join('|')
+"#,
+        )
+        .expect("direct inert focus-fixup result should evaluate");
+
+    let ancestor_sync_state = vm
+        .eval(
+            r#"
+(() => {
+  const { wrapper, input } = globalThis.__dynamicInertFocus;
+  input.inert = false;
+  input.focus();
+  wrapper.setAttribute('inert', '');
+  return [document.activeElement === input, globalThis.__dynamicInertFocus.blurCount].join('|');
+})()
+"#,
+        )
+        .expect("ancestor inert focus setup should evaluate");
+
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .expect("ancestor inert focus-fixup timer should run")
+    );
+    let ancestor_async_state = vm
+        .eval(
+            r#"
+[document.activeElement === document.body, globalThis.__dynamicInertFocus.blurCount].join('|')
+"#,
+        )
+        .expect("ancestor inert focus-fixup result should evaluate");
+
+    assert_eq!(direct_sync_state, "true|0");
+    assert_eq!(direct_async_state, "true|1");
+    assert_eq!(ancestor_sync_state, "true|1");
+    assert_eq!(ancestor_async_state, "true|2");
 }
 #[test]
 fn scroll_container_focusability_tracks_current_layout() {
@@ -3323,6 +3412,59 @@ fn set_html_unsafe_preserves_declarative_shadow_roots() {
         "function|1|true|true|2|input|span|1|em|true|2|true|false|true|true|true|slot|true"
     );
 }
+
+#[test]
+fn set_html_unsafe_in_xml_documents_uses_xml_fragment_serialization() {
+    let mut vm = new_storage_test_vm("https://set-html-unsafe-xml.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const markup = '<p><foo><b><i>test</b></i>';
+  const xml = document.implementation.createDocument(null, 'root', null);
+  xml.documentElement.setHTMLUnsafe(markup);
+
+  const svg = document.implementation.createDocument(
+    'http://www.w3.org/2000/svg',
+    'root',
+    null
+  );
+  svg.documentElement.setHTMLUnsafe(markup);
+
+  const liveSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  liveSvg.setHTMLUnsafe('<circle></circle>');
+
+  return [
+    xml.contentType,
+    xml.documentElement.innerHTML,
+    xml.documentElement.firstChild.namespaceURI,
+    svg.contentType,
+    svg.documentElement.innerHTML,
+    svg.documentElement.firstChild.namespaceURI,
+    liveSvg.innerHTML,
+    liveSvg.firstChild.namespaceURI
+  ].join('|');
+})()
+"#,
+        )
+        .expect("setHTMLUnsafe should serialize XML document fragments as XML");
+
+    assert_eq!(
+        result,
+        concat!(
+            "application/xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "image/svg+xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "<circle></circle>|",
+            "http://www.w3.org/2000/svg"
+        )
+    );
+}
+
 #[test]
 fn get_html_serializes_shadow_roots_when_requested() {
     let mut vm = new_storage_test_vm("https://shadow-get-html.test/");
@@ -4735,6 +4877,72 @@ target:true:true:true:targetDiv,#document-fragment;\
 target:true:true:true:targetDiv,#document-fragment,middleF,#document-fragment|middle:true:true;\
 target:true:true:true:targetForm,#document-fragment,middleI,#document-fragment|middle:true:true"
     );
+}
+#[test]
+fn composed_reference_events_cross_shadow_roots_and_retarget_source() {
+    let mut vm = new_storage_test_vm("https://composed-reference-event-source.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const outerHost = document.createElement('div');
+  const outerRoot = outerHost.attachShadow({ mode: 'open' });
+  const source = document.createElement('button');
+  const innerHost = document.createElement('section');
+  const innerRoot = innerHost.attachShadow({ mode: 'open' });
+  const target = document.createElement('span');
+  innerRoot.appendChild(target);
+  outerRoot.append(source, innerHost);
+  document.body.appendChild(outerHost);
+
+  const targets = [outerHost, innerHost, target];
+  const dispatch = (event) => {
+    const captureSources = new Map();
+    const bubbleSources = new Map();
+    for (const currentTarget of targets) {
+      currentTarget.addEventListener(event.type, currentEvent => {
+        bubbleSources.set(currentTarget, currentEvent.source);
+      }, { once: true });
+      currentTarget.addEventListener(event.type, currentEvent => {
+        captureSources.set(currentTarget, currentEvent.source);
+      }, { capture: true, once: true });
+    }
+    target.dispatchEvent(event);
+    return targets.every(currentTarget => {
+      const expectedSource = currentTarget === outerHost ? outerHost : source;
+      return captureSources.get(currentTarget) === expectedSource &&
+        bubbleSources.get(currentTarget) === expectedSource;
+    }) && event.source === outerHost;
+  };
+
+  const command = new CommandEvent('command', { composed: true, source });
+  const toggle = new ToggleEvent('toggle', { composed: true, source });
+  const toggleSourceDescriptor = Object.getOwnPropertyDescriptor(
+    ToggleEvent.prototype,
+    'source'
+  );
+  return [
+    dispatch(command),
+    dispatch(toggle),
+    !Object.hasOwn(toggle, 'source'),
+    typeof toggleSourceDescriptor.get,
+    toggleSourceDescriptor.set === undefined,
+    toggleSourceDescriptor.enumerable
+  ].join('|');
+})()
+"#,
+        )
+        .expect("composed reference events should cross shadow roots");
+
+    assert_eq!(result, "true|true|true|function|true|true");
 }
 #[tokio::test]
 async fn toggle_and_interest_events_follow_reference_target_source_path() {

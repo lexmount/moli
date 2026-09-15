@@ -9,22 +9,23 @@ use std::{
 use crate::{
     context_bootstrap::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
-        FileSystemHandleClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_file_object,
-        build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
-        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
-        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
-        detach_transferred_message_port, dom_exception_clone_fields,
-        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
-        file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
-        initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
-        prepare_transform_stream_transfer, prepare_writable_stream_transfer,
-        quota_exceeded_error_clone_fields, require_internal_stream_value,
-        selected_file_from_object,
+        FileSystemHandleClonePayload, GeometryClonePayload, ImageDataClonePayload,
+        ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
+        attach_file_system_file_snapshot_clone_payload, build_file_list_object, build_file_object,
+        build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
+        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
+        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
+        detach_message_port_owner_for_transfer, detach_transferred_message_port,
+        dom_exception_clone_fields, ensure_message_port_wrapper_for_id,
+        file_list_files_from_object, file_system_file_snapshot_clone_payload_from_object,
+        file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
+        image_data_clone_payload_from_object, initialize_readable_stream_clone_shell,
+        initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
+        message_port_id_from_object, new_dom_exception_value, new_quota_exceeded_error_value,
+        prepare_readable_stream_transfer, prepare_transform_stream_transfer,
+        prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
+        require_internal_stream_value, selected_file_from_object,
     },
     dom::native::SelectedFile,
     types::MessagePortId,
@@ -35,7 +36,7 @@ pub(crate) use moli_structured_clone::{
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 
 const HOST_OBJECT_TAG_MESSAGE_PORT: u32 = 1;
-const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
+pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
@@ -44,6 +45,16 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
+
+const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
+const GEOMETRY_KIND_DOM_POINT: u32 = 1;
+const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
+const GEOMETRY_KIND_DOM_RECT: u32 = 3;
+const GEOMETRY_KIND_DOM_QUAD: u32 = 4;
+const GEOMETRY_KIND_DOM_MATRIX_READONLY: u32 = 5;
+const GEOMETRY_KIND_DOM_MATRIX: u32 = 6;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
@@ -273,16 +284,54 @@ struct WireSerializer {
     file_system_handles: Rc<RefCell<ClonedFileSystemHandleStore>>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 struct ClonedBlobStore {
     next_id: u32,
     blobs: Vec<ClonedBlob>,
+    sources: Vec<ClonedBlobSource>,
+}
+
+struct ClonedBlobSource {
+    clone_id: u32,
+    object: v8::Global<v8::Object>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct ClonedFileSystemHandleStore {
     next_id: u32,
     handles: Vec<ClonedFileSystemHandle>,
+}
+
+impl WireSerializer {
+    fn store_blob_clone<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        payload: BlobClonePayload,
+    ) -> Option<u32> {
+        let mut store = self.blobs.borrow_mut();
+        if let Some(source) = store
+            .sources
+            .iter()
+            .find(|source| v8::Local::new(scope, &source.object).strict_equals(object.into()))
+        {
+            return Some(source.clone_id);
+        }
+
+        let clone_id = store.next_id;
+        let Some(next_id) = store.next_id.checked_add(1) else {
+            drop(store);
+            throw_data_clone_exception(scope, "Too many Blob or File objects in structured clone.");
+            return None;
+        };
+        store.next_id = next_id;
+        store.blobs.push(ClonedBlob { clone_id, payload });
+        store.sources.push(ClonedBlobSource {
+            clone_id,
+            object: v8::Global::new(scope, object),
+        });
+        Some(clone_id)
+    }
 }
 
 impl v8::ValueSerializerImpl for WireSerializer {
@@ -326,6 +375,15 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     }
                     serializer.write_uint32(HOST_OBJECT_TAG_MESSAGE_PORT);
                     serializer.write_uint64(port_id);
+                    return Some(true);
+                }
+            }
+            Some(
+                "DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad"
+                | "DOMMatrix" | "DOMMatrixReadOnly",
+            ) => {
+                if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
+                    write_geometry_clone_payload(serializer, payload);
                     return Some(true);
                 }
             }
@@ -403,19 +461,43 @@ impl v8::ValueSerializerImpl for WireSerializer {
                 serializer.write_uint32(clone_id);
                 return Some(true);
             }
-            Some("Blob" | "File") => {
-                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
-                    let mut store = self.blobs.borrow_mut();
-                    let clone_id = store.next_id;
-                    let Some(next_id) = store.next_id.checked_add(1) else {
-                        drop(store);
-                        throw_data_clone_exception(scope, "Too many Blobs in structured clone.");
+            Some("FileList") => {
+                let Some(files) = file_list_files_from_object(scope, object) else {
+                    throw_data_clone_exception(scope, "Invalid FileList during structured clone.");
+                    return None;
+                };
+                let Ok(length) = u32::try_from(files.len()) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many Files in structured clone FileList.",
+                    );
+                    return None;
+                };
+                let mut clone_ids = Vec::with_capacity(files.len());
+                for file in files {
+                    let Some(payload @ BlobClonePayload::File { .. }) =
+                        blob_clone_payload_from_object(scope, file)
+                    else {
+                        throw_data_clone_exception(
+                            scope,
+                            "FileList contains an invalid File during structured clone.",
+                        );
                         return None;
                     };
-                    store.next_id = next_id;
-                    store.blobs.push(ClonedBlob { clone_id, payload });
-                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    clone_ids.push(self.store_blob_clone(scope, file, payload)?);
+                }
+                serializer.write_uint32(HOST_OBJECT_TAG_FILE_LIST);
+                serializer.write_uint32(length);
+                for clone_id in clone_ids {
                     serializer.write_uint32(clone_id);
+                }
+                return Some(true);
+            }
+            Some("Blob" | "File") => {
+                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+                    let index = self.store_blob_clone(scope, object, payload)?;
+                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    serializer.write_uint32(index);
                     return Some(true);
                 }
             }
@@ -515,7 +597,26 @@ struct WireDeserializer {
     transform_streams: HashMap<u32, TransformStreamClonePayload>,
     deferred_streams: Rc<RefCell<Vec<DeferredStreamMaterialization>>>,
     blobs: HashMap<u32, BlobClonePayload>,
+    blob_objects: RefCell<HashMap<u32, v8::Global<v8::Object>>>,
     file_system_handles: HashMap<u32, FileSystemHandleClonePayload>,
+}
+
+impl WireDeserializer {
+    fn blob_object_for_clone_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        clone_id: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if let Some(object) = self.blob_objects.borrow().get(&clone_id) {
+            return Some(v8::Local::new(scope, object));
+        }
+        let payload = self.blobs.get(&clone_id)?;
+        let object = build_blob_object_from_clone_payload(scope, payload)?;
+        self.blob_objects
+            .borrow_mut()
+            .insert(clone_id, v8::Global::new(scope, object));
+        Some(object)
+    }
 }
 
 impl v8::ValueDeserializerImpl for WireDeserializer {
@@ -554,6 +655,15 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     None
                 })
             }
+            HOST_OBJECT_TAG_GEOMETRY => read_geometry_clone_payload(deserializer)
+                .map(|payload| build_geometry_object_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    throw_data_clone_exception(
+                        scope,
+                        "Failed to deserialize structured clone Geometry object.",
+                    );
+                    None
+                }),
             HOST_OBJECT_TAG_READABLE_STREAM => {
                 let clone_id = read_u32(deserializer)?;
                 let Some(payload) = self.readable_streams.get(&clone_id).cloned() else {
@@ -614,14 +724,50 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
             }
             HOST_OBJECT_TAG_BLOB => {
                 let clone_id = read_u32(deserializer)?;
-                let Some(payload) = self.blobs.get(&clone_id) else {
+                let Some(object) = self.blob_object_for_clone_id(scope, clone_id) else {
                     throw_data_clone_exception(
                         scope,
                         "Missing Blob payload during structured clone.",
                     );
                     return None;
                 };
-                build_blob_object_from_clone_payload(scope, payload)
+                Some(object)
+            }
+            HOST_OBJECT_TAG_FILE_LIST => {
+                let length = read_u32(deserializer)?;
+                let mut files = Vec::new();
+                if files.try_reserve_exact(length as usize).is_err() {
+                    throw_data_clone_exception(
+                        scope,
+                        "FileList is too large to deserialize from structured clone.",
+                    );
+                    return None;
+                }
+                for _ in 0..length {
+                    let clone_id = read_u32(deserializer)?;
+                    if !matches!(
+                        self.blobs.get(&clone_id),
+                        Some(BlobClonePayload::File { .. })
+                    ) {
+                        throw_data_clone_exception(
+                            scope,
+                            "Missing File payload during FileList structured clone.",
+                        );
+                        return None;
+                    }
+                    let Some(file) = self.blob_object_for_clone_id(scope, clone_id) else {
+                        throw_data_clone_exception(
+                            scope,
+                            "Failed to deserialize File in structured clone FileList.",
+                        );
+                        return None;
+                    };
+                    files.push(file);
+                }
+                build_file_list_object(scope, &files).or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize FileList.");
+                    None
+                })
             }
             HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE => {
                 let clone_id = read_u32(deserializer)?;
@@ -746,7 +892,7 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
     }
 }
 
-fn write_image_data_payload(
+pub(crate) fn write_image_data_payload(
     serializer: &dyn v8::ValueSerializerHelper,
     payload: ImageDataClonePayload,
 ) {
@@ -757,7 +903,7 @@ fn write_image_data_payload(
     write_raw_vec(serializer, &payload.bytes);
 }
 
-fn read_image_data_payload<'s>(
+pub(crate) fn read_image_data_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -783,6 +929,125 @@ fn read_image_data_payload<'s>(
             bytes,
         },
     )
+}
+
+pub(crate) fn write_geometry_clone_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: GeometryClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+    match payload {
+        GeometryClonePayload::Point { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_POINT
+            } else {
+                GEOMETRY_KIND_DOM_POINT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Rect { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_RECT
+            } else {
+                GEOMETRY_KIND_DOM_RECT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Quad { points } => {
+            serializer.write_uint32(GEOMETRY_KIND_DOM_QUAD);
+            for point in points {
+                write_doubles(serializer, &point);
+            }
+        }
+        GeometryClonePayload::Matrix {
+            mutable,
+            is_2d,
+            values,
+        } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_MATRIX
+            } else {
+                GEOMETRY_KIND_DOM_MATRIX_READONLY
+            });
+            serializer.write_uint32(u32::from(is_2d));
+            if is_2d {
+                write_doubles(
+                    serializer,
+                    &[
+                        values[0], values[1], values[4], values[5], values[12], values[13],
+                    ],
+                );
+            } else {
+                write_doubles(serializer, &values);
+            }
+        }
+    }
+}
+
+pub(crate) fn read_geometry_clone_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<GeometryClonePayload> {
+    let kind = read_u32(deserializer)?;
+    match kind {
+        GEOMETRY_KIND_DOM_POINT_READONLY | GEOMETRY_KIND_DOM_POINT => {
+            Some(GeometryClonePayload::Point {
+                mutable: kind == GEOMETRY_KIND_DOM_POINT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_RECT_READONLY | GEOMETRY_KIND_DOM_RECT => {
+            Some(GeometryClonePayload::Rect {
+                mutable: kind == GEOMETRY_KIND_DOM_RECT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_QUAD => {
+            let mut points = [[0.0; 4]; 4];
+            for point in &mut points {
+                *point = read_doubles(deserializer)?;
+            }
+            Some(GeometryClonePayload::Quad { points })
+        }
+        GEOMETRY_KIND_DOM_MATRIX_READONLY | GEOMETRY_KIND_DOM_MATRIX => {
+            let is_2d = match read_u32(deserializer)? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            };
+            let values = if is_2d {
+                let [m11, m12, m21, m22, m41, m42] = read_doubles(deserializer)?;
+                [
+                    m11, m12, 0.0, 0.0, m21, m22, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, m41, m42, 0.0, 1.0,
+                ]
+            } else {
+                read_doubles(deserializer)?
+            };
+            Some(GeometryClonePayload::Matrix {
+                mutable: kind == GEOMETRY_KIND_DOM_MATRIX,
+                is_2d,
+                values,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn write_doubles(serializer: &dyn v8::ValueSerializerHelper, values: &[f64]) {
+    for value in values {
+        serializer.write_double(*value);
+    }
+}
+
+fn read_doubles<const N: usize>(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<[f64; N]> {
+    let mut values = [0.0; N];
+    for value in &mut values {
+        if !deserializer.read_double(value) {
+            return None;
+        }
+    }
+    Some(values)
 }
 
 pub(crate) fn write_crypto_key_payload<'s>(
@@ -1261,6 +1526,7 @@ fn deserialize_from_wire_impl<'s>(
             transform_streams,
             deferred_streams: Rc::clone(&deferred_streams),
             blobs,
+            blob_objects: RefCell::new(HashMap::new()),
             file_system_handles,
         }),
         &payload.base.wire_bytes,

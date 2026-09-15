@@ -2,19 +2,24 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
+    context_bootstrap::{
+        EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
+        EventHandlerType, apply_event_handler_return_value, event_is_error_event,
+        set_event_internal_flag,
+    },
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
         ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_event_callback,
+        invoke_prepared_before_unload_event_handler, invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
         element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
     },
-    util::{get_private_value, object_bool_property, set_private_value, v8_string, v8str},
+    util::{get_private_value, set_private_value, v8_string, v8str},
 };
 use std::{collections::HashSet, convert::TryFrom};
 
@@ -476,6 +481,19 @@ impl JsContextHost {
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
     ) {
+        self.dispatch_child_window_event_with_target_override(
+            scope, handle, event_type, event, false,
+        );
+    }
+
+    pub(crate) fn dispatch_child_window_event_with_target_override<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        event_type: &str,
+        event: v8::Local<'s, v8::Object>,
+        legacy_target_override: bool,
+    ) {
         if !self.child_window_event_requires_runtime_dispatch(handle, event_type) {
             return;
         }
@@ -487,7 +505,9 @@ impl JsContextHost {
         };
         let previous_active_child_window = enter_child_window_event_dispatch(scope, handle);
         self.push_child_subresource_request_scope(handle);
-        let target = if event_type == "unload" {
+        // The legacy flag changes event.target, while dispatch still takes
+        // place at Window. Script dispatch never sets this flag.
+        let target = if legacy_target_override {
             self.child_browsing_context_document_wrapper(scope, handle)
                 .map(Into::into)
                 .unwrap_or_else(|| window.into())
@@ -496,6 +516,12 @@ impl JsContextHost {
         };
         let _ = event.set(scope, v8str(scope, "target").into(), target);
         let _ = event.set(scope, v8str(scope, "currentTarget").into(), window.into());
+        let _ = event.set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 2).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, true);
 
         if event_type == "load" {
             install_child_body_load_attribute_handler_if_needed(scope, self, handle);
@@ -544,6 +570,19 @@ impl JsContextHost {
                 break;
             }
         }
+        let _ = event.set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 0).into(),
+        );
+        let _ = event.set(
+            scope,
+            v8str(scope, "currentTarget").into(),
+            v8::null(scope).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, false);
         self.pop_child_subresource_request_scope();
         restore_child_window_event_dispatch(scope, previous_active_child_window);
     }
@@ -617,6 +656,21 @@ impl JsContextHost {
     ) -> (bool, Option<v8::Global<v8::Value>>) {
         if !self.child_window_event_target_is_current(ready.target) {
             return (false, None);
+        }
+        if ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
+            && event_type == "beforeunload"
+        {
+            invoke_prepared_before_unload_event_handler(
+                scope,
+                self as *mut JsContextHost,
+                EventTargetHandle::ChildWindow(ready.target),
+                false,
+                event_type,
+                &format!("child window {event_type} listener"),
+                ready.callback,
+                event,
+            );
+            return (true, None);
         }
         let arguments = child_window_event_callback_arguments(
             scope,
@@ -747,6 +801,7 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
+        && event_is_error_event(scope, event)
     {
         vec![
             event
@@ -770,28 +825,22 @@ fn child_window_event_callback_arguments<'s>(
     }
 }
 
-fn apply_child_window_event_handler_return(
-    scope: &mut v8::PinScope<'_, '_>,
+fn apply_child_window_event_handler_return<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
     let Some(returned) = returned else {
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" {
-        returned.is_boolean() && returned.boolean_value(scope)
+    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+        EventHandlerType::OnErrorEventHandler
     } else {
-        returned.is_boolean() && !returned.boolean_value(scope)
+        EventHandlerType::EventHandler
     };
-    if should_cancel && object_bool_property(scope, event, "cancelable").unwrap_or(false) {
-        let _ = event.set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
-    }
+    apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
 fn install_child_body_load_attribute_handler_if_needed<'s>(

@@ -1,22 +1,72 @@
 use super::*;
 use crate::{
     context_bootstrap::{
-        FileSystemHandleDurablePayload, build_file_system_handle_from_durable_payload,
-        file_system_handle_clone_payload_from_object,
-        file_system_handle_durable_payload_from_object,
+        FileSystemHandleDurablePayload, build_file_list_object,
+        build_file_system_handle_from_durable_payload, build_geometry_object_from_clone_payload,
+        file_list_files_from_object, file_system_handle_clone_payload_from_object,
+        file_system_handle_durable_payload_from_object, geometry_clone_payload_from_object,
+        image_data_clone_payload_from_object,
     },
     dom::native::SelectedFile,
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
-        HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, blob_clone_payload_from_object,
-        build_blob_object_from_clone_payload, read_crypto_key_payload, write_crypto_key_payload,
+        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_GEOMETRY,
+        HOST_OBJECT_TAG_IMAGE_DATA, blob_clone_payload_from_object,
+        build_blob_object_from_clone_payload, read_crypto_key_payload, read_geometry_clone_payload,
+        read_image_data_payload, write_crypto_key_payload, write_geometry_clone_payload,
+        write_image_data_payload,
     },
 };
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 struct IndexedDbStructuredCloneSerializer {
     external_objects: Rc<RefCell<Vec<IndexedDbExternalObject>>>,
+    external_object_sources: Rc<RefCell<Vec<IndexedDbExternalObjectSource>>>,
+}
+
+struct IndexedDbExternalObjectSource {
+    index: u32,
+    object: v8::Global<v8::Object>,
+}
+
+impl IndexedDbStructuredCloneSerializer {
+    fn store_blob_external_object<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        payload: BlobClonePayload,
+    ) -> Option<u32> {
+        if let Some(source) = self
+            .external_object_sources
+            .borrow()
+            .iter()
+            .find(|source| v8::Local::new(scope, &source.object).strict_equals(object.into()))
+        {
+            return Some(source.index);
+        }
+
+        let mut external_objects = self.external_objects.borrow_mut();
+        let Ok(index) = u32::try_from(external_objects.len()) else {
+            drop(external_objects);
+            let exception = dom_exception_value(
+                scope,
+                "Too many external objects in IndexedDB structured clone.",
+                "DataCloneError",
+            );
+            scope.throw_exception(exception);
+            return None;
+        };
+        external_objects.push(indexed_db_external_object_from_blob_payload(payload));
+        drop(external_objects);
+        self.external_object_sources
+            .borrow_mut()
+            .push(IndexedDbExternalObjectSource {
+                index,
+                object: v8::Global::new(scope, object),
+            });
+        Some(index)
+    }
 }
 
 impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
@@ -54,20 +104,65 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     return Some(true);
                 }
             }
-            Some("Blob" | "File") => {
-                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
-                    let mut external_objects = self.external_objects.borrow_mut();
-                    let Ok(index) = u32::try_from(external_objects.len()) else {
-                        drop(external_objects);
+            Some("ImageData") => {
+                if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
+                    write_image_data_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some(
+                "DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad"
+                | "DOMMatrix" | "DOMMatrixReadOnly",
+            ) => {
+                if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
+                    write_geometry_clone_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some("FileList") => {
+                let Some(files) = file_list_files_from_object(scope, object) else {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Invalid FileList during IndexedDB structured clone.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                };
+                let Ok(length) = u32::try_from(files.len()) else {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Too many Files in IndexedDB structured clone FileList.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                };
+                let mut indices = Vec::with_capacity(files.len());
+                for file in files {
+                    let Some(payload @ BlobClonePayload::File { .. }) =
+                        blob_clone_payload_from_object(scope, file)
+                    else {
                         let exception = dom_exception_value(
                             scope,
-                            "Too many external objects in IndexedDB structured clone.",
+                            "FileList contains an invalid File during IndexedDB structured clone.",
                             "DataCloneError",
                         );
                         scope.throw_exception(exception);
                         return None;
                     };
-                    external_objects.push(indexed_db_external_object_from_blob_payload(payload));
+                    indices.push(self.store_blob_external_object(scope, file, payload)?);
+                }
+                serializer.write_uint32(HOST_OBJECT_TAG_FILE_LIST);
+                serializer.write_uint32(length);
+                for index in indices {
+                    serializer.write_uint32(index);
+                }
+                return Some(true);
+            }
+            Some("Blob" | "File") => {
+                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+                    let index = self.store_blob_external_object(scope, object, payload)?;
                     serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
                     serializer.write_uint32(index);
                     return Some(true);
@@ -144,6 +239,28 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
 
 struct IndexedDbStructuredCloneDeserializer {
     external_objects: Vec<IndexedDbExternalObject>,
+    external_object_cache: RefCell<HashMap<u32, v8::Global<v8::Object>>>,
+}
+
+impl IndexedDbStructuredCloneDeserializer {
+    fn blob_object_for_external_index<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        index: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if let Some(object) = self.external_object_cache.borrow().get(&index) {
+            return Some(v8::Local::new(scope, object));
+        }
+        let payload = self
+            .external_objects
+            .get(index as usize)
+            .and_then(blob_payload_from_indexed_db_external_object)?;
+        let object = build_blob_object_from_clone_payload(scope, &payload)?;
+        self.external_object_cache
+            .borrow_mut()
+            .insert(index, v8::Global::new(scope, object));
+        Some(object)
+    }
 }
 
 impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
@@ -163,6 +280,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     let exception = dom_exception_value(
@@ -174,6 +292,17 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     None
                 })
             }
+            HOST_OBJECT_TAG_GEOMETRY => read_geometry_clone_payload(deserializer)
+                .map(|payload| build_geometry_object_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Failed to deserialize IndexedDB Geometry object.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    None
+                }),
             HOST_OBJECT_TAG_BLOB => {
                 let mut index = 0;
                 if !deserializer.read_uint32(&mut index) {
@@ -185,11 +314,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     scope.throw_exception(exception);
                     return None;
                 }
-                let Some(payload) = self
-                    .external_objects
-                    .get(index as usize)
-                    .and_then(blob_payload_from_indexed_db_external_object)
-                else {
+                let Some(object) = self.blob_object_for_external_index(scope, index) else {
                     let exception = dom_exception_value(
                         scope,
                         "Missing external Blob during IndexedDB structured clone.",
@@ -198,7 +323,65 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     scope.throw_exception(exception);
                     return None;
                 };
-                build_blob_object_from_clone_payload(scope, &payload)
+                Some(object)
+            }
+            HOST_OBJECT_TAG_FILE_LIST => {
+                let mut length = 0;
+                if !deserializer.read_uint32(&mut length) {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Failed to deserialize IndexedDB FileList length.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                }
+                let mut files = Vec::new();
+                if files.try_reserve_exact(length as usize).is_err() {
+                    let exception = dom_exception_value(
+                        scope,
+                        "IndexedDB FileList is too large to deserialize.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                }
+                for _ in 0..length {
+                    let mut index = 0;
+                    if !deserializer.read_uint32(&mut index)
+                        || !matches!(
+                            self.external_objects.get(index as usize),
+                            Some(IndexedDbExternalObject::File { .. })
+                        )
+                    {
+                        let exception = dom_exception_value(
+                            scope,
+                            "Missing external File during IndexedDB FileList clone.",
+                            "DataCloneError",
+                        );
+                        scope.throw_exception(exception);
+                        return None;
+                    }
+                    let Some(file) = self.blob_object_for_external_index(scope, index) else {
+                        let exception = dom_exception_value(
+                            scope,
+                            "Failed to deserialize File in IndexedDB FileList.",
+                            "DataCloneError",
+                        );
+                        scope.throw_exception(exception);
+                        return None;
+                    };
+                    files.push(file);
+                }
+                build_file_list_object(scope, &files).or_else(|| {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Failed to deserialize IndexedDB FileList.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    None
+                })
             }
             HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE => {
                 let mut index = 0;
@@ -336,6 +519,7 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
 ) -> Option<IndexedDbValue> {
     let mut should_throw_data_clone_error = false;
     let external_objects = Rc::new(RefCell::new(Vec::new()));
+    let external_object_sources = Rc::new(RefCell::new(Vec::new()));
     let serialized = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let scope = try_catch.init();
@@ -344,6 +528,7 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
             &scope,
             Box::new(IndexedDbStructuredCloneSerializer {
                 external_objects: Rc::clone(&external_objects),
+                external_object_sources: Rc::clone(&external_object_sources),
             }),
         );
         serializer.write_header();
@@ -380,6 +565,7 @@ pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(
         scope,
         Box::new(IndexedDbStructuredCloneDeserializer {
             external_objects: value.external_objects().to_vec(),
+            external_object_cache: RefCell::new(HashMap::new()),
         }),
         value.wire_bytes(),
     );

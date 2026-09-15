@@ -388,6 +388,7 @@ impl JsContextHost {
         owner: WindowExecutionContextOwner,
     ) -> bool {
         self.retire_event_callbacks_for_execution_context(owner);
+        self.close_watcher_managers.remove(&owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
         if let Some(binding) = retired.as_ref() {
@@ -421,7 +422,10 @@ impl JsContextHost {
     pub(crate) fn retire_window_execution_contexts_for_context_token(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
+        let revoked_blob_object_url_count =
+            crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
@@ -437,6 +441,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.close_watcher_managers.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
@@ -449,13 +454,15 @@ impl JsContextHost {
                 ?context_token,
                 retired_count,
                 retired_indexed_db_connections,
+                revoked_blob_object_url_count,
                 "retired LocalWindow bindings with destroyed V8 execution context"
             );
-        } else if retired_indexed_db_connections > 0 {
+        } else if retired_indexed_db_connections > 0 || revoked_blob_object_url_count > 0 {
             tracing::debug!(
                 ?context_token,
                 retired_indexed_db_connections,
-                "retired IndexedDB state with destroyed V8 execution context"
+                revoked_blob_object_url_count,
+                "retired context-owned state with destroyed V8 execution context"
             );
         }
         retired_count
@@ -472,7 +479,11 @@ impl JsContextHost {
     pub(crate) fn retire_isolated_window_execution_context(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
+        self.retire_close_watcher_realm(context_token);
+        let revoked_blob_object_url_count =
+            crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let retired_realm_count = self
             .window_execution_context_realms
@@ -480,6 +491,7 @@ impl JsContextHost {
         tracing::debug!(
             ?context_token,
             retired_realm_count,
+            revoked_blob_object_url_count,
             "retired isolated Window realm registration"
         );
         retired_realm_count

@@ -24,8 +24,9 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, observable_input_hit_test,
-    observable_input_surface_hit_test, perform_auxiliary_link_default_action,
+    contenteditable_editing_host, dispatch_public_event, is_text_control,
+    observable_input_hit_test, observable_input_surface_hit_test,
+    perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
     perform_drop_default_action, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     replace_contenteditable_selection, replace_text_control_selection,
@@ -39,7 +40,10 @@ use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererPointerEventProperties,
     RendererTouchPoint,
 };
-use crate::util::node_wrapper_from_handle;
+use crate::util::{
+    node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
+    utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
+};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -566,7 +570,11 @@ impl ScriptVm {
                 }
             };
         }
-        let hit = surface_hit.input;
+        let hit = if event_name == "wheel" {
+            surface_hit.document_or_element()
+        } else {
+            surface_hit.input
+        };
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
@@ -611,15 +619,7 @@ impl ScriptVm {
             let mut context_host = self._context_host.borrow_mut();
             context_host.set_hovered_element_for_input(hit_handle);
         }
-        let wheel_fallback_handle = (event_name == "wheel")
-            .then(|| {
-                self._context_host
-                    .borrow()
-                    .dom_host()
-                    .document_element_handle()
-            })
-            .flatten();
-        let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
+        let Some(handle) = capture_handle.or(hit_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
         let root_to_frame = hit
@@ -851,6 +851,12 @@ impl ScriptVm {
                     modifiers,
                 )
             {
+                if (pointer_event_name == "pointerdown" && pointer.pointer_type == "mouse")
+                    || (pointer_event_name == "pointerup" && pointer.pointer_type != "mouse")
+                {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                }
                 let dispatched =
                     dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                 if event_name == "mousedown" && !dispatched.allows_default() {
@@ -884,6 +890,10 @@ impl ScriptVm {
                     )
                 };
                 if let Some(event) = event {
+                    if event_name == "mousedown" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(pointer_dispatch_handle);
+                    }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
                     if event_name == "wheel" && dispatched.allows_default() {
@@ -1298,6 +1308,10 @@ impl ScriptVm {
                     &pointer,
                 )
             {
+                if pointer_event_name == "pointerup" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(pointer_handle);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, pointer_handle, event);
             }
             if should_finish_touch {
@@ -1320,6 +1334,9 @@ impl ScriptVm {
                     .wrap_handle(scope, runtime_ptr, handle)
                 && let Some(event) = construct_touch_event(scope, event_name, x, y, target)
             {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }.notify_close_watcher_input_activation(handle);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
             }
             if should_finish_touch {
@@ -1545,6 +1562,10 @@ impl ScriptVm {
                         &pointer,
                     )
                 {
+                    if pointer_event_name == "pointerup" {
+                        unsafe { &mut *runtime_ptr }
+                            .notify_close_watcher_input_activation(changed.pointer_handle);
+                    }
                     let _ =
                         dispatch_public_event(scope, runtime_ptr, changed.pointer_handle, event);
                 }
@@ -1616,6 +1637,10 @@ impl ScriptVm {
                 &active_event_points,
                 &changed_event_points,
             ) {
+                if event_name == "touchend" {
+                    unsafe { &mut *runtime_ptr }
+                        .notify_close_watcher_input_activation(event_target);
+                }
                 let _ = dispatch_public_event(scope, runtime_ptr, event_target, event);
             }
             Ok(input_dispatch_outcome(true))
@@ -1770,7 +1795,8 @@ impl ScriptVm {
         };
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            if replace_text_control_selection(scope, runtime_ptr, handle, text) {
+            if is_text_control(unsafe { &*runtime_ptr }, handle) {
+                let _ = replace_text_control_selection(scope, runtime_ptr, handle, text);
                 return Ok(true);
             }
             let runtime = unsafe { &*runtime_ptr };
@@ -1816,6 +1842,19 @@ impl ScriptVm {
         let shift = modifiers & 8 == 8;
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
+            let runtime = unsafe { &mut *runtime_ptr };
+            let close_request_context =
+                runtime
+                    .owner_dispatch_scope_for_node(handle)
+                    .and_then(|target| {
+                        let owner = runtime.current_window_execution_context_owner(target)?;
+                        runtime
+                            .window_execution_context(scope, owner, target)
+                            .map(|(_, context)| context)
+                    });
+            if event_name == "keydown" && key_lower != "escape" {
+                runtime.notify_close_watcher_input_activation(handle);
+            }
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -1834,9 +1873,22 @@ impl ScriptVm {
                 return Ok(input_dispatch_outcome(false));
             }
 
+            if event_name == "keydown"
+                && key_lower == "escape"
+                && let Some(context) = close_request_context
+            {
+                crate::context_bootstrap::process_close_watchers(scope, context);
+            }
+
             // Combined keydown/text input includes a cancelable keypress before
             // editing. Keep both events in this input turn; an explicit char
             // command already dispatched keypress and must not emit it twice.
+            if event_name == "keydown"
+                && let Some(handled) =
+                    perform_clipboard_key_default_action(scope, runtime_ptr, &key_lower, modifiers)
+            {
+                return Ok(input_dispatch_outcome(handled));
+            }
             let handle = if event_name == "keydown" && should_insert_text && !text.is_empty() {
                 // Like Blink's KeyboardEventManager, resolve focus again after
                 // keydown listeners before targeting the character event.
@@ -2053,35 +2105,27 @@ impl ScriptVm {
                 return Ok(input_dispatch_outcome(true));
             }
 
-            if target.is_text_control && key_lower == "backspace" {
+            if target.is_text_control && matches!(key_lower.as_str(), "backspace" | "delete") {
+                let value_units = utf16_units(&text_control_value(runtime, handle));
                 let (start, end) = current_selection_range(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 let (from, to) = if start != end {
                     (start, end)
-                } else if start == 0 {
-                    return Ok(input_dispatch_outcome(true));
+                } else if key_lower == "backspace" {
+                    (
+                        utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
+                        start,
+                    )
                 } else {
-                    (start - 1, start)
+                    (
+                        start,
+                        utf16_next_scalar_boundary(&value_units, start as usize) as u32,
+                    )
                 };
-                let _ =
-                    text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
-                return Ok(input_dispatch_outcome(replace_text_control_selection(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "",
-                )));
-            }
-
-            if target.is_text_control && key_lower == "delete" {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
-                let (start, end) = current_selection_range(runtime, handle);
-                let (from, to) = if start != end {
-                    (start, end)
-                } else if start >= value_len {
+                if from == to {
                     return Ok(input_dispatch_outcome(true));
-                } else {
-                    (start, start + 1)
-                };
+                }
                 let _ =
                     text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
                 return Ok(input_dispatch_outcome(replace_text_control_selection(
@@ -2093,7 +2137,7 @@ impl ScriptVm {
             }
 
             if target.is_text_control && (ctrl || meta) && key_lower == "a" {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
+                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
                 let _ = text_control_set_selection_range_internal(
                     scope,
                     runtime_ptr,
@@ -2131,8 +2175,11 @@ impl ScriptVm {
                     "arrowleft" | "left" | "arrowright" | "right" | "home" | "end"
                 )
             {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
+                let value_units = utf16_units(&text_control_value(runtime, handle));
+                let value_len = value_units.len() as u32;
                 let (start, end, direction) = current_selection_state(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 if shift {
                     let (anchor, focus) = match direction.as_str() {
                         "backward" => (end, start),
@@ -2140,12 +2187,24 @@ impl ScriptVm {
                         _ => (end, end),
                     };
                     let next_focus = match key_lower.as_str() {
-                        "arrowleft" | "left" => focus.saturating_sub(1),
-                        "arrowright" | "right" => (focus + 1).min(value_len),
+                        "arrowleft" | "left" => {
+                            utf16_previous_scalar_boundary(&value_units, focus as usize) as u32
+                        }
+                        "arrowright" | "right" => {
+                            utf16_next_scalar_boundary(&value_units, focus as usize) as u32
+                        }
                         "home" => 0,
                         "end" => value_len,
                         _ => focus,
                     };
+                    if next_focus == focus
+                        && matches!(
+                            key_lower.as_str(),
+                            "arrowleft" | "left" | "arrowright" | "right"
+                        )
+                    {
+                        return Ok(input_dispatch_outcome(true));
+                    }
                     let (next_start, next_end, next_direction) = if next_focus < anchor {
                         (next_focus, anchor, "backward")
                     } else if next_focus > anchor {
@@ -2168,20 +2227,29 @@ impl ScriptVm {
                         if start != end {
                             start
                         } else {
-                            start.saturating_sub(1)
+                            utf16_previous_scalar_boundary(&value_units, start as usize) as u32
                         }
                     }
                     "arrowright" | "right" => {
                         if start != end {
                             end
                         } else {
-                            (end + 1).min(value_len)
+                            utf16_next_scalar_boundary(&value_units, end as usize) as u32
                         }
                     }
                     "home" => 0,
                     "end" => value_len,
                     _ => end,
                 };
+                if start == end
+                    && caret == start
+                    && matches!(
+                        key_lower.as_str(),
+                        "arrowleft" | "left" | "arrowright" | "right"
+                    )
+                {
+                    return Ok(input_dispatch_outcome(true));
+                }
                 let _ = text_control_set_selection_range_internal(
                     scope,
                     runtime_ptr,

@@ -28,6 +28,7 @@ from PIL import Image, ImageChops
 from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
 from .case_set import FuzzyTolerance
 from .engine import EngineDriver, EngineDriverHandle
+from .native_input import NativeInput
 
 LAYOUT_VIEWPORT_WIDTH = 800
 LAYOUT_VIEWPORT_HEIGHT = 600
@@ -147,6 +148,7 @@ class _AttachedPage:
     target_id: str
     session_id: str
     baseline_target_ids: frozenset[str] | None
+    native_input: NativeInput | None = None
 
 
 @dataclass(frozen=True)
@@ -252,7 +254,14 @@ def _target_ids(infos: list[dict[str, Any]]) -> frozenset[str]:
 
 async def _close_target(client: RawCdpClient, target_id: str) -> None:
     command_id = await client.send("Target.closeTarget", {"targetId": target_id})
-    response, _ = await client.recv_until_id(command_id, timeout=5)
+    try:
+        response, _ = await client.recv_until_id(command_id, timeout=5)
+    except RawCdpError:
+        # Closing a parent or disposing a context can remove a target between
+        # getTargets and closeTarget. Only ignore the error if it is gone.
+        if target_id not in _target_ids(await _target_infos(client)):
+            return
+        raise
     success = (response.get("result") or {}).get("success")
     if success is False:
         raise RawCdpError(f"Target.closeTarget rejected target {target_id}")
@@ -260,6 +269,13 @@ async def _close_target(client: RawCdpClient, target_id: str) -> None:
 
 async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
     """Dispose one case's storage context and every target created inside it."""
+
+    input_cleanup_error = None
+    if page.native_input is not None:
+        try:
+            await page.native_input.close()
+        except Exception as error:
+            input_cleanup_error = error
 
     try:
         before = await _target_infos(client)
@@ -293,6 +309,8 @@ async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
     try:
         after = await _target_infos(client)
     except (RawCdpError, asyncio.TimeoutError):
+        if input_cleanup_error is not None and page.browser_context_id is None:
+            raise input_cleanup_error
         return
 
     residual_ids = {
@@ -327,12 +345,15 @@ async def _close_page(client: RawCdpClient, page: _AttachedPage) -> None:
             raise RawCdpError(
                 f"case cleanup left auxiliary targets alive: {sorted(leaked)}"
             )
+    if input_cleanup_error is not None and page.browser_context_id is None:
+        raise input_cleanup_error
 
 
 async def _attach_page(
     client: RawCdpClient,
     *,
     viewport: Viewport | None = None,
+    input_endpoint: str | None = None,
 ) -> _AttachedPage:
     """Create an isolated BrowserContext + Target for exactly one WPT case."""
 
@@ -402,6 +423,7 @@ async def _attach_page(
             target_id=target,
             session_id=session_id,
             baseline_target_ids=baseline_target_ids,
+            native_input=await NativeInput.attach(input_endpoint, target, browser_context_id) if input_endpoint else None,
         )
     except BaseException:
         if target is not None:
@@ -610,7 +632,11 @@ async def _run_one_case(
             )
             response, eval_seen = await client.recv_until_id(
                 eval_id,
-                timeout=max(0.01, min(5.0, deadline - time.perf_counter())),
+                # A synchronous test can keep the renderer busy for longer than
+                # an ordinary CDP command timeout.  Once the probe is in flight,
+                # let it use the case's remaining budget instead of turning a
+                # progressing test into an infrastructure error after 5 seconds.
+                timeout=max(0.01, deadline - time.perf_counter()),
             )
             seen_messages.extend(eval_seen)
         except (RawCdpError, asyncio.TimeoutError) as error:
@@ -1389,7 +1415,7 @@ async def _run_async(
         effective_viewport = LAYOUT_VIEWPORT
 
     try:
-        page = await _attach_page(client, viewport=effective_viewport)
+        page = await _attach_page(client, viewport=effective_viewport, input_endpoint=handle.endpoint)
     except Exception as error:
         result.setup_error = f"attach failed: {error}"
         try:
@@ -1444,6 +1470,8 @@ async def _run_async(
                 consecutive_relaunch_failures = 0
                 relaunch_count += 1
                 # Swap in a fresh engine and the isolated page for its next case.
+                if page.native_input is not None:
+                    await page.native_input.close()
                 try:
                     await client.websocket.close()
                 except Exception:
@@ -1454,6 +1482,8 @@ async def _run_async(
                 continue
 
             try:
+                if page.native_input is not None:
+                    page.native_input.deadline = time.perf_counter() + timeout_seconds
                 if isinstance(case, ReftestRun):
                     if effective_viewport is None:
                         raise RuntimeError("reftest requires a fixed viewport")
@@ -1502,6 +1532,8 @@ async def _run_async(
                         )
                     break
                 # Tear down current connection + engine, relaunch fresh.
+                if page.native_input is not None:
+                    await page.native_input.close()
                 try:
                     await client.websocket.close()
                 except Exception:
@@ -1556,7 +1588,7 @@ async def _run_async(
             if case_index + 1 < len(cases):
                 try:
                     await _close_page(client, page)
-                    page = await _attach_page(client, viewport=effective_viewport)
+                    page = await _attach_page(client, viewport=effective_viewport, input_endpoint=handle.endpoint)
                 except Exception:
                     # The completed case keeps its result, but no later case may
                     # inherit an incompletely disposed context or target set.
@@ -1636,7 +1668,7 @@ async def _try_relaunch(
             pass
         return None
     try:
-        new_page = await _attach_page(new_client, viewport=viewport)
+        new_page = await _attach_page(new_client, viewport=viewport, input_endpoint=new_handle.endpoint)
     except Exception:
         try:
             await new_client.websocket.close()

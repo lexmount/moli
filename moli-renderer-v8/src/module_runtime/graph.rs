@@ -484,6 +484,7 @@ impl NativeModuleGraphFetchRequest {
                         &request_origin,
                         &head,
                         request_mode,
+                        moli_fetch::RequestRedirectMode::Follow,
                     ).is_none();
                     if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
@@ -831,23 +832,8 @@ impl NativeModuleGraphJob {
         request: &NativeModuleGraphFetchRequest,
         source: std::result::Result<ModuleGraphFetchedSource, ModuleLoadError>,
     ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        let client = request.tree_client.ok_or_else(|| {
-            ModuleLoadError::new(
-                ModuleLoadStage::Fetch,
-                "module graph fetch request was missing its module tree client token",
-            )
-        })?;
-        if let Err(error) = &source {
-            let key = request.pending_fetch_key().cloned().ok_or_else(|| {
-                ModuleLoadError::new(
-                    ModuleLoadStage::Fetch,
-                    "failed module graph fetch request was missing its module map key",
-                )
-            })?;
-            vm.document_runtime
-                .mark_native_module_failed(key, error.clone());
-        }
-        self.finish_pending_chromium_tree_fetch_for_client(vm, client, request, source)
+        let mut owner = NativeModuleTreeDocumentOwner::new(vm);
+        self.finish_pending_chromium_tree_fetch_for_request_with_owner(&mut owner, request, source)
     }
 
     fn finish_pending_chromium_tree_fetch_for_request_with_owner<O>(
@@ -865,26 +851,20 @@ impl NativeModuleGraphJob {
                 "module graph fetch request was missing its module tree client token",
             )
         })?;
+        if let Err(error) = &source {
+            let key = request.pending_fetch_key().cloned().ok_or_else(|| {
+                ModuleLoadError::new(
+                    ModuleLoadStage::Fetch,
+                    "failed module graph fetch request was missing its module map key",
+                )
+            })?;
+            // Settle the shared fetch before failing this graph, so joined
+            // clients and later imports observe the cached fetch failure.
+            owner.mark_module_failed(key, error.clone());
+        }
         self.finish_pending_chromium_tree_fetch_for_client_with_owner(
             owner, client, request, source,
         )
-    }
-
-    fn finish_pending_chromium_tree_fetch_for_client(
-        &mut self,
-        vm: &mut ScriptVm,
-        client: module_tree::SingleModuleClientToken,
-        request: &NativeModuleGraphFetchRequest,
-        source: std::result::Result<ModuleGraphFetchedSource, ModuleLoadError>,
-    ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        trace_module_tree_fetch_completed_to_job(client, source.is_ok());
-        let outcome = match source {
-            Ok(source) => module_tree::ModuleFetchOutcome::Fetched(Box::new(
-                chromium_fetched_source_for_request(source, request)?,
-            )),
-            Err(error) => module_tree::ModuleFetchOutcome::Failed(chromium_error(error)),
-        };
-        self.resume_chromium_tree_fetch_outcome(vm, client, outcome)
     }
 
     fn finish_pending_chromium_tree_fetch_for_client_with_owner<O>(
@@ -905,16 +885,6 @@ impl NativeModuleGraphJob {
             Err(error) => module_tree::ModuleFetchOutcome::Failed(chromium_error(error)),
         };
         self.resume_chromium_tree_fetch_outcome_with_owner(owner, client, outcome)
-    }
-
-    fn resume_chromium_tree_fetch_outcome(
-        &mut self,
-        vm: &mut ScriptVm,
-        client: module_tree::SingleModuleClientToken,
-        outcome: module_tree::ModuleFetchOutcome,
-    ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        let mut owner = NativeModuleTreeDocumentOwner::new(vm);
-        self.resume_chromium_tree_fetch_outcome_with_owner(&mut owner, client, outcome)
     }
 
     pub(crate) fn resume_chromium_tree_fetch_outcome_with_owner<O>(
@@ -1351,6 +1321,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
                         "failed to resolve module specifier `{specifier}` from `{base_url}`: {error}"
                     ),
                 )
+                .with_error_constructor(module_tree::ModuleErrorConstructorKind::TypeError)
             })?;
         let attributes = local_attributes(attributes);
         let local_key = ModuleMapKey::from_url_and_attributes(&resolved_url, &attributes).map_err(
@@ -1538,6 +1509,9 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
     {
         let entry = local_entry_id(entry);
         let key = self.owner.module_entry_key(entry);
+        if let Some(error) = self.owner.module_failure(entry) {
+            return Err(chromium_error(error).with_key(chromium_module_key(&key)));
+        }
         let base_url = self.owner.module_entry_url(entry);
         let effective_fetch_metadata = self.owner.module_effective_fetch_metadata(entry);
         let requested_modules = self
@@ -1596,6 +1570,23 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             local_module_key(&key).unwrap_or_else(|_| ModuleMapKey::java_script(key.url.clone()));
         let entry = self.owner.mark_module_failed(local_key, local_error(error));
         chromium_entry_id(entry)
+    }
+
+    fn cache_module_request_error(
+        &mut self,
+        key: module_tree::ModuleMapKey,
+        error: module_tree::ModuleLoadError,
+    ) -> module_tree::ModuleLoadError {
+        let local_key = match local_module_key(&key) {
+            Ok(key) => key,
+            Err(error) => return chromium_error(error),
+        };
+        let error = match self.owner.preserve_module_load_error(local_error(error)) {
+            Ok(error) => error,
+            Err(error) => return chromium_error(error),
+        };
+        self.owner.mark_module_failed(local_key, error.clone());
+        chromium_error(error).with_key(key)
     }
 }
 
@@ -1715,6 +1706,9 @@ fn local_entry_id(entry: module_tree::ModuleEntryId) -> ModuleEntryId {
 fn chromium_source(source: ModuleSource) -> module_tree::ModuleSource {
     match source {
         ModuleSource::Text(source) => module_tree::ModuleSource::Text(source),
+        ModuleSource::TextWithOrigin { source, origin } => {
+            module_tree::ModuleSource::TextWithOrigin { source, origin }
+        }
         ModuleSource::Binary(bytes) => module_tree::ModuleSource::Binary(bytes),
     }
 }
@@ -1793,6 +1787,9 @@ fn chromium_fetched_source_for_request(
 fn local_source(source: module_tree::ModuleSource) -> ModuleSource {
     match source {
         module_tree::ModuleSource::Text(source) => ModuleSource::Text(source),
+        module_tree::ModuleSource::TextWithOrigin { source, origin } => {
+            ModuleSource::TextWithOrigin { source, origin }
+        }
         module_tree::ModuleSource::Binary(bytes) => ModuleSource::Binary(bytes),
     }
 }
@@ -1898,17 +1895,24 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let mut converted =
         module_tree::ModuleLoadError::new(chromium_load_stage(error.stage()), error.message());
+    if let Some(exception_id) = error.exception_id() {
+        converted = converted.with_exception_id(exception_id);
+    }
     if let Some(constructor) = error.error_constructor() {
         let constructor = match constructor {
+            ScriptErrorConstructorKind::Error => module_tree::ModuleErrorConstructorKind::Error,
             ScriptErrorConstructorKind::SyntaxError => {
                 module_tree::ModuleErrorConstructorKind::SyntaxError
             }
             ScriptErrorConstructorKind::TypeError => {
                 module_tree::ModuleErrorConstructorKind::TypeError
             }
-            ScriptErrorConstructorKind::Error
-            | ScriptErrorConstructorKind::WebAssemblyCompileError
-            | ScriptErrorConstructorKind::WebAssemblyLinkError => return converted,
+            ScriptErrorConstructorKind::WebAssemblyCompileError => {
+                module_tree::ModuleErrorConstructorKind::WebAssemblyCompileError
+            }
+            ScriptErrorConstructorKind::WebAssemblyLinkError => {
+                module_tree::ModuleErrorConstructorKind::WebAssemblyLinkError
+            }
         };
         converted = converted.with_error_constructor(constructor);
     }
@@ -1917,6 +1921,9 @@ fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
 
 fn local_error(error: module_tree::ModuleLoadError) -> ModuleLoadError {
     let mut converted = ModuleLoadError::new(local_load_stage(error.stage), error.message);
+    if let Some(exception_id) = error.exception_id {
+        converted = converted.with_exception_id(exception_id);
+    }
     if let Some(constructor) = error.error_constructor {
         converted = converted.with_error_constructor(local_error_constructor(constructor));
     }
@@ -1927,10 +1934,17 @@ fn local_error_constructor(
     constructor: module_tree::ModuleErrorConstructorKind,
 ) -> ScriptErrorConstructorKind {
     match constructor {
+        module_tree::ModuleErrorConstructorKind::Error => ScriptErrorConstructorKind::Error,
         module_tree::ModuleErrorConstructorKind::SyntaxError => {
             ScriptErrorConstructorKind::SyntaxError
         }
         module_tree::ModuleErrorConstructorKind::TypeError => ScriptErrorConstructorKind::TypeError,
+        module_tree::ModuleErrorConstructorKind::WebAssemblyCompileError => {
+            ScriptErrorConstructorKind::WebAssemblyCompileError
+        }
+        module_tree::ModuleErrorConstructorKind::WebAssemblyLinkError => {
+            ScriptErrorConstructorKind::WebAssemblyLinkError
+        }
     }
 }
 
@@ -2285,12 +2299,13 @@ fn module_script_inline_tree_job(
     vm: &mut ScriptVm,
     root: ModuleRootInput,
 ) -> std::result::Result<NativeModuleGraphJob, ModuleLoadError> {
-    module_script_inline_tree_job_for_owner(vm, root, ModuleScriptCompletionOwner::Parser)
+    module_script_inline_tree_job_for_owner(vm, root, true, ModuleScriptCompletionOwner::Parser)
 }
 
 fn module_script_inline_tree_job_for_owner(
     vm: &mut ScriptVm,
     root: ModuleRootInput,
+    source_is_external: bool,
     completion_owner: ModuleScriptCompletionOwner,
 ) -> std::result::Result<NativeModuleGraphJob, ModuleLoadError> {
     let trace_label = match completion_owner {
@@ -2299,11 +2314,18 @@ fn module_script_inline_tree_job_for_owner(
     };
     trace_module_graph_job_created(trace_label, &root);
     let key = module_key_for_root(&root)?;
-    vm.dispatch_module_fetch_csp_report_only_violation_for_owner(&key, &root.fetch_metadata);
-    if let Some(error) = vm.csp_blocked_module_fetch_error_for_owner(&key, &root.fetch_metadata) {
-        vm.document_runtime
-            .mark_native_module_failed(key.clone(), error.clone());
-        return Err(error);
+    // This adapter also accepts externally sourced roots whose bytes are already
+    // loaded. Only those roots have a fetch URL to check. Actual inline roots
+    // passed source-text CSP before graph creation; their synthetic identity URL
+    // is not a request. Dependency fetches keep their own URL policy checks.
+    if source_is_external {
+        vm.dispatch_module_fetch_csp_report_only_violation_for_owner(&key, &root.fetch_metadata);
+        if let Some(error) = vm.csp_blocked_module_fetch_error_for_owner(&key, &root.fetch_metadata)
+        {
+            vm.document_runtime
+                .mark_native_module_failed(key.clone(), error.clone());
+            return Err(error);
+        }
     }
     if let Some(entry) = reusable_inline_module_entry(vm, &key)? {
         return Ok(native_module_graph_job_for_inline_entry(
@@ -2328,7 +2350,7 @@ fn module_script_inline_tree_job_for_owner(
     let (record, identity) = match vm.compile_native_module_record(
         key.clone(),
         &source,
-        &root.source_url,
+        &root.base_url,
         &root.fetch_metadata,
     ) {
         Ok(result) => result,
@@ -2451,7 +2473,7 @@ fn module_script_graph_job_for_owner(
         source_is_external,
         completion_owner,
     );
-    module_script_inline_tree_job_for_owner(vm, root, completion_owner)
+    module_script_inline_tree_job_for_owner(vm, root, source_is_external, completion_owner)
 }
 
 pub(crate) fn parser_owned_loaded_module_script_graph_job(
@@ -2601,6 +2623,7 @@ where
                         request.base_url()
                     ),
                 )
+                .with_error_constructor(ScriptErrorConstructorKind::TypeError)
             })?,
     };
     let integrity = owner.resolve_module_integrity(&source_url);
@@ -2641,6 +2664,23 @@ mod tests {
         Url::parse(raw).expect("test url should parse")
     }
 
+    #[test]
+    fn module_source_origin_survives_the_tree_adapter() {
+        let source = ModuleSource::text_with_origin(
+            "export const value = 1;".to_owned(),
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: url("https://example.test/source.html"),
+                line_offset: 17,
+                column_offset: 23,
+            },
+        );
+        let roundtrip = local_source(chromium_source(source.clone()));
+        assert_eq!(roundtrip, source);
+        assert_eq!(roundtrip.text_source(), Some("export const value = 1;"));
+        assert_eq!(roundtrip.origin().unwrap().line_offset, 17);
+        assert!(roundtrip.binary_source().is_none());
+    }
+
     fn new_test_vm(url: &str) -> StandaloneScriptVmHarness {
         let _js_runtime = crate::JsRuntime::initialize();
         let page_task_queue = crate::page_task_queue::PageTaskQueueTestHarness::new();
@@ -2655,6 +2695,52 @@ mod tests {
         .expect("script vm bootstrap should succeed")
         .finish()
         .expect("script vm finish should succeed")
+    }
+
+    #[test]
+    fn module_source_origin_keeps_each_import_meta_base_when_first_accessed_later() {
+        let document_url = url("https://example.test/source.html");
+        let mut vm = new_test_vm(document_url.as_str());
+        vm.eval("globalThis.__moduleMetaReaders = [];").unwrap();
+        for directory in ["first", "second"] {
+            let base_url = url(&format!("https://example.test/{directory}/"));
+            let source = ModuleSource::text_with_origin(
+                "__moduleMetaReaders.push(() => import.meta);".to_owned(),
+                crate::document_module_graph::ModuleSourceOrigin {
+                    url: document_url.clone(),
+                    line_offset: 7,
+                    column_offset: 0,
+                },
+            );
+            let mut job = parser_owned_loaded_module_script_graph_job(
+                &mut vm,
+                source,
+                &base_url,
+                &document_url,
+                &ScriptFetchMetadata::default(),
+                false,
+            )
+            .unwrap();
+            let NativeModuleGraphJobAdvance::Complete(graph) =
+                job.advance_module_script_owner_lane(&mut vm).unwrap()
+            else {
+                panic!("an import-free inline module must compile without fetching");
+            };
+            vm.instantiate_native_module_graph(&graph).unwrap();
+            vm.evaluate_native_module_graph(graph.root_entry).unwrap();
+        }
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify([1, 0].map(index => {
+                    const meta = __moduleMetaReaders[index]();
+                    const originalURL = meta.url;
+                    meta.url = 'https://author-replacement.test/';
+                    return [originalURL, meta.resolve('./dependency.mjs')];
+                }))"#,
+            )
+            .unwrap(),
+            r#"[["https://example.test/second/","https://example.test/second/dependency.mjs"],["https://example.test/first/","https://example.test/first/dependency.mjs"]]"#
+        );
     }
 
     #[test]
@@ -2907,6 +2993,71 @@ mod tests {
             vm.document_runtime.native_module_entry_state(entry),
             ModuleMapEntryState::Compiled
         );
+    }
+
+    #[test]
+    fn loaded_external_module_roots_still_enforce_url_csp() {
+        for owner in [
+            ModuleScriptCompletionOwner::Parser,
+            ModuleScriptCompletionOwner::Runtime,
+        ] {
+            let mut vm = new_test_vm("https://app.example.test/page");
+            vm.set_response_content_security_policies(&["script-src 'unsafe-inline'".to_owned()]);
+            let root_url = url("https://app.example.test/root.mjs");
+            let Err(error) = module_script_graph_job_for_owner(
+                &mut vm,
+                ModuleSource::text("globalThis.__externalModuleRan = true;".to_owned()),
+                &root_url,
+                &url("https://app.example.test/page"),
+                &ScriptFetchMetadata::default(),
+                true,
+                owner,
+            ) else {
+                panic!("having loaded source must not bypass external module URL policy");
+            };
+            assert_eq!(error.stage(), ModuleLoadStage::Fetch);
+            assert!(error.message().contains(root_url.as_str()));
+            assert_eq!(vm.eval("typeof __externalModuleRan").unwrap(), "undefined");
+        }
+    }
+
+    #[test]
+    fn inline_module_roots_preserve_dependency_url_csp() {
+        let dependency_url = url("https://dependencies.example.test/child.mjs");
+        for owner in [
+            ModuleScriptCompletionOwner::Parser,
+            ModuleScriptCompletionOwner::Runtime,
+        ] {
+            for allow_dependency in [false, true] {
+                let mut vm = new_test_vm("https://app.example.test/page");
+                vm.set_response_content_security_policies(&[if allow_dependency {
+                    "script-src 'unsafe-inline' https://dependencies.example.test".to_owned()
+                } else {
+                    "script-src 'unsafe-inline'".to_owned()
+                }]);
+                let job = module_script_graph_job_for_owner(
+                    &mut vm,
+                    ModuleSource::text(format!("import '{}';", dependency_url)),
+                    &url("https://app.example.test/page"),
+                    &url("https://app.example.test/page"),
+                    &ScriptFetchMetadata::default(),
+                    false,
+                    owner,
+                )
+                .expect("an admitted inline root must not undergo external URL CSP checks");
+                let advance = advance_module_script_graph(&mut vm, job);
+                if allow_dependency {
+                    let fetch = expect_single_fetch(advance.unwrap(), "allowed inline dependency");
+                    assert_eq!(fetch.pending_fetch_key().unwrap().url(), &dependency_url);
+                } else {
+                    let Err(error) = advance else {
+                        panic!("inline roots must not exempt their imports from CSP");
+                    };
+                    assert_eq!(error.stage(), ModuleLoadStage::Fetch);
+                    assert!(error.message().contains(dependency_url.as_str()));
+                }
+            }
+        }
     }
 
     #[test]
@@ -3394,6 +3545,44 @@ import "./c.mjs";
     }
 
     #[test]
+    fn static_bare_specifier_resolve_failure_is_a_type_error() {
+        let mut vm = new_test_vm("https://app.example.test/page");
+        let root_url = url("https://app.example.test/root.mjs");
+        let job = parser_owned_external_module_script_graph_job(
+            &mut vm,
+            &root_url,
+            &url("https://app.example.test/page"),
+            &ScriptFetchMetadata::default(),
+        );
+
+        let root_fetch = expect_single_fetch(
+            advance_module_script_graph(&mut vm, job)
+                .expect("external parser graph should request root"),
+            "bare-specifier root",
+        );
+        let error = match root_fetch.finish_source_for_test(
+            &mut vm,
+            Ok(ModuleSource::text(
+                r#"import "unmapped-bare-specifier";"#.to_owned(),
+            )),
+        ) {
+            Ok(_) => panic!("an unmapped bare specifier should fail during graph resolution"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
+        assert!(
+            error.message().contains("unmapped-bare-specifier"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn static_import_with_invalid_attribute_key_fails_before_dependency_fetch() {
         let mut vm = new_test_vm("https://app.example.test/page");
         let root_url = url("https://app.example.test/root.mjs");
@@ -3498,6 +3687,10 @@ import "./c.mjs";
 
         assert!(!job.has_chromium_tree_for_test());
         assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
         assert!(
             error.message().contains(
                 "module type `text` is not a valid module type for module `https://example.test/app/dep.txt`"

@@ -98,17 +98,26 @@ pub(super) fn xhr_send_callback<'s>(
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     if async_request {
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
-        if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
+        if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
             return;
         }
-        xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
         if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
             return;
         }
     }
 
     let owner = prepared.owner;
+    if !async_request
+        && !host
+            .document_permissions_policy_for_owner(owner)
+            .is_some_and(
+                crate::permissions_policy::DocumentPermissionsPolicy::synchronous_xhr_enabled,
+            )
+    {
+        set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
+        throw_synchronous_xhr_failure(scope, xhr, prepared.resolved_url.as_str(), "NetworkError");
+        return;
+    }
     if let Some(violation) = host
         .check_document_connect_csp_for_owner(
             scope,
@@ -181,13 +190,26 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if let Some(response) = local_url_response(&prepared.resolved_url) {
-        if !xhr_is_async(scope, xhr) {
-            record_xhr_response_success(host, &prepared, &response);
-            apply_xhr_response(scope, xhr, response);
-            return;
+    if let Some(result) = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    ) {
+        match result {
+            Ok(response) if async_request => {
+                queue_local_xhr_response(scope, host, xhr, prepared, response);
+            }
+            Ok(response) => {
+                record_xhr_response_success(host, &prepared, &response);
+                apply_xhr_response(scope, xhr, response);
+            }
+            Err(message) if async_request => {
+                record_url_policy_xhr_failure(scope, host, xhr, prepared, message);
+            }
+            Err(message) => {
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, message);
+            }
         }
-        queue_local_xhr_response(scope, host, xhr, prepared, response);
         return;
     }
 
@@ -239,36 +261,39 @@ fn xhr_open_generation_changed(
         .is_some_and(|current| current != expected)
 }
 
-pub(crate) fn dispatch_xhr_upload_complete(
+pub(crate) fn capture_xhr_upload_listener_flag(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> bool {
+    let has_upload_listeners = xhr_upload_object(scope, xhr).is_some_and(|upload| {
+        crate::context_bootstrap::simple_object_has_event_listeners(
+            scope,
+            upload,
+            XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+        )
+    });
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, has_upload_listeners);
+    has_upload_listeners
+}
+
+pub(crate) fn dispatch_xhr_loadstart(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
     send_body: Option<&[u8]>,
-) {
-    let Some(send_body) = send_body else {
-        return;
-    };
-    let total = send_body.len() as f64;
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, true);
-    for event_type in ["loadstart", "progress", "load", "loadend"] {
-        if xhr_is_aborted(scope, xhr) {
-            set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-            return;
-        }
-        xhr_dispatch_upload_progress_event(scope, xhr, event_type, total, total);
+) -> bool {
+    let open_generation =
+        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
+    // The XHR loadstart listener can abort before upload.loadstart runs.
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
+    set_xhr_state_number(scope, xhr, XHR_UPLOAD_LOADED_SLOT, 0.0);
+    xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
+    if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
+        return false;
     }
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-}
-
-pub(crate) fn dispatch_xhr_upload_abort_if_in_progress(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-) {
-    if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT).unwrap_or(false) {
-        return;
+    if let Some(send_body) = send_body {
+        xhr_dispatch_upload_progress_event(scope, xhr, "loadstart", 0.0, send_body.len() as f64);
     }
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
-    xhr_dispatch_upload_progress_event(scope, xhr, "abort", 0.0, 0.0);
-    xhr_dispatch_upload_progress_event(scope, xhr, "loadend", 0.0, 0.0);
+    !xhr_is_aborted(scope, xhr) && !xhr_open_generation_changed(scope, xhr, open_generation)
 }
 
 fn send_synchronous_network_xhr(
@@ -289,7 +314,8 @@ fn send_synchronous_network_xhr(
     .with_request_origin(prepared.request_origin.clone())
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+    .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+    .with_use_cors_preflight(prepared.use_cors_preflight);
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -418,6 +444,15 @@ fn send_synchronous_network_xhr(
 
     match result {
         Ok(response) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                crate::context_bootstrap::ResourcePerformanceEntry::from_fetch_response(
+                    prepared.resolved_url.as_str(),
+                    "xmlhttprequest",
+                    None,
+                    &response,
+                ),
+            );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.request_origin,
                 &response.head(),

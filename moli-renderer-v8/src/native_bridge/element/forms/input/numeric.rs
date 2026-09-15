@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
 use crate::webidl;
+use moli_dom::forms::parse_non_negative_length_attribute;
 
 pub(in crate::native_bridge) fn input_max_length_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -150,29 +151,10 @@ fn text_control_length_getter_from_object<'s>(
         return;
     };
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
-        .and_then(|value| parse_non_negative_long_prefix(&value))
+        .and_then(|value| parse_non_negative_length_attribute(&value))
+        .and_then(|value| i32::try_from(value).ok())
         .unwrap_or(-1);
     rv.set_int32(value);
-}
-
-fn parse_non_negative_long_prefix(value: &str) -> Option<i32> {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-    let mut chars = value.chars();
-    let (sign, rest) = match chars.next() {
-        Some('+') => (1_i64, chars.as_str()),
-        Some('-') => (-1_i64, chars.as_str()),
-        Some(_) => (1_i64, value),
-        None => return None,
-    };
-    let digits = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = sign * digits.parse::<i64>().ok()?;
-    i32::try_from(value).ok().filter(|value| *value >= 0)
 }
 
 fn text_control_length_setter_on_object<'s>(

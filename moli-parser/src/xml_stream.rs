@@ -611,7 +611,7 @@ impl TreeSink for XmlStreamDocumentSink {
         XmlStreamParseHandle::element(
             target
                 .common
-                .create_element(html_name, html_attrs, html_flags),
+                .create_element(html_name, html_attrs, html_flags, None),
             element_name,
         )
     }
@@ -647,11 +647,13 @@ impl TreeSink for XmlStreamDocumentSink {
                 HtmlNodeOrText::AppendText(HtmlStrTendril::from(text.as_ref()))
             }
         };
-        self.target
-            .borrow_mut()
+        let mut target = self.target.borrow_mut();
+        let parent_id = target
             .common
-            .append(parent.inner.node_id(), child)
-            .consume();
+            .template_contents_parent_handle(parent.inner.node_id())
+            .map(|handle| handle.node_id())
+            .unwrap_or_else(|| parent.inner.node_id());
+        target.common.append(parent_id, child).consume();
     }
 
     fn append_before_sibling(&self, sibling: &Self::Handle, child: XmlNodeOrText<Self::Handle>) {
@@ -964,6 +966,63 @@ mod tests {
                 .and_then(Node::as_cdata_section)
                 .map(|section| section.data()),
             Some(" < > & ")
+        );
+    }
+
+    #[test]
+    fn incremental_xhtml_appends_template_children_to_template_contents() {
+        let mut stream = XmlDocumentStream::new(test_url());
+        stream.append_to_end(
+            concat!(
+                "<html xmlns='http://www.w3.org/1999/xhtml'><body>",
+                "<template id='outer'>text<div id='outer-child'/>",
+                "<template id='inner'><span id='inner-child'/></template></template>",
+                "<p id='after'/></body></html>"
+            )
+            .to_owned(),
+        );
+        let document = stream.finish();
+        let outer = element_by_id(&document, "outer").expect("outer template");
+        let inner = element_by_id(&document, "inner").expect("inner template");
+        let outer_child = element_by_id(&document, "outer-child").expect("outer child");
+        let inner_child = element_by_id(&document, "inner-child").expect("inner child");
+        let after = element_by_id(&document, "after").expect("sibling after template");
+        let outer_contents = document
+            .node(outer)
+            .and_then(Node::as_element)
+            .and_then(moli_dom::native::Element::template_contents)
+            .expect("outer template contents");
+        let inner_contents = document
+            .node(inner)
+            .and_then(Node::as_element)
+            .and_then(moli_dom::native::Element::template_contents)
+            .expect("inner template contents");
+        let contents_document = document
+            .node(outer_contents)
+            .and_then(Node::owner_document)
+            .expect("template contents owner document");
+
+        assert_eq!(document.child_ids(outer).count(), 0);
+        assert_eq!(document.child_ids(inner).count(), 0);
+        assert_eq!(
+            document.node(inner).and_then(Node::parent_node),
+            Some(outer_contents)
+        );
+        assert_eq!(
+            document.node(outer_child).and_then(Node::owner_document),
+            Some(contents_document)
+        );
+        assert_eq!(
+            document.node(inner_child).and_then(Node::owner_document),
+            Some(contents_document)
+        );
+        assert_eq!(
+            document.node(inner_contents).and_then(Node::owner_document),
+            Some(contents_document)
+        );
+        assert_eq!(
+            document.node(after).and_then(Node::owner_document),
+            Some(document.document_node_id())
         );
     }
 

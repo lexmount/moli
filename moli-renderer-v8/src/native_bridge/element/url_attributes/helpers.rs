@@ -61,7 +61,7 @@ pub(in crate::native_bridge::element) fn should_block_dangling_markup_subresourc
             .any(|byte| matches!(byte, b'\r' | b'\n' | b'\t'))
 }
 
-fn parse_url_with_document_query_encoding(
+pub(in crate::native_bridge) fn parse_url_with_document_query_encoding(
     runtime: &JsContextHost,
     handle: DomHandle,
     base: &Url,
@@ -116,23 +116,6 @@ fn document_handle_for_url_context(
     handle: DomHandle,
 ) -> Option<DomHandle> {
     runtime.dom_host().owner_document_handle(handle)
-}
-
-pub(in crate::native_bridge::element) fn default_port_for_scheme(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" => Some(80),
-        "https" => Some(443),
-        _ => None,
-    }
-}
-
-pub(in crate::native_bridge::element) fn normalize_url_default_port(url: &mut Url) {
-    if url
-        .port()
-        .is_some_and(|port| default_port_for_scheme(url.scheme()) == Some(port))
-    {
-        let _ = url.set_port(None);
-    }
 }
 
 pub(in crate::native_bridge::element) fn set_resolved_url_attribute(

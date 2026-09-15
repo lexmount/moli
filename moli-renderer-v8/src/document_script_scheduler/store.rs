@@ -19,7 +19,7 @@ use crate::parser_module_evaluation::{
 use crate::parser_script::action::ParserClassicScriptNextOwnerAction;
 use crate::planning::{PreparedScript, SharedScriptSourceLoad};
 use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParserModuleEvaluationReactionUpdate {
@@ -620,7 +620,7 @@ where
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
         mut convert: Convert,
     ) -> Option<ParserModuleEvaluationReactionUpdate>
     where
@@ -631,7 +631,7 @@ where
     {
         let root_entry =
             self.parser_module_evaluations
-                .mark_rejected(reaction_id, reason, error_constructor)?;
+                .mark_rejected(reaction_id, reason, error_value)?;
         let queued_ready_action_count = self.promote_ready_parser_module_evaluations(&mut convert);
         Some(ParserModuleEvaluationReactionUpdate {
             root_entry,
@@ -1185,6 +1185,196 @@ mod tests {
             .expect("parser order owner should release the retained exact terminal")
             .into_module_script_graph_ready();
         assert_eq!(parser_ready.script().node_id, first.node_id);
+    }
+
+    #[test]
+    fn async_module_readiness_bypasses_earlier_pending_modules() {
+        for earlier_mode in [ScriptMode::Async, ScriptMode::ModuleInOrder] {
+            for watch_before_ready in [false, true] {
+                let mut store: DocumentScriptSchedulerStore<u64, MainLikeModuleReadyTarget> =
+                    DocumentScriptSchedulerStore::default();
+                let target = MainLikeModuleReadyTarget {
+                    owner: 42,
+                    route: 1,
+                };
+                let mut slow =
+                    parser_module_script("https://document-scripts.test/slow.js", 10, 10);
+                slow.mode = earlier_mode;
+                let mut fast =
+                    parser_module_script("https://document-scripts.test/fast.js", 20, 20);
+                fast.mode = ScriptMode::Async;
+                assert!(
+                    store
+                        .register_and_watch_module_script(target.owner, &slow)
+                        .watched()
+                );
+                let fast_id = store.register_module_script(target.owner, &fast);
+                if watch_before_ready {
+                    assert!(store.watch_module_script(fast_id).watched());
+                }
+
+                assert_eq!(
+                    store.notify_module_script_graph_ready_work(main_like_graph_ready_work(
+                        target.clone(),
+                        fast.clone(),
+                        vec![ModuleEntryId::from_raw(20)],
+                    )),
+                    watch_before_ready,
+                );
+                if !watch_before_ready {
+                    assert!(!store.has_ready_work());
+                    assert!(store.watch_module_script(fast_id).watched());
+                }
+
+                let ready = store
+                    .take_next_ready_work()
+                    .expect("ready async module must not wait for an earlier module")
+                    .into_module_script_graph_ready();
+                assert_eq!(ready.script().node_id, fast.node_id);
+                assert_eq!(
+                    store.pending_parser_module_script_count_for_test(target.owner),
+                    1
+                );
+                assert!(!store.has_ready_work());
+
+                assert!(
+                    store.notify_module_script_graph_ready_work(main_like_graph_ready_work(
+                        target.clone(),
+                        slow.clone(),
+                        vec![ModuleEntryId::from_raw(10)],
+                    ))
+                );
+                let ready = store
+                    .take_next_ready_work()
+                    .expect("slow module completes later")
+                    .into_module_script_graph_ready();
+                assert_eq!(ready.script().node_id, slow.node_id);
+                assert_eq!(
+                    store.pending_parser_module_script_count_for_test(target.owner),
+                    0
+                );
+                assert!(!store.has_ready_work());
+            }
+        }
+    }
+
+    #[test]
+    fn async_module_failure_bypasses_earlier_pending_modules() {
+        for watch_before_failure in [false, true] {
+            let mut store: DocumentScriptSchedulerStore<
+                u64,
+                std::convert::Infallible,
+                std::convert::Infallible,
+                TestModuleGraphFailure,
+            > = DocumentScriptSchedulerStore::default();
+            let owner = 42;
+            let mut slow = parser_module_script("https://document-scripts.test/slow.js", 10, 10);
+            slow.mode = ScriptMode::Async;
+            let mut failed =
+                parser_module_script("https://document-scripts.test/failed.js", 20, 20);
+            failed.mode = ScriptMode::Async;
+            assert!(
+                store
+                    .register_and_watch_module_script(owner, &slow)
+                    .watched()
+            );
+            let failed_id = store.register_module_script(owner, &failed);
+            if watch_before_failure {
+                assert!(store.watch_module_script(failed_id).watched());
+            }
+            assert_eq!(
+                store.notify_module_script_graph_failed_action(TestModuleGraphFailure::new(
+                    owner,
+                    &failed,
+                    "fetch failed",
+                )),
+                watch_before_failure,
+            );
+            if !watch_before_failure {
+                assert!(!store.has_ready_work());
+                assert!(store.watch_module_script(failed_id).watched());
+            }
+
+            let failure = store
+                .take_next_ready_work()
+                .expect("async failure must not wait for an earlier module")
+                .into_module_script_graph_failed();
+            assert_eq!(failure.script_node_id(), failed.node_id);
+            assert_eq!(failure.message, "fetch failed");
+            assert_eq!(store.pending_parser_module_script_count_for_test(owner), 1);
+            assert!(!store.has_ready_work());
+        }
+    }
+
+    #[test]
+    fn ordered_modules_preserve_order_without_waiting_for_async_modules() {
+        let mut store: DocumentScriptSchedulerStore<u64, MainLikeModuleReadyTarget> =
+            DocumentScriptSchedulerStore::default();
+        let target = MainLikeModuleReadyTarget {
+            owner: 42,
+            route: 1,
+        };
+        let mut first = parser_module_script("https://document-scripts.test/first.js", 10, 10);
+        first.mode = ScriptMode::ModuleInOrder;
+        let mut middle = parser_module_script("https://document-scripts.test/async.js", 20, 20);
+        middle.mode = ScriptMode::Async;
+        let mut last = parser_module_script("https://document-scripts.test/last.js", 30, 30);
+        last.mode = ScriptMode::ModuleInOrder;
+        for script in [&first, &middle, &last] {
+            assert!(
+                store
+                    .register_and_watch_module_script(target.owner, script)
+                    .watched()
+            );
+        }
+
+        assert!(
+            !store.notify_module_script_graph_ready_work(main_like_graph_ready_work(
+                target.clone(),
+                last.clone(),
+                vec![ModuleEntryId::from_raw(30)],
+            ))
+        );
+        assert!(
+            !store.has_ready_work(),
+            "ordered modules must wait for earlier ordered modules"
+        );
+        assert!(
+            store.notify_module_script_graph_ready_work(main_like_graph_ready_work(
+                target.clone(),
+                first.clone(),
+                vec![ModuleEntryId::from_raw(10)],
+            ))
+        );
+        for expected in [&first, &last] {
+            let ready = store
+                .take_next_ready_work()
+                .expect("pending async module must not block ready ordered modules")
+                .into_module_script_graph_ready();
+            assert_eq!(ready.script().node_id, expected.node_id);
+        }
+        assert_eq!(
+            store.pending_parser_module_script_count_for_test(target.owner),
+            1
+        );
+        assert!(!store.has_ready_work());
+        assert!(
+            store.notify_module_script_graph_ready_work(main_like_graph_ready_work(
+                target.clone(),
+                middle.clone(),
+                vec![ModuleEntryId::from_raw(20)],
+            ))
+        );
+        let ready = store
+            .take_next_ready_work()
+            .expect("async module completes independently")
+            .into_module_script_graph_ready();
+        assert_eq!(ready.script().node_id, middle.node_id);
+        assert_eq!(
+            store.pending_parser_module_script_count_for_test(target.owner),
+            0
+        );
+        assert!(!store.has_ready_work());
     }
 
     #[test]

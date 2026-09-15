@@ -1,34 +1,5 @@
-use super::storage::{url_search_params_is_object, url_search_params_pairs};
-use super::*;
-use crate::context_bootstrap::url_form::url_href_slot;
 use crate::webidl;
 use moli_url::search_params::{SearchParamPair, parse_search_params};
-
-struct UrlSearchParamsSequencePair(SearchParamPair);
-
-impl<'s> webidl::WebIdlConverter<'s> for UrlSearchParamsSequencePair {
-    type Options = webidl::StringOptions;
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        let pair = <webidl::Sequence<webidl::UsvString> as webidl::WebIdlConverter>::convert(
-            scope, value, context, options,
-        )?;
-        if pair.0.len() != 2 {
-            return Err(webidl::WebIdlError::custom_message(
-                "URLSearchParams sequence pairs must contain exactly two items",
-            ));
-        }
-        let mut values = pair.0.into_iter();
-        let key = values.next().expect("validated sequence pair key").0;
-        let value = values.next().expect("validated sequence pair value").0;
-        Ok(Self((key, value)))
-    }
-}
 
 pub(super) fn url_search_params_pairs_from_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -38,18 +9,7 @@ pub(super) fn url_search_params_pairs_from_constructor<'s>(
         return Some(Vec::new());
     }
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-        if form_data_is_object(scope, object) {
-            return Some(
-                form_data_entries(scope, object)
-                    .into_iter()
-                    .filter_map(|(key, value)| {
-                        callback_value_string(scope, v8::Local::new(scope, &value))
-                            .map(|value| (key, value))
-                    })
-                    .collect(),
-            );
-        }
-        let sequence = match webidl::convert_optional_sequence::<UrlSearchParamsSequencePair>(
+        let sequence = match webidl::convert_optional_sequence::<webidl::Sequence<webidl::UsvString>>(
             scope,
             value,
             webidl::Context::argument("URLSearchParams", 1),
@@ -62,18 +22,21 @@ pub(super) fn url_search_params_pairs_from_constructor<'s>(
             }
         };
         if let Some(sequence) = sequence {
-            return Some(sequence.0.into_iter().map(|pair| pair.0).collect());
-        }
-        if url_search_params_is_object(scope, object) {
-            return Some(url_search_params_pairs(scope, object));
-        }
-        if url_href_slot(scope, object).is_some() {
-            return Some(
-                callback_arg_url_like_string(scope, value)
-                    .as_deref()
-                    .map(parse_search_params)
-                    .unwrap_or_default(),
-            );
+            // Pair lengths are checked after the complete WebIDL conversion.
+            let mut pairs = Vec::with_capacity(sequence.0.len());
+            for pair in sequence.0 {
+                let Ok([key, value]) = <[_; 2]>::try_from(pair.0) else {
+                    webidl::throw_error(
+                        scope,
+                        &webidl::WebIdlError::custom_message(
+                            "URLSearchParams sequence pairs must contain exactly two items",
+                        ),
+                    );
+                    return None;
+                };
+                pairs.push((key.0, value.0));
+            }
+            return Some(pairs);
         }
         return record_string_pairs(scope, object.into());
     }

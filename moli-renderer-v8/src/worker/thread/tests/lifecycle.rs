@@ -239,6 +239,62 @@ async fn service_worker_global_scope_does_not_expose_close() {
 }
 
 #[tokio::test]
+async fn service_worker_global_prototype_chain_is_complete_and_immutable() {
+    ensure_v8();
+    let (bootstrap_tx, mut bootstrap_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
+    let handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const chain = [];
+            for (let value = self; value !== null; value = Object.getPrototypeOf(value)) {
+                chain.push(value);
+            }
+            const expected = [
+                self,
+                ServiceWorkerGlobalScope.prototype,
+                WorkerGlobalScope.prototype,
+                EventTarget.prototype,
+                Object.prototype,
+            ];
+            if (chain.length !== expected.length ||
+                chain.some((value, index) => value !== expected[index])) {
+                throw new Error("service worker global prototype chain is incomplete");
+            }
+            for (const value of chain) {
+                const original = Object.getPrototypeOf(value);
+                if (Reflect.setPrototypeOf(value, {}) ||
+                    Object.getPrototypeOf(value) !== original ||
+                    !Reflect.setPrototypeOf(value, original)) {
+                    throw new Error("service worker global prototype chain is mutable");
+                }
+                if (!Object.isExtensible(value)) {
+                    throw new Error("immutable prototype object must remain extensible");
+                }
+            }
+            "#
+            .to_owned(),
+            "https://example.test/app/immutable-prototype-sw.js".to_owned(),
+        )
+        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+        })
+        .with_bootstrap_completion_sender(bootstrap_tx),
+    );
+
+    let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+        .await
+        .expect("timed out waiting for immutable service worker bootstrap")
+        .expect("service worker bootstrap channel closed");
+    bootstrap
+        .result
+        .expect("service worker global prototype chain should be complete and immutable");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap() {
     ensure_v8();
     let (bootstrap_tx, mut bootstrap_rx) =
@@ -701,9 +757,11 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                cors_exposed_header_names: None,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),
@@ -711,6 +769,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), "yes".to_owned())],
             },
         },
@@ -815,13 +874,16 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 run.clone(),
             ),
             request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                cors_exposed_header_names: None,
                 final_url: Some(request_url),
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 302,
+                status_text: "Found".to_owned(),
                 headers: vec![("location".to_owned(), "/app/final.html".to_owned())],
             },
         },
@@ -985,9 +1047,11 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                cors_exposed_header_names: None,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),
@@ -995,6 +1059,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), "yes".to_owned())],
             },
         },
@@ -1098,9 +1163,11 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                cors_exposed_header_names: None,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),
@@ -1108,6 +1175,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
             },
         },
@@ -2624,6 +2692,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
             referrer_policy: "origin".to_owned(),
             integrity: "sha256-test".to_owned(),
             keepalive: true,
+            use_cors_preflight: false,
         },
     };
     let completion =
@@ -2641,7 +2710,129 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
 }
 
 #[tokio::test]
-async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_body() {
+async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserves_checked_body() {
+    ensure_v8();
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fetch_url = format!("http://{}/body", listener.local_addr().unwrap());
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len(),
+            ).as_bytes()).await.unwrap();
+            stream.write_all(&bytes[..bytes.len() - 1]).await.unwrap();
+            if timeout(TIMEOUT, released)
+                .await
+                .is_ok_and(|result| result.is_ok())
+            {
+                stream.write_all(&bytes[bytes.len() - 1..]).await.unwrap();
+            }
+        });
+        let source = format!(
+            r#"
+            addEventListener('fetch', event => {{
+              event.respondWith((async () => {{
+                const response = await fetch({}, {{mode: 'no-cors'}});
+                const clone = response.clone();
+                const cacheName = event.request.url;
+                const cache = await caches.open(cacheName);
+                let settled = false;
+                const write = cache.put(event.request, clone).then(() => settled = true);
+                await new Promise(resolve => setTimeout(resolve, 30));
+                console.log(JSON.stringify({{type: response.type, bodyNull: response.body === null,
+                  cloneNull: clone.body === null, settled}}));
+                await write;
+                const cached = await cache.match(event.request);
+                await caches.delete(cacheName);
+                return cached;
+              }})());
+            }});
+        "#,
+            serde_json::to_string(&fetch_url).unwrap()
+        );
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, "https://example.test/app/sw.js".to_owned())
+                .with_request_client(loader)
+                .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                    registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                    version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                    scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+                }),
+        );
+        let mut request = service_worker_fetch_request_for_test();
+        request.request_mode = moli_fetch::RequestMode::NoCors;
+        request.destination = ServiceWorkerRequestDestination::Script;
+        handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+            event_id: ServiceWorkerEventId::from_u64_for_worker(31),
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                ServiceWorkerVersionId::from_u64_for_test(1),
+                crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            ),
+            request,
+            navigation_preload_sent: false,
+        });
+        let early = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::Console(message) => break message.message,
+                WorkerToParentMessage::SubresourceNetwork(_)
+                | WorkerToParentMessage::SubresourceContinue(_) => {}
+                other => panic!("expected opaque headers before EOF for {mime}: {other:?}"),
+            }
+        };
+        let early: serde_json::Value = serde_json::from_str(
+            early
+                .strip_prefix("log: ")
+                .unwrap_or_else(|| panic!("unexpected opaque response console message: {early}")),
+        )
+        .unwrap_or_else(|error| panic!("invalid opaque response diagnostic {early}: {error}"));
+        assert_eq!(early["type"], "opaque", "{mime}");
+        assert_eq!(early["bodyNull"], true, "{mime}");
+        assert_eq!(early["cloneNull"], true, "{mime}");
+        if !expected.is_empty() {
+            assert_eq!(
+                early["settled"], false,
+                "allowed body ended before its last byte"
+            );
+        }
+        release.send(()).unwrap();
+        let response = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => {
+                    match completion.result {
+                        ServiceWorkerFetchResult::Response(response) => break response,
+                        other => panic!("expected cached opaque response for {mime}: {other:?}"),
+                    }
+                }
+                WorkerToParentMessage::Error { message, .. } => panic!("{mime}: {message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(response.response_type, "opaque", "{mime}");
+        assert_eq!(response.body, expected, "{mime}");
+        server.await.unwrap();
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_head_and_body()
+ {
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -2668,7 +2859,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
             stream
                 .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCross-Origin-Resource-Policy: cross-origin\r\nVary: *\r\nSet-Cookie: hidden=secret\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
                 )
                 .await
                 .expect("write service worker opaque body response");
@@ -2683,7 +2874,9 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
                 function assertOpaqueResponse(response, label) {{
                   response.body;
                   if (response.type !== "opaque" || response.status !== 0 ||
-                      response.body !== null || response.bodyUsed) {{
+                      response.body !== null || response.bodyUsed ||
+                      response.statusText !== "" || response.url !== "" ||
+                      [...response.headers].length !== 0) {{
                     throw new Error(label + ":" + [
                       response.type,
                       response.status,
@@ -2788,7 +2981,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
-            response.status, 0,
+            response.status, 200,
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
@@ -2796,10 +2989,22 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             Some(fetch_url.as_str()),
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
-        assert!(
-            response.headers.is_empty(),
-            "clone/cache mode {clone_mode}/{cache_mode}"
-        );
+        assert_eq!(response.status_text, "OK");
+        for (name, value) in [
+            ("content-type", "application/javascript"),
+            ("cross-origin-resource-policy", "cross-origin"),
+            ("vary", "*"),
+            ("set-cookie", "hidden=secret"),
+        ] {
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|(key, entry)| key.eq_ignore_ascii_case(name) && entry == value),
+                "missing internal {name} for {clone_mode}/{cache_mode}: {:?}",
+                response.headers,
+            );
+        }
         assert_eq!(
             response.body,
             b"callback('OK');".to_vec(),
@@ -7411,6 +7616,131 @@ async fn worker_fetch_body_consumption_after_stream_abort_preserves_abort_reason
 }
 
 #[tokio::test]
+async fn worker_xmlhttprequest_loadstart_handles_upload_abort_and_reopen() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (() => {
+            const aborted = ["xhr", "upload", "empty"].map(abortAt => {
+                const xhr = new XMLHttpRequest();
+                const events = [];
+                xhr.onloadstart = event => {
+                    events.push(`xhr-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+                    if (abortAt === "xhr") xhr.abort();
+                };
+                xhr.upload.onloadstart = event => {
+                    events.push(`upload-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+                    if (abortAt !== "xhr") xhr.abort();
+                };
+                for (const type of ["progress", "load", "abort", "loadend"]) {
+                    xhr.upload.addEventListener(type, event => events.push(
+                        `upload-${type}:${xhr.readyState}:${event.loaded}:${event.total}:${event.lengthComputable}`));
+                }
+                xhr.onabort = () => events.push(`xhr-abort:${xhr.readyState}`);
+                xhr.onloadend = () => events.push(`xhr-loadend:${xhr.readyState}`);
+                xhr.open("POST", "/unused");
+                xhr.send(abortAt === "empty" ? "" : "é");
+                events.push(`after-send:${xhr.readyState}:${xhr.status}`);
+                return events;
+            });
+
+            const xhr = new XMLHttpRequest();
+            const reopened = [];
+            xhr.onloadstart = () => reopened.push(`xhr-start:${xhr.readyState}`);
+            xhr.upload.onloadstart = event => {
+                reopened.push(`upload-start:${event.loaded}:${event.total}`);
+                xhr.open("GET", "data:text/plain,replacement");
+                xhr.send();
+                reopened.push(`after-reopen:${xhr.readyState}`);
+            };
+            for (const type of ["progress", "load", "abort", "loadend"]) {
+                xhr.upload.addEventListener(type, () => reopened.push(`unexpected-upload-${type}`));
+            }
+            xhr.onload = () => reopened.push(`load:${xhr.responseText}`);
+            xhr.onloadend = () => {
+                reopened.push(`loadend:${xhr.readyState}`);
+                postMessage({ aborted, reopened });
+                close();
+            };
+            xhr.open("POST", "/unused");
+            xhr.send("é");
+        })();
+        "#
+        .into(),
+        "https://worker-xhr-upload-start.test/main.js".into(),
+    );
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"aborted":[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]],"reopened":["xhr-start:1","upload-start:0:2","xhr-start:1","after-reopen:1","load:replacement","loadend:4"]}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_xmlhttprequest_abort_uses_internal_state_and_preserves_reopened_request() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (() => {
+            const probe = new XMLHttpRequest();
+            const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+            const states = [];
+            let aborts = 0;
+            probe.onreadystatechange = () => states.push(state.call(probe));
+            probe.onabort = () => ++aborts;
+            Object.defineProperty(probe, "readyState", { get() { throw new Error("public readyState read"); } });
+            probe.abort();
+            const unsent = state.call(probe);
+            probe.open("POST", "data:text/plain,complete", false);
+            probe.abort();
+            const opened = state.call(probe);
+            probe.send({ toString() { probe.abort(); return "payload"; } });
+            const completed = [state.call(probe), probe.status, probe.responseText];
+            probe.abort();
+            const reset = [state.call(probe), probe.status, probe.statusText,
+                probe.responseText, probe.responseURL, probe.getAllResponseHeaders()];
+
+            const xhr = new XMLHttpRequest();
+            const events = [];
+            let restarted = false;
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 4 && !restarted) {
+                    restarted = true;
+                    events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+                    xhr.open("GET", "data:text/plain,second");
+                    xhr.send();
+                    events.push(`reopened:${xhr.readyState}`);
+                }
+            };
+            xhr.onloadstart = () => {
+                if (!restarted) {
+                    xhr.abort();
+                    events.push(`after-abort:${xhr.readyState}`);
+                }
+            };
+            xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+            xhr.onload = () => events.push(`load:${xhr.responseText}`);
+            xhr.onloadend = () => {
+                events.push(`loadend:${xhr.readyState}`);
+                if (xhr.readyState === 4) {
+                    postMessage({ unsent, opened, completed, reset, states, aborts, events });
+                    close();
+                }
+            };
+            xhr.open("GET", "data:text/plain,first");
+            xhr.send();
+        })();
+        "#
+        .into(),
+        "https://worker-xhr-abort-state.test/main.js".into(),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0,"events":["abort-ready:4:0","reopened:1","abort:1","loadend:1","after-abort:1","load:second","loadend:4"]}"#
+    );
+}
+
+#[tokio::test]
 async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_completion() {
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -9303,6 +9633,110 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
     assert_eq!(
         expect_post_json(msg),
         r#"{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"http://example.test/missing-child.js"}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_global() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                error: null,
+                ping: false
+            };
+            function finish() {
+                if (result.violation && result.error) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            child.addEventListener("message", () => {
+                result.ping = true;
+                postMessage(result);
+                close();
+            });
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    type: event.type,
+                    effectiveDirective: event.effectiveDirective,
+                    violatedDirective: event.violatedDirective,
+                    blockedURI: event.blockedURI,
+                    documentURI: event.documentURI,
+                    originalPolicy: event.originalPolicy,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("error", event => {
+                event.preventDefault();
+                result.error = {
+                    messageIncludesCsp: event.message.includes("Content Security Policy"),
+                    filename: event.filename
+                };
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"type":"securitypolicyviolation","effectiveDirective":"worker-src","violatedDirective":"worker-src","blockedURI":"data","documentURI":"https://app.example/parent.js","originalPolicy":"worker-src 'none'","disposition":"enforce","instance":true},"error":{"messageIncludesCsp":true,"filename":"data:text/javascript,postMessage('ping')"},"ping":false}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_worker_constructor_report_only_csp_is_async_and_does_not_block() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                childMessage: null
+            };
+            function finish() {
+                if (result.violation && result.childMessage) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    effectiveDirective: event.effectiveDirective,
+                    blockedURI: event.blockedURI,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("message", event => {
+                result.childMessage = event.data;
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_report_only_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"effectiveDirective":"worker-src","blockedURI":"data","disposition":"report","instance":true},"childMessage":"ping"}"#
     );
 }
 

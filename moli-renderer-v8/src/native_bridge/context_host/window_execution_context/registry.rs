@@ -216,9 +216,157 @@ impl WindowExecutionContextIdentity {
         self.access_policy == WindowExecutionContextAccessPolicy::Universal
     }
 
+    /// Encodes an exact callback-realm identity for storage in an internal V8
+    /// private slot. Lightweight popup realms alias their opener's V8 context,
+    /// so retaining only that context would lose the LocalWindow generation
+    /// and dispatch address captured when the callback was converted.
+    pub(crate) fn serialize_for_internal_slot(self) -> String {
+        let policy = u8::from(self.grants_universal_access());
+        match (self.owner, self.dispatch_scope) {
+            (WindowExecutionContextOwner::Frame(local_window_id), OwnerDispatchScope::Top) => {
+                format!(
+                    "frame:{}:top:{}:{policy}",
+                    local_window_id.0,
+                    self.realm_token.as_u64()
+                )
+            }
+            (
+                WindowExecutionContextOwner::Frame(local_window_id),
+                OwnerDispatchScope::Child(child_handle),
+            ) => format!(
+                "frame:{}:child:{}:{}:{policy}",
+                local_window_id.0,
+                child_handle.index(),
+                self.realm_token.as_u64()
+            ),
+            (
+                WindowExecutionContextOwner::LightweightPopup {
+                    popup_id,
+                    local_window_id,
+                },
+                OwnerDispatchScope::LightweightPopup(dispatch_popup_id),
+            ) => {
+                debug_assert_eq!(popup_id, dispatch_popup_id);
+                format!(
+                    "popup:{popup_id}:{}:{}:{policy}",
+                    local_window_id.as_u64(),
+                    self.realm_token.as_u64()
+                )
+            }
+            _ => unreachable!("Window execution-context owner and dispatch scope diverged"),
+        }
+    }
+
+    pub(crate) fn deserialize_from_internal_slot(serialized: &str) -> Option<Self> {
+        fn access_policy(value: &str) -> Option<WindowExecutionContextAccessPolicy> {
+            match value {
+                "0" => Some(WindowExecutionContextAccessPolicy::EnforceWebOrigin),
+                "1" => Some(WindowExecutionContextAccessPolicy::Universal),
+                _ => None,
+            }
+        }
+
+        let parts = serialized.split(':').collect::<Vec<_>>();
+        match parts.as_slice() {
+            ["frame", local_window_id, "top", realm_token, policy] => Some(Self::new(
+                WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(
+                    local_window_id.parse().ok()?,
+                )),
+                OwnerDispatchScope::Top,
+                RuntimeObservableContextToken::from_raw(realm_token.parse().ok()?),
+                access_policy(policy)?,
+            )),
+            [
+                "frame",
+                local_window_id,
+                "child",
+                child_handle,
+                realm_token,
+                policy,
+            ] => {
+                let child_handle = child_handle.parse::<u64>().ok()?;
+                let child_handle = usize::try_from(child_handle).ok()?;
+                Some(Self::new(
+                    WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(
+                        local_window_id.parse().ok()?,
+                    )),
+                    OwnerDispatchScope::Child(crate::document_runtime::DomHandle::new(
+                        child_handle,
+                    )),
+                    RuntimeObservableContextToken::from_raw(realm_token.parse().ok()?),
+                    access_policy(policy)?,
+                ))
+            }
+            ["popup", popup_id, local_window_id, realm_token, policy] => {
+                let popup_id = popup_id.parse().ok()?;
+                Some(Self::new(
+                    WindowExecutionContextOwner::LightweightPopup {
+                        popup_id,
+                        local_window_id: LightweightPopupLocalWindowId::new(
+                            local_window_id.parse().ok()?,
+                        ),
+                    },
+                    OwnerDispatchScope::LightweightPopup(popup_id),
+                    RuntimeObservableContextToken::from_raw(realm_token.parse().ok()?),
+                    access_policy(policy)?,
+                ))
+            }
+            _ => None,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn access_policy(
         self,
     ) -> WindowExecutionContextAccessPolicy {
         self.access_policy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_identity_internal_slot_encoding_round_trips_every_owner_shape() {
+        let identities = [
+            WindowExecutionContextIdentity::new(
+                WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(7)),
+                OwnerDispatchScope::Top,
+                RuntimeObservableContextToken::from_raw(11),
+                WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+            ),
+            WindowExecutionContextIdentity::new(
+                WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(13)),
+                OwnerDispatchScope::Child(crate::document_runtime::DomHandle::new(17)),
+                RuntimeObservableContextToken::from_raw(19),
+                WindowExecutionContextAccessPolicy::Universal,
+            ),
+            WindowExecutionContextIdentity::new(
+                WindowExecutionContextOwner::LightweightPopup {
+                    popup_id: 23,
+                    local_window_id: LightweightPopupLocalWindowId::new(29),
+                },
+                OwnerDispatchScope::LightweightPopup(23),
+                RuntimeObservableContextToken::from_raw(31),
+                WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+            ),
+        ];
+
+        for identity in identities {
+            assert_eq!(
+                WindowExecutionContextIdentity::deserialize_from_internal_slot(
+                    &identity.serialize_for_internal_slot()
+                ),
+                Some(identity)
+            );
+        }
+        assert_eq!(
+            WindowExecutionContextIdentity::deserialize_from_internal_slot("popup:23:29:31:2"),
+            None
+        );
+        assert_eq!(
+            WindowExecutionContextIdentity::deserialize_from_internal_slot("not-an-identity"),
+            None
+        );
     }
 }

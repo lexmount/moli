@@ -1,3 +1,4 @@
+mod bitmap_task;
 mod broadcast_channel_delivery;
 mod child_frame_task;
 mod child_module_dependency_fetch_start;
@@ -16,6 +17,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db_task;
 mod internal_loading;
+mod main_document_lifecycle;
 mod main_document_post_parse;
 mod main_document_runtime;
 mod main_document_task_owner;
@@ -34,12 +36,15 @@ mod owner_sources;
 mod parse_time;
 mod parser_async_module_admission;
 mod parser_owned_module_continuation;
+mod popup_close;
 mod popup_load_event;
 mod post_domcontentloaded_runtime;
 mod post_parse_owner_work;
+mod promise_rejection;
 mod ready_signal;
 mod rendering_update;
 mod resource_completions;
+mod script_preparation_error;
 mod senders;
 mod service_worker_client_message;
 mod service_worker_internal;
@@ -152,6 +157,11 @@ pub(crate) struct PageWindowDocumentTaskTurnAction<I, K> {
 
 impl<I, K> PageWindowDocumentTaskTurnAction<I, K> {}
 
+pub(crate) use self::bitmap_task::{
+    PageBitmapTaskTargetEffect, PageBitmapTaskTurnAction, PageBitmapTaskTurnOutcome,
+    RendererPageBitmapTask, RendererPageBitmapTaskId, RendererPageBitmapTaskOwner,
+    RendererPageBitmapTaskProducer, RendererPageBitmapTaskSender,
+};
 pub(crate) use self::broadcast_channel_delivery::{
     PageBroadcastChannelDeliveryDocumentEffect, PageBroadcastChannelDeliveryTurnAction,
     PageBroadcastChannelDeliveryTurnOutcome, RendererPageBroadcastChannelDeliveryOwner,
@@ -209,12 +219,10 @@ pub(crate) use self::dedicated_worker_client_event::{
     RendererPageDedicatedWorkerClientEventProducer, RendererPageDedicatedWorkerClientEventSender,
     RendererPageDedicatedWorkerClientEventTask,
 };
-#[cfg(test)]
-pub(crate) use self::dom_manipulation::RendererPageDomManipulationOwner;
 pub(crate) use self::dom_manipulation::{
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,
-    RendererPageDomManipulationRoute, RendererPageDomManipulationSender,
-    RendererPageDomManipulationTask,
+    RendererPageDomManipulationOwner, RendererPageDomManipulationRoute,
+    RendererPageDomManipulationSender, RendererPageDomManipulationTask,
 };
 pub(crate) use self::dynamic_import_owner_action::{
     PageDynamicImportOwnerActionDocumentEffect, PageDynamicImportOwnerActionTurnAction,
@@ -268,6 +276,11 @@ pub(crate) use self::internal_loading::{
     PageInternalLoadingTargetEffect, PageInternalLoadingTurnAction, PageInternalLoadingTurnOutcome,
     RendererPageInternalLoadingOwner, RendererPageInternalLoadingSender,
     RendererPageInternalLoadingTask,
+};
+pub(crate) use self::main_document_lifecycle::{
+    PageMainDocumentLifecycleTurnAction, PageMainDocumentLifecycleTurnOutcome,
+    RendererPageMainDocumentLifecycleCompletion, RendererPageMainDocumentLifecycleOwner,
+    RendererPageMainDocumentLifecycleSender, RendererPageMainDocumentLifecycleTask,
 };
 pub(crate) use self::main_document_post_parse::{
     MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,
@@ -371,6 +384,10 @@ pub(crate) use self::parser_owned_module_continuation::{
     PageParserOwnedModuleContinuationBodyActivity, PageParserOwnedModuleContinuationTargetEffect,
     PageParserOwnedModuleContinuationTurnAction,
 };
+pub(crate) use self::popup_close::{
+    PagePopupCloseTargetEffect, PagePopupCloseTurnAction, PagePopupCloseTurnOutcome,
+    RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
+};
 pub(crate) use self::popup_load_event::{
     PagePopupLoadEventTargetEffect, PagePopupLoadEventTurnAction, PagePopupLoadEventTurnOutcome,
     RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
@@ -379,6 +396,12 @@ pub(crate) use self::popup_load_event::{
 pub(crate) use self::post_parse_owner_work::{
     PostParseLifecycleQueueStats, PostParseLifecycleWork, PostParsePageOwnedWork,
     post_parse_lifecycle_queue_stats,
+};
+pub(crate) use self::promise_rejection::{
+    PagePromiseRejectionTargetEffect, PagePromiseRejectionTurnAction,
+    PagePromiseRejectionTurnOutcome, RendererPagePromiseRejectionOwner,
+    RendererPagePromiseRejectionSender, RendererPagePromiseRejectionTask,
+    RendererPagePromiseRejectionTaskId, RendererPagePromiseRejectionTaskKind,
 };
 use self::ready_signal::RendererPageTaskReadySignal;
 #[cfg(test)]
@@ -394,6 +417,12 @@ pub(crate) use self::resource_completions::RendererResourceCompletionTestHarness
 pub(super) use self::resource_completions::{
     RendererOwnerWake, RendererOwnerWakeSender, RendererOwnerWakeSource,
     RendererResourceCompletionSender, RendererTopLevelNavigationHandoff,
+};
+pub(crate) use self::script_preparation_error::{
+    PageScriptPreparationErrorTargetEffect, PageScriptPreparationErrorTurnAction,
+    PageScriptPreparationErrorTurnOutcome, RendererPageScriptPreparationErrorOwner,
+    RendererPageScriptPreparationErrorSender, RendererPageScriptPreparationErrorTask,
+    RendererPageScriptPreparationErrorTaskId,
 };
 pub(crate) use self::senders::PageRuntimeWakeSignal;
 #[cfg(test)]
@@ -839,6 +868,7 @@ mod tests {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }
     }
 

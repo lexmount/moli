@@ -622,6 +622,396 @@ document.head.append(late);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stylesheet_reload_retains_cssom_until_the_successor_installs() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    run_page_vm_async_test(async move {
+        let wrong = format!(
+            "sha384-{}",
+            STANDARD.encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(b"wrong"))
+        );
+        for (status, integrity, expected) in [
+            (
+                "HTTP/1.1 200 OK",
+                None,
+                "false|false|false|1|1|2|rgb(4, 5, 6)|load",
+            ),
+            (
+                "HTTP/1.1 404 Not Found",
+                None,
+                "false|false|false|1|0|2|rgb(0, 0, 0)|error",
+            ),
+            (
+                "HTTP/1.1 200 OK",
+                Some(wrong.as_str()),
+                "true|true|true|1|2|2|rgb(7, 8, 9)|error",
+            ),
+        ] {
+            let (base_url, server) = spawn_path_response_http_server(vec![
+                (
+                    "/old.css",
+                    "HTTP/1.1 200 OK",
+                    "#reload-target { color: rgb(1, 2, 3); }".to_owned(),
+                    Duration::ZERO,
+                ),
+                (
+                    "/next.css",
+                    status,
+                    "#reload-target { color: rgb(4, 5, 6); }".to_owned(),
+                    Duration::ZERO,
+                ),
+            ])
+            .await;
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+            let (mut page_vm, _resource_source, mut wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader,
+                    Url::parse(&format!("{base_url}/page.html"))?,
+                );
+            let old_href = serde_json::to_string(&format!("{base_url}/old.css"))?;
+            let next_href = serde_json::to_string(&format!("{base_url}/next.css"))?;
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.__reloadEvents = [];
+const target = document.body.appendChild(document.createElement("div"));
+target.id = "reload-target";
+const link = document.createElement("link");
+link.rel = "stylesheet";
+link.href = {old_href};
+link.onload = () => __reloadEvents.push("load");
+link.onerror = () => __reloadEvents.push("error");
+document.head.append(link);
+"ready"
+"#,
+            ))?;
+
+            for stage in 0..2 {
+                page_vm
+                    .vm_mut()
+                    .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
+                    .await;
+                assert!(
+                    page_vm
+                        .run_exact_selected_page_task_for_test(
+                            PageSelectedTaskTestSelector::StylesheetCompletion,
+                            &loader,
+                        )
+                        .await?
+                );
+                let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                    .expect("the selected stylesheet response must publish its result");
+                page_vm
+                    .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                        crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                            event,
+                        ),
+                        &loader,
+                    )
+                    .await?;
+                if stage == 0 {
+                    assert_eq!(page_vm.vm_mut().eval("__reloadEvents.join('|')")?, "load");
+                    let integrity = serde_json::to_string(integrity.unwrap_or_default())?;
+                    let pending = page_vm.vm_mut().eval(&format!(
+                        r##"
+const old = link.sheet;
+old.insertRule("#reload-target {{ color: rgb(7, 8, 9); }}", old.cssRules.length);
+globalThis.__reloadSnapshot = () => [
+  link.sheet === old, old.ownerNode === link, document.styleSheets[0] === old,
+  document.styleSheets.length, link.sheet.cssRules.length, old.cssRules.length,
+  getComputedStyle(target).color, __reloadEvents.join(",")
+].join("|");
+__reloadEvents.length = 0;
+link.integrity = {integrity};
+link.href = {next_href};
+__reloadSnapshot()
+"##,
+                    ))?;
+                    assert_eq!(
+                        pending,
+                        "true|true|true|1|2|2|rgb(7, 8, 9)|",
+                        "changing href must retain the old JS sheet and its CSSOM edits until replacement"
+                    );
+                } else {
+                    assert_eq!(page_vm.vm_mut().eval("__reloadSnapshot()")?, expected);
+                    assert_eq!(
+                        page_vm.vm_mut().eval(&format!("old.href === {old_href}"))?,
+                        "true",
+                        "the old sheet's URL must not follow the owner's new href"
+                    );
+                    assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+                }
+            }
+            server.await.expect("both stylesheet responses should be consumed");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stylesheet reload CSSOM lifetimes should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stylesheet_reload_removal_retires_the_sheet_and_pending_successor() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            ("/old.css", "HTTP/1.1 200 OK", "body { color: red; }".to_owned(), Duration::ZERO),
+            ("/next.css", "HTTP/1.1 200 OK", "body { color: green; }".to_owned(), Duration::ZERO),
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse(&format!("{base_url}/page.html"))?,
+            );
+        let old_href = serde_json::to_string(&format!("{base_url}/old.css"))?;
+        let next_href = serde_json::to_string(&format!("{base_url}/next.css"))?;
+        page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__reloadEvents = [];
+const link = document.createElement("link");
+link.rel = "stylesheet";
+link.href = {old_href};
+link.onload = () => __reloadEvents.push("load");
+link.onerror = () => __reloadEvents.push("error");
+document.head.append(link);
+"ready"
+"#,
+        ))?;
+        page_vm.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::StylesheetCompletion, &loader).await?);
+        let event = take_next_link_element_event_task_for_test(&mut page_vm).expect("initial load event");
+        page_vm.run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+            crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event), &loader,
+        ).await?;
+        assert_eq!(page_vm.vm_mut().eval(&format!(
+            "const old = link.sheet; __reloadEvents.length = 0; link.href = {next_href}; link.sheet === old && old.ownerNode === link"
+        ))?, "true");
+
+        page_vm.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        assert_eq!(page_vm.vm_mut().eval(
+            "link.remove(); [link.sheet === null, old.ownerNode === null, document.styleSheets.length].join('|')"
+        )?, "true|true|0");
+        let _ = page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::StylesheetCompletion, &loader).await?;
+        assert!(take_next_link_element_event_task_for_test(&mut page_vm).is_none());
+        assert_eq!(page_vm.vm_mut().eval(
+            "[link.sheet === null, old.ownerNode === null, document.styleSheets.length, __reloadEvents.length].join('|')"
+        )?, "true|true|0|0");
+        assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+        server.await.expect("both requests reached the fixture before removal");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("removal must invalidate a reloading stylesheet owner");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stylesheet_integrity_does_not_reuse_an_unverified_css_source() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    run_page_vm_async_test(async move {
+        let css = "#integrity-cache-probe { color: rgb(1, 2, 3); }";
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/integrity-cache.css",
+                "HTTP/1.1 200 OK\r\nCache-Control: no-store",
+                css.to_owned(),
+                Duration::ZERO,
+            );
+            3
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = serde_json::to_string(&format!("{base_url}/integrity-cache.css"))?;
+        let metadata = |body: &[u8]| {
+            format!(
+                "sha384-{}",
+                STANDARD.encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(body))
+            )
+        };
+        let wrong = metadata(b"wrong");
+        let matching = metadata(css.as_bytes());
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__cacheIntegrityEvents = [];
+const target = document.createElement("div");
+target.id = "integrity-cache-probe";
+document.body.append(target);
+"ready"
+"#,
+        )?;
+
+        for (index, integrity, successful) in [
+            (0, "", true),
+            (1, wrong.as_str(), false),
+            (2, matching.as_str(), true),
+        ] {
+            let integrity = serde_json::to_string(integrity)?;
+            let synchronous = page_vm.vm_mut().eval(&format!(
+                r#"
+(() => {{
+  const link = document.createElement("link");
+  link.id = "integrity-cache-link";
+  link.rel = "stylesheet";
+  link.integrity = {integrity};
+  link.href = {href};
+  link.onload = () => __cacheIntegrityEvents.push("{index}:load");
+  link.onerror = () => __cacheIntegrityEvents.push("{index}:error");
+  document.head.append(link);
+  return [link.sheet === null, document.styleSheets.length,
+    getComputedStyle(target).color, __cacheIntegrityEvents.length].join("|");
+}})()
+"#,
+            ))?;
+            assert_eq!(
+                synchronous,
+                format!("true|0|rgb(0, 0, 0)|{index}"),
+                "a parsed source cached by URL must not authorize another link's integrity"
+            );
+            page_vm
+                .vm_mut()
+                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
+                .await;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::StylesheetCompletion,
+                        &loader,
+                    )
+                    .await?
+            );
+            let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                .expect("the integrity-specific load must publish its result");
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                        event,
+                    ),
+                    &loader,
+                )
+                .await?;
+            let color = if successful { "rgb(1, 2, 3)" } else { "rgb(0, 0, 0)" };
+            let event = if successful { "load" } else { "error" };
+            assert_eq!(
+                page_vm.vm_mut().eval(
+                    "[document.getElementById('integrity-cache-link').sheet !== null, getComputedStyle(target).color, __cacheIntegrityEvents.at(-1)].join('|')"
+                )?,
+                format!("{successful}|{color}|{index}:{event}")
+            );
+            page_vm.vm_mut().eval("document.getElementById('integrity-cache-link').remove()")?;
+        }
+        server.await.expect("each integrity identity must fetch its own response");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("integrity cache authorization test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn integrity_rejected_stylesheets_skip_cssom_for_network_and_cached_loads() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/integrity-rejected.css",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/css",
+            "@import url('/must-not-fetch.css'); body { color: red; }".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = serde_json::to_string(&format!("{base_url}/integrity-rejected.css"))?;
+        let integrity = serde_json::to_string(&format!(
+            "sha384-{}",
+            STANDARD.encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(b"wrong"))
+        ))?;
+        page_vm.vm_mut().eval("globalThis.__integrityEvents = []")?;
+
+        for index in 0..2 {
+            page_vm.vm_mut().eval(&format!(
+                r#"
+(() => {{
+  const link = document.createElement("link");
+  link.id = "integrity-rejected-{index}";
+  link.rel = "stylesheet";
+  link.integrity = {integrity};
+  link.href = {href};
+  link.onload = () => __integrityEvents.push("{index}:load");
+  link.onerror = () => __integrityEvents.push("{index}:error");
+  document.head.append(link);
+}})()
+"#,
+            ))?;
+            if index == 0 {
+                page_vm
+                    .vm_mut()
+                    .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
+                    .await;
+                assert!(
+                    page_vm
+                        .run_exact_selected_page_task_for_test(
+                            PageSelectedTaskTestSelector::StylesheetCompletion,
+                            &loader,
+                        )
+                        .await?
+                );
+            }
+            assert_eq!(
+                page_vm.vm_mut().eval(&format!(
+                    "[document.getElementById('integrity-rejected-{index}').sheet === null, document.styleSheets.length, __integrityEvents.length].join('|')"
+                ))?,
+                format!("true|0|{index}"),
+                "integrity failure must not create an owner sheet or synchronously dispatch its error"
+            );
+            assert!(
+                page_vm
+                    .take_stylesheet_networking_body_task_for_test()
+                    .is_none(),
+                "integrity rejection must not start imports or refetch a completed cache entry"
+            );
+            let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                .expect("integrity failure must still publish its link error task");
+            let body = page_vm.apply_selected_page_connected_style_event_turn(event)?;
+            assert_eq!(
+                body.action.target_effect,
+                PageConnectedStyleEventTargetEffect::DispatchedToCurrentOwner {
+                    load_delay_effect: PageConnectedStyleLoadDelayEffect::ReleasedExactBinding,
+                }
+            );
+            page_vm
+                .finish_selected_page_dom_manipulation_task(
+                    PageDomManipulationTurnAction::ConnectedStyleEvent(body.action),
+                    &loader,
+                )
+                .await?;
+            assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+        }
+        assert_eq!(
+            page_vm.vm_mut().eval("__integrityEvents.join('|')")?,
+            "0:error|1:error"
+        );
+        server.await.expect("integrity fixture should be fetched once");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("integrity CSSOM settlement test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_completed_preload_settles_empty_sheet_synchronously_before_link_error() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -1236,7 +1626,7 @@ document.write('<!doctype html><html><head><link id="replacement-blocker" rel="s
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn connected_style_body_settles_its_lease_but_leaves_reactions_for_task_completion() {
+async fn connected_style_body_settles_its_lease_and_cleans_up_callbacks() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -1279,8 +1669,8 @@ document.head.appendChild(style);
             page_vm
                 .vm_mut()
                 .eval("__connectedStyleBoundary.join('|')")?,
-            "callback",
-            "the body must leave listener Promise reactions pending"
+            "callback|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm
@@ -1294,7 +1684,7 @@ document.head.appendChild(style);
                 .vm_mut()
                 .eval("__connectedStyleBoundary.join('|')")?,
             "callback|microtask|runtime-script",
-            "selected completion must own the checkpoint and runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -2770,11 +3160,14 @@ document.head.append(dynamicStyle);
             "a dynamic non-parser-owned stylesheet must not manufacture parser work"
         );
         assert!(page_vm.has_ready_dom_manipulation_task_for_test());
-        assert!(
-            page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
-                .await?
-        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the dynamic link event must be independently selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__dynamicStyleEvents.join('|')")?,
             "load"

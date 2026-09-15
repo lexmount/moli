@@ -19,6 +19,67 @@ fn serialized_stylesheet_text(stylesheet: &LiveStylesheetRef) -> StdArc<str> {
         .serialized_css_text()
 }
 
+fn style_rule_seed_declaration_text(stylesheet: &LiveStylesheet, path: &[usize]) -> String {
+    let Some(LiveStylesheetRuleWrapperSeed::Style {
+        declaration_text, ..
+    }) = stylesheet.rule_wrapper_seed_at_path(path)
+    else {
+        panic!("style rule seed should resolve at {path:?}");
+    };
+    declaration_text
+}
+
+#[test]
+fn eof_open_var_cssom_override_is_shared_and_cleared_by_native_mutation() {
+    let registry = LiveStylesheetRegistry::default();
+    let shared_lock = SharedRwLock::new();
+    let base_url = url::Url::parse("https://example.test/styles/open-var.css").unwrap();
+    let source = ".target { color: red; width: var(--prop";
+    let first = registry.create_inline_with_shared_initial_contents(
+        source,
+        base_url.clone(),
+        QuirksMode::NoQuirks,
+        shared_lock.clone(),
+    );
+    let second = registry.create_inline_with_shared_initial_contents(
+        source,
+        base_url,
+        QuirksMode::NoQuirks,
+        shared_lock,
+    );
+
+    assert_eq!(
+        style_rule_seed_declaration_text(&first, &[0]),
+        "color: red; width: var(--prop;"
+    );
+    assert_eq!(
+        style_rule_seed_declaration_text(&second, &[0]),
+        "color: red; width: var(--prop;"
+    );
+    assert_eq!(
+        native_rule_css_text(&first, &[0]),
+        ".target { color: red; width: var(--prop); }"
+    );
+
+    first
+        .set_style_rule_declarations(&[0], "width: var(--updated);")
+        .unwrap();
+    assert_eq!(
+        style_rule_seed_declaration_text(&first, &[0]),
+        "width: var(--updated);"
+    );
+    assert_eq!(
+        style_rule_seed_declaration_text(&second, &[0]),
+        "color: red; width: var(--prop;"
+    );
+
+    first.replace_from_text(".replacement { height: var(--replacement");
+    assert_eq!(
+        style_rule_seed_declaration_text(&first, &[0]),
+        "height: var(--replacement;"
+    );
+}
+
 #[test]
 fn native_import_edges_own_distinct_children_and_propagate_cascade_changes() {
     let registry = LiveStylesheetRegistry::default();

@@ -78,19 +78,11 @@ pub(in crate::native_bridge::document) fn named_node_map_set_named_item_method_c
         return;
     };
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, element) {
-        let mut handled = false;
         crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
                 rv.set(value);
-                handled = true;
             }
         });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
-        rv.set(value);
         return;
     }
     let Some(value) = live_set_attribute_node(scope, element, args.get(0)) else {
@@ -177,19 +169,11 @@ pub(in crate::native_bridge::document) fn named_node_map_set_named_item_ns_metho
         return;
     };
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, element) {
-        let mut handled = false;
         crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
                 rv.set(value);
-                handled = true;
             }
         });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
-        rv.set(value);
         return;
     }
     let Some(value) = live_set_attribute_node(scope, element, args.get(0)) else {

@@ -115,7 +115,7 @@ getComputedStyle(document.getElementById('fallback')).display
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn geometry_batch_reuses_latest_tree_until_fresh_paint_replaces_it() {
+async fn geometry_batch_reuses_current_tree_and_refreshes_after_mutation() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -224,6 +224,15 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             "{transformed_rect:?}"
         );
 
+        let reused = moli_layout::GeometryProvider::answer(
+            page_vm.vm_mut(),
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+            moli_layout::LayoutViewport::new(320, 200, 1.0),
+            &batch,
+        )?;
+        assert_eq!(reused.metrics, first.metrics);
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test(), after_first);
+
         page_vm
             .vm_mut()
             .eval("document.getElementById('target').style.width='180px'; 'mutated'")?;
@@ -239,20 +248,21 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_second.0);
-        assert_eq!(after_second.1, before.1 + 1);
+        assert_eq!(after_second.1, before.1 + 2);
         assert_eq!(cache_after_second.0, cache_before.0 + 1);
-        assert_eq!(cache_after_second.1, cache_before.1 + 1);
-        assert_eq!(cache_after_second.2, cache_before.2 + 1);
+        assert_eq!(cache_after_second.1, cache_before.1 + 2);
+        assert_eq!(cache_after_second.2, cache_before.2 + 2);
         let second_width = match &second.answers[1] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
             }
             answer => panic!("unexpected box-model answer: {answer:?}"),
         };
-        assert!((second_width - 120.0).abs() <= 0.05, "{second_width}");
-        assert_eq!(after_second.2, after_first.2);
-        assert_eq!(after_second.3, after_first.3);
-        assert_eq!(second.metrics, first.metrics);
+        assert!((second_width - 180.0).abs() <= 0.05, "{second_width}");
+        assert_eq!(after_second.2, after_first.2 + second.metrics.elapsed);
+        assert_eq!(after_second.3, Some(second.metrics));
+        assert_eq!(second.metrics.reason, moli_layout::LayoutFlushReason::SynchronousGeometry);
+        assert_eq!(second.metrics.paint_operation_count, 0);
         assert!(matches!(
             second.answers[0],
             moli_layout::LayoutQueryAnswer::DocumentMetrics(metrics)
@@ -268,10 +278,10 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_screenshot.0);
-        assert_eq!(after_screenshot.1, before.1 + 2);
+        assert_eq!(after_screenshot.1, before.1 + 3);
         assert_eq!(cache_after_screenshot.0, cache_before.0 + 1);
-        assert_eq!(cache_after_screenshot.1, cache_before.1 + 1);
-        assert_eq!(cache_after_screenshot.2, cache_before.2 + 2);
+        assert_eq!(cache_after_screenshot.1, cache_before.1 + 2);
+        assert_eq!(cache_after_screenshot.2, cache_before.2 + 3);
         let (_, retention) = cache_after_screenshot
             .3
             .expect("fresh paint layout should publish its frozen tree");
@@ -302,10 +312,10 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
         let cache_after_third = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
-        assert_eq!(after_third.1, before.1 + 2);
+        assert_eq!(after_third.1, before.1 + 3);
         assert_eq!(cache_after_third.0, cache_before.0 + 2);
-        assert_eq!(cache_after_third.1, cache_before.1 + 1);
-        assert_eq!(cache_after_third.2, cache_before.2 + 2);
+        assert_eq!(cache_after_third.1, cache_before.1 + 2);
+        assert_eq!(cache_after_third.2, cache_before.2 + 3);
         let third_width = match &third.answers[1] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
@@ -370,22 +380,22 @@ document.body.innerHTML = '<div id=target></div>';
         page_vm
             .vm_mut()
             .eval("document.getElementById('target').style.width='80px'; 'mutated'")?;
-        let stale = moli_layout::GeometryProvider::answer(
+        let before_next_frame = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
             moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
-        let stale_width = match &stale.answers[0] {
+        let before_next_frame_width = match &before_next_frame.answers[0] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
             }
-            answer => panic!("unexpected stale box-model answer: {answer:?}"),
+            answer => panic!("unexpected box-model answer before the next frame: {answer:?}"),
         };
-        assert!((stale_width - 40.0).abs() <= 0.05, "{stale_width}");
+        assert!((before_next_frame_width - 80.0).abs() <= 0.05, "{before_next_frame_width}");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 1
+            passes_before + 2
         );
 
         page_vm
@@ -397,14 +407,14 @@ document.body.innerHTML = '<div id=target></div>';
             .expect("second screencast frame layout");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 2
+            passes_before + 3
         );
         let cache_after_second = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
-        assert_eq!(cache_after_second.0, cache_before.0 + 1);
-        assert_eq!(cache_after_second.1, cache_before.1);
-        assert_eq!(cache_after_second.2, cache_before.2 + 2);
+        assert_eq!(cache_after_second.0, cache_before.0);
+        assert_eq!(cache_after_second.1, cache_before.1 + 1);
+        assert_eq!(cache_after_second.2, cache_before.2 + 3);
         assert!(cache_after_second.3.is_some());
 
         let refreshed = moli_layout::GeometryProvider::answer(
@@ -422,14 +432,14 @@ document.body.innerHTML = '<div id=target></div>';
         assert!((refreshed_width - 80.0).abs() <= 0.05, "{refreshed_width}");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 2
+            passes_before + 3
         );
         let cache_after_query = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
-        assert_eq!(cache_after_query.0, cache_before.0 + 2);
-        assert_eq!(cache_after_query.1, cache_before.1);
-        assert_eq!(cache_after_query.2, cache_before.2 + 2);
+        assert_eq!(cache_after_query.0, cache_before.0 + 1);
+        assert_eq!(cache_after_query.1, cache_before.1 + 1);
+        assert_eq!(cache_after_query.2, cache_before.2 + 3);
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -5043,7 +5053,7 @@ document.close();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rendering_update_body_leaves_reactions_and_runtime_scripts_for_selected_completion() {
+async fn rendering_update_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -5079,8 +5089,8 @@ scrollTo(0, 10);
         );
         assert_eq!(
             page_vm.vm_mut().eval("__renderingTaskBoundary.join('|')")?,
-            "callback",
-            "the rendering-update body must leave listener reactions pending"
+            "callback|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         assert_eq!(
             page_vm
@@ -5099,7 +5109,7 @@ scrollTo(0, 10);
         assert_eq!(
             page_vm.vm_mut().eval("__renderingTaskBoundary.join('|')")?,
             "callback|microtask|runtime-script",
-            "selected completion must own the checkpoint and runtime follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })

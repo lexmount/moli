@@ -1,8 +1,9 @@
 use crate::cssom_selector::{
-    dom_api_selector_list_contains_known_pseudo_element,
+    consume_nested_component_value, dom_api_selector_list_contains_known_pseudo_element,
     dom_api_selector_list_has_only_known_pseudo_elements,
     dom_api_selector_text_with_trailing_attribute_recovery,
     selector_list_has_invalid_terminal_pseudo_element_chain,
+    webkit_compat_pseudo_element_validation_selector,
 };
 use cssparser::ToCss;
 use selectors::parser::ParseRelative;
@@ -42,6 +43,7 @@ pub(crate) fn parse_dom_api_selector_list_for_url(
     if let Err(error) = crate::selector::validation::pre_validate_selector(&selector) {
         if error.message() == "unclosed '(' in selector"
             && dom_api_selector_list_has_only_known_pseudo_elements(&selector)
+            && validate_dom_api_pseudo_element_selector_list(&selector)
         {
             return Ok(ParsedDomApiSelectorList::EmptyKnownPseudoElement);
         }
@@ -52,13 +54,98 @@ pub(crate) fn parse_dom_api_selector_list_for_url(
             "terminal pseudo-elements cannot be chained",
         ));
     }
-    if dom_api_selector_list_has_only_known_pseudo_elements(&selector)
-        || (dom_api_selector_list_contains_known_pseudo_element(&selector)
-            && validate_style_rule_selector_list(&selector).is_ok())
+    if dom_api_selector_list_contains_known_pseudo_element(&selector)
+        && validate_dom_api_pseudo_element_selector_list(&selector)
     {
         return Ok(ParsedDomApiSelectorList::EmptyKnownPseudoElement);
     }
     parse_dom_api_selector_list_text_for_url(&selector, url).map(ParsedDomApiSelectorList::Parsed)
+}
+
+fn validate_dom_api_pseudo_element_selector_list(selector: &str) -> bool {
+    if validate_style_rule_selector_list(selector).is_ok() {
+        return true;
+    }
+    // The current Servo pseudo-element implementation does not opt any
+    // pseudo-element into the generic parser's `valid_after_slotted` hook.
+    // Validate those chains through the equivalent element-backed `::part`
+    // grammar without changing the selector used for querying or styling.
+    let Some(selector) = slotted_pseudo_element_validation_selector(selector) else {
+        return false;
+    };
+    validate_style_rule_selector_list(&selector).is_ok()
+}
+
+fn slotted_pseudo_element_validation_selector(selector_text: &str) -> Option<String> {
+    let mut input = cssparser::ParserInput::new(selector_text);
+    let mut parser = cssparser::Parser::new(&mut input);
+    let mut replacements = Vec::new();
+
+    while !parser.is_exhausted() {
+        let token_start = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            return None;
+        };
+        if !matches!(token, cssparser::Token::Colon) {
+            consume_nested_component_value(&mut parser, &token).ok()?;
+            continue;
+        }
+        let after_first_colon = parser.state();
+        let Ok(cssparser::Token::Colon) = parser.next_including_whitespace_and_comments().cloned()
+        else {
+            parser.reset(&after_first_colon);
+            continue;
+        };
+        let Ok(cssparser::Token::Function(name)) =
+            parser.next_including_whitespace_and_comments().cloned()
+        else {
+            continue;
+        };
+        let is_slotted = name.eq_ignore_ascii_case("slotted");
+        let function = cssparser::Token::Function(name);
+        consume_nested_component_value(&mut parser, &function).ok()?;
+        if !is_slotted {
+            continue;
+        }
+        let token_end = parser.position().byte_index();
+        let isolated = selector_text.get(token_start..token_end)?;
+        if validate_style_rule_selector_list(isolated).is_err() {
+            return None;
+        }
+        if next_significant_token_is_single_colon(&mut parser) {
+            return None;
+        }
+        replacements.push((token_start, token_end));
+    }
+
+    if replacements.is_empty() {
+        return None;
+    }
+    let mut selector = selector_text.to_owned();
+    for (start, end) in replacements.into_iter().rev() {
+        selector.replace_range(start..end, "::part(moli-slotted-validation)");
+    }
+    Some(selector)
+}
+
+fn next_significant_token_is_single_colon(parser: &mut cssparser::Parser<'_, '_>) -> bool {
+    let state = parser.state();
+    let mut is_single_colon = false;
+    while let Ok(token) = parser.next_including_whitespace_and_comments().cloned() {
+        match token {
+            cssparser::Token::WhiteSpace(_) | cssparser::Token::Comment(_) => {}
+            cssparser::Token::Colon => {
+                is_single_colon = !matches!(
+                    parser.next_including_whitespace_and_comments().cloned(),
+                    Ok(cssparser::Token::Colon)
+                );
+                break;
+            }
+            _ => break,
+        }
+    }
+    parser.reset(&state);
+    is_single_colon
 }
 
 fn parse_dom_api_selector_list_text_for_url(
@@ -83,18 +170,34 @@ fn parse_dom_api_selector_list_text_for_url(
 }
 
 pub(crate) fn validate_style_rule_selector_list(selector: &str) -> Result<(), SelectorError> {
-    parse_style_rule_selector_list_for_url(
-        selector,
-        Url::parse("about:blank").expect("about:blank is valid"),
-        false,
-    )
-    .map(|_| ())
+    if selector_list_has_invalid_terminal_pseudo_element_chain(selector) {
+        return Err(SelectorError::syntax(
+            "terminal pseudo-elements cannot be chained",
+        ));
+    }
+    let url = Url::parse("about:blank").expect("about:blank is valid");
+    parse_style_rule_selector_list_for_url(selector, url.clone(), false)
+        .or_else(|error| {
+            let Some(selector) = webkit_compat_pseudo_element_validation_selector(selector) else {
+                return Err(error);
+            };
+            parse_style_rule_selector_list_for_url(&selector, url, false)
+        })
+        .map(|_| ())
 }
 
 pub(crate) fn validate_supports_selector_list(selector: &str) -> Result<(), SelectorError> {
-    parse_style_rule_selector_list_for_url(
+    validate_supports_selector_list_with_namespaces(selector, &StyleRuleNamespaceContext::default())
+}
+
+pub(crate) fn validate_supports_selector_list_with_namespaces(
+    selector: &str,
+    namespace_context: &StyleRuleNamespaceContext,
+) -> Result<(), SelectorError> {
+    parse_style_rule_selector_list_for_url_and_namespaces(
         selector,
         Url::parse("about:blank").expect("about:blank is valid"),
+        namespace_context,
         true,
     )
     .map(|_| ())
@@ -121,12 +224,29 @@ pub(crate) fn validate_style_rule_selector_list_with_namespaces(
     selector: &str,
     namespace_context: &StyleRuleNamespaceContext,
 ) -> Result<(), SelectorError> {
+    if selector_list_has_invalid_terminal_pseudo_element_chain(selector) {
+        return Err(SelectorError::syntax(
+            "terminal pseudo-elements cannot be chained",
+        ));
+    }
+    let url = Url::parse("about:blank").expect("about:blank is valid");
     parse_style_rule_selector_list_for_url_and_namespaces(
         selector,
-        Url::parse("about:blank").expect("about:blank is valid"),
+        url.clone(),
         namespace_context,
         false,
     )
+    .or_else(|error| {
+        let Some(selector) = webkit_compat_pseudo_element_validation_selector(selector) else {
+            return Err(error);
+        };
+        parse_style_rule_selector_list_for_url_and_namespaces(
+            &selector,
+            url,
+            namespace_context,
+            false,
+        )
+    })
     .map(|_| ())
 }
 

@@ -268,10 +268,14 @@ pub(in crate::native_bridge) fn bridge_detached_document_character_set_callback<
 
 pub(in crate::native_bridge) fn bridge_detached_document_compat_mode_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
-    _args: v8::FunctionCallbackArguments<'a>,
+    args: v8::FunctionCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_string_return_value(scope, &mut rv, "CSS1Compat");
+    let compat_mode = v8::Local::<v8::Object>::try_from(args.get(0))
+        .ok()
+        .map(|document| detached_document_state_string(scope, document, "compatMode", "CSS1Compat"))
+        .unwrap_or_else(|| "CSS1Compat".to_owned());
+    set_string_return_value(scope, &mut rv, &compat_mode);
 }
 
 pub(in crate::native_bridge) fn bridge_detached_document_referrer_callback<'a>(
@@ -293,7 +297,7 @@ pub(in crate::native_bridge) fn bridge_detached_document_domain_callback<'a>(
 ) {
     let value = v8::Local::<v8::Object>::try_from(args.get(0))
         .ok()
-        .and_then(|document| detached_document_domain_value(scope, document))
+        .and_then(|document| document_domain_value_for_object(scope, document))
         .unwrap_or_else(|| {
             scope
                 .get_current_context()
@@ -322,15 +326,6 @@ pub(in crate::native_bridge) fn bridge_set_detached_document_domain_callback<'a>
         return;
     }
     throw_document_domain_security_error(scope);
-}
-
-fn detached_document_domain_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope)?;
-    let document_handle = detached_native_handle_for_runtime(scope, host_ptr, document)?;
-    Some(unsafe { &*host_ptr }.document_domain_value_for_document_handle(document_handle))
 }
 
 fn set_detached_document_domain_value<'s>(

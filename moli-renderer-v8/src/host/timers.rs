@@ -18,10 +18,13 @@ use crate::{
     page_task_queue::RendererPageTimerSelection,
     script_provenance::CompiledStringProvenance,
     util::{
-        context_host_ptr_from_global_bridge, create_script_origin_with_base_url, get_private_value,
+        context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_nonce,
+        get_private_value, script_nonce_from_host_defined_options,
     },
 };
-use moli_time::{TimerId, TimerReadyAllowance, TimerScheduler};
+use moli_time::{
+    TimerId, TimerReadyAllowance, TimerScheduleRange, TimerScheduleSnapshot, TimerScheduler,
+};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -42,6 +45,8 @@ struct ScheduledTimerSource {
     use_target_context: bool,
     source: String,
     provenance: CompiledStringProvenance,
+    // A snapshot of the initiating script, not the eventual timer caller/realm.
+    script_nonce: Option<String>,
 }
 
 struct ScheduledTimerFunction {
@@ -491,6 +496,9 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
+        let script_nonce = scope
+            .get_current_host_defined_options()
+            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -517,6 +525,7 @@ impl HostTimeoutScheduler {
                         use_target_context,
                         source,
                         provenance,
+                        script_nonce,
                     }),
                     owner,
                     is_interval: false,
@@ -539,6 +548,9 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
+        let script_nonce = scope
+            .get_current_host_defined_options()
+            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -565,6 +577,7 @@ impl HostTimeoutScheduler {
                         use_target_context,
                         source,
                         provenance,
+                        script_nonce,
                     }),
                     owner,
                     is_interval: true,
@@ -736,10 +749,41 @@ impl HostTimeoutScheduler {
         self.run_timer(scope, timer)
     }
 
+    pub(crate) fn run_next_from_schedule_ranges(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        ranges: &[TimerScheduleRange],
+    ) -> HostTimeoutRunResult {
+        let Some(timer) = self.scheduler.take_next_ready_from_schedule_ranges(
+            ranges,
+            Instant::now(),
+            min_delay_ready_allowance(),
+        ) else {
+            return HostTimeoutRunResult::Idle;
+        };
+        self.run_timer(scope, timer)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_ready_timer(&self) -> bool {
         self.scheduler
             .has_ready_timer(Instant::now(), min_delay_ready_allowance())
+    }
+
+    pub(crate) fn has_ready_from_schedule_ranges(&self, ranges: &[TimerScheduleRange]) -> bool {
+        self.scheduler.has_ready_from_schedule_ranges(
+            ranges,
+            Instant::now(),
+            min_delay_ready_allowance(),
+        )
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> TimerScheduleSnapshot {
+        self.scheduler.schedule_snapshot()
+    }
+
+    pub(crate) fn schedule_range_since(&self, start: TimerScheduleSnapshot) -> TimerScheduleRange {
+        self.scheduler.schedule_range_since(start)
     }
 
     pub(crate) fn next_ready_timer_deadline(
@@ -1225,6 +1269,7 @@ fn run_window_timer_source(
     let mut scope = try_catch.init();
     let Some(source_value) = v8_string(&scope, &source.source) else {
         return Err(Box::new(V8ExceptionReport {
+            muted_errors: false,
             summary: "failed to allocate timer source string".to_owned(),
             source: Some(source.provenance.source_url().to_string()),
             line: None,
@@ -1235,11 +1280,12 @@ fn run_window_timer_source(
             exception: None,
         }));
     };
-    let origin = create_script_origin_with_base_url(
+    let origin = create_script_origin_with_base_url_and_nonce(
         &mut scope,
         source.provenance.source_url().as_str(),
         0,
         Some(source.provenance.module_base_url()),
+        source.script_nonce.as_deref(),
     );
     let Some(script) = v8::Script::compile(&scope, source_value, Some(&origin)) else {
         let exception = scope.exception();

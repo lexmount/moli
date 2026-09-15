@@ -28,8 +28,10 @@ pub(super) fn record_intercepted_fetch(
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key,
         prepared.policy_context,
+        prepared.blob_url_entry,
         PendingSubresourceFetchInfo {
             internal_id: 0,
             network_request_handle: None,
@@ -144,11 +146,19 @@ pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
 ) -> Result<Option<Response>, String> {
-    let Some(response) = local_url_response(&prepared.resolved_url) else {
-        if prepared.resolved_url.scheme() != "blob" {
-            return Ok(None);
-        }
-        let message = FILE_NOT_FOUND_ERROR_TEXT.to_owned();
+    let Some(result) = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    ) else {
+        return Ok(None);
+    };
+    let response = result.map_err(|message| {
+        let message = if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
+            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+        } else {
+            message
+        };
         host.record_subresource_network(SubresourceNetworkRecord::failure(
             prepared.frame_id.clone(),
             prepared.document_url.clone(),
@@ -159,8 +169,8 @@ pub(super) fn resolve_local_fetch(
             SubresourceResourceType::Fetch,
             message.clone(),
         ));
-        return Err(message);
-    };
+        message
+    })?;
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
             prepared.frame_id.clone(),
@@ -244,6 +254,7 @@ pub(super) fn spawn_network_fetch(
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
+            false,
         )
         .is_some();
     let internal_id = host.record_async_subresource_fetch(
@@ -256,6 +267,7 @@ pub(super) fn spawn_network_fetch(
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {

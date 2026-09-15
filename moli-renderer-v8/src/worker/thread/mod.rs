@@ -11,6 +11,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
+
 #[cfg(test)]
 use crate::broadcast_channel_runtime::new_broadcast_channel_registry;
 use crate::broadcast_channel_runtime::{
@@ -68,14 +70,15 @@ use runtime_inspector::WorkerRuntimeInspector;
 
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
-    WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
+    WorkerWebCryptoCompletion, WorkerXhrEvent, close_worker_owned_broadcast_channels,
     close_worker_owned_message_ports, continue_pending_worker_csp_report,
     continue_pending_worker_fetch, continue_pending_worker_fetch_response,
     continue_pending_worker_xhr, continue_pending_worker_xhr_response,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    dispatch_worker_csp_violation_event_for_state, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -83,13 +86,13 @@ use super::global_scope::{
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
+    drain_worker_xhr_event, fail_pending_worker_csp_report, fail_pending_worker_fetch,
     fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
     fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
     fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
     fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
     fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    service_worker_fetch_handler_type,
+    prepare_service_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
@@ -610,7 +613,7 @@ fn start_worker_module_graph_fetch(
             worker_global_content_security_policies,
             worker_global_content_security_report_only_policies,
             worker_global_content_security_reporting_endpoints,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
     let initial_csp_report_only_violation =
@@ -1602,8 +1605,7 @@ async fn worker_main(
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
         mpsc::unbounded_channel::<WorkerFetchEvent>();
-    let (xhr_completion_tx, mut xhr_completion_rx) =
-        mpsc::unbounded_channel::<WorkerXhrCompletion>();
+    let (xhr_completion_tx, mut xhr_completion_rx) = mpsc::unbounded_channel::<WorkerXhrEvent>();
     let (module_graph_fetch_tx, mut module_graph_fetch_rx) =
         mpsc::unbounded_channel::<WorkerModuleGraphFetchCompletion>();
     let (module_evaluation_tx, mut module_evaluation_rx) =
@@ -1756,7 +1758,35 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         *isolate_handle.lock() = Some(scope.thread_safe_handle());
-        let ctx = v8::Context::new(scope, Default::default());
+        let service_worker_templates =
+            if matches!(state.borrow().global_kind, WorkerGlobalKind::Service { .. }) {
+                match prepare_service_worker_global_scope_templates(scope) {
+                    Ok(templates) => Some(templates),
+                    Err(error) => {
+                        tracing::error!(
+                            url = %script_url,
+                            error = %error,
+                            "failed to prepare service worker global templates"
+                        );
+                        bootstrap_completion
+                            .mark_install_global_failure(&script_url, error.to_string());
+                        install_global_failed = true;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+        let global_template = service_worker_templates
+            .as_ref()
+            .map(|templates| templates.global_template(scope));
+        let ctx = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template,
+                ..Default::default()
+            },
+        );
         crate::resource_owner::install_resource_owner_for_context(ctx, resource_owner_id);
         crate::context_bootstrap::set_indexed_db_manager_for_context(
             ctx,
@@ -1775,17 +1805,24 @@ async fn worker_main(
 
         let scope = &mut v8::ContextScope::new(scope, ctx);
         let global = ctx.global(scope);
-        if let Err(e) = install_worker_global_scope(scope, global, state.clone()) {
-            tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
-            bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
-            install_global_failed = true;
-        } else if script_kind == WorkerScriptKind::Classic {
-            let referrer_policy = { state.borrow().referrer_policy.clone() };
-            install_classic_worker_dynamic_module_runtime(
+        if !install_global_failed {
+            if let Err(e) = install_worker_global_scope(
                 scope,
-                referrer_policy,
-                module_evaluation_tx.clone(),
-            );
+                global,
+                state.clone(),
+                service_worker_templates.as_ref(),
+            ) {
+                tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
+                bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
+                install_global_failed = true;
+            } else if script_kind == WorkerScriptKind::Classic {
+                let referrer_policy = { state.borrow().referrer_policy.clone() };
+                install_classic_worker_dynamic_module_runtime(
+                    scope,
+                    referrer_policy,
+                    module_evaluation_tx.clone(),
+                );
+            }
         }
     }
     if install_global_failed {
@@ -1826,6 +1863,7 @@ async fn worker_main(
         let referrer_policy = { state.borrow().referrer_policy.clone() };
 
         // ── Evaluate the worker script ─────────────────────────────────────
+        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
         match evaluate_worker_bootstrap_script(
             scope,
             &script_source,
@@ -1878,6 +1916,7 @@ async fn worker_main(
         }
 
         // Run microtask checkpoint after initial script evaluation.
+        drop(execution_scope);
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
     }
@@ -1945,7 +1984,7 @@ async fn worker_main(
         enum WorkerLoopWake {
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
-            Xhr(Option<WorkerXhrCompletion>),
+            Xhr(Option<WorkerXhrEvent>),
             ModuleGraphFetch(Option<Box<WorkerModuleGraphFetchCompletion>>),
             ModuleEvaluation(Option<WorkerModuleEvaluationCompletion>),
             ModuleRuntime,
@@ -2628,6 +2667,23 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+            )) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                dispatch_worker_csp_violation_event_for_state(scope, &state, &violation);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::NestedWorkerEvent {
                 worker_id,
                 message,
@@ -2645,6 +2701,7 @@ async fn worker_main(
                 if let Some(error) = result.unhandled_error {
                     let global = ctx.global(scope);
                     let report = V8ExceptionReport {
+                        muted_errors: false,
                         summary: error.message,
                         source: Some(error.filename),
                         line: Some(error.lineno as usize),
@@ -2978,7 +3035,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                drain_worker_xhr_completion(scope, &state, completion);
+                drain_worker_xhr_event(scope, &state, completion);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
@@ -3461,6 +3518,7 @@ fn worker_bootstrap_error(
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
     (
         V8ExceptionReport {
+            muted_errors: false,
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
             line: Some(1),

@@ -171,13 +171,15 @@ pub(crate) struct RendererStoragePartitionIdentity {
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
     id: super::RendererBrowserContextRuntimeId,
+    // Keep clipboard representations independent of any page's V8 objects so
+    // other pages and replacement documents can read them in their own realm.
+    clipboard_data: Mutex<Vec<(String, Vec<u8>)>>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     shared_worker_runtime: shared_workers::LazySharedWorkerRuntime,
     service_worker_runtime: service_worker_runtime::LazyServiceWorkerRuntime,
     storage_partition_identity: RendererStoragePartitionIdentity,
-    next_web_storage_opaque_context_nonce: AtomicU64,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
@@ -268,6 +270,7 @@ impl DetachedParserScriptFetchContinuation {
         let text = String::from_utf8_lossy(&response_body).into_owned();
         let response = crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
             ResponseHead {
+                status_text: None,
                 final_url: inner.script.url.clone(),
                 status: response_code,
                 headers: response_headers,
@@ -341,6 +344,14 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
+    pub(crate) fn clipboard_data(&self) -> Vec<(String, Vec<u8>)> {
+        self.inner.clipboard_data.lock().clone()
+    }
+
+    pub(crate) fn set_clipboard_data(&self, data: Vec<(String, Vec<u8>)>) {
+        *self.inner.clipboard_data.lock() = data;
+    }
+
     // A browser-context runtime is only valid while its thread-affine owner is
     // retained, so construction returns that owner rather than a bare handle.
     #[allow(clippy::new_ret_no_self)]
@@ -529,13 +540,13 @@ impl RendererBrowserContextRuntime {
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
+                clipboard_data: Mutex::new(Vec::new()),
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
                 shared_worker_runtime,
                 service_worker_runtime,
                 storage_partition_identity,
-                next_web_storage_opaque_context_nonce: AtomicU64::default(),
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
@@ -703,12 +714,11 @@ impl RendererBrowserContextRuntime {
     pub(crate) fn next_web_storage_opaque_context_nonce(
         &self,
     ) -> moli_storage_key::OpaqueOriginNonce {
-        moli_storage_key::OpaqueOriginNonce::new(
-            self.inner
-                .next_web_storage_opaque_context_nonce
-                .fetch_add(1, Ordering::Relaxed)
-                .saturating_add(1),
-        )
+        // Windows and Workers compare storage keys in the same partition.
+        // Their opaque origins must draw from the same nonce namespace.
+        self.inner
+            .broadcast_channel_registry
+            .next_opaque_context_nonce()
     }
 
     pub(crate) fn allocate_child_document_loader_id(&self) -> String {

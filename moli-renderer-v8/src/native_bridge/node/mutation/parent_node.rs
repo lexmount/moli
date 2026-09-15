@@ -1,5 +1,5 @@
 use super::core::{
-    node_can_contain_children, node_move_before_shadow_including_contains, node_type_is_insertable,
+    node_can_contain_children, node_is_host_including_inclusive_ancestor, node_type_is_insertable,
     pre_insert_validation_handles,
 };
 use super::fragment::{
@@ -148,7 +148,7 @@ fn validate_parent_node_insertion(
         return false;
     }
     for child in inserted {
-        if node_move_before_shadow_including_contains(runtime, *child, parent) {
+        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return false;
         }
@@ -229,39 +229,14 @@ pub(in crate::native_bridge) fn node_replace_children_callback<'s>(
                 document_handle,
                 &inserted,
             )?;
-            let added_children = unsafe { &*runtime_ptr }
-                .dom_host()
-                .child_handles(fragment)
-                .collect::<Vec<_>>();
-            let records_enabled = unsafe { &*runtime_ptr }
-                .dom_host()
-                .mutation_records_enabled();
             let runtime = unsafe { &mut *runtime_ptr };
-            let removes_existing_children = !existing_children.is_empty();
-            for &child in &existing_children {
-                let _ = runtime.remove_child_appending_to_current_reaction_queue(
-                    scope,
-                    runtime_ptr,
-                    parent,
-                    child,
-                );
-            }
-            let changed = runtime.append_child_appending_to_current_reaction_queue(
+            runtime.replace_all_children_with_fragment_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 fragment,
-            ) || removes_existing_children;
-            if changed && records_enabled {
-                crate::observer_runtime::coalesce_child_list_replacement_records(
-                    runtime_ptr,
-                    parent,
-                    &added_children,
-                    &existing_children,
-                    None,
-                    None,
-                );
-            }
+                &existing_children,
+            );
             Some(())
         })
     else {
@@ -281,7 +256,7 @@ fn validate_parent_node_replace_children(
         return false;
     }
     for child in inserted {
-        if node_move_before_shadow_including_contains(runtime, *child, parent) {
+        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return false;
         }

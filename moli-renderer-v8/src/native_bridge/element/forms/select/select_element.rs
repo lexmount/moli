@@ -636,6 +636,7 @@ pub(in crate::native_bridge) fn select_selected_index_setter_function<'s>(
         let _ = runtime.set_selected_state(scope, runtime_ptr, option, should_select);
     }
     let _ = runtime.set_select_explicit_none(scope, runtime_ptr, handle, !matched);
+    let _ = runtime.sync_selectedcontents_for_select_in_reaction_scope(scope, runtime_ptr, handle);
     rv.set_undefined();
 }
 
@@ -700,7 +701,7 @@ pub(in crate::native_bridge) fn select_value_setter_function<'s>(
     else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_select_value(handle, &next_value);
+    let _ = unsafe { &mut *runtime_ptr }.set_select_value(scope, runtime_ptr, handle, &next_value);
     rv.set_undefined();
 }
 

@@ -13,31 +13,23 @@ impl JsContextHost {
             .is_some_and(ChildBrowsingContextEntry::has_cached_snapshot)
     }
 
-    pub(crate) fn sync_initial_child_browsing_context_history_floor(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-    ) {
-        let main_document_child_count = self
-            .top_level_child_browsing_context_handles_in_frame_tree_order()
-            .into_iter()
-            .filter(|handle| {
-                self.child_browsing_context_popup_owner_id(*handle)
-                    .is_none()
-            })
-            .count();
-        if main_document_child_count == 0 {
-            return;
-        }
-        let owner = scope.get_current_context().global(scope);
-        set_top_level_history_length_at_least_for_runtime_owner(
-            scope,
-            owner,
-            1.0 + main_document_child_count as f64,
-        );
-    }
-
     pub(crate) fn child_browsing_context_count(&self) -> usize {
         self.top_level_child_browsing_context_handles_in_frame_tree_order()
+            .len()
+    }
+
+    pub(crate) fn child_browsing_context_is_on_initial_about_blank_entry(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        self.child_current_document_is_initial_empty(handle)
+            && self
+                .child_browsing_context_current_url(handle)
+                .is_some_and(|url| moli_url::is_about_blank(&url))
+    }
+
+    pub(crate) fn child_browsing_context_count_for_document(&self, document: DomHandle) -> usize {
+        self.window_child_browsing_context_handles_for_document(document)
             .len()
     }
 
@@ -77,7 +69,7 @@ impl JsContextHost {
         self.lightweight_popup_id_for_document_handle(owner_document)
     }
 
-    fn collect_child_browsing_context_handles_in_document_order_from_document(
+    pub(in crate::native_bridge::context_host) fn collect_child_browsing_context_handles_in_document_order_from_document(
         &self,
         document: DomHandle,
         out: &mut Vec<DomHandle>,
@@ -140,22 +132,54 @@ impl JsContextHost {
             .collect()
     }
 
+    fn child_browsing_context_direct_frame_handles_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<DomHandle> {
+        self.child_browsing_contexts
+            .keys()
+            .copied()
+            .filter(|handle| {
+                self.dom_host().node(*handle).and_then(Node::owner_document) == Some(document)
+            })
+            .collect()
+    }
+
+    fn window_child_browsing_context_handles_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<DomHandle> {
+        // A frame inside a shadow tree still owns a browsing context, but it is
+        // not exposed through the containing Window's indexed properties.
+        self.child_browsing_context_direct_frame_handles_for_document(document)
+            .into_iter()
+            .filter(|handle| {
+                self.dom_host()
+                    .node(*handle)
+                    .is_some_and(|node| node.flags().in_document_tree())
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn child_browsing_context_handle_by_index(&self, index: usize) -> Option<DomHandle> {
-        // Window indexed/named interceptors hit this on every miss.
-        if self.child_browsing_contexts.is_empty() {
-            return None;
-        }
+        // Tests use this to inspect the global frame-tree projection rather
+        // than one Window's scoped indexed properties.
         self.top_level_child_browsing_context_handles_in_frame_tree_order()
             .into_iter()
             .nth(index)
     }
 
-    pub(crate) fn child_browsing_context_child_frame_handle_by_index(
+    pub(crate) fn child_browsing_context_handle_by_index_for_document(
         &self,
-        parent: DomHandle,
+        document: DomHandle,
         index: usize,
     ) -> Option<DomHandle> {
-        self.child_browsing_context_child_frame_handles(parent)
+        // Window indexed/named interceptors hit this on every miss.
+        if self.child_browsing_contexts.is_empty() {
+            return None;
+        }
+        self.window_child_browsing_context_handles_for_document(document)
             .into_iter()
             .nth(index)
     }
@@ -164,11 +188,18 @@ impl JsContextHost {
         &self,
         parent: DomHandle,
     ) -> Vec<DomHandle> {
-        self.child_browsing_contexts
-            .keys()
-            .copied()
-            .filter(|handle| self.child_browsing_context_parent_handle(*handle) == Some(parent))
-            .collect()
+        self.child_browsing_context_document_handle(parent)
+            .map(|document| self.child_browsing_context_direct_frame_handles_for_document(document))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn child_browsing_context_child_frame_handle_by_index(
+        &self,
+        parent: DomHandle,
+        index: usize,
+    ) -> Option<DomHandle> {
+        let document = self.child_browsing_context_document_handle(parent)?;
+        self.child_browsing_context_handle_by_index_for_document(document, index)
     }
 
     pub(crate) fn child_browsing_context_direct_host_handles(
@@ -349,10 +380,17 @@ impl JsContextHost {
         &self,
         document_handle: DomHandle,
     ) -> Option<&str> {
-        self.child_browsing_context_host_for_document_handle(document_handle)
-            .and_then(|child_handle| self.child_browsing_contexts.get(&child_handle))
+        let child_handle = self.child_browsing_context_host_for_document_handle(document_handle)?;
+        if let Some(character_set) = self
+            .child_browsing_contexts
+            .get(&child_handle)
             .and_then(|entry| entry.cached_snapshot_ref())
             .map(|snapshot| snapshot.character_set.as_str())
+        {
+            return Some(character_set);
+        }
+        self.child_current_document_is_initial_empty(child_handle)
+            .then_some("UTF-8")
     }
 
     pub(crate) fn child_browsing_context_referrer_for_document_handle(
@@ -431,11 +469,14 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         bootstrap: ChildBrowsingContextBootstrap,
+        initiator_url: Option<Url>,
         reflects_window_state: bool,
     ) -> Option<crate::frame_owner_model::FrameDocumentNavigationLoadBinding> {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         };
+        let ancestor_origins_referrer_policy =
+            self.child_ancestor_origins_referrer_policy_from_owner_attribute(handle);
         let permissions_policy =
             self.child_browsing_context_permissions_policy_for_navigation(handle, &bootstrap);
         let Some(navigation) = self.replace_child_navigation_load(handle) else {
@@ -447,7 +488,8 @@ impl JsContextHost {
         };
         let entry = self.child_browsing_contexts.get_mut(&handle)?;
         entry.set_document_permissions_policy(permissions_policy);
-        entry.set_pending_navigation(bootstrap, reflects_window_state);
+        entry.set_ancestor_origins_referrer_policy_snapshot(ancestor_origins_referrer_policy);
+        entry.set_pending_navigation(bootstrap, initiator_url, reflects_window_state);
         self.note_child_frame_load_started_for_parent(handle);
         Some(navigation)
     }

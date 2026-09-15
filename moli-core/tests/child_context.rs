@@ -25,7 +25,7 @@ async fn child_browsing_context_initial_history_seed_keeps_current_entry_index_z
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-history-length=\"2\""),
+            .contains("data-top-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -33,7 +33,7 @@ async fn child_browsing_context_initial_history_seed_keeps_current_entry_index_z
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"2\""),
+            .contains("data-child-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );

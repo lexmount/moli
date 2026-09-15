@@ -13,10 +13,12 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) request_headers: Vec<(String, String)>,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
     pub(super) body: Option<Vec<u8>>,
+    pub(super) body_stream: Option<v8::Global<v8::Object>>,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) redirect_mode: moli_fetch::RequestRedirectMode,
@@ -40,7 +42,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &JsContextHost,
 ) -> Result<PreparedWindowFetchRequest, String> {
-    let mut request_headers = parsed.headers;
+    let request_headers = parsed.headers;
     // Receiver capture and WebIDL conversion are complete before this pure
     // preparation stage. Never inspect `args.this()` here: doing so could bind
     // the operation to a replacement LocalWindow after an author getter
@@ -72,13 +74,18 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let policy_context = effective_subresource_policy_context(scope, host, request_scope);
     let network_partition_key = active_subresource_network_partition_key(host, request_scope);
     let cors_preflight_request_headers = request_headers.clone();
-    if parsed.suppress_default_content_type {
-        request_headers.push(("Content-Type".to_owned(), String::new()));
-    }
     let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
+    validate_request_url_credentials(&resolved_url)?;
+    let referrer = parsed
+        .init_validation
+        .validate(scope, parsed.request_mode.as_ref(), &parsed.cache)?
+        .unwrap_or(parsed.referrer);
 
+    let blob_url_entry = parsed
+        .blob_url_entry
+        .or_else(|| CapturedBlobUrl::capture(&resolved_url));
     Ok(PreparedWindowFetchRequest {
         frame_id,
         fetch_context,
@@ -91,16 +98,18 @@ pub(super) fn prepare_window_fetch_request<'s>(
         document_referrer_policy,
         policy_context,
         resolved_url,
+        blob_url_entry,
         method: parsed.method,
         request_headers,
         cors_preflight_request_headers,
         body: parsed.body,
+        body_stream: parsed.body_stream,
         request_mode: parsed.request_mode,
         credentials_mode: parsed.credentials_mode,
         redirect_mode: parsed.redirect_mode,
         priority: parsed.priority,
         cache: parsed.cache,
-        referrer: parsed.referrer,
+        referrer,
         referrer_policy: parsed.referrer_policy,
         integrity: parsed.integrity,
         keepalive: parsed.keepalive,

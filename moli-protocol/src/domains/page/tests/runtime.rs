@@ -1040,6 +1040,15 @@ async fn runtime_add_binding_default_world_replays_into_runtime_materialized_chi
     )
     .await;
 
+    // V8 replays bindings into future contexts while Runtime is enabled.
+    ctx.process_async(json!({
+        "id": 420,
+        "method": "Runtime.enable",
+        "sessionId": "SID-1",
+    }))
+    .await;
+    ctx.expect_result(420, json!({}), Some("SID-1"));
+
     ctx.process_async(json!({
         "id": 421,
         "method": "Runtime.addBinding",
@@ -1383,4 +1392,94 @@ async fn runtime_evaluate_child_history_back_emits_child_frame_navigation_and_li
         Some(child_url_a.as_str()),
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attached_runtime_binding_reports_child_calls_without_primary_registration() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 48_000,
+        "method": "Target.attachToTarget",
+        "params": {"targetId": "TID-1", "flatten": true}
+    }))
+    .await;
+    let attached_session_id = take_response_by_id(&mut ctx, 48_000)["result"]["sessionId"]
+        .as_str()
+        .expect("second target session")
+        .to_owned();
+    assert_ne!(attached_session_id, "SID-1");
+    ctx.process_async(json!({
+        "id": 48_001,
+        "method": "Runtime.enable",
+        "sessionId": attached_session_id,
+    }))
+    .await;
+    ctx.expect_result(48_001, json!({}), Some(&attached_session_id));
+    ctx.process_async(json!({
+        "id": 48_002,
+        "method": "Runtime.addBinding",
+        "sessionId": attached_session_id,
+        "params": {"name": "attachedChildBinding"}
+    }))
+    .await;
+    ctx.expect_result(48_002, json!({}), Some(&attached_session_id));
+    ctx.process_async(json!({
+        "id": 48_003,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": {"url": "data:text/html,<iframe srcdoc=\"<body>child</body>\"></iframe>"}
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 48_003);
+    let frame_id = child_frame_id_for_single_iframe(&mut ctx, 48_004).await;
+    wait_until_frame_stopped_loading(&mut ctx, &frame_id).await;
+    let child_context_id = wait_for_child_default_execution_context_id(
+        &mut ctx,
+        &frame_id,
+        "attached child binding context",
+    )
+    .await;
+    for (offset, scoped) in [(0_u64, false), (3, true)] {
+        if scoped {
+            ctx.process_async(json!({
+                "id": 48_005 + offset,
+                "method": "Runtime.addBinding",
+                "sessionId": attached_session_id,
+                "params": {"name": "attachedChildBinding", "executionContextId": child_context_id}
+            }))
+            .await;
+            ctx.expect_result(48_005 + offset, json!({}), Some(&attached_session_id));
+        }
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": 48_006 + offset,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {"expression": "frames[0].attachedChildBinding('child-call'); 'called'"}
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 48_006 + offset)["result"]["result"]["value"],
+            json!("called")
+        );
+        let events = ctx
+            .sent
+            .iter()
+            .filter(|message| message["method"] == "Runtime.bindingCalled")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events.len(),
+            1,
+            "one notification for the registering session (scoped={scoped}): {events:?}"
+        );
+        assert_eq!(events[0]["sessionId"], json!(attached_session_id));
+        assert_eq!(events[0]["params"]["name"], "attachedChildBinding");
+        assert_eq!(events[0]["params"]["payload"], "child-call");
+        assert_eq!(
+            events[0]["params"]["executionContextId"],
+            json!(child_context_id)
+        );
+    }
 }

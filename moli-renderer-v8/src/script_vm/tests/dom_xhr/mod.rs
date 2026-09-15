@@ -1,10 +1,25 @@
 use super::*;
 
 mod computed_style;
+mod cors_preflight;
+mod cors_redirect;
+mod cors_response;
 mod cssom;
+mod data_response;
 mod dom;
+mod event_modifiers;
+mod file_input;
 mod forms;
 mod misc;
+mod null_body;
+mod opaque_response;
+mod open_validation;
+mod query_realms;
+mod redirect_filter;
+mod response_type;
 mod shadow_dom;
+mod streaming_failure;
 mod style_invalidation;
+mod upload_preflight;
+mod upload_transport;
 mod xhr;

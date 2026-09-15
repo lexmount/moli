@@ -5,10 +5,9 @@ use url::Url;
 
 use crate::document_module_graph::{
     DocumentModuleMapCore, ModuleAttributesKey, ModuleEntryId, ModuleFetchMetadata,
-    ModuleIdentityHash, ModuleImportPhase, ModuleLoadError, ModuleMapEntry,
-    ModuleMapFetchDisposition, ModuleMapKey, ModuleMapTerminalNotification,
-    ModuleResolvedDependency, ModuleSource, NativeModuleMapSingleModuleClient,
-    NativeModulepreloadLinkClient,
+    ModuleIdentityHash, ModuleLoadError, ModuleMapEntry, ModuleMapFetchDisposition, ModuleMapKey,
+    ModuleMapTerminalNotification, ModuleResolvedDependency, ModuleSource,
+    NativeModuleMapSingleModuleClient, NativeModulepreloadLinkClient,
 };
 use crate::frame_owner_model::{
     FrameDocumentModuleClientId, FrameDocumentModuleFetchClientStart,
@@ -655,28 +654,33 @@ impl NativeDocumentModulator {
             .set_record_state_for_entry(self.core.entry(entry_id), ModuleRecordState::Evaluated);
     }
 
-    pub(crate) fn module_key_for(
+    /// Retain resolved inputs in the compiled records before entering V8.
+    /// Evaluation callbacks can then find them after the modulator is restored
+    /// to its owner or after an asynchronous dependency settles.
+    pub(crate) fn register_wasm_evaluation_graph(
         &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<&ModuleMapKey> {
-        self.module_entry_id_for(module)
-            .map(|entry_id| self.entry(entry_id).effective_key())
-    }
-
-    pub(crate) fn module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        let entry = self.entry(self.module_entry_id_for(module)?);
-        Some((entry.effective_key().clone(), entry.source()?.clone()))
-    }
-
-    pub(crate) fn module_wasm_record_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<WasmModuleRecord> {
-        let entry = self.entry(self.module_entry_id_for(module)?);
-        self.records.record_for_entry(entry)?.wasm_module().cloned()
+        scope: &mut v8::PinScope<'_, '_>,
+        graph: &super::ModuleGraphHandle,
+    ) {
+        for entry_id in &graph.entries {
+            let Some(record) = self.compiled_record(*entry_id) else {
+                continue;
+            };
+            let module = v8::Local::new(scope, record.compiled_module());
+            let dependencies = record
+                .requests()
+                .iter()
+                .filter_map(|request| {
+                    self.resolved_dependency_module_for(
+                        module,
+                        request.specifier(),
+                        request.attributes(),
+                    )
+                    .map(|dependency| (request.clone(), dependency))
+                })
+                .collect();
+            record.register_evaluation(scope, dependencies);
+        }
     }
 
     pub(crate) fn module_wasm_record(&self, entry_id: ModuleEntryId) -> Option<WasmModuleRecord> {
@@ -723,28 +727,6 @@ impl NativeDocumentModulator {
     ) -> Option<v8::Global<v8::Module>> {
         self.resolve_static_dependency(referrer, specifier, attributes)
             .map(|record| record.compiled_module().clone())
-    }
-
-    pub(crate) fn evaluation_dependency_modules_for(
-        &self,
-        referrer: v8::Local<'_, v8::Module>,
-    ) -> Option<Vec<v8::Global<v8::Module>>> {
-        let referrer_entry_id = self.module_entry_id_for(referrer)?;
-        let referrer_entry = self.entry(referrer_entry_id);
-        let record = self.records.record_for_entry(referrer_entry)?;
-        let mut dependencies = Vec::new();
-        for request in record
-            .requests()
-            .iter()
-            .filter(|request| request.phase() == ModuleImportPhase::Evaluation)
-        {
-            dependencies.push(self.resolved_dependency_module_for(
-                referrer,
-                request.specifier(),
-                request.attributes(),
-            )?);
-        }
-        Some(dependencies)
     }
 
     pub(crate) fn entry_url(&self, entry_id: ModuleEntryId) -> Url {

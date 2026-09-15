@@ -12,8 +12,8 @@ use crate::{
         },
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
-            ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
-            observable_used_grid_tracks,
+            ClientRect, element_has_hidden_attribute, observable_bounding_client_rect,
+            observable_bounding_client_rects, observable_used_grid_tracks,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
@@ -1383,6 +1383,7 @@ pub(super) fn computed_style_default_value(
         "line-height" => "normal".to_owned(),
         "link-parameters" => "none".to_owned(),
         "content" => "normal".to_owned(),
+        "content-visibility" => "visible".to_owned(),
         "background-color" => "rgba(0, 0, 0, 0)".to_owned(),
         "background-attachment" => "scroll".to_owned(),
         "background-blend-mode" | "mix-blend-mode" => "normal".to_owned(),
@@ -2329,7 +2330,9 @@ fn computed_style_property_value_after_style_update(
     if !computed_style_applies(runtime, handle) {
         return String::new();
     }
-    if property == "display" && element_has_hidden_attribute(runtime, handle) {
+    if property == "display"
+        && element_hidden_attribute_state(runtime, handle) == HiddenAttributeState::Hidden
+    {
         return "none".to_owned();
     }
     let inputs = prepared_inputs;
@@ -2393,6 +2396,9 @@ fn computed_style_property_value_after_style_update(
     }
     if property == "font-variant" {
         return computed_font_variant_shorthand_value(runtime, handle, resolution);
+    }
+    if property == "mask" {
+        return computed_mask_shorthand_value(runtime, handle, resolution);
     }
     if property == "border" {
         return computed_border_shorthand_value(runtime, handle, context);
@@ -2660,6 +2666,36 @@ fn computed_font_variant_shorthand_value(
         .map(|property| resolution.computed_property(runtime, handle, property))
         .collect::<Vec<_>>();
     serialize_font_variant_shorthand_values(&values).unwrap_or_default()
+}
+
+fn computed_mask_shorthand_value(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    resolution: StyleResolutionContext<'_>,
+) -> String {
+    const LONGHANDS: [&str; 9] = [
+        "mask-mode",
+        "mask-repeat",
+        "mask-clip",
+        "mask-origin",
+        "mask-composite",
+        "mask-position-x",
+        "mask-position-y",
+        "mask-size",
+        "mask-image",
+    ];
+
+    let mut block = moli_css_parse::CssDeclarationBlock::default();
+    for property in LONGHANDS {
+        let value = resolution.computed_property(runtime, handle, property);
+        if value.is_empty()
+            || block.set_property(property, &value, false)
+                == moli_css_parse::CssSetResult::ParseError
+        {
+            return String::new();
+        }
+    }
+    block.property_value("mask").unwrap_or_default()
 }
 
 fn computed_webkit_text_stroke_shorthand_value(
@@ -5075,12 +5111,29 @@ fn css_px_values_equal(left: f64, right: f64) -> bool {
     (left - right).abs() < 0.001
 }
 
-fn element_has_hidden_attribute(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    runtime
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HiddenAttributeState {
+    Missing,
+    Hidden,
+    UntilFound,
+}
+
+fn element_hidden_attribute_state(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> HiddenAttributeState {
+    let value = runtime
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.has_attribute("hidden"))
+        .and_then(|element| element.attribute("hidden"));
+    match value {
+        None => HiddenAttributeState::Missing,
+        Some(value) if value.eq_ignore_ascii_case("until-found") => {
+            HiddenAttributeState::UntilFound
+        }
+        Some(_) => HiddenAttributeState::Hidden,
+    }
 }
 
 fn resolve_moli_computed_style_value(
@@ -5855,8 +5908,9 @@ fn computed_direction_with_resolution(
         }
     }
     let direction = resolution.raw_property(runtime, handle, "direction");
-    if direction.eq_ignore_ascii_case("rtl") {
-        return "rtl".to_owned();
+    let direction = direction.to_ascii_lowercase();
+    if matches!(direction.as_str(), "ltr" | "rtl") {
+        return direction;
     }
     html_directionality(runtime.dom_host(), handle)
         .as_str()

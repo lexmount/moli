@@ -2,8 +2,8 @@ use super::super::{
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     native_bridge::JsContextHost,
     util::{
-        callable_relevant_context, constructor_prototype, get_private_object,
-        global_constructor_prototype,
+        constructor_prototype, get_private_object, global_constructor_prototype,
+        new_target_realm_constructor_prototype, receiver_uses_new_target_realm_object_fallback,
     },
 };
 use super::CustomElementRegistryKey;
@@ -51,22 +51,6 @@ fn registry_constructor_prototype<'s>(
     }
 }
 
-pub(super) fn receiver_uses_new_target_realm_object_fallback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    new_target: v8::Local<'s, v8::Function>,
-) -> bool {
-    let Some(receiver_prototype) = receiver.get_prototype(scope) else {
-        return false;
-    };
-    let Some(object_prototype) =
-        new_target_realm_constructor_prototype(scope, new_target, "Object")
-    else {
-        return false;
-    };
-    receiver_prototype.strict_equals(object_prototype.into())
-}
-
 pub(super) fn set_wrapper_html_constructor_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     wrapper: v8::Local<'s, v8::Object>,
@@ -82,29 +66,20 @@ pub(super) fn set_wrapper_html_constructor_prototype<'s>(
     // getters twice. A non-object value is represented by the Object
     // prototype from NewTarget's relevant Realm; replace only that fallback
     // with the active HTML interface prototype from the same Realm.
-    let prototype = if receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target) {
-        new_target_realm_constructor_prototype(scope, new_target, active_constructor_name)
+    let prototype =
+        if receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target.into()) {
+            new_target_realm_constructor_prototype(
+                scope,
+                new_target.into(),
+                active_constructor_name,
+            )
             .map(Into::into)
             .unwrap_or(prototype)
-    } else {
-        prototype
-    };
+        } else {
+            prototype
+        };
     let _ = wrapper.set_prototype(scope, prototype);
     if let Some(foreign) = get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT) {
         let _ = foreign.set_prototype(scope, prototype);
     }
-}
-
-fn new_target_realm_constructor_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    new_target: v8::Local<'s, v8::Function>,
-    constructor_name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let context = callable_relevant_context(scope, new_target.into())?;
-    let prototype = {
-        let context_scope = &mut v8::ContextScope::new(scope, context);
-        let prototype = global_constructor_prototype(context_scope, constructor_name)?;
-        v8::Global::new(context_scope, prototype)
-    };
-    Some(v8::Local::new(scope, &prototype))
 }

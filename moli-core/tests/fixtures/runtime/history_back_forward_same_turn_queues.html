@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <body data-sync-state="" data-popstate-log="" data-final-state="">
+    <script>
+      const popstateLog = [];
+
+      history.pushState({ step: 1 }, "", "#one");
+      history.pushState({ step: 2 }, "", "#two");
+
+      window.addEventListener("popstate", (event) => {
+        popstateLog.push(String(event.state?.step ?? "null"));
+        document.body.setAttribute("data-popstate-log", popstateLog.join(","));
+        if (popstateLog.length === 2) {
+          document.body.setAttribute("data-final-state", String(history.state.step));
+        }
+      });
+
+      history.back();
+      history.forward();
+
+      document.body.setAttribute(
+        "data-sync-state",
+        String(history.state?.step ?? "null")
+      );
+    </script>
+  </body>
+</html>

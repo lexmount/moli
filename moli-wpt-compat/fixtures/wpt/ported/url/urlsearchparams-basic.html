@@ -431,9 +431,9 @@ test(function () {
       },
     });
   }, "top-level iterator should propagate pair conversion errors");
-  assert_true(
+  assert_false(
     closedAfterStringification,
-    "pair conversion errors should close the top-level iterator",
+    "pair conversion errors must not close the top-level iterator",
   );
 
   let closedAfterInvalidPair = false;
@@ -444,10 +444,8 @@ test(function () {
         return {
           next: function () {
             count += 1;
-            return {
-              done: false,
-              value: count === 1 ? ["short"] : ["unreached", "value"],
-            };
+            if (count === 1) return { done: false, value: ["short"] };
+            return { done: true };
           },
           return: function () {
             closedAfterInvalidPair = true;
@@ -457,11 +455,11 @@ test(function () {
       },
     });
   }, "top-level iterator should propagate invalid pair errors");
-  assert_true(
+  assert_false(
     closedAfterInvalidPair,
-    "invalid pair errors should close the top-level iterator",
+    "invalid pair errors must not close the top-level iterator",
   );
-}, "URLSearchParams constructor closes top-level iterators on pair conversion errors");
+}, "URLSearchParams constructor does not close top-level iterators on pair errors");
 
 test(function () {
   let innerClosedAfterValueConversion = false;
@@ -497,11 +495,11 @@ test(function () {
   assert_throws_name("RangeError", function () {
     new URLSearchParams([pair]);
   }, "inner pair iterator should propagate element conversion errors");
-  assert_true(
+  assert_false(
     innerClosedAfterValueConversion,
-    "pair element conversion errors should close the inner pair iterator",
+    "pair element conversion errors must not close the inner pair iterator",
   );
-}, "URLSearchParams constructor closes inner pair iterators on element conversion errors");
+}, "URLSearchParams constructor does not close inner pair iterators on conversion errors");
 
 test(function () {
   let topLevelReturnCalled = false;
@@ -527,7 +525,7 @@ test(function () {
       },
     });
   }, "top-level iterator return errors should not replace the original conversion error");
-  assert_true(topLevelReturnCalled, "top-level iterator return should be called");
+  assert_false(topLevelReturnCalled, "top-level iterator return must not be called");
 
   let innerReturnCalled = false;
   const pair = {
@@ -558,16 +556,19 @@ test(function () {
   assert_throws_name("RangeError", function () {
     new URLSearchParams([pair]);
   }, "inner pair iterator return errors should not replace the original conversion error");
-  assert_true(innerReturnCalled, "inner pair iterator return should be called");
-}, "URLSearchParams constructor preserves original errors when iterator return throws");
+  assert_false(innerReturnCalled, "inner pair iterator return must not be called");
+}, "URLSearchParams constructor does not call throwing return methods after conversion errors");
 
 test(function () {
   let returnCalled = false;
   assert_throws_name("TypeError", function () {
     new URLSearchParams({
       [Symbol.iterator]: function () {
+        let done = false;
         return {
           next: function () {
+            if (done) return { done: true };
+            done = true;
             return { done: false, value: ["short"] };
           },
           return: function () {
@@ -578,8 +579,8 @@ test(function () {
       },
     });
   }, "top-level iterator return errors should not replace invalid pair length errors");
-  assert_true(returnCalled, "top-level iterator return should be called");
-}, "URLSearchParams constructor preserves invalid pair length errors when iterator return throws");
+  assert_false(returnCalled, "top-level iterator return must not be called");
+}, "URLSearchParams constructor does not call throwing return methods for invalid pairs");
 
 test(function () {
   let topLevelReturnCalled = false;
@@ -665,7 +666,12 @@ test(function () {
 test(function () {
   const record = { visible: "yes" };
   const symbolKey = Symbol("hidden");
-  record[symbolKey] = "symbol";
+  Object.defineProperty(record, symbolKey, {
+    enumerable: false,
+    get: function () {
+      throw new Error("non-enumerable symbol values must not be read");
+    },
+  });
   Object.defineProperty(record, "hidden", {
     value: "no",
     enumerable: false,
@@ -674,7 +680,23 @@ test(function () {
   assert_equals(params.toString(), "visible=yes");
   assert_false(params.has("hidden"));
   assert_false(params.has("Symbol(hidden)"));
-}, "URLSearchParams constructor ignores non-enumerable and symbol record properties");
+}, "URLSearchParams constructor ignores non-enumerable string and symbol record properties");
+
+test(function () {
+  const record = { visible: "yes" };
+  let valueRead = false;
+  Object.defineProperty(record, Symbol("invalid key"), {
+    enumerable: true,
+    get: function () {
+      valueRead = true;
+      return "unreachable";
+    },
+  });
+  assert_throws_name("TypeError", function () {
+    new URLSearchParams(record);
+  }, "enumerable symbol keys cannot be converted to USVString");
+  assert_false(valueRead, "record keys must be converted before their values are read");
+}, "URLSearchParams constructor rejects enumerable symbol keys before reading their values");
 
 test(function () {
   const sequence = new URLSearchParams([

@@ -28,6 +28,9 @@ struct PerformanceGetEntriesByNameArgs {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::PerformanceEntry, scope_lifetime = 'scope)]
 struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
+    #[webapi(slot = PERFORMANCE_ENTRY_ID_SLOT)]
+    id: f64,
+
     #[webapi(slot = PERFORMANCE_ENTRY_NAME_SLOT)]
     name: &'name str,
 
@@ -40,6 +43,9 @@ struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
     #[webapi(slot = PERFORMANCE_ENTRY_DURATION_SLOT)]
     duration: f64,
 
+    #[webapi(slot = PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)]
+    navigation_id: f64,
+
     #[webapi(slot = PERFORMANCE_ENTRY_DETAIL_SLOT)]
     detail: v8::Local<'scope, v8::Value>,
 }
@@ -47,10 +53,12 @@ struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct PerformanceEntryJsonSnapshotDeclaration {
+    id: f64,
     name: String,
     entry_type: String,
     start_time: f64,
     duration: f64,
+    navigation_id: f64,
 }
 
 #[derive(WebApiObject)]
@@ -120,10 +128,12 @@ struct PerformanceResourceTimingSlotDeclaration {
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct PerformanceResourceTimingJsonSnapshotDeclaration {
+    id: f64,
     name: String,
     entry_type: String,
     start_time: f64,
     duration: f64,
+    navigation_id: f64,
     initiator_type: String,
     next_hop_protocol: String,
     worker_start: f64,
@@ -152,10 +162,12 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
         entry: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
         Some(Self::new(
+            performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_ID_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_START_TIME_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?,
+            performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)?,
             performance_entry_slot_string(
                 scope,
@@ -217,28 +229,42 @@ struct PerformanceEntryPrototypeAccessorsDeclaration {
         data = callback_data_index_value(scope, 0),
         enumerable
     )]
-    name: (),
+    id: (),
     #[webapi(
         accessor_property,
         getter = performance_entry_base_attribute_getter_callback,
         data = callback_data_index_value(scope, 1),
         enumerable
     )]
-    entry_type: (),
+    name: (),
     #[webapi(
         accessor_property,
         getter = performance_entry_base_attribute_getter_callback,
         data = callback_data_index_value(scope, 2),
         enumerable
     )]
-    start_time: (),
+    entry_type: (),
     #[webapi(
         accessor_property,
         getter = performance_entry_base_attribute_getter_callback,
         data = callback_data_index_value(scope, 3),
         enumerable
     )]
+    start_time: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_entry_base_attribute_getter_callback,
+        data = callback_data_index_value(scope, 4),
+        enumerable
+    )]
     duration: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_entry_base_attribute_getter_callback,
+        data = callback_data_index_value(scope, 5),
+        enumerable
+    )]
+    navigation_id: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -467,6 +493,10 @@ fn performance_entry_to_json_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
+    let Some(id) = performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_ID_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
     let Some(name) = performance_entry_slot_string(scope, receiver, PERFORMANCE_ENTRY_NAME_SLOT)
     else {
         throw_type_error(scope, "Illegal invocation");
@@ -490,10 +520,22 @@ fn performance_entry_to_json_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let snapshot =
-        PerformanceEntryJsonSnapshotDeclaration::new(name, entry_type, start_time, duration)
-            .bind(scope)
-            .expect("PerformanceEntry toJSON snapshot declaration should bind");
+    let Some(navigation_id) =
+        performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    let snapshot = PerformanceEntryJsonSnapshotDeclaration::new(
+        id,
+        name,
+        entry_type,
+        start_time,
+        duration,
+        navigation_id,
+    )
+    .bind(scope)
+    .expect("PerformanceEntry toJSON snapshot declaration should bind");
     rv.set(snapshot.into());
 }
 
@@ -619,10 +661,12 @@ pub(in crate::context_bootstrap) fn set_performance_entry_slot_number<'s>(
 }
 
 const PERFORMANCE_ENTRY_BASE_ATTRIBUTE_SLOTS: &[&str] = &[
+    PERFORMANCE_ENTRY_ID_SLOT,
     PERFORMANCE_ENTRY_NAME_SLOT,
     PERFORMANCE_ENTRY_TYPE_SLOT,
     PERFORMANCE_ENTRY_START_TIME_SLOT,
     PERFORMANCE_ENTRY_DURATION_SLOT,
+    PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT,
 ];
 
 const PERFORMANCE_ENTRY_DETAIL_ATTRIBUTE_SLOTS: &[&str] = &[PERFORMANCE_ENTRY_DETAIL_SLOT];
@@ -742,10 +786,12 @@ pub(super) fn create_performance_entry<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let detail = detail.unwrap_or_else(|| v8::null(scope).into());
     let entry = PerformanceEntryObjectDeclaration {
+        id: 0.0,
         name,
         entry_type,
         start_time,
         duration,
+        navigation_id: 0.0,
         detail,
     }
     .bind(scope)
@@ -778,10 +824,12 @@ pub(super) fn initialize_performance_entry_slots<'s>(
 ) {
     let detail = detail.unwrap_or_else(|| v8::null(scope).into());
     PerformanceEntryObjectDeclaration {
+        id: 0.0,
         name,
         entry_type,
         start_time,
         duration,
+        navigation_id: 0.0,
         detail,
     }
     .initialize(scope, entry)
@@ -793,6 +841,10 @@ pub(super) fn push_performance_entry<'s>(
     performance: v8::Local<'s, v8::Object>,
     entry: v8::Local<'s, v8::Object>,
 ) {
+    if super::install::is_window_performance(scope, performance) {
+        super::install::ensure_navigation_performance_entry(scope, performance);
+    }
+    assign_queued_performance_entry_identity(scope, performance, entry);
     let entry_type = performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT)
         .unwrap_or_default();
     if entry_type == "resource" {
@@ -802,6 +854,60 @@ pub(super) fn push_performance_entry<'s>(
     }
     append_performance_entry(scope, performance, entry);
     queue_matching_performance_observers(scope, entry, &entry_type);
+}
+
+pub(super) fn assign_navigation_performance_entry_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    let id = ensure_performance_entry_id(scope, performance, entry);
+    set_performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT, id);
+}
+
+fn assign_queued_performance_entry_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    ensure_performance_entry_id(scope, performance, entry);
+    let navigation_id = get_private_value(scope, performance, PERFORMANCE_NAVIGATION_ENTRY_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .and_then(|navigation| {
+            performance_entry_slot_number(scope, navigation, PERFORMANCE_ENTRY_ID_SLOT)
+        })
+        .unwrap_or(0.0);
+    set_performance_entry_slot_number(
+        scope,
+        entry,
+        PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT,
+        navigation_id,
+    );
+}
+
+fn ensure_performance_entry_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+    entry: v8::Local<'s, v8::Object>,
+) -> f64 {
+    if let Some(id) = performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_ID_SLOT)
+        .filter(|id| *id > 0.0)
+    {
+        return id;
+    }
+    let last_id = get_private_value(scope, performance, PERFORMANCE_LAST_ENTRY_ID_SLOT)
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or_else(|| fastrand::u64(100..=10_000) as f64);
+    let id = last_id + fastrand::u64(1..=10) as f64;
+    let id_value = v8::Number::new(scope, id);
+    set_private_value(
+        scope,
+        performance,
+        PERFORMANCE_LAST_ENTRY_ID_SLOT,
+        id_value.into(),
+    );
+    set_performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_ID_SLOT, id);
+    id
 }
 
 pub(super) fn append_performance_entry<'s>(

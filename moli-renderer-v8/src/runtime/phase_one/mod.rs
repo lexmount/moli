@@ -75,6 +75,7 @@ use self::parser_turn::{PageTaskTurnResult, ParserDriver};
 #[cfg(test)]
 use self::parser_turn::{
     ParserStepAdvanceOutcome, ScriptHandoffOutcome, bind_parser_owned_script_handle,
+    finish_parser_session_for_test,
 };
 pub(super) use self::pending_residence::{PendingPhaseOneResidence, PendingPhaseOneResumeOutcome};
 pub(super) use self::state::ConcurrentParseTimeRuntime;
@@ -441,6 +442,23 @@ mod tests {
         html: &'static str,
         env: PageVmEnvConfig,
     ) -> PageVm {
+        parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, false).await
+    }
+
+    async fn parse_finished_phase_one_html_into_page_vm_for_test(html: &'static str) -> PageVm {
+        parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(
+            html,
+            default_test_page_vm_env_config(),
+            true,
+        )
+        .await
+    }
+
+    async fn parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(
+        html: &'static str,
+        env: PageVmEnvConfig,
+        finish_after_step: bool,
+    ) -> PageVm {
         let PhaseOnePageVmHarness {
             mut page_vm,
             loader,
@@ -472,6 +490,12 @@ mod tests {
         .await
         .expect("parser step should complete");
         assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
+        if finish_after_step {
+            driver.parser_session.request_finish();
+            page_vm.vm_mut().with_dom_host_parse_step(|vm| {
+                finish_parser_session_for_test(driver.parser_session, vm)
+            });
+        }
         page_vm
     }
 
@@ -2638,7 +2662,7 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
-    fn buffered_html_preload_scan_leaves_modulepreload_to_native_module_map() {
+    fn buffered_html_preload_scan_routes_script_like_modulepreloads_to_native_module_map() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
         let requests = collect_preloadable_external_script_requests_from_html(
             &final_url,
@@ -2652,10 +2676,20 @@ document.body.setAttribute('data-error-state', [
             "#,
         );
 
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.kind_hint == crate::types::ScriptKind::Module),
+            "scanner modulepreloads must take the native module-map admission path"
+        );
         assert_eq!(
-            requests,
-            Vec::new(),
-            "modulepreload must not enter the legacy script-text preload cache; the parser publishes exact link candidates to the native module map"
+            preload_request_urls(requests),
+            vec![
+                Url::parse("https://example.test/entry.mjs").expect("entry module URL"),
+                Url::parse("https://example.test/theme.css?version=1")
+                    .expect("default script-like module URL"),
+            ],
+            "the scanner should dedupe script-like modulepreloads while leaving typed and data candidates to the parser"
         );
     }
 
@@ -2833,6 +2867,7 @@ document.body.setAttribute('data-error-state', [
             r#"
                 <script type="module" src="/before.mjs"></script>
                 <script type="importmap">{"integrity": {}}</script>
+                <link rel="modulepreload" href="/after-preload.mjs">
                 <script type="module" src="/after.mjs"></script>
                 <script src="/classic.js"></script>
             "#,
@@ -2845,6 +2880,26 @@ document.body.setAttribute('data-error-state', [
                 Url::parse("https://example.test/classic.js").expect("classic url"),
             ]
         );
+    }
+
+    #[test]
+    fn html_preload_scanner_preserves_modulepreload_before_module_script() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let requests = collect_preloadable_external_script_requests_from_html(
+            &final_url,
+            r#"
+                <link rel="modulepreload" href="/entry.mjs" integrity="sha384-invalid">
+                <script type="module" src="/entry.mjs"></script>
+            "#,
+        );
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, requests[1].url);
+        assert_eq!(
+            requests[0].fetch_metadata.integrity.as_deref(),
+            Some("sha384-invalid")
+        );
+        assert_eq!(requests[1].fetch_metadata.integrity, None);
     }
 
     #[test]
@@ -3461,6 +3516,32 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
+    fn quirks_stylesheet_parser_client_claims_mode_neutral_scanner_descriptor() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut cache = BufferedDocumentPreloadState::default();
+        cache.append_to_main_document_scan(
+            &final_url,
+            r#"<link rel="stylesheet" href="/app.css">"#,
+            &loader,
+        );
+        assert_eq!(cache.pending_preload_counts_for_test(), (0, 1));
+
+        let stylesheet_candidate =
+            moli_stylesheet_blocking::DocumentOwnedBlockingStylesheetCandidate::Link {
+                node_id: NodeId::new(11),
+                url: Url::parse("https://example.test/app.css").expect("stylesheet URL"),
+                options: crate::stylesheet_blocking::StylesheetFetchOptions::default()
+                    .with_quirks_mode_mime_compatibility(true),
+            };
+        cache.claim_pending_stylesheet_preloads_for_parser(&[
+            DocumentOwnedBlockingStylesheetDiscoveryInput::from(&stylesheet_candidate),
+        ]);
+
+        assert_eq!(cache.pending_preload_counts_for_test(), (0, 0));
+    }
+
+    #[test]
     fn meta_csp_pending_descriptor_budget_falls_back_to_parser() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
@@ -3984,6 +4065,31 @@ document.body.setAttribute('data-error-state', [
                 Some("nonce-1"),
                 Some("high"),
             )
+        );
+    }
+
+    #[test]
+    fn buffered_preload_scanner_clears_nonnonceable_script_nonces() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let requests = collect_preloadable_external_script_requests_from_html(
+            &final_url,
+            r#"
+                <script src="/safe.js" nonce="abc"></script>
+                <script src="/script.js" nonce="abc" data="value<script"></script>
+                <script src="/style.js" nonce="abc" data="value<style"></script>
+                <script src="/link.js" nonce="abc" data="value<link"></script>
+                <script src="/duplicate.js" nonce="abc" duplicate duplicate></script>
+            "#,
+        );
+
+        assert_eq!(requests.len(), 5);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.fetch_metadata.nonce.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("abc"), None, None, None, None],
+            "speculative requests must use the same nonceability gate as parser execution"
         );
     }
 
@@ -5205,6 +5311,19 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
 
     #[test]
     fn main_parser_blocking_source_failure_uses_the_shared_completion_event_flow() {
+        for (movement, expected) in [
+            ("", "error:true|error-microtask"),
+            ("foreign.body.append(script);", ""),
+            (
+                "foreign.body.append(script); document.body.append(script);",
+                "error:true|error-microtask",
+            ),
+        ] {
+            assert_main_parser_blocking_source_failure_events(movement, expected);
+        }
+    }
+
+    fn assert_main_parser_blocking_source_failure_events(movement: &str, expected: &str) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -5244,6 +5363,13 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .vm_mut()
                 .eval("window.__mainParserClassicFailureEvents = []")
                 .expect("source failure event state should initialize");
+            page_vm.vm_mut().eval(&format!(r#"
+                (() => {{
+                    const script = document.querySelector('script');
+                    const foreign = document.implementation.createHTMLDocument('');
+                    {movement}
+                }})()
+            "#)).expect("source failure script movement should complete");
 
             let task_owner = page_vm
                 .vm()
@@ -5299,8 +5425,8 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                     .vm_mut()
                     .eval("__mainParserClassicFailureEvents.join('|')")
                     .expect("source failure events should evaluate"),
-                "error:true|error-microtask",
-                "source failure must dispatch error with currentScript cleared and settle its reactions before parser continuation"
+                expected,
+                "source failure must check the preparation Document before dispatching error and settling reactions"
             );
         }));
     }
@@ -5971,6 +6097,59 @@ globalThis.__outerDocumentWriteScriptContinued = true;
                     .and_then(serde_json::Value::as_str),
                 Some(r#"{"blockedScriptRan":false,"outerScriptContinued":true,"violations":1}"#)
             );
+        }));
+    }
+
+    #[test]
+    fn parser_style_csp_checks_complete_contents_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+            for (markup, policy, report_only, expected_violations, expected_sheet) in [
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'none'", false, 1, false),
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'none'", true, 1, true),
+                ("<style id='sheet'>p {color:blue;}</style>", "style-src 'sha256-rB6kiow2O3eFUeTNyyLeK3wV0+l7vNB90J1aqllKvjg='", false, 0, true),
+                ("<style id='sheet'></style>", "style-src 'none'", false, 1, false),
+                ("<style id='sheet'>p {color:blue;}", "style-src 'none'", false, 1, false),
+                ("<script>document.write(\"<style id='sheet'>p {color:blue;}</style>\")</script>", "style-src 'none'", false, 1, false),
+                ("<script>const s = document.createElement('style'); s.id = 'sheet'; document.head.append(s); s.textContent = 'p {color:blue;}';</script>", "style-src 'none'", false, 2, false),
+            ] {
+                let env = default_test_page_vm_env_config_with(|env| {
+                    let policies = if report_only {
+                        &mut env.document_policy_container.response_content_security_report_only_policies
+                    } else {
+                        &mut env.document_policy_container.response_content_security_policies
+                    };
+                    *policies = vec![policy.to_owned()];
+                });
+                let html = Box::leak(format!("<!doctype html><html><head><script>globalThis.__parserStyleViolations = 0; document.addEventListener('securitypolicyviolation', () => __parserStyleViolations++);</script>{markup}").into_boxed_str());
+                let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, true).await;
+                let result = page_vm.evaluate_expression("Boolean(document.getElementById('sheet').sheet)").expect("stylesheet probe");
+                assert_eq!(result.get("value").and_then(serde_json::Value::as_bool), Some(expected_sheet), "{markup}, {policy}, report-only={report_only}");
+
+                let local_executor = page_vm.local_executor.clone();
+                let page_vm_ptr: *mut PageVm = &mut page_vm;
+                super::access::run_named_owner_local_task(
+                    local_executor,
+                    "parser style CSP task channel closed",
+                    async move {
+                        let page_vm = unsafe { &mut *page_vm_ptr };
+                        page_vm.page_task_queue.accept_ready_parse_time_wakes();
+                        page_vm.vm_mut().drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
+                        while let Some(task) = page_vm.page_task_queue.parse_time_pop_front() {
+                            let work = PostParsePageOwnedWork::lifecycle_work(
+                                crate::page_task_queue::PostParseLifecycleWork::from_parse_time_page_task(task),
+                            );
+                            execute_page_owned_work_turn_on_local_task(page_vm, work).await?;
+                        }
+                        Ok(())
+                    },
+                ).await.expect("parser style tasks");
+                let result = page_vm.evaluate_expression("__parserStyleViolations").expect("violation event count");
+                assert_eq!(result.get("value").and_then(serde_json::Value::as_u64), Some(expected_violations), "{markup}, {policy}, report-only={report_only}");
+            }
         }));
     }
 
@@ -12412,6 +12591,160 @@ JSON.stringify({
     }
 
     #[test]
+    fn parser_option_finish_and_select_setters_sync_selectedcontent_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><body>
+<form id="form"><select id="select">
+  <button><selectedcontent id="selectedcontent">default</selectedcontent></button>
+  <div><option id="one"><span id="source-span">one</span></option></div>
+  <div><option id="two"><strong>two</strong></option></div>
+</select></form>
+<script>
+const select = document.getElementById('select');
+const selectedcontent = document.getElementById('selectedcontent');
+const sourceSpan = document.querySelector('#one > span');
+window.selectedcontentState = [
+  selectedcontent.textContent.trim(),
+  selectedcontent.innerText.trim(),
+  selectedcontent.firstElementChild !== sourceSpan,
+];
+select.value = 'two';
+window.selectedcontentState.push(
+  selectedcontent.textContent.trim(),
+  selectedcontent.firstElementChild.tagName,
+);
+document.querySelector('#two > strong').textContent = 'updated';
+select.selectedIndex = select.selectedIndex;
+window.selectedcontentState.push(selectedcontent.textContent.trim());
+document.getElementById('form').reset();
+window.selectedcontentState.push(selectedcontent.textContent.trim());
+</script>
+</body></html>"#,
+            )
+            .await;
+
+            let result = page_vm
+                .evaluate_expression("JSON.stringify(window.selectedcontentState)")
+                .expect("selectedcontent parser state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"["one","one",true,"two","STRONG","updated","one"]"#),
+                "parser option completion and select setters must synchronously clone the selected option children"
+            );
+        }));
+    }
+
+    #[test]
+    fn moving_selected_option_updates_previous_select_selectedcontent_in_a_microtask() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><body>
+<select id="source">
+  <button><selectedcontent id="selectedcontent"></selectedcontent></button>
+  <option id="moved">one</option>
+  <option>two</option>
+</select>
+<div id="destination"></div>
+<script>
+const selectedcontent = document.getElementById('selectedcontent');
+document.getElementById('destination').appendChild(document.getElementById('moved'));
+window.selectedcontentMoveState = [selectedcontent.textContent.trim()];
+</script>
+</body></html>"#,
+            )
+            .await;
+
+            page_vm
+                .evaluate_expression("0")
+                .expect("selectedcontent removal microtask checkpoint should run");
+            let result = page_vm
+                .evaluate_expression(
+                    "JSON.stringify([...window.selectedcontentMoveState, document.getElementById('selectedcontent').textContent.trim()])",
+                )
+                .expect("selectedcontent move state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"["one","two"]"#),
+                "implicit option removal must keep the old clone synchronously and update it at the next microtask checkpoint"
+            );
+        }));
+    }
+
+    #[test]
+    fn parser_eof_option_finish_syncs_selectedcontent_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut text_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+                r#"<select><button><selectedcontent></button><option>X"#,
+            )
+            .await;
+            let text_result = text_page_vm
+                .evaluate_expression(
+                    r#"
+(() => {
+  const selectedcontent = document.querySelector('selectedcontent');
+  const source = document.querySelector('option');
+  return [
+    selectedcontent.textContent,
+    selectedcontent.firstChild !== source.firstChild
+  ].join('|');
+})()
+"#,
+                )
+                .expect("EOF-closed text option selectedcontent state should evaluate");
+            assert_eq!(
+                text_result.get("value").and_then(serde_json::Value::as_str),
+                Some("X|true"),
+                "EOF-closing an option must clone its text into selectedcontent"
+            );
+
+            let mut nested_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+                r#"<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b"#,
+            )
+            .await;
+            let nested_result = nested_page_vm
+                .evaluate_expression(
+                    r#"
+(() => {
+  const selectedcontent = document.querySelector('selectedcontent');
+  const source = document.querySelector('option');
+  return [
+    selectedcontent.textContent,
+    selectedcontent.innerHTML === source.innerHTML,
+    selectedcontent.firstChild !== source.firstChild,
+    selectedcontent.querySelector('i') !== source.querySelector('i'),
+    selectedcontent.querySelectorAll('b').length
+  ].join('|');
+})()
+"#,
+                )
+                .expect("EOF-closed nested option selectedcontent state should evaluate");
+            assert_eq!(
+                nested_result
+                    .get("value")
+                    .and_then(serde_json::Value::as_str),
+                Some("xiibb|true|true|true|2"),
+                "EOF-closing an option must deep-clone its parsed children into selectedcontent"
+            );
+        }));
+    }
+
+    #[test]
     fn parser_merged_root_attributes_hide_nonce_content_values() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -13775,16 +14108,23 @@ window.parserMixedAdoptEvents.length = 0;
                 None,
                 "parser DocumentFragment insertion must not represent text-track default-mode work as a timer"
             );
-            assert!(matches!(
-                take_next_dom_manipulation_task_for_test(&page_vm),
-                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
+            page_vm
+                .vm_mut()
+                .perform_script_task_checkpoint(None)
+                .expect("parser task-end checkpoint should select the image request");
             assert!(
                 matches!(
                     take_next_dom_manipulation_task_for_test(&page_vm),
                     crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
                 ),
-                "hoisted text track should follow the earlier image in the shared DOM FIFO"
+                "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+            );
+            assert!(
+                matches!(
+                    take_next_dom_manipulation_task_for_test(&page_vm),
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
+                ),
+                "the image-update microtask should queue its terminal after the earlier text-track task"
             );
         }));
     }
@@ -13892,16 +14232,23 @@ window.parserMixedAdoptEvents.length = 0;
                 None,
                 "parser DocumentFragment insertBefore must not represent text-track default-mode work as a timer"
             );
-            assert!(matches!(
-                take_next_dom_manipulation_task_for_test(&page_vm),
-                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
+            page_vm
+                .vm_mut()
+                .perform_script_task_checkpoint(None)
+                .expect("parser task-end checkpoint should select the image request");
             assert!(
                 matches!(
                     take_next_dom_manipulation_task_for_test(&page_vm),
                     crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
                 ),
-                "insertBefore-hoisted text track should follow the image in the shared DOM FIFO"
+                "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+            );
+            assert!(
+                matches!(
+                    take_next_dom_manipulation_task_for_test(&page_vm),
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
+                ),
+                "the image-update microtask should queue its terminal after the earlier text-track task"
             );
         }));
     }
@@ -18094,7 +18441,7 @@ document.body.setAttribute("data-range", [
             let outcome = driver
                 .advance_parser_step(
                     &mut page_vm,
-                    "<!doctype html><html><head><style>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
+                    "<!doctype html><html><head><style id='blocking-style'>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
                     None,
                 )
                 .await
@@ -18103,6 +18450,20 @@ document.body.setAttribute("data-range", [
             assert!(
                 matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
                 "parser-created style import should gate parser-blocking script on live PageVm"
+            );
+            let style = page_vm
+                .vm()
+                .document_runtime
+                .dom_host()
+                .element_handle_by_id("blocking-style")
+                .expect("parser-created style owner");
+            assert_eq!(
+                page_vm
+                    .vm()
+                    .document_runtime
+                    .pending_style_import_binding_for_test(style),
+                Some((1, true)),
+                "the parser-discovered import must bind its live stylesheet root before the script gate is released"
             );
         }));
     }

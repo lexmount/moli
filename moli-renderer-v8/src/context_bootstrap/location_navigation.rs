@@ -23,8 +23,8 @@ use super::navigation_lifecycle::{
     settle_navigation_transition_finished_local,
 };
 use super::navigation_mutation::{
-    apply_local_window_location_navigation, apply_navigation_navigate_same_document,
-    sync_local_document_front_from_window, update_navigation_current_entry_for_same_document,
+    apply_navigation_navigate_same_document, sync_local_document_front_from_window,
+    update_navigation_current_entry_for_same_document,
 };
 use super::navigation_reload::{NavigationReloadAdmission, navigation_reload_admission};
 use super::navigation_result::{
@@ -67,14 +67,39 @@ pub(super) enum NavigationNavigateHistoryKind {
     Replace,
 }
 
+#[derive(Default)]
+struct LocationNavigationOptions {
+    dispatch_child_navigate_event_for_all_kinds: bool,
+    force_exact_same_document_navigation: bool,
+    explicit_initiator_url: Option<url::Url>,
+}
+
 pub(crate) fn navigate_location_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
     kind: LocationNavigationKind,
     raw_target: Option<String>,
 ) {
+    let owner = runtime_window_owner(scope, location);
+    let replaces_unloaded_document = kind == LocationNavigationKind::Assign
+        && location_document_is_before_load_complete(scope, owner)
+        && !context_host_ptr_for_navigation_owner(scope, owner)
+            .is_some_and(|host| unsafe { &*host }.protocol_user_gesture_activation());
+    let kind = if replaces_unloaded_document {
+        LocationNavigationKind::Replace
+    } else {
+        kind
+    };
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, false, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: replaces_unloaded_document,
+            ..LocationNavigationOptions::default()
+        },
     );
 }
 
@@ -118,8 +143,10 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
         LocationNavigationKind::Assign,
         Some(target),
         None,
-        false,
-        true,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..LocationNavigationOptions::default()
+        },
     );
     true
 }
@@ -173,8 +200,10 @@ pub(crate) fn navigate_top_level_meta_refresh(
         kind,
         Some(target.to_string()),
         None,
-        false,
-        same_document_fragment,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: same_document_fragment,
+            ..LocationNavigationOptions::default()
+        },
     );
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
@@ -195,8 +224,7 @@ pub(crate) fn navigate_location_object_with_source_element<'s>(
         kind,
         raw_target,
         source_element,
-        false,
-        false,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -207,7 +235,36 @@ pub(crate) fn navigate_location_object_with_child_navigate_event<'s>(
     raw_target: Option<String>,
 ) {
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, true, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            ..LocationNavigationOptions::default()
+        },
+    );
+}
+
+pub(crate) fn navigate_location_object_with_child_navigate_event_and_initiator_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    kind: LocationNavigationKind,
+    raw_target: Option<String>,
+    initiator_url: url::Url,
+) {
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            explicit_initiator_url: Some(initiator_url),
+            ..LocationNavigationOptions::default()
+        },
     );
 }
 
@@ -217,9 +274,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
     source_element: Option<v8::Local<'s, v8::Object>>,
-    dispatch_child_navigate_event_for_all_kinds: bool,
-    force_exact_same_document_navigation: bool,
+    options: LocationNavigationOptions,
 ) {
+    let LocationNavigationOptions {
+        dispatch_child_navigate_event_for_all_kinds,
+        force_exact_same_document_navigation,
+        explicit_initiator_url,
+    } = options;
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
     let raw_target_is_fragment_only = raw_target
@@ -304,20 +365,22 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             super::navigation_window::window_navigation_for_holder(scope, owner)
         };
+        let child_handle = if runtime_window_is_global(scope, owner) {
+            None
+        } else {
+            child_browsing_context_handle_for_runtime_owner(scope, owner)
+        };
+        let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
+            context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+            })
+        });
         let effective_kind = match kind {
-            LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
+            LocationNavigationKind::Assign if replaces_initial_about_blank => {
                 LocationNavigationKind::Replace
             }
-            LocationNavigationKind::Assign
-                if source_element.is_none()
-                    && runtime_window_is_global(scope, owner)
-                    && top_level_document_is_before_load_complete(scope) =>
-            {
-                if force_exact_same_document_navigation {
-                    LocationNavigationKind::Assign
-                } else {
-                    LocationNavigationKind::Replace
-                }
+            LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
+                LocationNavigationKind::Replace
             }
             _ => kind,
         };
@@ -402,11 +465,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 effective_kind,
             );
         }
-        let child_handle = if runtime_window_is_global(scope, owner) {
-            None
-        } else {
-            child_browsing_context_handle_for_runtime_owner(scope, owner)
-        };
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let state = window_history_for_holder(scope, owner)
                 .map(|history| history_state_value(scope, history))
@@ -582,6 +640,17 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
 
     if let Some(handle) = child_handle {
         let is_javascript_url = resolved.scheme() == "javascript";
+        let host_ptr = context_host_ptr_for_navigation_owner(scope, owner);
+        let replaces_initial_empty_document = !is_javascript_url
+            && matches!(kind, LocationNavigationKind::Assign)
+            && host_ptr.is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+            });
+        let kind = if replaces_initial_empty_document {
+            LocationNavigationKind::Replace
+        } else {
+            kind
+        };
         if (matches!(kind, LocationNavigationKind::Assign)
             || dispatch_child_navigate_event_for_all_kinds)
             && !is_javascript_url
@@ -603,25 +672,34 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
-        if !is_javascript_url {
-            sync_location_object(scope, location, resolved.as_str());
-            apply_local_window_location_navigation(scope, owner, &resolved, kind);
-        }
-        if let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) {
+        if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
-                host.mark_child_browsing_context_top_level_history_increment(handle);
-            }
-            if matches!(kind, LocationNavigationKind::Reload) {
-                host.queue_child_browsing_context_reload_from_existing_seed(
-                    handle,
-                    resolved.as_str(),
-                );
-            } else {
+            let initiator_url =
+                explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
+            if is_javascript_url {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     handle,
                     resolved.as_str(),
+                    initiator_url,
                 );
+            } else {
+                // A cross-document navigation only prepares the next history
+                // entry. The old Document's Location, history state and entry
+                // identity remain visible until the replacement commits.
+                let entry_seed = if matches!(kind, LocationNavigationKind::Reload) {
+                    history_entry_seed_for_reload(scope, owner)
+                } else {
+                    history_entry_seed_for_cross_document_location(scope, owner, &resolved, kind)
+                };
+                if let Some(entry_seed) = entry_seed {
+                    host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+                        handle,
+                        resolved.as_str(),
+                        entry_seed,
+                        matches!(kind, LocationNavigationKind::Assign),
+                        initiator_url,
+                    );
+                }
             }
         }
         return;
@@ -804,11 +882,23 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
     !outcome.intercepted
 }
 
-fn top_level_document_is_before_load_complete(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-        unsafe { &*host_ptr }.host_document().ready_state()
-            != crate::dom::native::DocumentReadyState::Complete
-    })
+fn location_document_is_before_load_complete<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    let document_handle = if runtime_window_is_global(scope, owner) {
+        Some(host.document_handle())
+    } else {
+        child_browsing_context_handle_for_runtime_owner(scope, owner)
+            .and_then(|handle| host.frame_owner_current_child_snapshot(handle))
+            .map(|snapshot| snapshot.document_handle)
+    };
+    document_handle
+        .is_some_and(|document| host.document_is_completely_loaded(document) == Some(false))
 }
 
 const LOCATION_INTERCEPT_SETTLEMENT_NAVIGATION_SLOT: &str = "__lmLocationInterceptNavigation";
@@ -1220,6 +1310,33 @@ fn context_host_ptr_for_navigation_owner(
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
                 .and_then(|parent| context_host_ptr_from_window_object(scope, parent))
         })
+}
+
+fn location_navigation_initiator_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+) -> Option<url::Url> {
+    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+        return host.lightweight_popup_document_url(popup_id);
+    }
+    let dispatch_scope = scope
+        .get_incumbent_context()
+        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
+        .map(|identity| identity.dispatch_scope())
+        .or_else(|| {
+            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
+                .map(crate::native_bridge::OwnerDispatchScope::Child)
+        })
+        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_url().clone()),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_current_url(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_url(popup_id)
+        }
+    }
 }
 
 #[cfg(test)]

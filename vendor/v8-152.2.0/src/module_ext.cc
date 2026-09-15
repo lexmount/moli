@@ -7,6 +7,10 @@ using namespace support;
 
 extern "C" {
 
+const v8::Value* v8__Module__GetResourceName(const v8::Module& self) {
+  return local_to_ptr(self.GetResourceName());
+}
+
 MaybeBool v8__Module__SetSyntheticModuleExportUninitialized(
     const v8::Module& self,
     v8::Isolate* isolate,

@@ -1,11 +1,11 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
-use crate::native_bridge::document::XHTML_NS;
 use crate::util::v8_string;
 use crate::webidl;
 
 use super::super::{
     JsContextHost,
+    document::{MATHML_NS, SVG_NS, XHTML_NS},
     node::{
         node_is_element, node_runtime_and_handle_from_object_or_detached,
         throw_incompatible_getter_receiver, throw_incompatible_setter_receiver,
@@ -13,6 +13,7 @@ use super::super::{
     throw_dom_exception,
 };
 
+use super::details_dialog::main_summary_child;
 use super::reflection::{
     DomStringReflection, ElementReflectionInterface, NullToEmptyDomStringReflection,
     UnsignedLongReflection, UsvStringReflection, remove_reflected_attribute,
@@ -20,8 +21,8 @@ use super::reflection::{
 use super::{
     attribute_property_getter_from_object_or_detached,
     boolean_attribute_property_getter_from_object_or_detached, element_attribute,
-    form_associated_form_owner, html_element_getter_receiver, html_element_setter_receiver,
-    property_dom_string_value, resolve_url_like_attribute,
+    element_has_attribute, form_associated_form_owner, html_element_getter_receiver,
+    html_element_setter_receiver, property_dom_string_value, resolve_url_like_attribute,
     set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object, set_reflected_attribute,
@@ -687,32 +688,6 @@ fn set_html_unsigned_long_attribute_for_receiver<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, content_attr, &value.to_string());
 }
 
-pub(in crate::native_bridge) fn table_col_span_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    html_unsigned_long_attribute_getter_for_receiver(scope, args.this(), rv, "span", 1, |value| {
-        if value == 0 { 1 } else { value.min(1000) }
-    });
-}
-
-pub(in crate::native_bridge) fn table_col_span_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_html_unsigned_long_attribute_for_receiver(
-        scope,
-        args.this(),
-        "span",
-        args.get(0),
-        "HTMLTableColElement",
-        "span",
-    );
-    rv.set_undefined();
-}
-
 pub(in crate::native_bridge) fn html_download_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -745,7 +720,7 @@ pub(in crate::native_bridge) fn node_dir_getter_function<'s>(
     canonical_attribute_getter_from_object(scope, args.this(), "dir", canonical_dir_value, rv);
 }
 
-fn canonical_dir_value(raw: &str) -> &'static str {
+pub(in crate::native_bridge) fn canonical_dir_value(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case("ltr") {
         "ltr"
     } else if raw.eq_ignore_ascii_case("rtl") {
@@ -1056,30 +1031,6 @@ pub(in crate::native_bridge) fn html_color_getter_function<'s>(
     attribute_property_getter_from_object_or_detached(scope, args.this(), "color", rv);
 }
 
-pub(in crate::native_bridge) fn node_sandbox_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "sandbox", rv);
-}
-
-pub(in crate::native_bridge) fn node_sandbox_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "sandbox",
-        args.get(0),
-        "HTMLIFrameElement",
-        "sandbox",
-    );
-    rv.set_undefined();
-}
-
 fn set_dom_string_treat_null_as_empty_on_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1110,6 +1061,31 @@ fn set_dom_string_treat_null_as_empty_on_object<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
 }
 
+pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    if let Some(local_name) = descriptor.html_local_name
+        && html_element_getter_receiver(
+            scope,
+            args.this(),
+            descriptor.interface,
+            descriptor.member,
+            local_name,
+        )
+        .is_none()
+    {
+        return;
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), descriptor.attribute, rv);
+}
+
 pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1118,6 +1094,18 @@ pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_funct
     if let Some(descriptor) =
         NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
     {
+        if let Some(local_name) = descriptor.html_local_name
+            && html_element_setter_receiver(
+                scope,
+                args.this(),
+                descriptor.interface,
+                descriptor.member,
+                local_name,
+            )
+            .is_none()
+        {
+            return;
+        }
         set_dom_string_treat_null_as_empty_on_object(
             scope,
             args.this(),
@@ -1216,6 +1204,117 @@ pub(in crate::native_bridge) fn html_no_shade_setter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     set_boolean_attribute_on_object_or_detached(scope, args.this(), "noshade", args.get(0));
+    rv.set_undefined();
+}
+
+fn html_boolean_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    interface: &'static str,
+    member: &'static str,
+    local_name: &'static str,
+    attribute: &'static str,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) =
+        html_element_getter_receiver(scope, receiver, interface, member, local_name)
+    else {
+        rv.set_bool(false);
+        return;
+    };
+    rv.set_bool(element_has_attribute(
+        unsafe { &*runtime_ptr },
+        handle,
+        attribute,
+    ));
+}
+
+fn html_boolean_attribute_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    interface: &'static str,
+    member: &'static str,
+    local_name: &'static str,
+    attribute: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        html_element_setter_receiver(scope, receiver, interface, member, local_name)
+    else {
+        return;
+    };
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        attribute,
+        value.boolean_value(scope),
+    );
+}
+
+pub(in crate::native_bridge) fn html_no_resize_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    html_boolean_attribute_getter(
+        scope,
+        args.this(),
+        "HTMLFrameElement",
+        "noResize",
+        "frame",
+        "noresize",
+        rv,
+    );
+}
+
+pub(in crate::native_bridge) fn html_no_resize_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    html_boolean_attribute_setter(
+        scope,
+        args.this(),
+        args.get(0),
+        "HTMLFrameElement",
+        "noResize",
+        "frame",
+        "noresize",
+    );
+    rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn html_true_speed_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    html_boolean_attribute_getter(
+        scope,
+        args.this(),
+        "HTMLMarqueeElement",
+        "trueSpeed",
+        "marquee",
+        "truespeed",
+        rv,
+    );
+}
+
+pub(in crate::native_bridge) fn html_true_speed_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    html_boolean_attribute_setter(
+        scope,
+        args.this(),
+        args.get(0),
+        "HTMLMarqueeElement",
+        "trueSpeed",
+        "marquee",
+        "truespeed",
+    );
     rv.set_undefined();
 }
 
@@ -1521,20 +1620,27 @@ fn canonical_scope_value(raw: &str) -> &'static str {
 // ---------- Unsigned-long content attribute reflections ----------
 //
 // Each parses the content attribute via the HTML "non-negative integer
-// parsing rules" (leading whitespace skipped, leading digits consumed) and
-// returns the parsed value (clamped to [0, u32::MAX] then narrowed to i32 for
-// the IDL `unsigned long`). When the attribute is missing or unparseable the
-// attribute-specific default applies.
+// parsing rules" (leading whitespace skipped, leading digits consumed).
+// Attribute-specific reflection code decides whether to apply the signed
+// 31-bit boundary or a narrower getter clamp.
 
-fn parse_non_negative_integer(value: &str) -> Option<u32> {
+pub(in crate::native_bridge::element) fn parse_non_negative_integer(value: &str) -> Option<u32> {
     // Per HTML "rules for parsing non-negative integers": skip leading ASCII
     // whitespace, then consume leading ASCII digits. Out-of-range results
     // saturate at u32::MAX rather than falling back to the attribute default
     // — the spec's reflection algorithm clamps to the unsigned-long range.
     let mut chars = value.chars().skip_while(|ch| ch.is_ascii_whitespace());
-    if matches!(chars.clone().next(), Some('+')) {
-        chars.next();
-    }
+    let negative = match chars.clone().next() {
+        Some('+') => {
+            chars.next();
+            false
+        }
+        Some('-') => {
+            chars.next();
+            true
+        }
+        _ => false,
+    };
     let mut acc: u64 = 0;
     let mut had_digit = false;
     for ch in chars.by_ref() {
@@ -1548,7 +1654,11 @@ fn parse_non_negative_integer(value: &str) -> Option<u32> {
             break;
         }
     }
-    if had_digit { Some(acc as u32) } else { None }
+    if !had_digit || (negative && acc != 0) {
+        None
+    } else {
+        Some(acc as u32)
+    }
 }
 
 fn unsigned_long_attribute_getter_from_object_or_detached<'s, F>(
@@ -1672,7 +1782,7 @@ pub(in crate::native_bridge) fn canonical_preload_value(raw: &str) -> &'static s
     }
 }
 
-fn canonical_fetch_priority_value(raw: &str) -> &'static str {
+pub(super) fn canonical_fetch_priority_value(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case("low") {
         "low"
     } else if raw.eq_ignore_ascii_case("high") {
@@ -2372,11 +2482,11 @@ pub(in crate::native_bridge) fn node_hidden_getter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
         return;
     }
     match element_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
@@ -2398,11 +2508,11 @@ pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
         return;
     }
     let value = args.get(0);
@@ -2452,7 +2562,7 @@ pub(in crate::native_bridge) fn node_inert_getter_function<'s>(
         throw_incompatible_getter_receiver(scope, "HTMLElement", "inert");
         return;
     }
-    rv.set_bool(element_attribute(runtime, handle, "inert").is_some());
+    rv.set_bool(element_has_attribute(runtime, handle, "inert"));
 }
 
 pub(in crate::native_bridge) fn node_inert_setter_function<'s>(
@@ -2489,11 +2599,21 @@ fn default_tab_index_for(runtime: &JsContextHost, handle: DomHandle) -> i32 {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
-    if element.namespace() != "http://www.w3.org/1999/xhtml" {
-        return -1;
-    }
-    match element.local_name() {
-        "a" | "button" | "input" | "select" | "textarea" => 0,
+    match (element.namespace(), element.local_name()) {
+        (
+            XHTML_NS,
+            "a" | "area" | "button" | "frame" | "iframe" | "input" | "object" | "select"
+            | "textarea",
+        )
+        | (SVG_NS | MATHML_NS, "a") => 0,
+        (XHTML_NS, "summary")
+            if runtime
+                .dom_host()
+                .parent_node(handle)
+                .is_some_and(|parent| main_summary_child(runtime, parent) == Some(handle)) =>
+        {
+            0
+        }
         _ => -1,
     }
 }
@@ -2563,7 +2683,18 @@ fn parse_tab_index_attribute(value: &str) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_dir_value, parse_tab_index_attribute};
+    use super::{canonical_dir_value, parse_non_negative_integer, parse_tab_index_attribute};
+
+    #[test]
+    fn parses_html_non_negative_integer_including_minus_zero() {
+        assert_eq!(parse_non_negative_integer(""), None);
+        assert_eq!(parse_non_negative_integer("\u{b}7"), None);
+        assert_eq!(parse_non_negative_integer(" +7tail"), Some(7));
+        assert_eq!(parse_non_negative_integer("-0"), Some(0));
+        assert_eq!(parse_non_negative_integer("-00tail"), Some(0));
+        assert_eq!(parse_non_negative_integer("-1"), None);
+        assert_eq!(parse_non_negative_integer("4294967296"), Some(u32::MAX));
+    }
 
     #[test]
     fn parses_tab_index_attribute_like_html_signed_integer() {

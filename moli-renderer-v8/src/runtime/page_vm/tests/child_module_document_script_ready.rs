@@ -1,6 +1,6 @@
 use super::*;
 
-async fn queue_child_module_document_script_ready(
+pub(super) async fn queue_child_module_document_script_ready(
     page_vm: &mut PageVm,
     base_url: &str,
     create_reaction_child: bool,
@@ -197,7 +197,7 @@ Promise.resolve().then(() => {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn child_module_ready_body_keeps_load_reaction_for_selected_task_completion() {
+async fn child_module_ready_body_cleans_up_script_before_load_callback() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
             "/child-module-task-boundary.js",
@@ -234,8 +234,8 @@ Promise.resolve().then(() => {
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildModuleTaskBoundary.join('|')"
                 )?,
-            "module-body|module-microtask|script-load",
-            "module error-handling must run its algorithmic checkpoint before script load, but the load listener reaction belongs to selected task completion"
+            "module-body|module-microtask|script-load|load-microtask",
+            "module cleanup precedes script load, whose callback has its own cleanup checkpoint"
         );
 
         server

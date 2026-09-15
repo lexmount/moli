@@ -1,17 +1,18 @@
 use super::super::init::RequestInitMembers;
 use super::super::input::{
-    normalize_request_method, normalize_request_referrer, request_body_already_used_error,
+    normalize_fetch_request_method, request_body_already_used_error,
     request_headers_guard_for_mode, request_input_snapshot_for_constructor, request_input_url,
     request_method_allows_body, request_signal_snapshot_from_value,
-    try_resolve_request_constructor_url_for_scope,
+    try_resolve_request_constructor_url_for_scope, validate_request_url_credentials,
 };
 use super::super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_fetch::{RequestMode, RequestRedirectMode};
+use moli_fetch::RequestRedirectMode;
 
 pub(super) struct RequestConstructionState {
     pub(super) url_resolved: String,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) mode: String,
     pub(super) cache: String,
@@ -24,6 +25,8 @@ pub(super) struct RequestConstructionState {
     pub(super) priority: moli_fetch::FetchPriorityHint,
     pub(super) duplex: String,
     pub(super) body: Option<Vec<u8>>,
+    pub(super) body_stream: Option<v8::Global<v8::Object>>,
+    pub(super) inherited_body_stream: bool,
     pub(super) inherited_body_unusable: bool,
     pub(super) body_content_type: Option<String>,
     pub(super) headers: Vec<(String, String)>,
@@ -51,6 +54,9 @@ pub(super) fn request_initial_state<'s>(
             .map_err(|_| {
                 webidl::WebIdlError::custom_message("Failed to construct 'Request': invalid URL")
             })?;
+    if let Ok(url) = url::Url::parse(&url_resolved) {
+        validate_request_url_credentials(&url).map_err(webidl::WebIdlError::custom_message)?;
+    }
     let method = inherited
         .as_ref()
         .map(|snapshot| snapshot.method.clone())
@@ -98,6 +104,17 @@ pub(super) fn request_initial_state<'s>(
     let body = inherited
         .as_ref()
         .and_then(|snapshot| snapshot.body.clone());
+    let body_stream = body
+        .is_none()
+        .then(|| {
+            v8::Local::<v8::Object>::try_from(args.get(0))
+                .ok()
+                .filter(|input| is_branded_request_object(scope, *input))
+                .and_then(|input| body_stream_object(scope, input))
+                .map(|stream| v8::Global::new(scope, stream))
+        })
+        .flatten();
+    let inherited_body_stream = body_stream.is_some();
     let inherited_body_unusable = inherited
         .as_ref()
         .is_some_and(|snapshot| snapshot.body_unusable);
@@ -105,10 +122,14 @@ pub(super) fn request_initial_state<'s>(
         .as_ref()
         .map(|snapshot| snapshot.headers.clone())
         .unwrap_or_default();
+    let blob_url_entry = inherited
+        .as_ref()
+        .and_then(|snapshot| snapshot.blob_url_entry.clone());
     let signal = inherited.and_then(|snapshot| snapshot.signal);
 
     Ok(RequestConstructionState {
         url_resolved,
+        blob_url_entry,
         method,
         mode,
         cache,
@@ -121,6 +142,8 @@ pub(super) fn request_initial_state<'s>(
         priority,
         duplex,
         body,
+        body_stream,
+        inherited_body_stream,
         inherited_body_unusable,
         body_content_type: None,
         headers,
@@ -134,11 +157,18 @@ pub(super) fn apply_request_init_overrides<'s>(
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
     let parsed = webidl::parse_dictionary_object::<RequestInitMembers>(scope, init)?;
+    let validation = parsed.validation();
+    if let Some(mode) = validation.mode {
+        state.mode = mode.as_ref().to_owned();
+    }
+    if let Some(cache) = parsed.cache {
+        state.cache = cache.0.to_owned();
+    }
 
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
-        state.method = normalize_request_method(&method)
-            .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))?;
+        state.method =
+            normalize_fetch_request_method(&method).map_err(webidl::WebIdlError::custom_message)?;
     }
     let init_body_value = webidl::property_result(
         scope,
@@ -146,20 +176,35 @@ pub(super) fn apply_request_init_overrides<'s>(
         "body",
         webidl::Context::member("RequestInit", "body"),
     )?;
-    let init_body_is_readable_stream = init_body_value
+    let init_body_stream = init_body_value
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|object| web_api_interfaces::ReadableStream::is_instance(scope, object));
+        .filter(|object| web_api_interfaces::ReadableStream::is_instance(scope, *object));
     let body_from_init = init_body_value
+        .filter(|_| init_body_stream.is_none())
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
         .transpose()?
         .flatten();
     if let Some(init_body) = body_from_init.as_ref() {
         state.body_content_type = init_body.content_type.clone();
         state.body = Some(init_body.bytes.clone());
+        state.body_stream = None;
+        state.inherited_body_stream = false;
         state.inherited_body_unusable = false;
     }
-    if state.body.as_ref().is_some_and(|body| !body.is_empty())
-        && (body_from_init.is_some() || method_overridden)
+    if let Some(stream) = init_body_stream {
+        if readable_body_stream_unusable(scope, stream) {
+            return Err(webidl::WebIdlError::custom_message(
+                "BodyInit ReadableStream is locked or disturbed",
+            ));
+        }
+        state.body = None;
+        state.body_content_type = None;
+        state.body_stream = Some(v8::Global::new(scope, stream));
+        state.inherited_body_stream = false;
+        state.inherited_body_unusable = false;
+    }
+    if (state.body.is_some() || state.body_stream.is_some())
+        && (body_from_init.is_some() || init_body_stream.is_some() || method_overridden)
         && !request_method_allows_body(&state.method)
     {
         return Err(webidl::WebIdlError::custom_message(
@@ -169,20 +214,21 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(headers) = parsed.headers {
         state.headers = headers;
     }
-    let signal_key = v8str(scope, "signal");
-    if init.has(scope, signal_key.into()).unwrap_or(false) {
-        let signal = init
-            .get(scope, signal_key.into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
+    if let Some(signal) = webidl::property_result(
+        scope,
+        init,
+        "signal",
+        webidl::Context::member("RequestInit", "signal"),
+    )?
+    .filter(|value| !value.is_undefined())
+    {
         state.signal = request_signal_snapshot_from_value(scope, signal)?;
     }
-    if let Some(mode) = parsed.mode.map(|value| value.0) {
-        if mode == RequestMode::Navigate {
-            return Err(webidl::WebIdlError::custom_message(
-                "Cannot construct a Request with a RequestInit whose mode member is \"navigate\".",
-            ));
-        }
-        state.mode = mode.as_ref().to_owned();
+    if let Some(referrer) = validation
+        .validate(scope, &state.mode, &state.cache)
+        .map_err(webidl::WebIdlError::custom_message)?
+    {
+        state.referrer = referrer;
     }
     if state.mode == "no-cors" && !moli_fetch::is_cors_safelisted_method(&state.method) {
         return Err(webidl::WebIdlError::custom_message(
@@ -192,17 +238,11 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(credentials_mode) = parsed.credentials_mode.map(|value| value.0) {
         state.credentials = request_credentials_mode_label(credentials_mode).to_owned();
     }
-    if let Some(cache) = parsed.cache {
-        state.cache = cache;
-    }
     if let Some(redirect) = parsed.redirect {
         state.redirect_mode = redirect.0;
     }
-    if let Some(referrer) = parsed.referrer {
-        state.referrer = normalize_request_referrer(scope, &referrer);
-    }
     if let Some(referrer_policy) = parsed.referrer_policy {
-        state.referrer_policy = referrer_policy;
+        state.referrer_policy = referrer_policy.0.to_owned();
     }
     if let Some(integrity) = parsed.integrity {
         state.integrity = integrity;
@@ -210,16 +250,26 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(priority) = parsed.priority {
         state.priority = priority.0;
     }
-    if let Some(duplex) = parsed.duplex {
-        state.duplex = duplex;
+    if parsed.duplex.is_some() {
+        state.duplex = "half".to_owned();
     }
-    if parsed.keepalive == Some(true) && init_body_is_readable_stream {
+    if init_body_stream.is_some() && parsed.duplex.is_none() {
         return Err(webidl::WebIdlError::custom_message(
-            "Request with keepalive cannot have a ReadableStream body",
+            "Request with a ReadableStream body requires duplex",
         ));
     }
     if let Some(keepalive) = parsed.keepalive {
         state.keepalive = keepalive;
+    }
+    if state.keepalive && init_body_stream.is_some() {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with keepalive cannot have a ReadableStream body",
+        ));
+    }
+    if state.body_stream.is_some() && !matches!(state.mode.as_str(), "cors" | "same-origin") {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires cors or same-origin mode",
+        ));
     }
     let guard = request_headers_guard_for_mode(&state.mode);
     state.headers = filter_headers_for_guard(&state.headers, guard);
@@ -227,9 +277,15 @@ pub(super) fn apply_request_init_overrides<'s>(
 }
 
 pub(super) fn validate_request_body_is_usable(
+    scope: &mut v8::PinScope<'_, '_>,
     state: &RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
-    if state.inherited_body_unusable {
+    if state.inherited_body_unusable
+        || state.body_stream.as_ref().is_some_and(|stream| {
+            let stream = v8::Local::new(scope, stream);
+            readable_body_stream_unusable(scope, stream)
+        })
+    {
         return Err(request_body_already_used_error());
     }
     Ok(())

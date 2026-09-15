@@ -27,9 +27,20 @@ use super::{
         RendererPageImageLoadEventOwner, RendererPageImageLoadEventSender,
         RendererPageImageLoadEventTask,
     },
+    popup_close::{
+        RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
+    },
     popup_load_event::{
         RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
         RendererPagePopupLoadEventTask,
+    },
+    promise_rejection::{
+        RendererPagePromiseRejectionOwner, RendererPagePromiseRejectionSender,
+        RendererPagePromiseRejectionTask,
+    },
+    script_preparation_error::{
+        RendererPageScriptPreparationErrorOwner, RendererPageScriptPreparationErrorSender,
+        RendererPageScriptPreparationErrorTask,
     },
     storage_event_delivery::{
         RendererPageStorageEventDeliveryOwner, RendererPageStorageEventDeliverySender,
@@ -64,8 +75,14 @@ pub(crate) enum RendererPageDomManipulationOwner {
     HashChange(RendererPageHashChangeDeliveryOwner),
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
+    ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
+    PromiseRejection(RendererPagePromiseRejectionOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
+    MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleOwner),
+    ChildDocumentLifecycle(super::RendererPageChildFrameTaskOwner),
+    ChildHostLoad(super::RendererPageChildFrameTaskOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
+    PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeOwner),
     TextTrackLoad(RendererPageTextTrackLoadOwner),
@@ -80,8 +97,14 @@ pub(crate) enum RendererPageDomManipulationTask {
     HashChange(RendererPageHashChangeDeliveryTask),
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
+    ScriptPreparationError(RendererPageScriptPreparationErrorTask),
+    PromiseRejection(RendererPagePromiseRejectionTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
+    MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleTask),
+    ChildDocumentLifecycle(super::RendererPageChildFrameTask),
+    ChildHostLoad(super::RendererPageChildFrameTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
+    PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeTask),
     TextTrackLoad(RendererPageTextTrackLoadTask),
@@ -104,12 +127,28 @@ impl RendererPageDomManipulationTask {
             Self::FileEntryFileCallback(task) => {
                 RendererPageDomManipulationOwner::FileEntryFileCallback(task.owner())
             }
+            Self::ScriptPreparationError(task) => {
+                RendererPageDomManipulationOwner::ScriptPreparationError(task.owner())
+            }
+            Self::PromiseRejection(task) => {
+                RendererPageDomManipulationOwner::PromiseRejection(task.owner())
+            }
             Self::ImageLoadEvent(task) => {
                 RendererPageDomManipulationOwner::ImageLoadEvent(task.owner())
+            }
+            Self::MainDocumentLifecycle(task) => {
+                RendererPageDomManipulationOwner::MainDocumentLifecycle(task.owner)
+            }
+            Self::ChildDocumentLifecycle(task) => {
+                RendererPageDomManipulationOwner::ChildDocumentLifecycle(task.owner())
+            }
+            Self::ChildHostLoad(task) => {
+                RendererPageDomManipulationOwner::ChildHostLoad(task.owner())
             }
             Self::PopupLoadEvent(task) => {
                 RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
             }
+            Self::PopupClose(task) => RendererPageDomManipulationOwner::PopupClose(task.owner()),
             Self::ConnectedStyleEvent(task) => {
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(task.owner())
             }
@@ -142,8 +181,14 @@ pub(crate) enum PageDomManipulationTurnAction {
     HashChange(super::PageHashChangeDeliveryTurnAction),
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
+    ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
+    PromiseRejection(super::PagePromiseRejectionTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
+    MainDocumentLifecycle(super::PageMainDocumentLifecycleTurnAction),
+    ChildDocumentLifecycle(super::PageChildDocumentLifecycleTurnAction),
+    ChildHostLoad(super::PageChildHostLoadTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
+    PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
     TextTrackDefaultMode(super::PageTextTrackDefaultModeTurnAction),
     TextTrackLoad(super::PageTextTrackLoadTurnAction),
@@ -195,12 +240,64 @@ impl RendererPageDomManipulationSender {
         RendererPageFileEntryFileCallbackSender::new(self.route.clone(), self.root_document)
     }
 
+    pub(crate) fn script_preparation_error(&self) -> RendererPageScriptPreparationErrorSender {
+        RendererPageScriptPreparationErrorSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn promise_rejection(&self) -> RendererPagePromiseRejectionSender {
+        RendererPagePromiseRejectionSender::new(self.route.clone(), self.root_document)
+    }
+
     pub(crate) fn image_load_event(&self) -> RendererPageImageLoadEventSender {
         RendererPageImageLoadEventSender::new(self.route.clone(), self.root_document)
     }
 
+    pub(crate) fn main_document_lifecycle(&self) -> super::RendererPageMainDocumentLifecycleSender {
+        super::RendererPageMainDocumentLifecycleSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn send_child_document_lifecycle(
+        &self,
+        target: super::RendererPageChildDocumentLifecycleTarget,
+    ) -> Result<(), super::child_frame_task::RendererPageChildFrameTaskRouteClosed> {
+        debug_assert!(!matches!(
+            target.action(),
+            crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)
+        ));
+        self.route
+            .send(RendererPageDomManipulationTask::ChildDocumentLifecycle(
+                super::RendererPageChildFrameTask::new(
+                    super::RendererPageChildFrameTaskOwner::new(
+                        self.root_document,
+                        super::RendererPageChildFrameTaskTarget::DocumentLifecycle(target),
+                    ),
+                ),
+            ))
+            .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
+    }
+
+    pub(crate) fn send_child_host_load(
+        &self,
+        target: super::RendererPageChildHostLoadTarget,
+    ) -> Result<(), super::child_frame_task::RendererPageChildFrameTaskRouteClosed> {
+        self.route
+            .send(RendererPageDomManipulationTask::ChildHostLoad(
+                super::RendererPageChildFrameTask::new(
+                    super::RendererPageChildFrameTaskOwner::new(
+                        self.root_document,
+                        super::RendererPageChildFrameTaskTarget::HostLoad(target),
+                    ),
+                ),
+            ))
+            .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
+    }
+
     pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
         RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn popup_close(&self) -> RendererPagePopupCloseSender {
+        RendererPagePopupCloseSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn text_track_default_mode(&self) -> RendererPageTextTrackDefaultModeSender {
@@ -253,6 +350,20 @@ pub(crate) struct RendererPageDomManipulationSource {
 }
 
 impl RendererPageDomManipulationSource {
+    pub(crate) fn has_document_lifecycle_task(
+        &mut self,
+        is_current: impl Fn(RendererPageDomManipulationOwner) -> bool,
+    ) -> bool {
+        self.source.has_matching_task(|ready| {
+            matches!(
+                ready.value(),
+                RendererPageDomManipulationTask::MainDocumentLifecycle(_)
+                    | RendererPageDomManipulationTask::ChildDocumentLifecycle(_)
+                    | RendererPageDomManipulationTask::ChildHostLoad(_)
+            ) && is_current(ready.value().owner())
+        })
+    }
+
     /// Remove cancelled task closures before they become scheduler-visible.
     ///
     /// Element toggle coalescing cancels and reposts at the tail, matching the

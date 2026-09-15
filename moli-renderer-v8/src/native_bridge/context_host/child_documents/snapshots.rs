@@ -1,3 +1,4 @@
+use super::super::fixture_support::child_upstream_fixture_text;
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
 use super::configure_child_document_navigation_request;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
@@ -27,9 +28,12 @@ impl JsContextHost {
         handle: DomHandle,
         url: &Url,
     ) -> Option<ChildBrowsingContextSnapshot> {
-        let snapshot = self.apply_page_csp_bypass_to_child_snapshot(
-            self.materialize_local_child_snapshot_for_url(url)?,
-        );
+        let mut snapshot = self.materialize_local_child_snapshot_for_url(url)?;
+        if ChildBrowsingContextBootstrap::Url(url.clone()).content_security_policy_inherited() {
+            snapshot.policy_container =
+                self.initial_child_about_blank_policy_container_from_parent(handle);
+        }
+        let snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
         if moli_url::is_about_blank(&snapshot.url) {
             Some(snapshot.with_fallback_base_url(self.document_base_url_for_child_context(handle)))
         } else {
@@ -46,7 +50,13 @@ impl JsContextHost {
                 url.clone(),
                 "<!DOCTYPE html><html><head></head><body></body></html>".into(),
             )),
-            "http" | "https" => None,
+            "http" | "https" => child_upstream_fixture_text(url).map(|markup| {
+                ChildBrowsingContextSnapshot::new(
+                    url.clone(),
+                    markup,
+                    child_document_content_type_for_url(url),
+                )
+            }),
             "blob" => {
                 let (body, mime_type) = crate::blob::object_url_body_and_type(url.as_str())?;
                 if !mime_type.is_empty() && !is_html_document_mime(&mime_type) {
@@ -144,31 +154,29 @@ impl JsContextHost {
         handle: DomHandle,
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> Option<ChildBrowsingContextSnapshot> {
-        match bootstrap {
+        let mut snapshot = match bootstrap {
             ChildBrowsingContextBootstrap::AboutBlank => {
-                let policy_container =
-                    self.initial_child_about_blank_policy_container_from_parent(handle);
-                Some(
-                    self.apply_page_csp_bypass_to_child_snapshot(
-                        ChildBrowsingContextSnapshot::about_blank(
-                            self.document_base_url_for_child_context(handle),
-                        )
-                        .with_policy_container(policy_container),
-                    ),
-                )
+                Some(ChildBrowsingContextSnapshot::about_blank(
+                    self.document_base_url_for_child_context(handle),
+                ))
             }
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
-                self.apply_page_csp_bypass_to_child_snapshot(ChildBrowsingContextSnapshot::srcdoc(
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
+                Some(ChildBrowsingContextSnapshot::srcdoc(
                     base_url.clone(),
                     markup.clone(),
                     self.document_character_set().to_owned(),
-                )),
-            ),
+                ))
+            }
             ChildBrowsingContextBootstrap::Url(url) => {
-                self.materialize_local_child_snapshot_for_navigation_url(handle, url)
+                return self.materialize_local_child_snapshot_for_navigation_url(handle, url);
             }
             ChildBrowsingContextBootstrap::Request(_) => None,
+        }?;
+        if bootstrap.content_security_policy_inherited() {
+            snapshot.policy_container =
+                self.initial_child_about_blank_policy_container_from_parent(handle);
         }
+        Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot))
     }
 
     pub(in crate::native_bridge::context_host) fn child_document_fallback_character_set(

@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_trusted_types_webidl_surface_checks_descriptors_arguments_and_brands() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({}); close();",
+            include_str!("../../../../tests/fixtures/trusted-types-webidl.js")
+        ),
+        "https://trusted-types-webidl.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker Trusted Types probe should settle")
+        .expect("worker Trusted Types probe should return a result");
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
+
+#[tokio::test]
 async fn worker_compression_streams_roundtrip_all_formats() {
     ensure_v8();
     let mut handle = spawn_worker(
@@ -69,6 +86,21 @@ async fn worker_console_capture_does_not_serialize_or_coerce_page_objects() {
         assert_eq!(expect_post_json(message), "0");
         break;
     }
+}
+
+#[tokio::test]
+async fn worker_does_not_expose_window_only_webrtc_event_interfaces() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"postMessage([typeof RTCPeerConnectionIceEvent, typeof RTCDataChannelEvent]); close();"#
+            .into(),
+        "test://webrtc-event-exposure".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker WebRTC event exposure")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"["undefined","undefined"]"#);
 }
 
 #[tokio::test]
@@ -1901,22 +1933,158 @@ async fn worker_error_propagation() {
 }
 
 #[tokio::test]
+async fn worker_origin_is_replaceable_across_worker_global_kinds() {
+    ensure_v8();
+    let storage_key = moli_storage_key::MoliStorageKey::new(
+        "https://origin.test".to_owned(),
+        "https://origin.test".to_owned(),
+        None,
+        moli_storage_key::StoragePartitionRelation::FirstParty,
+    );
+    let dedicated = super::super::WorkerGlobalKind::Dedicated {
+        name: String::new(),
+    };
+    let cases = [
+        (
+            dedicated.clone(),
+            "https://origin.test/worker.js",
+            "https://origin.test",
+        ),
+        (dedicated, "data:text/javascript,", "null"),
+        (
+            super::super::WorkerGlobalKind::Shared {
+                name: "origin".to_owned(),
+                storage_key,
+            },
+            "https://origin.test/shared.js",
+            "https://origin.test",
+        ),
+        (
+            super::super::WorkerGlobalKind::Service {
+                registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                scope_url: url::Url::parse("https://origin.test/").unwrap(),
+            },
+            "https://origin.test/sw.js",
+            "https://origin.test",
+        ),
+    ];
+    let probe = r#"
+        function check(value, message) {
+            if (!value) throw new Error(message);
+        }
+        function throwsTypeError(callback) {
+            try { callback(); } catch (error) { return error instanceof TypeError; }
+            return false;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, 'origin');
+        check(typeof descriptor?.get === 'function' && typeof descriptor.set === 'function', 'prototype accessor');
+        check(descriptor.enumerable && descriptor.configurable, 'accessor flags');
+        check(descriptor.get.length === 0 && descriptor.set.length === 1, 'accessor lengths');
+        check(descriptor.get.name === 'get origin' && descriptor.set.name === 'set origin', 'accessor names');
+        check(!Object.hasOwn(self, 'origin'), 'no initial own origin');
+        check(self.origin === expectedOrigin && location.origin === expectedOrigin, 'initial origin');
+        check(descriptor.get.call(null) === expectedOrigin && descriptor.get.call(undefined) === expectedOrigin, 'default getter receiver');
+
+        const replacement = { [Symbol.toPrimitive]() { throw new Error('must not convert'); } };
+        check(Reflect.set(WorkerGlobalScope.prototype, 'origin', replacement, self), 'replace through prototype');
+        const own = Object.getOwnPropertyDescriptor(self, 'origin');
+        check(own.value === replacement && own.writable && own.enumerable && own.configurable, 'replacement descriptor');
+        check(descriptor.get.call(self) === expectedOrigin && location.origin === expectedOrigin, 'internal origin survives replacement');
+        const symbol = Symbol('replacement');
+        (() => { 'use strict'; self.origin = symbol; })();
+        check(self.origin === symbol, 'strict assignment preserves value');
+        check(delete self.origin, 'delete replacement');
+        check(self.origin === expectedOrigin, 'deletion restores internal origin');
+
+        for (const receiver of [{}, Object.create(self), WorkerGlobalScope.prototype, new Proxy(self, {})]) {
+            const before = Object.getOwnPropertyDescriptor(receiver, 'origin');
+            check(throwsTypeError(() => descriptor.get.call(receiver)), 'getter receiver check');
+            check(throwsTypeError(() => descriptor.set.call(receiver, replacement)), 'setter receiver check');
+            const after = Object.getOwnPropertyDescriptor(receiver, 'origin');
+            check(after?.get === before?.get && after?.set === before?.set && after?.value === before?.value, 'invalid receiver not mutated');
+            check(Object.hasOwn(receiver, 'origin') === (before !== undefined), 'invalid receiver own property unchanged');
+        }
+        descriptor.set.call(null, replacement);
+        check(self.origin === replacement, 'default setter receiver');
+        delete self.origin;
+        descriptor.set.call(self);
+        check(Object.hasOwn(self, 'origin') && self.origin === undefined, 'missing setter value');
+        delete self.origin;
+
+        const observed = (0, eval)("var origin; var originValues = []; for (origin of ['same-origin', 'cross-origin']) originValues.push(origin); originValues;");
+        check(observed.join('|') === 'same-origin|cross-origin', 'global var assignments');
+        delete self.origin;
+        check(self.origin === expectedOrigin, 'origin survives global var assignments');
+
+        Object.defineProperty(self, 'origin', {value: 'locked', writable: false, enumerable: true, configurable: false});
+        check(throwsTypeError(() => descriptor.set.call(self, 'new')), 'failed replacement throws');
+        check(self.origin === 'locked' && descriptor.get.call(self) === expectedOrigin, 'failed replacement preserves values');
+    "#;
+    for (kind, script_url, expected_origin) in cases {
+        let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source = format!(
+            "const expectedOrigin = {};\n{probe}",
+            serde_json::to_string(expected_origin).unwrap(),
+        );
+        let handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, script_url.to_owned())
+                .with_global_kind(kind)
+                .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+            .await
+            .expect("origin probe should finish")
+            .expect("origin probe should report completion");
+        handle.terminate_and_join();
+        bootstrap.result.unwrap_or_else(|error| {
+            panic!("Worker origin probe failed for {script_url}: {error:?}")
+        });
+    }
+}
+
+#[tokio::test]
 async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const descriptor = Object.getOwnPropertyDescriptor(performance, "timeOrigin");
-        const before = performance.timeOrigin;
-        try { performance.timeOrigin = before + 1000000; } catch (_) {}
-        const after = performance.timeOrigin;
-        const first = performance.now();
-        const second = performance.now();
+        const original = performance;
+        const globalDescriptor = Object.getOwnPropertyDescriptor(
+            WorkerGlobalScope.prototype,
+            "performance"
+        );
+        const timeOriginDescriptor = Object.getOwnPropertyDescriptor(
+            Performance.prototype,
+            "timeOrigin"
+        );
+        const before = original.timeOrigin;
+        try { original.timeOrigin = before + 1000000; } catch (_) {}
+        const after = original.timeOrigin;
+        const first = original.now();
+        const second = original.now();
+        const replacement = {};
+        self.performance = replacement;
         postMessage({
-            readonly: descriptor && descriptor.writable === false,
+            interfaceShape:
+                original instanceof Performance
+                && original instanceof EventTarget
+                && Object.getPrototypeOf(original) === Performance.prototype,
+            globalAccessor:
+                typeof globalDescriptor?.get === "function"
+                && typeof globalDescriptor?.set === "function"
+                && globalDescriptor.enumerable === true,
+            timeOriginAccessor:
+                typeof timeOriginDescriptor?.get === "function"
+                && timeOriginDescriptor?.set === undefined
+                && timeOriginDescriptor.enumerable === true,
             unchanged: after === before,
             numeric: typeof first === "number" && typeof second === "number",
             monotonic: second >= first,
-            noLegacyMemory: !("memory" in performance) && !("MemoryInfo" in self)
+            replaceable:
+                performance === replacement
+                && Object.prototype.hasOwnProperty.call(self, "performance"),
+            originalStillWorks: typeof original.now() === "number",
+            noLegacyMemory: !("memory" in original) && !("MemoryInfo" in self)
         });
         close();
         "#
@@ -1930,7 +2098,191 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"readonly":true,"unchanged":true,"numeric":true,"monotonic":true,"noLegacyMemory":true}"#
+        r#"{"interfaceShape":true,"globalAccessor":true,"timeOriginAccessor":true,"unchanged":true,"numeric":true,"monotonic":true,"replaceable":true,"originalStillWorks":true,"noLegacyMemory":true}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_user_timing_uses_shared_mark_measure_runtime() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const capture = callback => {
+            try {
+                callback();
+                return "none";
+            } catch (error) {
+                return error.name;
+            }
+        };
+        const timingNames = [
+            "navigationStart",
+            "unloadEventStart",
+            "unloadEventEnd",
+            "redirectStart",
+            "redirectEnd",
+            "fetchStart",
+            "domainLookupStart",
+            "domainLookupEnd",
+            "connectStart",
+            "connectEnd",
+            "secureConnectionStart",
+            "requestStart",
+            "responseStart",
+            "responseEnd",
+            "domLoading",
+            "domInteractive",
+            "domContentLoadedEventStart",
+            "domContentLoadedEventEnd",
+            "domComplete",
+            "loadEventStart",
+            "loadEventEnd"
+        ];
+        const timingNamesAccepted = timingNames.every(name => {
+            const mark = performance.mark(name, { startTime: 1 });
+            performance.clearMarks(name);
+            const measure = performance.measure(name);
+            performance.clearMeasures(name);
+            return mark.name === name && measure.name === name;
+        });
+
+        const sourceDetail = { state: "before" };
+        const mark = performance.mark("worker-mark", {
+            startTime: 2,
+            detail: sourceDetail
+        });
+        sourceDetail.state = "after";
+        const measure = performance.measure("worker-measure", {
+            start: "worker-mark",
+            end: 5,
+            detail: { kind: "measure" }
+        });
+        const detached = new PerformanceMark("detached", {
+            startTime: 3,
+            detail: { kind: "detached" }
+        });
+        const reservedBoundary = capture(() => {
+            performance.mark("navigationStart", { startTime: 4 });
+            performance.measure("reserved", "navigationStart", "navigationStart");
+        });
+
+        postMessage({
+            timingNamesAccepted,
+            interfaces:
+                performance instanceof Performance
+                && mark instanceof PerformanceMark
+                && mark instanceof PerformanceEntry
+                && measure instanceof PerformanceMeasure
+                && measure instanceof PerformanceEntry
+                && detached instanceof PerformanceMark,
+            inheritance:
+                Object.getPrototypeOf(Performance) === EventTarget
+                && Object.getPrototypeOf(PerformanceMark) === PerformanceEntry
+                && Object.getPrototypeOf(PerformanceMeasure) === PerformanceEntry,
+            mark: [
+                mark.name,
+                mark.entryType,
+                mark.startTime,
+                mark.duration,
+                mark.detail.state,
+                mark.detail === sourceDetail
+            ].join(":"),
+            measure: [
+                measure.name,
+                measure.entryType,
+                measure.startTime,
+                measure.duration,
+                measure.detail.kind
+            ].join(":"),
+            entryIds:
+                Number.isSafeInteger(mark.id)
+                && mark.id > 0
+                && Number.isSafeInteger(measure.id)
+                && measure.id > mark.id
+                && mark.navigationId === 0
+                && measure.navigationId === 0
+                && detached.id === 0
+                && detached.navigationId === 0
+                && mark.toJSON().id === mark.id
+                && mark.toJSON().navigationId === 0,
+            detachedTimelineCount:
+                performance.getEntriesByName("detached", "mark").length,
+            bufferedTypes: performance.getEntries()
+                .map(entry => entry.entryType)
+                .join(","),
+            reservedBoundary,
+            missingBoundary: capture(() =>
+                performance.measure("missing", "not-a-mark")),
+            markBrand: capture(() => performance.mark.call({}, "bad")),
+            nowBrand: capture(() => performance.now.call({}))
+        });
+        close();
+        "#
+        .into(),
+        "test://worker_user_timing".into(),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"timingNamesAccepted":true,"interfaces":true,"inheritance":true,"mark":"worker-mark:mark:2:0:before:false","measure":"worker-measure:measure:2:3:measure","entryIds":true,"detachedTimelineCount":0,"bufferedTypes":"mark,measure,mark","reservedBoundary":"TypeError","missingBoundary":"SyntaxError","markBrand":"TypeError","nowBrand":"TypeError"}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_performance_observer_delivers_live_and_buffered_user_timing_entries() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const firstObserver = new PerformanceObserver((list, observer) => {
+            const liveEntries = list.getEntries();
+            observer.disconnect();
+            const bufferedObserver = new PerformanceObserver(bufferedList => {
+                const bufferedEntries = bufferedList.getEntries();
+                postMessage({
+                    interfaces:
+                        firstObserver instanceof PerformanceObserver
+                        && list instanceof PerformanceObserverEntryList,
+                    prototypeMethods:
+                        typeof list.getEntries === "function"
+                        && typeof list.getEntriesByType === "function"
+                        && typeof list.getEntriesByName === "function",
+                    supportedEntryTypes: PerformanceObserver.supportedEntryTypes.join(","),
+                    live: liveEntries
+                        .map(entry => `${entry.name}:${entry.entryType}`)
+                        .join(","),
+                    liveMarks: list.getEntriesByType("mark").length,
+                    namedMeasure: list.getEntriesByName("worker-observed-measure", "measure").length,
+                    buffered: bufferedEntries
+                        .map(entry => `${entry.name}:${entry.entryType}`)
+                        .join(",")
+                });
+                bufferedObserver.disconnect();
+                close();
+            });
+            bufferedObserver.observe({ type: "mark", buffered: true });
+        });
+        firstObserver.observe({ entryTypes: ["mark", "measure"] });
+        performance.mark("worker-observed-mark", { startTime: 1 });
+        performance.measure("worker-observed-measure", {
+            start: 1,
+            end: 3
+        });
+        "#
+        .into(),
+        "test://worker_performance_observer".into(),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"interfaces":true,"prototypeMethods":true,"supportedEntryTypes":"mark,measure,resource","live":"worker-observed-mark:mark,worker-observed-measure:measure","liveMarks":1,"namedMeasure":1,"buffered":"worker-observed-mark:mark"}"#
     );
 }
 

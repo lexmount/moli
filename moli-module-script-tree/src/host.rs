@@ -41,4 +41,13 @@ pub trait ModuleScriptTreeHost {
     ) -> Result<ModuleGraphHandle, ModuleLoadError>;
 
     fn mark_module_failed(&mut self, key: ModuleMapKey, error: ModuleLoadError) -> ModuleEntryId;
+
+    /// Static requested-module validation errors belong to the module script,
+    /// unlike failures to resolve the specifier passed directly to import().
+    /// Retain the actual exception and cache it for subsequent graph loads.
+    fn cache_module_request_error(
+        &mut self,
+        key: ModuleMapKey,
+        error: ModuleLoadError,
+    ) -> ModuleLoadError;
 }

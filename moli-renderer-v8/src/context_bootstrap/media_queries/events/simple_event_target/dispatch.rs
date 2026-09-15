@@ -6,8 +6,10 @@ use crate::{
         clear_event_dispatch_fields, event_internal_bool_flag, set_event_composed_path,
         set_event_dispatch_fields, set_event_internal_flag,
     },
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
+    native_bridge::lightweight_popup_id_from_window,
     util::{context_host_ptr_from_global_bridge, serialize_v8_array},
 };
 
@@ -78,7 +80,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 .get_creation_context(scope)
                 .unwrap_or(current_context);
             let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-            let _ = invoke_simple_event_callback(
+            let returned = invoke_simple_event_callback(
                 scope,
                 event_type,
                 &format!("simple event target {handler_name}"),
@@ -90,6 +92,14 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 &[event.into()],
                 event,
             );
+            if let Some(returned) = returned {
+                apply_event_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    EventHandlerType::EventHandler,
+                );
+            }
         }
     }
 
@@ -122,7 +132,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                     );
                 }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                let _ = invoke_simple_event_listener(
+                let returned = invoke_simple_event_listener(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
@@ -131,6 +141,16 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                     &[event.into()],
                     event,
                 );
+                if listener.handler_slot.is_some()
+                    && let Some(returned) = returned
+                {
+                    apply_event_handler_return_value(
+                        scope,
+                        event,
+                        v8::Local::new(scope, &returned),
+                        EventHandlerType::EventHandler,
+                    );
+                }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 if event_stop_immediate_propagation(scope, event) {
                     break 'phases;
@@ -155,12 +175,34 @@ pub(crate) fn invoke_simple_event_listener<'s>(
     current_event: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Global<v8::Value>> {
     let invocation = listener.invocation(callback_this, arguments, Some(current_event));
+    // Lightweight popup Window shells alias the opener's concrete V8 realm.
+    // Retain the callback's exact registration-time Window only for popup
+    // `load`: this is where a top-realm WPT callback must keep scheduling work
+    // on the opener after it calls `popup.close()`. Other synthetic popup
+    // events deliberately execute in their target owner scope until those
+    // Window shells gain distinct V8 realms.
+    let captured_relevant_identity = if event_type == "load"
+        && v8::Local::<v8::Object>::try_from(callback_this)
+            .ok()
+            .and_then(|target| lightweight_popup_id_from_window(scope, target))
+            .is_some()
+    {
+        listener.relevant_identity().filter(|identity| {
+            !matches!(
+                identity.dispatch_scope(),
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)
+            )
+        })
+    } else {
+        None
+    };
     invoke_simple_event_callback_with_invocation(
         scope,
         event_type,
         callback_name,
         callback_this,
         listener.relevant_context(),
+        captured_relevant_identity,
         invocation,
     )
 }
@@ -194,6 +236,7 @@ fn invoke_simple_event_callback<'s>(
         callback_name,
         callback_this,
         relevant_context,
+        None,
         invocation,
     )
 }
@@ -220,12 +263,15 @@ fn invoke_simple_event_callback_with_invocation<'s>(
     callback_name: &str,
     callback_target: v8::Local<'s, v8::Value>,
     relevant_context: v8::Local<'s, v8::Context>,
+    captured_relevant_identity: Option<crate::native_bridge::WindowExecutionContextIdentity>,
     mut invocation: CallbackInvocation<'s, '_>,
 ) -> Option<v8::Global<v8::Value>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope);
-    let relevant_identity = host_ptr.and_then(|host_ptr| {
-        unsafe { &*host_ptr }
-            .window_execution_context_identity_for_v8_context(scope, relevant_context)
+    let relevant_identity = captured_relevant_identity.or_else(|| {
+        host_ptr.and_then(|host_ptr| {
+            unsafe { &*host_ptr }
+                .window_execution_context_identity_for_v8_context(scope, relevant_context)
+        })
     });
     if let Some(host_ptr) = host_ptr {
         invocation = invocation.with_execution_context_currentness(host_ptr, relevant_identity);
@@ -238,28 +284,29 @@ fn invoke_simple_event_callback_with_invocation<'s>(
         let target_name = simple_event_target_interface_name(scope, callback_target);
         host.schedule_dom_debugger_event_listener_pause_for_interface(event_type, &target_name)
     });
-    match CallbackInvoker::invoke(
+    CallbackInvoker::invoke_event_and_then(
         scope,
         "event listener",
         "simple event listener threw",
         CallbackExceptionLogLevel::Debug,
         callback_name,
         invocation,
-    ) {
-        CallbackInvocationOutcome::Returned(value) => Some(value),
-        CallbackInvocationOutcome::Threw(report) => {
-            if let Some(host_ptr) = host_ptr {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    event_type,
-                    relevant_identity,
-                    None,
-                    &report,
-                );
+        |scope, outcome| match outcome {
+            CallbackInvocationOutcome::Returned(value) => Some(value),
+            CallbackInvocationOutcome::Threw(report) => {
+                if let Some(host_ptr) = host_ptr {
+                    report_event_callback_exception(
+                        scope,
+                        host_ptr,
+                        event_type,
+                        relevant_identity,
+                        None,
+                        &report,
+                    );
+                }
+                None
             }
-            None
-        }
-        CallbackInvocationOutcome::Retired => None,
-    }
+            CallbackInvocationOutcome::Retired => None,
+        },
+    )
 }

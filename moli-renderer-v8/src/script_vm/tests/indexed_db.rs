@@ -1180,6 +1180,236 @@ fn indexed_db_roundtrips_blob_file_and_array_buffer_values() {
 }
 
 #[test]
+fn indexed_db_roundtrips_file_list_with_file_graph_identity() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-file-list-value.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbFileListResult = "pending";
+  const dbName = `file-list-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onerror = () => {
+    globalThis.__indexedDbFileListResult = `open-error:${open.error && open.error.name}`;
+  };
+  open.onupgradeneeded = () => {
+    open.result.createObjectStore("values", { keyPath: "id" });
+  };
+  open.onsuccess = () => {
+    const db = open.result;
+    const transfer = new DataTransfer();
+    const file = new File(["FILE_LIST_IDB"], "list.txt", {
+      type: "text/list",
+      lastModified: 77
+    });
+    file.expando = "not serialized";
+    transfer.items.add(file);
+    const list = transfer.files;
+    list.expando = "not serialized";
+
+    const writeTx = db.transaction("values", "readwrite");
+    writeTx.onerror = () => {
+      globalThis.__indexedDbFileListResult =
+        `write-error:${writeTx.error && writeTx.error.name}`;
+    };
+    writeTx.objectStore("values").put({
+      id: 1,
+      list,
+      listAlias: list,
+      file
+    });
+    writeTx.oncomplete = () => {
+      const get = db.transaction("values").objectStore("values").get(1);
+      get.onerror = () => {
+        globalThis.__indexedDbFileListResult = `get-error:${get.error && get.error.name}`;
+      };
+      get.onsuccess = () => {
+        const row = get.result;
+        row.file.text().then(text => {
+          globalThis.__indexedDbFileListResult = JSON.stringify({
+            listBrand: row.list instanceof FileList,
+            listPrototype: Object.getPrototypeOf(row.list) === FileList.prototype,
+            listDistinct: row.list !== list,
+            listAlias: row.list === row.listAlias,
+            listLength: row.list.length,
+            itemMatchesFile: row.list.item(0) === row.file,
+            indexedMatchesFile: row.list[0] === row.file,
+            fileBrand: row.file instanceof File && row.file instanceof Blob,
+            fileDistinct: row.file !== file,
+            fileMetadata: [row.file.name, row.file.type, row.file.lastModified, row.file.size],
+            text,
+            expandosExcluded:
+              row.list.expando === undefined && row.file.expando === undefined
+          });
+        }, error => {
+          globalThis.__indexedDbFileListResult = `file-error:${error && error.name}`;
+        });
+      };
+    };
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb FileList workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbFileListResult)")
+        .expect("indexeddb FileList result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"listBrand":true,"listPrototype":true,"listDistinct":true,"listAlias":true,"listLength":1,"itemMatchesFile":true,"indexedMatchesFile":true,"fileBrand":true,"fileDistinct":true,"fileMetadata":["list.txt","text/list",77,13],"text":"FILE_LIST_IDB","expandosExcluded":true}"#,
+    );
+}
+
+#[test]
+fn indexed_db_roundtrips_image_data_and_geometry_objects() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-image-data-geometry.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbGeometryResult = "pending";
+  const dbName = `image-data-geometry-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onerror = () => {
+    globalThis.__indexedDbGeometryResult = `open-error:${open.error && open.error.name}`;
+  };
+  open.onupgradeneeded = () => open.result.createObjectStore("values");
+  open.onsuccess = () => {
+    const image = new ImageData(
+      new Uint8ClampedArray([1, 2, 3, 4, 5, 6, 7, 8]),
+      2,
+      1,
+      { colorSpace: "display-p3" }
+    );
+    const pointReadOnly = new DOMPointReadOnly(1, -0, Infinity, NaN);
+    const point = new DOMPoint(2, 3, 4, 5);
+    const rectReadOnly = new DOMRectReadOnly(6, 7, 8, 9);
+    const rect = new DOMRect(10, 11, 12, 13);
+    const quad = new DOMQuad(
+      { x: 1, y: 2, z: 3, w: 4 },
+      { x: 5, y: 6, z: 7, w: 8 },
+      { x: 9, y: 10, z: 11, w: 12 },
+      { x: 13, y: 14, z: 15, w: 16 }
+    );
+    const matrixReadOnly = new DOMMatrixReadOnly([1, 2, 3, 4, 5, 6]);
+    const matrix = new DOMMatrix([
+      11, 12, 13, 14,
+      21, 22, 23, 24,
+      31, 32, 33, 34,
+      41, 42, 43, 44
+    ]);
+    for (const value of [
+      image,
+      pointReadOnly,
+      point,
+      rectReadOnly,
+      rect,
+      quad,
+      matrixReadOnly,
+      matrix
+    ]) {
+      value.expando = "not serialized";
+    }
+
+    const write = open.result.transaction("values", "readwrite");
+    write.objectStore("values").put({
+      image,
+      imageAlias: image,
+      pointReadOnly,
+      point,
+      rectReadOnly,
+      rect,
+      quad,
+      matrixReadOnly,
+      matrix
+    }, "value");
+    write.oncomplete = () => {
+      const read = open.result.transaction("values").objectStore("values").get("value");
+      read.onerror = () => {
+        globalThis.__indexedDbGeometryResult =
+          `read-error:${read.error && read.error.name}`;
+      };
+      read.onsuccess = () => {
+        const row = read.result;
+        const exactBrand = (value, name) =>
+          Object.getPrototypeOf(value) === self[name].prototype;
+        const sameValues = (value, names, expected) =>
+          names.every((name, index) => Object.is(value[name], expected[index]));
+        globalThis.__indexedDbGeometryResult = JSON.stringify({
+          image: [
+            exactBrand(row.image, "ImageData"),
+            row.image !== image,
+            row.image === row.imageAlias,
+            row.image.width,
+            row.image.height,
+            row.image.colorSpace,
+            Array.from(row.image.data).join(","),
+            row.image.data !== image.data
+          ],
+          pointReadOnly:
+            exactBrand(row.pointReadOnly, "DOMPointReadOnly") &&
+            sameValues(row.pointReadOnly, ["x", "y", "z", "w"], [1, -0, Infinity, NaN]),
+          point:
+            exactBrand(row.point, "DOMPoint") &&
+            sameValues(row.point, ["x", "y", "z", "w"], [2, 3, 4, 5]),
+          rectReadOnly:
+            exactBrand(row.rectReadOnly, "DOMRectReadOnly") &&
+            sameValues(row.rectReadOnly, ["x", "y", "width", "height"], [6, 7, 8, 9]),
+          rect:
+            exactBrand(row.rect, "DOMRect") &&
+            sameValues(row.rect, ["x", "y", "width", "height"], [10, 11, 12, 13]),
+          quad:
+            exactBrand(row.quad, "DOMQuad") &&
+            [row.quad.p1, row.quad.p2, row.quad.p3, row.quad.p4]
+              .every((pointValue, index) =>
+                sameValues(
+                  pointValue,
+                  ["x", "y", "z", "w"],
+                  [1 + index * 4, 2 + index * 4, 3 + index * 4, 4 + index * 4]
+                )),
+          matrixReadOnly:
+            exactBrand(row.matrixReadOnly, "DOMMatrixReadOnly") &&
+            sameValues(row.matrixReadOnly, ["a", "b", "c", "d", "e", "f", "is2D"],
+              [1, 2, 3, 4, 5, 6, true]),
+          matrix:
+            exactBrand(row.matrix, "DOMMatrix") &&
+            sameValues(row.matrix, ["m11", "m12", "m13", "m14", "m41", "m42", "m43", "m44", "is2D"],
+              [11, 12, 13, 14, 41, 42, 43, 44, false]),
+          expandosExcluded: [
+            row.image,
+            row.pointReadOnly,
+            row.point,
+            row.rectReadOnly,
+            row.rect,
+            row.quad,
+            row.matrixReadOnly,
+            row.matrix
+          ].every(value => value.expando === undefined)
+        });
+      };
+    };
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb ImageData/Geometry workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbGeometryResult)")
+        .expect("indexeddb ImageData/Geometry result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"image":[true,true,true,2,1,"display-p3","1,2,3,4,5,6,7,8",true],"pointReadOnly":true,"point":true,"rectReadOnly":true,"rect":true,"quad":true,"matrixReadOnly":true,"matrix":true,"expandosExcluded":true}"#
+    );
+}
+
+#[test]
 fn indexed_db_roundtrips_opfs_handles_with_durable_external_objects() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-opfs-handle.test/");
 
@@ -2500,6 +2730,120 @@ async fn indexed_db_child_reply_does_not_leak_child_scope_to_top_continuation() 
 }
 
 #[test]
+fn global_cache_storage_preserves_error_responses_and_immutable_headers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-response.test/");
+    vm.eval(r#"
+globalThis.cacheResponseResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const name = 'response-admission';
+  await caches.delete(name);
+  const cache = await caches.open(name);
+  const NativeResponse = Response;
+  const errorFactory = Response.error;
+  for (const [key, response] of [
+    ['error', Response.error()],
+    ['error-clone', Response.error().clone()],
+    ['server-error', new Response('failure', {status: 500})],
+    ['redirect', Response.redirect('/target')]
+  ]) {
+    await cache.put('/' + key, response);
+    const matched = await cache.match('/' + key);
+    const all = await cache.matchAll('/' + key);
+    const storageMatch = await caches.match('/' + key, {cacheName: name});
+    for (const entry of [matched, matched.clone(), all[0], storageMatch]) {
+      check(entry.type === response.type && entry.status === response.status, key + ': metadata');
+      for (const mutation of [
+        () => entry.headers.set('x-added', 'value'),
+        () => entry.headers.append('x-added', 'value'),
+        () => entry.headers.delete('x-absent')
+      ]) {
+        let error;
+        try { mutation(); } catch (value) { error = value; }
+        check(error instanceof TypeError, key + ': immutable headers');
+      }
+      if (entry.type === 'error') {
+        check(entry.status === 0 && !entry.ok && entry.statusText === '' && entry.url === '' &&
+          !entry.redirected && entry.body === null && !entry.bodyUsed && [...entry.headers].length === 0,
+          key + ': error response');
+        check(await entry.text() === '' && !entry.bodyUsed, key + ': null body');
+        await cache.put('/again', entry);
+      }
+    }
+  }
+  try {
+    globalThis.Response = function() { throw new Error('author constructor invoked'); };
+    const error = errorFactory.call(null);
+    check(error instanceof NativeResponse && error.type === 'error', 'intrinsic Response.error');
+    await cache.put('/tampered', error);
+    const matched = await cache.match('/tampered');
+    check(matched instanceof NativeResponse && matched.type === 'error' && matched.body === null,
+      'intrinsic cached error response');
+  } finally {
+    globalThis.Response = NativeResponse;
+  }
+  await caches.delete(name);
+  cacheResponseResult = 'ok';
+})().catch(error => cacheResponseResult = String(error.stack || error));
+"#).unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheResponseResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
+fn global_cache_storage_rejects_uncacheable_responses_before_consuming_body() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-admission.test/");
+    vm.eval(
+        r#"
+globalThis.cacheAdmissionResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const name = 'response-admission';
+  await caches.delete(name);
+  const cache = await caches.open(name);
+  await cache.put('/key', new Response('original'));
+  for (const streaming of [false, true]) {
+    for (const init of [
+      {status: 206},
+      {headers: {VARY: '*'}},
+      {headers: [['vary', 'Accept-Language'], ['Vary', ' \t* ']]}
+    ]) {
+      const body = streaming ? new ReadableStream({start(controller) {
+        controller.enqueue(new TextEncoder().encode('replacement'));
+        controller.close();
+      }}) : 'replacement';
+      const response = new Response(body, init);
+      // Admission reads the associated response, even if author properties mask it.
+      Object.defineProperty(response, 'status', {get() { throw new Error('status getter'); }});
+      Object.defineProperty(response, 'headers', {get() { throw new Error('headers getter'); }});
+      let error;
+      try { await cache.put('/key', response); } catch (value) { error = value; }
+      check(error instanceof TypeError, 'uncacheable response must reject');
+      check(!response.bodyUsed && !response.body.locked, 'rejection consumed or locked body');
+      check(await response.text() === 'replacement', 'rejected body is readable');
+      check(await (await cache.match('/key')).text() === 'original', 'rejection replaced entry');
+    }
+  }
+  const accepted = new Response('allowed', {headers: {Vary: 'Accept-Language, star*'}});
+  await cache.put('/key', accepted);
+  check(accepted.bodyUsed && await (await cache.match('/key')).text() === 'allowed', 'valid Vary');
+  await caches.delete(name);
+  cacheAdmissionResult = 'ok';
+})().catch(error => cacheAdmissionResult = String(error.stack || error));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheAdmissionResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
 fn global_cache_storage_normalizes_request_info_urls() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://cache-request-info.test/app/index.html");
@@ -2794,6 +3138,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        cors_exposed_header_names: None,
                         response_type: "default".to_owned(),
                         url: format!("{page_url}reserved"),
                         redirected: false,
@@ -5706,4 +6051,45 @@ async fn read_indexed_db_databases_child_request_head(
         }
     }
     Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+#[test]
+fn indexed_db_put_rejects_non_serializable_platform_objects() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-platform-object-dataclone.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbPlatformCloneErrors = "pending";
+  const dbName = `platform-object-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("values");
+  open.onsuccess = () => {
+    const store = open.result.transaction("values", "readwrite").objectStore("values");
+    const probe = (value, key) => {
+      try {
+        store.put(value, key);
+        return "ok";
+      } catch (error) {
+        return error && error.name;
+      }
+    };
+    globalThis.__indexedDbPlatformCloneErrors = [
+      probe(new Event("event"), "event"),
+      probe(new MessageChannel(), "channel"),
+      probe(new Response(), "response")
+    ].join("|");
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb platform object dataclone workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbPlatformCloneErrors)")
+        .expect("indexeddb platform object dataclone result should be readable");
+
+    assert_eq!(result, "DataCloneError|DataCloneError|DataCloneError");
 }

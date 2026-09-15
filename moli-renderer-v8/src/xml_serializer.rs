@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    dom::native::{DomHost, NativeNodeId, NodeType},
+    dom::native::{DomHost, Element, NativeNodeId, NodeType},
     native_bridge::node_runtime_and_handle_from_object_or_detached,
 };
 
@@ -12,6 +12,7 @@ const VOID_HTML: &[&str] = &[
     "keygen", "link", "menuitem", "meta", "param", "source", "track", "wbr",
 ];
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+const XLINK_NAMESPACE: &str = "http://www.w3.org/1999/xlink";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
 
@@ -48,18 +49,40 @@ pub(super) fn xml_serializer_serialize_to_string_callback<'s>(
 #[derive(Clone, Debug)]
 struct NamespaceContext {
     default_namespace: String,
-    prefixes: HashMap<String, String>,
+    prefixes: HashMap<String, Vec<String>>,
 }
 
 impl Default for NamespaceContext {
     fn default() -> Self {
         Self {
             default_namespace: String::new(),
-            prefixes: HashMap::from([
-                ("xml".to_owned(), XML_NAMESPACE.to_owned()),
-                ("xmlns".to_owned(), XMLNS_NAMESPACE.to_owned()),
-            ]),
+            prefixes: HashMap::from([(XML_NAMESPACE.to_owned(), vec!["xml".to_owned()])]),
         }
+    }
+}
+
+impl NamespaceContext {
+    fn add_prefix(&mut self, namespace: &str, prefix: &str) {
+        self.prefixes
+            .entry(namespace.to_owned())
+            .or_default()
+            .push(prefix.to_owned());
+    }
+
+    fn preferred_prefix(&self, namespace: &str, preferred: Option<&str>) -> Option<String> {
+        let candidates = self.prefixes.get(namespace)?;
+        if let Some(preferred) = preferred
+            && candidates.iter().any(|candidate| candidate == preferred)
+        {
+            return Some(preferred.to_owned());
+        }
+        candidates.last().cloned()
+    }
+
+    fn contains_prefix(&self, namespace: &str, prefix: &str) -> bool {
+        self.prefixes
+            .get(namespace)
+            .is_some_and(|prefixes| prefixes.iter().any(|candidate| candidate == prefix))
     }
 }
 
@@ -73,10 +96,32 @@ fn serialize_native_value<'s>(
     // SAFETY: the node bridge only returns the context host installed for this
     // live V8 callback, and serialization holds no reference past the callback.
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
+    Some(serialize_native_handle(dom_host, handle))
+}
+
+pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) -> String {
     let mut next_generated_prefix = 1;
-    Some(serialize_native_node(
+    serialize_native_node(
         dom_host,
         handle,
+        &NamespaceContext::default(),
+        &mut next_generated_prefix,
+    )
+}
+
+pub(crate) fn serialize_native_inner_html(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+) -> Option<String> {
+    let child_container = dom_host
+        .node(handle)?
+        .as_element()
+        .and_then(Element::template_contents)
+        .unwrap_or(handle);
+    let mut next_generated_prefix = 1;
+    Some(serialize_native_children(
+        dom_host,
+        child_container,
         &NamespaceContext::default(),
         &mut next_generated_prefix,
     ))
@@ -164,84 +209,66 @@ fn serialize_native_element(
     let original_prefix = element.prefix().filter(|prefix| !prefix.is_empty());
     let local_name = element.local_name();
     let mut namespace_context = parent_namespace_context.clone();
-
-    for attribute in element.attributes() {
-        if attribute.namespace() != XMLNS_NAMESPACE {
-            continue;
-        }
-        if attribute.prefix() == Some("xmlns") {
-            namespace_context.prefixes.insert(
-                attribute.local_name().to_owned(),
-                attribute.value().to_owned(),
-            );
-        } else if attribute.local_name() == "xmlns" {
-            namespace_context.default_namespace = attribute.value().to_owned();
-        }
-    }
-
+    let (local_default_namespace, local_prefixes) =
+        record_namespace_information(element, &mut namespace_context);
+    let mut inherited_namespace = parent_namespace_context.default_namespace.clone();
+    let mut ignore_namespace_definition_attribute = false;
     let mut serialized_attributes = Vec::<String>::new();
-    let element_prefix = if let Some(prefix) = original_prefix {
-        if namespace_context.prefixes.get(prefix).map(String::as_str) != Some(namespace) {
-            serialized_attributes.push(format!(" xmlns:{prefix}=\"{}\"", escape_attr(namespace)));
-            namespace_context
-                .prefixes
-                .insert(prefix.to_owned(), namespace.to_owned());
+
+    let tag = if inherited_namespace == namespace {
+        if local_default_namespace.is_some()
+            && !local_prefixes
+                .values()
+                .any(|namespace| namespace.is_empty())
+        {
+            ignore_namespace_definition_attribute = true;
         }
-        Some(prefix.to_owned())
-    } else if namespace_context.default_namespace != namespace {
-        serialized_attributes.push(format!(" xmlns=\"{}\"", escape_attr(namespace)));
-        namespace_context.default_namespace = namespace.to_owned();
-        None
+        if namespace == XML_NAMESPACE {
+            format!("xml:{local_name}")
+        } else {
+            local_name.to_owned()
+        }
     } else {
-        None
+        let candidate_prefix = namespace_context.preferred_prefix(namespace, original_prefix);
+        if let Some(candidate_prefix) = candidate_prefix {
+            if let Some(local_default_namespace) = local_default_namespace
+                .as_deref()
+                .filter(|namespace| *namespace != XML_NAMESPACE)
+            {
+                inherited_namespace = local_default_namespace.to_owned();
+            }
+            format!("{candidate_prefix}:{local_name}")
+        } else if let Some(original_prefix) = original_prefix {
+            let prefix = if local_prefixes.contains_key(original_prefix) {
+                generate_namespace_prefix(&mut namespace_context, namespace, next_generated_prefix)
+            } else {
+                namespace_context.add_prefix(namespace, original_prefix);
+                original_prefix.to_owned()
+            };
+            serialized_attributes.push(format!(" xmlns:{prefix}=\"{}\"", escape_attr(namespace)));
+            if let Some(local_default_namespace) = local_default_namespace.as_deref() {
+                inherited_namespace = local_default_namespace.to_owned();
+            }
+            format!("{prefix}:{local_name}")
+        } else if local_default_namespace.as_deref() != Some(namespace) {
+            ignore_namespace_definition_attribute = true;
+            inherited_namespace = namespace.to_owned();
+            serialized_attributes.push(format!(" xmlns=\"{}\"", escape_attr(namespace)));
+            local_name.to_owned()
+        } else {
+            inherited_namespace = namespace.to_owned();
+            local_name.to_owned()
+        }
     };
 
-    for attribute in element.attributes() {
-        if attribute.namespace() == XMLNS_NAMESPACE {
-            serialized_attributes.push(format!(
-                " {}=\"{}\"",
-                attribute.name(),
-                escape_attr(attribute.value())
-            ));
-            continue;
-        }
-
-        let attribute_name = if attribute.namespace().is_empty() {
-            attribute.name()
-        } else if let Some(prefix) = attribute.prefix().filter(|prefix| !prefix.is_empty()) {
-            if prefix != "xml"
-                && namespace_context.prefixes.get(prefix).map(String::as_str)
-                    != Some(attribute.namespace())
-            {
-                serialized_attributes.push(format!(
-                    " xmlns:{prefix}=\"{}\"",
-                    escape_attr(attribute.namespace())
-                ));
-                namespace_context
-                    .prefixes
-                    .insert(prefix.to_owned(), attribute.namespace().to_owned());
-            }
-            format!("{prefix}:{}", attribute.local_name())
-        } else {
-            let prefix = next_available_namespace_prefix(&namespace_context, next_generated_prefix);
-            serialized_attributes.push(format!(
-                " xmlns:{prefix}=\"{}\"",
-                escape_attr(attribute.namespace())
-            ));
-            namespace_context
-                .prefixes
-                .insert(prefix.clone(), attribute.namespace().to_owned());
-            format!("{prefix}:{}", attribute.local_name())
-        };
-        serialized_attributes.push(format!(
-            " {attribute_name}=\"{}\"",
-            escape_attr(attribute.value())
-        ));
-    }
-
-    let tag = element_prefix
-        .map(|prefix| format!("{prefix}:{local_name}"))
-        .unwrap_or_else(|| local_name.to_owned());
+    serialized_attributes.extend(serialize_native_attributes(
+        element,
+        &mut namespace_context,
+        next_generated_prefix,
+        &local_prefixes,
+        ignore_namespace_definition_attribute,
+    ));
+    namespace_context.default_namespace = inherited_namespace;
     let child_handle = element.template_contents().unwrap_or(handle);
     let has_children = dom_host.child_handles(child_handle).next().is_some();
     let open = format!("<{tag}{}", serialized_attributes.join(""));
@@ -263,17 +290,124 @@ fn serialize_native_element(
     )
 }
 
-fn next_available_namespace_prefix(
-    namespace_context: &NamespaceContext,
+fn record_namespace_information(
+    element: &Element,
+    namespace_context: &mut NamespaceContext,
+) -> (Option<String>, HashMap<String, String>) {
+    let mut local_default_namespace = None;
+    let mut local_prefixes = HashMap::new();
+    for attribute in element.attributes() {
+        if attribute.prefix().is_none()
+            && attribute.local_name() == "xmlns"
+            && matches!(attribute.namespace(), "" | XMLNS_NAMESPACE)
+        {
+            local_default_namespace = Some(attribute.value().to_owned());
+            continue;
+        }
+        if attribute.namespace() != XMLNS_NAMESPACE {
+            continue;
+        }
+        let Some(attribute_prefix) = attribute.prefix() else {
+            continue;
+        };
+        if attribute_prefix.is_empty() {
+            local_default_namespace = Some(attribute.value().to_owned());
+            continue;
+        }
+
+        let prefix = attribute.local_name();
+        let namespace = attribute.value();
+        if namespace == XML_NAMESPACE || namespace_context.contains_prefix(namespace, prefix) {
+            continue;
+        }
+        namespace_context.add_prefix(namespace, prefix);
+        local_prefixes.insert(prefix.to_owned(), namespace.to_owned());
+    }
+    (local_default_namespace, local_prefixes)
+}
+
+fn serialize_native_attributes(
+    element: &Element,
+    namespace_context: &mut NamespaceContext,
+    next_generated_prefix: &mut usize,
+    local_prefixes: &HashMap<String, String>,
+    ignore_namespace_definition_attribute: bool,
+) -> Vec<String> {
+    let mut serialized = Vec::new();
+    for attribute in element.attributes() {
+        let attribute_namespace = attribute.namespace();
+        let is_default_namespace_declaration = attribute.prefix().is_none()
+            && attribute.local_name() == "xmlns"
+            && matches!(attribute_namespace, "" | XMLNS_NAMESPACE);
+        let mut candidate_prefix = (!attribute_namespace.is_empty())
+            .then(|| namespace_context.preferred_prefix(attribute_namespace, attribute.prefix()))
+            .flatten();
+
+        if is_default_namespace_declaration && ignore_namespace_definition_attribute {
+            continue;
+        }
+        if attribute_namespace == XMLNS_NAMESPACE {
+            if attribute.value() == XML_NAMESPACE {
+                continue;
+            }
+            if attribute.prefix().is_some() {
+                let local_namespace = local_prefixes.get(attribute.local_name());
+                if local_namespace.is_none()
+                    || (local_namespace.is_some_and(|namespace| namespace != attribute.value())
+                        && namespace_context
+                            .contains_prefix(attribute.value(), attribute.local_name()))
+                {
+                    continue;
+                }
+            }
+            if attribute.prefix() == Some("xmlns") {
+                candidate_prefix = Some("xmlns".to_owned());
+            }
+        } else if attribute_namespace == XLINK_NAMESPACE
+            && candidate_prefix.is_none()
+            && let Some(prefix) = attribute.prefix().filter(|prefix| !prefix.is_empty())
+        {
+            // XML serialization preserves an explicitly supplied XLink prefix here;
+            // unlike HTML serialization, it must not force the canonical `xlink` prefix.
+            namespace_context.add_prefix(attribute_namespace, prefix);
+            serialized.push(format!(
+                " xmlns:{prefix}=\"{}\"",
+                escape_attr(attribute_namespace)
+            ));
+            candidate_prefix = Some(prefix.to_owned());
+        } else if !attribute_namespace.is_empty() && candidate_prefix.is_none() {
+            let prefix = generate_namespace_prefix(
+                namespace_context,
+                attribute_namespace,
+                next_generated_prefix,
+            );
+            serialized.push(format!(
+                " xmlns:{prefix}=\"{}\"",
+                escape_attr(attribute_namespace)
+            ));
+            candidate_prefix = Some(prefix);
+        }
+
+        let attribute_name = candidate_prefix
+            .map(|prefix| format!("{prefix}:{}", attribute.local_name()))
+            .unwrap_or_else(|| attribute.local_name().to_owned());
+        serialized.push(format!(
+            " {attribute_name}=\"{}\"",
+            escape_attr(attribute.value())
+        ));
+    }
+    serialized
+}
+
+fn generate_namespace_prefix(
+    namespace_context: &mut NamespaceContext,
+    namespace: &str,
     next_generated_prefix: &mut usize,
 ) -> String {
-    loop {
-        let prefix = format!("ns{next_generated_prefix}");
-        *next_generated_prefix += 1;
-        if !namespace_context.prefixes.contains_key(&prefix) {
-            return prefix;
-        }
-    }
+    let prefix = format!("ns{next_generated_prefix}");
+    *next_generated_prefix += 1;
+    namespace_context.add_prefix(namespace, &prefix);
+    prefix
 }
 
 fn serialize_value(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> String {
@@ -484,7 +618,15 @@ fn escape_attr(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_attr, escape_text};
+    use crate::dom::native::{DomHost, NativeDom};
+
+    use super::{XMLNS_NAMESPACE, escape_attr, escape_text, serialize_native_handle};
+
+    fn xml_host() -> DomHost {
+        DomHost::from_dom(NativeDom::new_xml(
+            url::Url::parse("https://xml-serializer.test/").unwrap(),
+        ))
+    }
 
     #[test]
     fn xml_serializer_escapes_text_with_html_escape_crate() {
@@ -499,6 +641,72 @@ mod tests {
         assert_eq!(
             escape_attr("a \"quoted\" > b && a < c"),
             "a &quot;quoted&quot; &gt; b &amp;&amp; a &lt; c"
+        );
+    }
+
+    #[test]
+    fn xml_serializer_reuses_the_nearest_namespace_prefix() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(None, None, "root");
+        let child = host.create_element_with_parts(None, None, "child");
+        let child2 = host.create_element_with_parts(Some("u1"), None, "child2");
+        let grandchild = host.create_element_with_parts(Some("u1"), None, "grandchild");
+        assert!(host.set_attribute_ns(root, Some(XMLNS_NAMESPACE), Some("xmlns"), "p1", "u1"));
+        assert!(host.set_attribute_ns(child, Some(XMLNS_NAMESPACE), Some("xmlns"), "p2", "u1"));
+        assert!(host.set_attribute_ns(child2, Some("u1"), None, "name", "v"));
+        assert!(host.append_child(root, child));
+        assert!(host.append_child(child, child2));
+        assert!(host.append_child(child2, grandchild));
+
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<root xmlns:p1=\"u1\"><child xmlns:p2=\"u1\">",
+                "<p2:child2 p2:name=\"v\"><p2:grandchild/>",
+                "</p2:child2></child></root>"
+            )
+        );
+    }
+
+    #[test]
+    fn xml_serializer_generates_prefixes_for_local_conflicts() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("uri1"), Some("p"), "root");
+        assert!(host.set_attribute_ns(root, Some(XMLNS_NAMESPACE), Some("xmlns"), "p", "uri2"));
+        assert!(host.set_attribute_ns(root, Some("uri3"), Some("p"), "name", "v"));
+
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            concat!(
+                "<ns1:root xmlns:ns1=\"uri1\" xmlns:p=\"uri2\" ",
+                "xmlns:ns2=\"uri3\" ns2:name=\"v\"/>"
+            )
+        );
+    }
+
+    #[test]
+    fn xml_serializer_reconciles_default_namespace_declarations() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("u1"), None, "root");
+        let child = host.create_element_with_parts(None, None, "child");
+        let sibling = host.create_element_with_parts(Some("u1"), None, "sibling");
+        assert!(host.set_attribute_ns(root, Some(XMLNS_NAMESPACE), None, "xmlns", "u1"));
+        assert!(host.set_attribute(child, "xmlns", "FAIL"));
+        assert!(host.set_attribute_ns(sibling, Some(XMLNS_NAMESPACE), None, "xmlns", "FAIL"));
+        assert!(host.append_child(root, child));
+        assert!(host.append_child(root, sibling));
+
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            "<root xmlns=\"u1\"><child xmlns=\"\"/><sibling/></root>"
+        );
+
+        let empty = host.create_element_with_parts(None, None, "empty");
+        assert!(host.set_attribute_ns(empty, Some(XMLNS_NAMESPACE), None, "xmlns", ""));
+        assert!(host.set_attribute_ns(empty, Some(XMLNS_NAMESPACE), Some("xmlns"), "p", ""));
+        assert_eq!(
+            serialize_native_handle(&host, empty),
+            "<empty xmlns=\"\" xmlns:p=\"\"/>"
         );
     }
 }

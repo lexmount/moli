@@ -12,7 +12,9 @@ mod install;
 
 pub(super) use data_transfer::data_transfer_constructor_callback;
 pub(crate) use data_transfer::{
-    apply_drag_modifier_drop_effect, build_data_transfer_object, is_branded_data_transfer_object,
+    apply_drag_modifier_drop_effect, build_clipboard_data_transfer, build_data_transfer_object,
+    clipboard_data_transfer_contents, disable_clipboard_data_transfer,
+    is_branded_data_transfer_object,
 };
 pub(crate) use data_transfer::{
     data_transfer_clear_data_callback, data_transfer_get_data_callback,
@@ -36,8 +38,10 @@ pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
     file_system_file_entry_file_callback,
 };
-pub(crate) use file_list::{build_file_list_object, sync_file_list_contents};
-pub(super) use file_list::{file_list_constructor_callback, file_list_item_callback};
+pub(super) use file_list::file_list_item_callback;
+pub(crate) use file_list::{
+    build_file_list_object, file_list_files_from_object, sync_file_list_contents,
+};
 pub(crate) use file_reader::flush_one_pending_file_reader;
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_add_event_listener_callback,

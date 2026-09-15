@@ -64,6 +64,7 @@ pub(crate) enum RequestHttpVersion {
 pub struct StreamingHtmlResponseStart {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -79,6 +80,7 @@ impl StreamingHtmlResponseStart {
         ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -197,7 +199,7 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     if !header_present(&outgoing, "referer")
-        && let Some(referer) = referrer_header_value_for_request(request, request_url)
+        && let Some(referer) = request.referrer_header_value(request_url)
     {
         outgoing.push(("Referer".to_owned(), referer));
     }
@@ -325,12 +327,41 @@ fn append_browser_subresource_headers(
     request: &Request,
     request_url: &Url,
 ) {
-    let Some(metadata) = request.browser_request_metadata() else {
-        return;
-    };
     if !matches!(request_url.scheme(), "http" | "https") {
         return;
     }
+    let Some(metadata) = request.browser_request_metadata() else {
+        if matches!(
+            request.resource_type,
+            crate::RequestResourceType::Script
+                | crate::RequestResourceType::ParserBlockingScript
+                | crate::RequestResourceType::ClassicAsyncOrDeferScript
+                | crate::RequestResourceType::LatePreloadScript
+        ) {
+            append_header_if_missing(outgoing, "Accept", "*/*".to_owned());
+            append_header_if_missing(
+                outgoing,
+                "Accept-Language",
+                config.browser_identity().accept_language().to_owned(),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Site",
+                request_sec_fetch_site(request, request_url),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Mode",
+                request.request_mode.as_ref().to_owned(),
+            );
+            append_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
+            if let Some(origin) = request_origin_header_value(request, request_url) {
+                append_header_if_missing(outgoing, "Origin", origin);
+            }
+            append_browser_client_hints(outgoing, config);
+        }
+        return;
+    };
 
     match metadata {
         BrowserRequestMetadata::Audio
@@ -479,28 +510,6 @@ fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
     }
 }
 
-fn referrer_header_value_for_request(request: &Request, request_url: &Url) -> Option<String> {
-    if !request.infers_referrer_from_initiator() {
-        return None;
-    }
-    let referrer_url = request.cookie_context.initiator_url.as_ref()?;
-    let (referrer_policy, document_referrer_policy) = request
-        .subresource_request_metadata()
-        .map(|metadata| {
-            (
-                metadata.referrer_policy.as_deref(),
-                metadata.document_referrer_policy.as_deref(),
-            )
-        })
-        .unwrap_or((None, None));
-    crate::referrer_header_value(
-        referrer_url,
-        request_url,
-        referrer_policy,
-        document_referrer_policy,
-    )
-}
-
 pub(crate) fn store_response_cookies(
     cookie_store: &SharedBrowserCookieStore,
     response_url: &Url,
@@ -596,6 +605,7 @@ pub(crate) fn configure_easy<H: Handler>(
     easy.url(request_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
+    let mut uses_post_fields = false;
     match request.method.as_str() {
         "GET" => easy.get(true).context("failed to configure GET request")?,
         "HEAD" => easy
@@ -607,13 +617,16 @@ pub(crate) fn configure_easy<H: Handler>(
             let body_bytes = request.body.as_deref().unwrap_or(&[]);
             easy.post_fields_copy(body_bytes)
                 .context("failed to set POST body")?;
+            uses_post_fields = true;
         }
         method => {
             easy.custom_request(method)
                 .with_context(|| anyhow!("failed to configure {method} request"))?;
-            if let Some(ref body) = request.body {
-                easy.post_fields_copy(body)
+            // Fetch requires Content-Length: 0 for a bodyless PUT, just as for POST.
+            if request.body.is_some() || method == "PUT" {
+                easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
                     .context("failed to set custom request body")?;
+                uses_post_fields = true;
             }
         }
     }
@@ -648,10 +661,14 @@ pub(crate) fn configure_easy<H: Handler>(
     let mut has_headers = false;
 
     let mut has_content_type_header = false;
-    for (name, value) in &outgoing_headers {
+    for (name, value) in outgoing_headers
+        .iter()
+        .chain(validation_headers.iter().flatten())
+    {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
         let header_line = if value.is_empty() {
-            format!("{name}:")
+            // libcurl's semicolon form sends an empty value; `Name:` suppresses it.
+            format!("{name};")
         } else {
             format!("{name}: {value}")
         };
@@ -660,22 +677,13 @@ pub(crate) fn configure_easy<H: Handler>(
             .context("failed to build request header")?;
         has_headers = true;
     }
-    if let Some(validation_headers) = validation_headers {
-        for (name, value) in validation_headers {
-            has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-            headers
-                .append(&format!("{name}: {value}"))
-                .context("failed to build cache validation request header")?;
-            has_headers = true;
-        }
-    }
-    if request.method.eq_ignore_ascii_case("POST") && !has_content_type_header {
+    if uses_post_fields && !has_content_type_header {
         // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies. Browser fetch/sendBeacon only send Content-Type when
-        // BodyInit or caller headers produce one, so suppress curl's transport default.
+        // when using post_fields_copy, including uploads with custom methods.
+        // Keep this transport-only suppression separate from explicit empty headers.
         headers
             .append("Content-Type:")
-            .context("failed to suppress curl default POST content-type")?;
+            .context("failed to suppress curl default upload content-type")?;
         has_headers = true;
     }
 
@@ -1286,6 +1294,29 @@ mod tests {
                 .map(|(_, value)| value.as_str())
                 .collect::<Vec<_>>(),
             vec!["https://explicit.test"]
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_is_cross_origin_without_hiding_referrer_url() {
+        let config = FetchConfig::default();
+        let request_url = url("https://app.test/data");
+        let request = Request::new("GET", request_url.as_str(), None, Vec::new())
+            .unwrap()
+            .with_initiator_url(&url("https://app.test/sandboxed-frame"))
+            .with_request_origin(moli_url::WebOrigin::Opaque)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+
+        let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
+
+        assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+        assert_eq!(
+            header_value(&headers, "sec-fetch-site").as_deref(),
+            Some("cross-site")
+        );
+        assert_eq!(
+            header_value(&headers, "referer").as_deref(),
+            Some("https://app.test/sandboxed-frame")
         );
     }
 

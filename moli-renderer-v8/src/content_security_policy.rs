@@ -11,6 +11,7 @@ use moli_fetch::{
     Request, RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType,
 };
 use moli_webapi_declare::WebApiObject;
+use percent_encoding::percent_decode_str;
 use serde_json::json;
 use url::Url;
 
@@ -42,8 +43,9 @@ pub(crate) enum ContentSecurityPolicyResourceKind {
     DocumentMedia,
     DocumentScriptElement,
     DocumentStyleElement,
-    SharedWorkerScript,
+    WorkerConstructor,
     WorkerConnect,
+    WorkerDynamicModuleImport,
     WorkerScript,
     WorkerStaticModuleImport,
 }
@@ -220,8 +222,8 @@ impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
             disposition: violation.disposition,
             source_file: violation.source_file.as_str(),
             sample: violation.sample.as_str(),
-            line_number: 0,
-            column_number: 0,
+            line_number: violation.line_number,
+            column_number: violation.column_number,
             status_code: 0,
         }
     }
@@ -278,22 +280,30 @@ fn security_policy_violation_event_declaration<'s>(
 }
 
 pub(crate) fn content_security_policy_headers(headers: &[(String, String)]) -> Vec<String> {
-    headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-security-policy"))
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .collect()
+    content_security_policy_header_values(headers, "content-security-policy")
 }
 
 pub(crate) fn content_security_policy_report_only_headers(
     headers: &[(String, String)],
 ) -> Vec<String> {
+    content_security_policy_header_values(headers, "content-security-policy-report-only")
+}
+
+fn content_security_policy_header_values(
+    headers: &[(String, String)],
+    header_name: &str,
+) -> Vec<String> {
+    // Each HTTP field can contain several independently enforced policies.
+    // Commas are CSP list delimiters even inside quotes in directive values;
+    // the quoted-string rules used by Reporting-Endpoints do not apply here.
+    // https://w3c.github.io/webappsec-csp/#parse-response-csp
     headers
         .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-security-policy-report-only"))
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .filter(|(name, _)| name.eq_ignore_ascii_case(header_name))
+        .flat_map(|(_, value)| value.split(','))
+        .map(str::trim_ascii)
+        .filter(|policy| !parsed_directives(policy).is_empty())
+        .map(str::to_owned)
         .collect()
 }
 
@@ -316,15 +326,6 @@ pub(crate) fn content_security_policy_allows_trusted_types_eval(policies: &[Stri
         && policies
             .iter()
             .any(|policy| policy_allows_trusted_types_eval(policy))
-}
-
-pub(crate) fn content_security_policy_allows_trusted_type_policy_name(
-    policies: &[String],
-    policy_name: &str,
-) -> bool {
-    policies
-        .iter()
-        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name))
 }
 
 pub(crate) fn content_security_policy_sandboxes_document_domain(policies: &[String]) -> bool {
@@ -487,7 +488,7 @@ pub(crate) fn content_security_policy_report_to_endpoints(
 pub(crate) fn content_security_policy_violation_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {
-    json!({
+    let mut report = json!({
         "csp-report": {
             "document-uri": fields.document_uri,
             "referrer": fields.referrer,
@@ -500,8 +501,14 @@ pub(crate) fn content_security_policy_violation_report_body(
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
-    })
-    .to_string()
+    });
+    if fields.line_number != 0 {
+        report["csp-report"]["line-number"] = json!(fields.line_number);
+    }
+    if fields.column_number != 0 {
+        report["csp-report"]["column-number"] = json!(fields.column_number);
+    }
+    report.to_string()
 }
 
 pub(crate) fn content_security_policy_reporting_api_report_body(
@@ -943,56 +950,92 @@ pub(crate) fn content_security_policy_source_file_for_report(source_file: &str) 
     source_url.to_string()
 }
 
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    // Imported worker scripts retain the originally requested URL separately
+    // from their final resource name and their (possibly muted) import base.
+    // Reporting the final URL could disclose a cross-origin redirect target.
+    let source_file = scope
+        .get_current_host_defined_options()
+        .and_then(|options| {
+            crate::util::script_request_url_from_host_defined_options(scope, options)
+        })
+        .map(|url| url.to_string())
+        .or_else(|| {
+            frame
+                .get_script_name_or_source_url(scope)
+                .map(|source| source.to_rust_string_lossy(scope))
+        })
+        .map(|source| content_security_policy_source_file_for_report(&source))
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
+}
+
 pub(crate) fn content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-    policies: &[String],
+    policy: &str,
     protected_url: &Url,
     sink: &str,
     sample: &str,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    policies.iter().find_map(|policy| {
-        if !policy_requires_trusted_types_for_script(policy) {
-            return None;
-        }
-        let document_uri = protected_url.to_string();
-        Some(ContentSecurityPolicyUrlViolation {
-            effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
-            blocked_uri: "trusted-types-sink".to_owned(),
-            source_file: document_uri.clone(),
-            document_uri,
-            original_policy: policy.clone(),
-            disposition,
-            report_uri_endpoints: content_security_policy_report_uri_endpoints(
-                policy,
-                protected_url,
-            ),
-            report_to_endpoints: content_security_policy_report_to_endpoints(
-                policy,
-                reporting_endpoints,
-            ),
-            sample: trusted_types_sink_violation_sample(sink, sample),
-            line_number: 0,
-            column_number: 0,
-        })
+    if !policy_requires_trusted_types_for_script(policy) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
+        blocked_uri: "trusted-types-sink".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.to_owned(),
+        disposition,
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_sink_violation_sample(sink, sample),
+        line_number: 0,
+        column_number: 0,
     })
 }
 
-pub(crate) fn content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+pub(crate) fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
     policy: &str,
     protected_url: &Url,
-    kind: ContentSecurityPolicyNonUrlKind,
+    policy_name: &str,
+    is_duplicate: bool,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_non_url_violation_with_source(
-        policy,
-        protected_url,
-        kind,
-        None,
+    if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: TRUSTED_TYPES,
+        blocked_uri: "trusted-types-policy".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.to_owned(),
         disposition,
-        reporting_endpoints,
-    )
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_violation_sample(policy_name),
+        line_number: 0,
+        column_number: 0,
+    })
 }
 
 pub(crate) fn content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
@@ -1093,7 +1136,7 @@ pub(crate) fn content_security_policy_inline_style_element_violation_with_dispos
     })
 }
 
-fn content_security_policy_non_url_violation_with_source(
+pub(crate) fn content_security_policy_non_url_violation_with_source(
     policy: &str,
     protected_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
@@ -1152,21 +1195,33 @@ fn policy_allows_trusted_types_eval(policy: &str) -> bool {
         })
 }
 
-fn policy_allows_trusted_type_policy_name(policy: &str, policy_name: &str) -> bool {
+fn policy_allows_trusted_type_policy_name(
+    policy: &str,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
     let directives = parsed_directives(policy);
     let Some(sources) = directive_source_list(&directives, TRUSTED_TYPES) else {
         return true;
     };
-    sources.iter().any(|source| {
+    let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
             || (!source.is_empty()
                 && source == policy_name
+                // Only tt-policy-name tokens can whitelist a literal name.
+                // The policy API itself accepts arbitrary strings, including
+                // under a wildcard, so do not validate policy_name globally.
                 && source.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
                 }))
-    })
+    });
+    let duplicate_is_allowed = !is_duplicate
+        || sources
+            .iter()
+            .any(|source| csp_keyword_eq(source, "allow-duplicates"));
+    name_is_allowed && duplicate_is_allowed
 }
 
 fn policy_sandboxes_document_domain(policy: &str) -> bool {
@@ -1220,8 +1275,12 @@ fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
 }
 
 fn trusted_types_sink_violation_sample(sink: &str, sample: &str) -> String {
-    let clipped = sample.chars().take(40).collect::<String>();
+    let clipped = trusted_types_violation_sample(sample);
     format!("{sink}|{clipped}")
+}
+
+fn trusted_types_violation_sample(sample: &str) -> String {
+    sample.chars().take(40).collect()
 }
 
 fn effective_source_list_with_directive(
@@ -1458,9 +1517,10 @@ fn inline_source_violation_sample(source_list: &[&str], source: &str) -> String 
 }
 
 fn normalized_source_list(sources: Vec<&str>) -> Vec<&str> {
+    // The directive parser already splits on CSP's ASCII whitespace. Trimming
+    // again would turn invalid tokens containing vertical tabs into sources.
     sources
         .into_iter()
-        .map(str::trim)
         .filter(|source| !source.is_empty())
         .collect()
 }
@@ -1596,45 +1656,36 @@ fn source_url_matches(
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> bool {
-    if host_source_contains_query_or_fragment(source) {
-        return false;
-    }
-    if let Some(matches) =
-        wildcard_host_source_matches(source, protected_url, request_url, redirect_status)
-    {
-        return matches;
-    }
-    let Ok(source_url) = parse_source_url(source, protected_url) else {
+    let Some(source) = parse_host_source(source) else {
         return false;
     };
-    let scheme_match = csp_scheme_match(source_url.scheme(), request_url.scheme());
+    let source_scheme = source.scheme.unwrap_or_else(|| protected_url.scheme());
+    let scheme_match = csp_scheme_match(source_scheme, request_url.scheme());
     if scheme_match == CspSchemeMatch::NotMatching {
         return false;
     }
-    if source_url.host_str() != request_url.host_str() {
-        return false;
-    }
-    let port_match = csp_port_match(
-        source_url.scheme(),
-        source_url.port_or_known_default(),
-        false,
-        request_url,
-    );
+    let port_match = host_source_port_match(source_scheme, source.port, request_url);
     if !csp_scheme_and_port_match(scheme_match, port_match) {
         return false;
     }
-    if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
-        || !source_has_path(source)
+    let Some(request_host) = request_url.host_str() else {
+        return false;
+    };
+    if !csp_host_part_matches(source.host, request_host) {
+        return false;
+    }
+    // Keep the existing wildcard-port IPv4 restriction separate from grammar
+    // validation; sources with ordinary ports already accept literal IPv4.
+    if source.port == Some("*")
+        && source.host != "127.0.0.1"
+        && source.host.parse::<std::net::Ipv4Addr>().is_ok()
     {
-        return true;
+        return false;
     }
-    let source_path = source_url.path();
-    let request_path = request_url.path();
-    if source_path.ends_with('/') {
-        request_path.starts_with(source_path)
-    } else {
-        request_path == source_path
-    }
+    redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
+        || source
+            .path
+            .is_none_or(|path| csp_path_part_matches(path, request_url.path()))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1736,50 +1787,60 @@ fn csp_scheme_and_port_match(scheme_match: CspSchemeMatch, port_match: CspPortMa
     scheme_can_upgrade && port_can_upgrade
 }
 
-fn wildcard_host_source_matches(
-    source: &str,
-    protected_url: &Url,
-    request_url: &Url,
-    redirect_status: ContentSecurityPolicyRedirectStatus,
-) -> Option<bool> {
-    let (source_scheme, rest) = if let Some((scheme, rest)) = source.split_once("://") {
+struct CspHostSource<'a> {
+    scheme: Option<&'a str>,
+    host: &'a str,
+    port: Option<&'a str>,
+    path: Option<&'a str>,
+}
+
+fn parse_host_source(source: &str) -> Option<CspHostSource<'_>> {
+    // CSP host-source is not a URL: credentials and scheme-relative URLs are
+    // invalid, and URL parsing must not normalize hosts or dot segments.
+    // https://w3c.github.io/webappsec-csp/#source-lists
+    let (scheme, rest) = if let Some((scheme, rest)) = source.split_once("://")
+        && !scheme.contains('/')
+    {
+        let mut bytes = scheme.bytes();
+        if !bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+            || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+        {
+            return None;
+        }
         (Some(scheme), rest)
-    } else if let Some(rest) = source.strip_prefix("//") {
-        (Some(protected_url.scheme()), rest)
     } else {
         (None, source)
     };
-    let (authority, source_path) = split_authority_and_path(rest);
-    let (source_host, source_port) = split_source_authority(authority)?;
-    if source_host != "*" && !source_host.starts_with("*.") {
+    let (authority, path) = split_authority_and_path(rest);
+    let (host, port) = if let Some((host, port)) = authority.split_once(':') {
+        if port != "*" && (port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit())) {
+            return None;
+        }
+        (host, Some(port))
+    } else {
+        (authority, None)
+    };
+    if host != "*" {
+        let labels = host.strip_prefix("*.").unwrap_or(host);
+        let labels = labels.strip_suffix('.').unwrap_or(labels);
+        if !labels.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        }) {
+            return None;
+        }
+    }
+    if path.is_some_and(|path| !csp_path_part_is_valid(path)) {
         return None;
     }
-    let source_scheme = source_scheme.unwrap_or_else(|| protected_url.scheme());
-    let scheme_match = csp_scheme_match(source_scheme, request_url.scheme());
-    if scheme_match == CspSchemeMatch::NotMatching {
-        return Some(false);
-    }
-    let port_match = wildcard_source_port_match(source_scheme, source_port, request_url);
-    if !csp_scheme_and_port_match(scheme_match, port_match) {
-        return Some(false);
-    }
-    let Some(request_host) = request_url.host_str() else {
-        return Some(false);
-    };
-    if !wildcard_source_host_matches(source_host, request_host) {
-        return Some(false);
-    }
-    if let Some(source_path) = source_path
-        && redirect_status == ContentSecurityPolicyRedirectStatus::NoRedirect
-    {
-        let request_path = request_url.path();
-        return Some(if source_path.ends_with('/') {
-            request_path.starts_with(source_path)
-        } else {
-            request_path == source_path
-        });
-    }
-    Some(true)
+    Some(CspHostSource {
+        scheme,
+        host,
+        port,
+        path,
+    })
 }
 
 fn split_authority_and_path(source_rest: &str) -> (&str, Option<&str>) {
@@ -1789,34 +1850,81 @@ fn split_authority_and_path(source_rest: &str) -> (&str, Option<&str>) {
         .unwrap_or((source_rest, None))
 }
 
-fn split_source_authority(authority: &str) -> Option<(&str, Option<&str>)> {
-    if authority.is_empty() {
-        return None;
-    }
-    if let Some((host, port)) = authority.rsplit_once(':')
-        && !host.is_empty()
-        && (port == "*" || port.parse::<u16>().is_ok())
-    {
-        return Some((host, Some(port)));
-    }
-    Some((authority, None))
-}
-
-fn wildcard_source_host_matches(source_host: &str, request_host: &str) -> bool {
-    let source_host = source_host.trim_end_matches('.').to_ascii_lowercase();
-    let request_host = request_host.trim_end_matches('.').to_ascii_lowercase();
+fn csp_host_part_matches(source_host: &str, request_host: &str) -> bool {
     if source_host == "*" {
         return !request_host.is_empty();
     }
-    let Some(source_suffix) = source_host.strip_prefix("*.") else {
-        return false;
-    };
-    request_host.len() > source_suffix.len()
-        && request_host.ends_with(source_suffix)
-        && request_host.as_bytes()[request_host.len() - source_suffix.len() - 1] == b'.'
+    if let Some(suffix) = source_host.strip_prefix('*') {
+        return request_host.len() >= suffix.len()
+            && request_host.as_bytes()[request_host.len() - suffix.len()..]
+                .eq_ignore_ascii_case(suffix.as_bytes());
+    }
+    source_host.eq_ignore_ascii_case(request_host)
 }
 
-fn wildcard_source_port_match(
+fn csp_path_part_is_valid(path: &str) -> bool {
+    // RFC 3986 path-absolute, excluding raw ';' and ',' as required by CSP.
+    if !path.starts_with('/') || path.starts_with("//") {
+        return false;
+    }
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            if !bytes.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+                || !bytes.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+            {
+                return false;
+            }
+        } else if !byte.is_ascii_alphanumeric()
+            && !matches!(
+                byte,
+                b'/' | b'-'
+                    | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b'='
+                    | b':'
+                    | b'@'
+            )
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn csp_path_part_matches(source_path: &str, request_path: &str) -> bool {
+    if source_path.is_empty() || (source_path == "/" && request_path.is_empty()) {
+        return true;
+    }
+    // Split before decoding so an encoded slash cannot create a path boundary.
+    // Compare bytes: distinct invalid UTF-8 sequences must not become equal.
+    // https://w3c.github.io/webappsec-csp/#match-paths
+    let mut source_segments = source_path.split('/').peekable();
+    let mut request_segments = request_path.split('/');
+    while let Some(source_segment) = source_segments.next() {
+        let Some(request_segment) = request_segments.next() else {
+            return false;
+        };
+        if source_segment.is_empty() && source_segments.peek().is_none() {
+            return true;
+        }
+        if !percent_decode_str(source_segment).eq(percent_decode_str(request_segment)) {
+            return false;
+        }
+    }
+    request_segments.next().is_none()
+}
+
+fn host_source_port_match(
     source_scheme: &str,
     source_port: Option<&str>,
     request_url: &Url,
@@ -1841,17 +1949,8 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     match scheme.to_ascii_lowercase().as_str() {
         "http" | "ws" => Some(80),
         "https" | "wss" => Some(443),
+        "ftp" => Some(21),
         _ => None,
-    }
-}
-
-fn parse_source_url(source: &str, protected_url: &Url) -> Result<Url, url::ParseError> {
-    if source.contains("://") {
-        Url::parse(source)
-    } else if source.starts_with("//") {
-        Url::parse(&format!("{}:{source}", protected_url.scheme()))
-    } else {
-        Url::parse(&format!("{}://{}", protected_url.scheme(), source))
     }
 }
 
@@ -1862,15 +1961,6 @@ fn source_has_path(source: &str) -> bool {
         .or_else(|| source.strip_prefix("//"))
         .unwrap_or(source);
     after_scheme.contains('/')
-}
-
-fn host_source_contains_query_or_fragment(source: &str) -> bool {
-    let after_scheme = source
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .or_else(|| source.strip_prefix("//"))
-        .unwrap_or(source);
-    after_scheme.contains('?') || after_scheme.contains('#')
 }
 
 fn csp_keyword_eq(source: &str, keyword: &str) -> bool {
@@ -1888,9 +1978,9 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
-            Self::DocumentScriptElement => SCRIPT_SRC_ELEM,
+            Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
-            Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
+            Self::WorkerConstructor | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
             Self::WorkerScript => SCRIPT_SRC,
         }
@@ -1905,8 +1995,9 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
-            Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
+            Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
+            Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerStaticModuleImport => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
         }
@@ -2097,6 +2188,173 @@ mod tests {
     }
 
     #[test]
+    fn csp_headers_preserve_policy_order_and_disposition() {
+        let headers = vec![
+            (
+                "CONTENT-SECURITY-POLICY".to_owned(),
+                " , img-src *; report-uri /first, img-src 'none'; report-uri /second, ".to_owned(),
+            ),
+            (
+                "Content-Security-Policy-Report-Only".to_owned(),
+                "script-src * , script-src 'none'".to_owned(),
+            ),
+            (
+                "content-security-policy".to_owned(),
+                "worker-src 'self'".to_owned(),
+            ),
+        ];
+        assert_eq!(
+            content_security_policy_headers(&headers),
+            [
+                "img-src *; report-uri /first",
+                "img-src 'none'; report-uri /second",
+                "worker-src 'self'",
+            ]
+        );
+        assert_eq!(
+            content_security_policy_report_only_headers(&headers),
+            ["script-src *", "script-src 'none'"]
+        );
+    }
+
+    #[test]
+    fn csp_header_policy_lists_enforce_every_policy() {
+        for (value, request, expected) in [
+            (
+                "img-src * , img-src 'none'",
+                "https://cdn.test/asset",
+                false,
+            ),
+            ("img-src *,img-src 'none'", "https://cdn.test/asset", false),
+            (
+                "img-src *; ignored first, img-src 'none'; ignored second",
+                "https://cdn.test/asset",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo,ignored",
+                "https://cdn.test/foo",
+                true,
+            ),
+            (
+                "img-src https://cdn.test/foo,ignored",
+                "https://cdn.test/foo,ignored",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo%2cbar",
+                "https://cdn.test/foo,bar",
+                true,
+            ),
+            (
+                ", , img-src * , , img-src 'none', ,",
+                "https://cdn.test/asset",
+                false,
+            ),
+            (
+                "img-src *; img-src 'none', img-src *",
+                "https://cdn.test/asset",
+                true,
+            ),
+            (
+                "img-src https://cdn.test/foo, img-src https://cdn.test/bar",
+                "https://cdn.test/foo",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo, img-src https://cdn.test/bar",
+                "https://cdn.test/bar",
+                false,
+            ),
+            (
+                "img-src *; ignored \"start, img-src 'none'; ignored end\"",
+                "https://cdn.test/asset",
+                false,
+            ),
+        ] {
+            let policies = content_security_policy_headers(&[(
+                "Content-Security-Policy".to_owned(),
+                value.to_owned(),
+            )]);
+            assert_eq!(
+                content_security_policy_allows_url(
+                    &policies,
+                    &protected_url(),
+                    &request_url(request),
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                ),
+                expected,
+                "{value:?} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn csp_header_lists_keep_report_only_violations_with_their_policy() {
+        let headers = vec![
+            ("Content-Security-Policy".to_owned(), "img-src *".to_owned()),
+            (
+                "Content-Security-Policy-Report-Only".to_owned(),
+                "img-src *; report-uri /allowed, img-src 'none'; report-uri /blocked".to_owned(),
+            ),
+        ];
+        let protected = protected_url();
+        let request = request_url("https://cdn.test/asset");
+        assert!(content_security_policy_allows_url(
+            &content_security_policy_headers(&headers),
+            &protected,
+            &request,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+        ));
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+            &content_security_policy_report_only_headers(&headers),
+            &protected,
+            &request,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Report,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        ).expect("the second report-only policy must produce a violation");
+        assert_eq!(
+            violation.disposition,
+            ContentSecurityPolicyDisposition::Report
+        );
+        assert_eq!(
+            violation.original_policy,
+            "img-src 'none'; report-uri /blocked"
+        );
+        assert_eq!(violation.report_uri_endpoints, ["https://app.test/blocked"]);
+    }
+
+    #[test]
+    fn csp_header_lists_preserve_invalid_whitespace_and_skip_empty_policies() {
+        for name in [
+            "content-security-policy",
+            "content-security-policy-report-only",
+        ] {
+            let collect = |value: &str| {
+                content_security_policy_header_values(&[(name.to_owned(), value.to_owned())], name)
+            };
+            assert!(collect(", ; ; , \t , img-src 'none'\u{00a0},").is_empty());
+            assert_eq!(
+                collect("\t\n\r\u{000c} img-src 'none' , \t"),
+                ["img-src 'none'"]
+            );
+            assert_eq!(
+                collect("img-src *\u{000b}, img-src 'none'"),
+                ["img-src *\u{000b}", "img-src 'none'"]
+            );
+            let policies = collect("img-src *\u{000b}");
+            assert!(!content_security_policy_allows_url(
+                &policies,
+                &protected_url(),
+                &request_url("https://cdn.test/asset"),
+                ContentSecurityPolicyResourceKind::DocumentImage,
+            ));
+        }
+    }
+
+    #[test]
     fn frame_ancestors_requires_every_ancestor_to_match() {
         let protected_url = "https://child.test/frame.html";
         let ancestors = [Some("https://child.test"), Some("https://top.test")];
@@ -2182,43 +2440,43 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_none_blocks_shared_worker_script() {
+    fn worker_src_none_blocks_worker_constructor() {
         assert!(!allowed(
             "worker-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
+    fn worker_constructor_uses_script_src_and_default_src_fallbacks() {
         assert!(!allowed(
             "script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "default-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_child_src_before_script_src_fallback() {
+    fn worker_constructor_uses_child_src_before_script_src_fallback() {
         assert!(!allowed(
             "child-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "child-src https://workers.test; script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://workers.test/worker.js"
         ));
     }
@@ -2243,15 +2501,15 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_takes_precedence_for_shared_worker_scripts() {
+    fn worker_src_takes_precedence_for_worker_constructors() {
         assert!(allowed(
             "default-src 'none'; script-src 'none'; worker-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src *; script-src *; worker-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
@@ -2365,6 +2623,44 @@ mod tests {
             ContentSecurityPolicyResourceKind::WorkerScript,
             "https://cdn.test/worker-import.js"
         ));
+    }
+
+    #[test]
+    fn worker_module_imports_use_their_request_specific_directive_fallbacks() {
+        let cross_origin = "https://cdn.test/worker-import.js";
+
+        assert!(!allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src *; script-src 'self'",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(!allowed(
+            "script-src-elem 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+            &["script-src 'self'".to_owned()],
+            &protected_url(),
+            &request_url(cross_origin),
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        )
+        .expect("script-src fallback should block the cross-origin dynamic import");
+        assert_eq!(violation.effective_directive, "script-src-elem");
     }
 
     #[test]
@@ -2482,17 +2778,179 @@ mod tests {
     }
 
     #[test]
-    fn host_sources_support_scheme_relative_urls() {
-        assert!(allowed(
-            "script-src //cdn.test",
-            ContentSecurityPolicyResourceKind::DocumentScriptElement,
-            "https://cdn.test/app.js"
-        ));
-        assert!(!allowed(
-            "script-src //cdn.test",
-            ContentSecurityPolicyResourceKind::DocumentScriptElement,
-            "http://cdn.test/app.js"
-        ));
+    fn host_sources_reject_scheme_relative_urls() {
+        for source in ["//cdn.test", "//cdn.test:*", "//*.test", "//*.test:*"] {
+            for scheme in ["https", "http"] {
+                assert!(!allowed(
+                    &format!("script-src {source}"),
+                    ContentSecurityPolicyResourceKind::DocumentScriptElement,
+                    &format!("{scheme}://cdn.test/app.js")
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_host_sources_cannot_allow_initial_or_redirected_requests() {
+        for (source, request) in [
+            (
+                "https://cdn.test:*/foo,bar",
+                "https://cdn.test:8443/foo,bar",
+            ),
+            ("https://*.test/foo,bar", "https://cdn.test/foo,bar"),
+            ("https://cdn.test/foo,bar", "https://cdn.test/foo,bar"),
+            ("https://user@cdn.test", "https://cdn.test/asset"),
+            ("https://%63dn.test", "https://cdn.test/asset"),
+            ("https://bad_host.test", "https://bad_host.test/asset"),
+            (
+                "https://*.bad_host.test:*",
+                "https://cdn.bad_host.test:8443/asset",
+            ),
+            ("https://bad..test", "https://bad..test/asset"),
+            ("https://*.test..:*", "https://cdn.test:8443/asset"),
+            ("https://cdn.test:", "https://cdn.test/asset"),
+            ("https://cdn.test:+443", "https://cdn.test/asset"),
+            ("https://cdn.test:65536", "https://cdn.test/asset"),
+            ("https://cdn.test/%", "https://cdn.test/%"),
+            ("https://cdn.test:*/%6g", "https://cdn.test:8443/%6g"),
+            ("https://*.test/%a", "https://cdn.test/%a"),
+            ("https://cdn.test//asset", "https://cdn.test//asset"),
+            (
+                "https://cdn.test/asset\\file",
+                "https://cdn.test/asset/file",
+            ),
+            ("https://cdn.test/[asset]", "https://cdn.test/[asset]"),
+            ("https://cdn.test/asset\u{000b}", "https://cdn.test/asset"),
+            ("\u{000b}https://cdn.test", "https://cdn.test/asset"),
+            ("https://127.1", "https://127.0.0.1/asset"),
+        ] {
+            for redirect_status in [
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+            ] {
+                assert!(
+                    !content_security_policy_allows_url_with_redirect_status(
+                        &[format!("img-src {source}")],
+                        &protected_url(),
+                        &request_url(request),
+                        ContentSecurityPolicyResourceKind::DocumentImage,
+                        redirect_status,
+                    ),
+                    "{source:?} must not allow {request:?} ({redirect_status:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn host_source_paths_decode_segments_for_exact_and_wildcard_sources() {
+        for authority in ["cdn.test", "cdn.test:*", "*.test", "*.test:*", "*", "*:*"] {
+            for (source_path, request_path, expected) in [
+                ("/%61sset", "/asset", true),
+                ("/asset", "/%61sset", true),
+                ("/%61sset/", "/asset/file", true),
+                ("/%61sset/", "/asset", false),
+                ("/asset", "/ASSET", false),
+                ("/asset", "/asset/", false),
+                ("/a%2fb", "/a%2Fb", true),
+                ("/a%2fb", "/a/b", false),
+                ("/a/", "/a%2Fb", false),
+                ("/a/", "/a//b", true),
+                ("/a//", "/a/b", false),
+                ("/a%252fb", "/a%2fb", false),
+                ("/a+b", "/a%20b", false),
+                ("/a%2bb", "/a+b", true),
+                ("/a%2cb", "/a,b", true),
+                ("/a%3bb", "/a;b", true),
+                ("/%ff", "/%FF", true),
+                ("/%ff", "/%fe", false),
+                ("/%e4%b8%ad", "/中", true),
+                ("/a/../asset", "/asset", false),
+                ("/a/%2e%2e/asset", "/asset", false),
+                ("/./asset", "/asset", false),
+                ("/path://asset", "/path://asset", true),
+            ] {
+                let policy = format!("img-src https://{authority}{source_path}");
+                let request = format!("https://cdn.test{request_path}");
+                assert_eq!(
+                    allowed(
+                        &policy,
+                        ContentSecurityPolicyResourceKind::DocumentImage,
+                        &request
+                    ),
+                    expected,
+                    "{policy} with {request}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn valid_host_source_grammar_preserves_ports_and_raw_hostnames() {
+        for (source, request, expected) in [
+            ("HTTPS://CDN.TEST:00443", "https://cdn.test/asset", true),
+            (
+                "cdn.test/path://asset",
+                "https://cdn.test/path://asset",
+                true,
+            ),
+            ("https://cdn.test:0", "https://cdn.test:0/asset", true),
+            (
+                "https://cdn.test:65535",
+                "https://cdn.test:65535/asset",
+                true,
+            ),
+            (
+                "https://xn--bcher-kva.test",
+                "https://bücher.test/asset",
+                true,
+            ),
+            ("https://*.TEST.", "https://cdn.test./asset", true),
+            ("https://*.TEST.", "https://cdn.test/asset", false),
+            ("https://*.test", "https://cdn.test./asset", false),
+            ("ftp://cdn.test", "ftp://cdn.test/asset", true),
+            ("https://192.0.2.1", "https://192.0.2.1/asset", true),
+            (
+                "https://192.0.2.1:8443",
+                "https://192.0.2.1:8443/asset",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                allowed(
+                    &format!("img-src {source}"),
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                    request
+                ),
+                expected,
+                "{source} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn csp_path_matching_preserves_empty_segments_and_byte_boundaries() {
+        for (source, request, expected) in [
+            ("", "", true),
+            ("", "/asset", true),
+            ("/", "", true),
+            ("/", "/asset", true),
+            ("/a/", "/a", false),
+            ("/a/", "/a/", true),
+            ("/a//", "/a/", false),
+            ("/a//", "/a//b", true),
+            ("/a%2fb/", "/a/b/file", false),
+            ("/a%2fb/", "/a%2Fb/file", true),
+            ("/%00", "/%00", true),
+            ("/%00", "/", false),
+            ("/%ff", "/%fe", false),
+        ] {
+            assert_eq!(
+                csp_path_part_matches(source, request),
+                expected,
+                "{source:?} with {request:?}"
+            );
+        }
     }
 
     #[test]
@@ -2573,6 +3031,154 @@ mod tests {
             ContentSecurityPolicyResourceKind::WorkerScript,
             "https://assets.cdn.example.com/trusted%2Fevil.js"
         ));
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_apply_across_resource_kinds() {
+        for kind in [
+            ContentSecurityPolicyResourceKind::DocumentConnect,
+            ContentSecurityPolicyResourceKind::DocumentFrame,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+            ContentSecurityPolicyResourceKind::DocumentManifest,
+            ContentSecurityPolicyResourceKind::DocumentMedia,
+            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+            ContentSecurityPolicyResourceKind::DocumentStyleElement,
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyResourceKind::WorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+        ] {
+            for source in ["https://cdn.test:*", "http://cdn.test:*", "CDN.TEST:*"] {
+                for port in ["", ":0", ":80", ":443", ":8443", ":65535"] {
+                    let policy = format!("default-src {source}");
+                    let request = format!("https://cdn.test{port}/asset");
+                    assert!(
+                        allowed(&policy, kind, &request),
+                        "{policy} should allow {request} for {kind:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_preserve_other_source_restrictions() {
+        for (source, request, expected) in [
+            ("http://cdn.test:*", "http://cdn.test:8080/asset", true),
+            ("https://CDN.TEST:*", "https://cdn.test:8443/asset", true),
+            ("cdn.test:*", "https://cdn.test:8443/asset", true),
+            ("cdn.test:*", "http://cdn.test:8080/asset", false),
+            (
+                "https://cdn.test:*",
+                "https://sub.cdn.test:8443/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*",
+                "https://evilcdn.test:8443/asset",
+                false,
+            ),
+            ("https://cdn.test.:*", "https://cdn.test:8443/asset", false),
+            ("https://cdn.test.:*", "https://cdn.test.:8443/asset", true),
+            ("https://cdn.test:*", "http://cdn.test:8080/asset", false),
+            ("http://cdn.test:*", "ws://cdn.test:8080/asset", false),
+            ("ws://cdn.test:*", "wss://cdn.test:8443/asset", true),
+            ("wss://cdn.test:*", "ws://cdn.test:8080/asset", false),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/trusted/asset",
+                true,
+            ),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/trusted%2Fevil",
+                false,
+            ),
+            (
+                "https://cdn.test:*/trusted/",
+                "https://cdn.test:8443/other/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/asset?cache=1",
+                true,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/asset/extra",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset",
+                "https://cdn.test:8443/ASSET",
+                false,
+            ),
+            ("//cdn.test:*", "https://cdn.test:8443/asset", false),
+            (
+                "https://user@cdn.test:*",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            ("https://%63dn.test:*", "https://cdn.test:8443/asset", false),
+            (
+                "https://cdn.test:*/asset?ignored",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            (
+                "https://cdn.test:*/asset#ignored",
+                "https://cdn.test:8443/asset",
+                false,
+            ),
+            ("https://cdn.test:*0", "https://cdn.test:8443/asset", false),
+            (
+                "https://bad_host.test:*",
+                "https://bad_host.test:8443/asset",
+                false,
+            ),
+            (
+                "https://bad..host.test:*",
+                "https://bad..host.test:8443/asset",
+                false,
+            ),
+            ("https://127.0.0.1:*", "https://127.0.0.1:8443/asset", true),
+            ("https://192.0.2.1:*", "https://192.0.2.1:8443/asset", false),
+            ("https://[::1]:*", "https://[::1]:8443/asset", false),
+        ] {
+            let policy = format!("img-src {source}");
+            assert_eq!(
+                allowed(
+                    &policy,
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                    request
+                ),
+                expected,
+                "{policy} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_host_port_wildcards_preserve_redirect_restrictions() {
+        for (request, expected) in [
+            ("https://cdn.test:9443/other/asset", true),
+            ("https://other.test:9443/other/asset", false),
+            ("http://cdn.test:8080/other/asset", false),
+        ] {
+            assert_eq!(
+                content_security_policy_allows_url_with_redirect_status(
+                    &["script-src https://cdn.test:*/trusted/".to_owned()],
+                    &protected_url(),
+                    &request_url(request),
+                    ContentSecurityPolicyResourceKind::DocumentScriptElement,
+                    ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                ),
+                expected,
+                "a redirected wildcard-port request must still match scheme and host: {request}"
+            );
+        }
     }
 
     #[test]
@@ -3021,6 +3627,35 @@ mod tests {
     }
 
     #[test]
+    fn violation_report_formats_preserve_captured_script_locations() {
+        let mut violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'".to_owned()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        violation.source_file = "https://app.test/imported/script.js".into();
+        violation.line_number = 12;
+        violation.column_number = 34;
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        assert_eq!(fields.source_file, violation.source_file);
+        assert_eq!((fields.line_number, fields.column_number), (12, 34));
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
+        assert_eq!(legacy["csp-report"]["line-number"], 12);
+        assert_eq!(legacy["csp-report"]["column-number"], 34);
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
+        assert_eq!(reporting[0]["body"]["lineNumber"], 12);
+        assert_eq!(reporting[0]["body"]["columnNumber"], 34);
+    }
+
+    #[test]
     fn violation_report_request_uses_csp_fetch_security_modes() {
         let violation = content_security_policy_url_violation_with_redirect_status(
             &["connect-src 'none'; report-uri /csp-report".to_owned()],
@@ -3076,25 +3711,26 @@ mod tests {
     fn non_url_inline_script_uses_script_src_elem_fallbacks() {
         let reporting_endpoints = ContentSecurityPolicyReportingEndpoints::default();
         assert!(
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+            content_security_policy_non_url_violation_with_source(
                 "script-src-elem 'unsafe-inline'; script-src 'none'",
                 &protected_url(),
                 ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+                None,
                 ContentSecurityPolicyDisposition::Enforce,
                 &reporting_endpoints,
             )
             .is_none()
         );
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "script-src 'self'; default-src 'unsafe-inline'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
-                ContentSecurityPolicyDisposition::Report,
-                &reporting_endpoints,
-            )
-            .expect("script-src should block inline script without unsafe-inline");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "script-src 'self'; default-src 'unsafe-inline'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
+            ContentSecurityPolicyDisposition::Report,
+            &reporting_endpoints,
+        )
+        .expect("script-src should block inline script without unsafe-inline");
         assert_eq!(violation.effective_directive, "script-src-elem");
         assert_eq!(violation.blocked_uri, "inline");
         assert_eq!(
@@ -3406,10 +4042,11 @@ mod tests {
             "default-src 'unsafe-eval'",
         ] {
             assert!(
-                content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+                content_security_policy_non_url_violation_with_source(
                     policy,
                     &protected_url(),
                     ContentSecurityPolicyNonUrlKind::WasmEval,
+                    None,
                     ContentSecurityPolicyDisposition::Enforce,
                     &reporting_endpoints,
                 )
@@ -3418,42 +4055,53 @@ mod tests {
             );
         }
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "default-src 'self'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::WasmEval,
-                ContentSecurityPolicyDisposition::Enforce,
-                &reporting_endpoints,
-            )
-            .expect("default-src should block wasm eval without unsafe eval source");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "default-src 'self'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
+            ContentSecurityPolicyDisposition::Enforce,
+            &reporting_endpoints,
+        )
+        .expect("default-src should block wasm eval without unsafe eval source");
         assert_eq!(violation.effective_directive, "script-src");
         assert_eq!(violation.blocked_uri, "wasm-eval");
     }
 
     #[test]
     fn trusted_types_directive_filters_policy_names() {
-        let allowed = |policies: &[&str], name: &str| {
-            content_security_policy_allows_trusted_type_policy_name(
-                &policies
-                    .iter()
-                    .map(|policy| policy.to_string())
-                    .collect::<Vec<_>>(),
-                name,
-            )
+        let allowed = |policies: &[&str], name: &str, is_duplicate: bool| {
+            policies
+                .iter()
+                .all(|policy| policy_allows_trusted_type_policy_name(policy, name, is_duplicate))
         };
 
-        assert!(allowed(&[], "SomeName"));
-        assert!(allowed(&["default-src 'none'"], "SomeName"));
-        assert!(allowed(&["trusted-types SomeName OtherName"], "SomeName"));
-        assert!(allowed(&["trusted-types * 'aLLow-dUPLIcates'"], "SomeName"));
-        assert!(allowed(&["trusted-types 'none' SomeName"], "SomeName"));
-        assert!(!allowed(&["trusted-types"], "SomeName"));
-        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName"));
-        assert!(!allowed(&["trusted-types SomeName"], "default"));
+        assert!(allowed(&[], "SomeName", false));
+        assert!(allowed(&[], "SomeName", true));
+        assert!(allowed(&["default-src 'none'"], "SomeName", false));
+        assert!(allowed(
+            &["trusted-types SomeName OtherName"],
+            "SomeName",
+            false
+        ));
+        assert!(allowed(
+            &["trusted-types * 'aLLow-dUPLIcates'"],
+            "SomeName",
+            true
+        ));
+        assert!(allowed(
+            &["trusted-types 'none' SomeName"],
+            "SomeName",
+            false
+        ));
+        assert!(!allowed(&["trusted-types"], "SomeName", false));
+        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName", false));
+        assert!(!allowed(&["trusted-types SomeName"], "SomeName", true));
+        assert!(!allowed(&["trusted-types SomeName"], "default", false));
         assert!(!allowed(
             &["trusted-types SomeName", "trusted-types OtherName"],
-            "SomeName"
+            "SomeName",
+            false
         ));
     }
 
@@ -3464,7 +4112,7 @@ mod tests {
             let policy = format!("trusted-types {name}");
             let expected = byte.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&byte);
             assert_eq!(
-                policy_allows_trusted_type_policy_name(&policy, &name),
+                policy_allows_trusted_type_policy_name(&policy, &name, false),
                 expected,
                 "invalid tt-policy-name byte {byte:#04x} must not match literally",
             );
@@ -3472,23 +4120,32 @@ mod tests {
         for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
             assert!(policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {name}"),
-                name
+                name,
+                false,
             ));
         }
         assert!(policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "valid"
+            "valid",
+            false,
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "policy*name"
+            "policy*name",
+            false,
         ));
         for wildcard in ["\u{000b}*", "*\u{000b}", "policy*"] {
             assert!(!policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {wildcard}"),
-                "valid"
+                "valid",
+                false,
             ));
         }
+        assert!(!policy_allows_trusted_type_policy_name(
+            "trusted-types valid \u{000b}'allow-duplicates'",
+            "valid",
+            true,
+        ));
     }
 
     #[test]
@@ -3502,8 +4159,18 @@ mod tests {
             "\0",
         ] {
             for policy in ["", "trusted-types *"] {
-                assert!(policy_allows_trusted_type_policy_name(policy, name));
+                assert!(policy_allows_trusted_type_policy_name(policy, name, false));
             }
+            assert!(!policy_allows_trusted_type_policy_name(
+                "trusted-types *",
+                name,
+                true,
+            ));
+            assert!(policy_allows_trusted_type_policy_name(
+                "trusted-types * 'allow-duplicates'",
+                name,
+                true,
+            ));
         }
     }
 

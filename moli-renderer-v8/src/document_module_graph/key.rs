@@ -92,15 +92,20 @@ impl ModuleMapKey {
             return Err(format!("Invalid attribute key \"{invalid_key}\"."));
         }
         let Some(module_type) = attributes.module_type() else {
-            if url.path().to_ascii_lowercase().ends_with(".wasm") {
-                return Ok(Self::webassembly(url.clone()));
-            }
-            return Ok(Self::java_script(url.clone()));
+            return Ok(Self::from_script_url(url.clone()));
         };
         match module_type {
             "json" => Ok(Self::json_with_attributes(url.clone(), attributes.clone())),
             "css" => Ok(Self::css_with_attributes(url.clone(), attributes.clone())),
             other => Err(format!("module type `{other}` is not a valid module type")),
+        }
+    }
+
+    pub(crate) fn from_script_url(url: Url) -> Self {
+        if url.path().to_ascii_lowercase().ends_with(".wasm") {
+            Self::webassembly(url)
+        } else {
+            Self::java_script(url)
         }
     }
 

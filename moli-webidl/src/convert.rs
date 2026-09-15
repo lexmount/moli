@@ -352,35 +352,16 @@ where
         sequence_iterator_from_method(scope, value, iterator_method, context)?;
     let mut values = Vec::new();
     while let Some(item) = sequence_iterator_next(scope, iterator, next_method, context)? {
-        let (converted, caught_exception) = {
-            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-            let mut conversion_scope = try_catch.init();
-            let converted = T::convert(&mut conversion_scope, item, context, options);
-            let caught_exception = conversion_scope
-                .has_caught()
-                .then(|| conversion_scope.exception())
-                .flatten()
-                .map(|exception| v8::Global::new(&conversion_scope, exception));
-            (converted, caught_exception)
-        };
-        match converted {
-            Ok(value) => values.push(value),
-            Err(error) => {
-                sequence_iterator_close_ignoring_errors(scope, iterator);
-                if let Some(exception) = caught_exception {
-                    let exception = v8::Local::new(scope, &exception);
-                    scope.throw_exception(exception);
-                }
-                return Err(error);
-            }
-        }
+        // WebIDL sequence conversion propagates errors without IteratorClose.
+        values.push(T::convert(scope, item, context, options)?);
     }
     Ok(Some(Sequence(values)))
 }
 
-// Records are converted from own property names and then property values. If two
-// JavaScript keys become the same WebIDL key after key conversion, the later
-// property wins, matching the WebIDL record replacement behavior.
+// Record conversion collects own keys, then observes each descriptor immediately
+// before converting that entry. Getters and Proxy traps can affect later entries.
+// If two JavaScript keys become the same WebIDL key after key conversion, the
+// later property wins, matching the WebIDL record replacement behavior.
 impl<'s, K, V> WebIdlConverter<'s> for Record<K, V>
 where
     K: WebIdlConverter<'s> + PartialEq,
@@ -398,12 +379,17 @@ where
     ) -> Result<Self, WebIdlError> {
         let object = v8::Local::<v8::Object>::try_from(value)
             .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
-        let properties = own_property_names(scope, object, context)?;
+        let properties = own_property_keys(scope, object, context)?;
         let mut entries: Vec<(K, V)> = Vec::with_capacity(properties.length() as usize);
         for index in 0..properties.length() {
             let key_value = properties.get_index(scope, index).ok_or_else(|| {
                 WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record"))
             })?;
+            let property = v8::Local::<v8::Name>::try_from(key_value)
+                .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
+            if !record_property_is_enumerable(scope, object, property, context)? {
+                continue;
+            }
             let key = K::convert(scope, key_value, context, &K::Options::default())?;
             let value = record_property_value(scope, object, key_value, context)?;
             let value = V::convert(scope, value, context, &V::Options::default())?;
@@ -1157,27 +1143,6 @@ fn sequence_iterator_next<'s>(
     Ok(Some(value))
 }
 
-fn sequence_iterator_close_ignoring_errors<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    iterator: v8::Local<'s, v8::Object>,
-) {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
-    let Some(return_key) = v8::String::new(&scope, "return") else {
-        return;
-    };
-    let Some(return_method) = iterator.get(&scope, return_key.into()) else {
-        return;
-    };
-    if return_method.is_null_or_undefined() {
-        return;
-    }
-    let Ok(return_method) = v8::Local::<v8::Function>::try_from(return_method) else {
-        return;
-    };
-    let _ = return_method.call(&scope, iterator.into(), &[]);
-}
-
 fn call_sequence_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     function: v8::Local<'s, v8::Function>,
@@ -1200,14 +1165,19 @@ fn call_sequence_function<'s>(
     }
 }
 
-fn own_property_names<'s>(
+fn own_property_keys<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     context: Context,
 ) -> Result<v8::Local<'s, v8::Array>, WebIdlError> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    match object.get_own_property_names(&scope, v8::GetPropertyNamesArgs::default()) {
+    let args = v8::GetPropertyNamesArgs {
+        property_filter: v8::PropertyFilter::ALL_PROPERTIES,
+        key_conversion: v8::KeyConversionMode::ConvertToString,
+        ..Default::default()
+    };
+    match object.get_own_property_names(&scope, args) {
         Some(properties) => Ok(properties),
         None if scope.has_caught() => {
             let _ = scope.rethrow();
@@ -1218,6 +1188,38 @@ fn own_property_names<'s>(
             WebIdlErrorKind::CannotConvert("record"),
         )),
     }
+}
+
+fn record_property_is_enumerable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    key: v8::Local<'s, v8::Name>,
+    context: Context,
+) -> Result<bool, WebIdlError> {
+    let descriptor = {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        match object.get_own_property_descriptor(&scope, key) {
+            Some(descriptor) => descriptor,
+            None if scope.has_caught() => {
+                let _ = scope.rethrow();
+                return Err(WebIdlError::pending_exception(context));
+            }
+            None => {
+                return Err(WebIdlError::new(
+                    context,
+                    WebIdlErrorKind::CannotConvert("record"),
+                ));
+            }
+        }
+    };
+    if descriptor.is_undefined() {
+        return Ok(false);
+    }
+    let descriptor = v8::Local::<v8::Object>::try_from(descriptor)
+        .map_err(|_| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("record")))?;
+    property_result(scope, descriptor, "enumerable", context)
+        .map(|value| value.is_some_and(|value| value.is_true()))
 }
 
 fn record_property_value<'s>(

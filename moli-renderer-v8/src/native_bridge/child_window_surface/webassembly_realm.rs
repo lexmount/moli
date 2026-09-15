@@ -11,13 +11,6 @@ struct ChildWindowWebAssemblyConstructorDataDeclaration<'scope> {
     native_constructor: v8::Local<'scope, v8::Function>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct ChildWindowInstancePrototypeDeclaration<'scope> {
-    #[webapi(data_property)]
-    constructor: v8::Local<'scope, v8::Function>,
-}
-
 const CHILD_WEBASSEMBLY_CONSTRUCTOR_NAMES: &[(&str, i32)] = &[
     ("Module", 1),
     ("Instance", 1),
@@ -29,12 +22,11 @@ const CHILD_WEBASSEMBLY_CONSTRUCTOR_NAMES: &[(&str, i32)] = &[
     ("RuntimeError", 1),
 ];
 
-/// Adapts V8's isolate-owned WebAssembly constructors to observable
-/// per-realm constructor and NewTarget prototype semantics.
+/// Adapts WebAssembly constructors to the observable Function and NewTarget
+/// realm semantics while retaining V8's intrinsic instance prototypes.
 ///
 /// This is not a child-only Web API declaration. It is an embedder workaround
-/// kept at the realm-state boundary until V8 supplies the same identities for
-/// these contexts directly.
+/// kept at the realm-state boundary.
 pub(super) fn install_child_webassembly_realm_adapter(
     scope: &mut v8::PinScope<'_, '_>,
     window: v8::Local<'_, v8::Object>,
@@ -109,23 +101,27 @@ fn install_child_webassembly_constructor(
         set_object_slot(scope, child_webassembly, name, constructor.into());
         return;
     };
-    let Some(child_instance_prototype) = ChildWindowInstancePrototypeDeclaration::new(constructor)
-        .bind(scope)
-        .ok()
-    else {
-        set_object_slot(scope, child_webassembly, name, constructor.into());
-        return;
-    };
-    let _ = child_instance_prototype.set_prototype(scope, native_instance_prototype.into());
-    let _ = constructor.set(
+    // V8-created exceptions, compiled modules and instances use this intrinsic
+    // prototype directly. An extra prototype layer would exclude those values
+    // from the public constructor's instanceof and constructor identity checks.
+    let _ = constructor.define_own_property(
         scope,
         v8str(scope, "prototype").into(),
-        child_instance_prototype.into(),
+        native_instance_prototype.into(),
+        v8::PropertyAttribute::READ_ONLY
+            | v8::PropertyAttribute::DONT_ENUM
+            | v8::PropertyAttribute::DONT_DELETE,
+    );
+    let _ = native_instance_prototype.define_own_property(
+        scope,
+        v8str(scope, "constructor").into(),
+        constructor.into(),
+        v8::PropertyAttribute::DONT_ENUM,
     );
     crate::context_bootstrap::set_current_context_webassembly_default_prototype(
         scope,
         name,
-        child_instance_prototype,
+        native_instance_prototype,
     );
     set_object_slot(scope, child_webassembly, name, constructor.into());
 }

@@ -2603,19 +2603,23 @@ async fn worker_filelist_interface_object_is_available() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const file = new File(["hello"], "note.txt", { type: "text/plain" });
-        const list = new FileList([file]);
+        let constructError = null;
+        try {
+            new FileList();
+        } catch (error) {
+            constructError = error && error.name;
+        }
         postMessage({
             ctorOwn: Object.prototype.hasOwnProperty.call(self, "FileList"),
             ctorType: typeof FileList,
-            ctorName: list.constructor && list.constructor.name,
-            tag: Object.prototype.toString.call(list),
-            instanceofFileList: list instanceof FileList,
-            length: list.length,
-            firstName: list.item(0) && list.item(0).name,
-            indexName: list[0] && list[0].name,
-            iterType: typeof list[Symbol.iterator],
-            iterName: Array.from(list).map(file => file.name).join(","),
+            ctorName: FileList.name,
+            constructError,
+            itemType: typeof FileList.prototype.item,
+            lengthGetterType: typeof Object.getOwnPropertyDescriptor(
+                FileList.prototype,
+                "length",
+            ).get,
+            iterType: typeof FileList.prototype[Symbol.iterator],
         });
         close();
         "#
@@ -2629,7 +2633,7 @@ async fn worker_filelist_interface_object_is_available() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","tag":"[object FileList]","instanceofFileList":true,"length":1,"firstName":"note.txt","indexName":"note.txt","iterType":"function","iterName":"note.txt"}"#
+        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","constructError":"TypeError","itemType":"function","lengthGetterType":"function","iterType":"function"}"#
     );
 }
 
@@ -2876,8 +2880,14 @@ async fn worker_xmlhttprequest_uses_worker_script_base_url_and_event_target_list
 #[tokio::test]
 async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() {
     ensure_v8();
-    let mut handle = spawn_worker_with_request_client_and_network_policy(
-        r#"
+    for (status, expected_text) in [
+        (200, "fulfilled-worker-xhr"),
+        (204, ""),
+        (205, ""),
+        (304, ""),
+    ] {
+        let mut handle = spawn_worker_with_request_client_and_network_policy(
+            r#"
         onmessage = () => {
             const xhr = new XMLHttpRequest();
             xhr.onloadend = () => {
@@ -2893,54 +2903,55 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
             xhr.send("payload");
         };
         "#
-        .into(),
-        "http://example.test/worker/main.js".into(),
-        ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader"),
-        WorkerNetworkPolicy {
-            network_partition_key: Some("credentialless-worker-xhr".to_owned()),
-            ..WorkerNetworkPolicy::default()
-        },
-    );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
-    handle.post_message(serialize_test_string("go"));
+            .into(),
+            "http://example.test/worker/main.js".into(),
+            ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader"),
+            WorkerNetworkPolicy {
+                network_partition_key: Some("credentialless-worker-xhr".to_owned()),
+                ..WorkerNetworkPolicy::default()
+            },
+        );
+        handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        handle.post_message(serialize_test_string("go"));
 
-    let pending = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for worker xhr pause")
-        .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
-        panic!("expected worker xhr pause, got {pending:?}");
-    };
-    assert!(pending.info.network_request_handle.is_none());
-    assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
-    assert_eq!(
-        pending.info.url.as_str(),
-        "http://example.test/intercepted-worker-xhr"
-    );
-    assert_eq!(pending.info.request_body.as_deref(), Some("payload"));
-    assert_eq!(
-        pending.network_partition_key.as_deref(),
-        Some("credentialless-worker-xhr")
-    );
+        let pending = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for worker xhr pause")
+            .expect("worker channel closed");
+        let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+            panic!("expected worker xhr pause, got {pending:?}");
+        };
+        assert!(pending.info.network_request_handle.is_none());
+        assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
+        assert_eq!(
+            pending.info.url.as_str(),
+            "http://example.test/intercepted-worker-xhr"
+        );
+        assert_eq!(pending.info.request_body.as_deref(), Some("payload"));
+        assert_eq!(
+            pending.network_partition_key.as_deref(),
+            Some("credentialless-worker-xhr")
+        );
 
-    let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
-    handle.fulfill_pending_xhr(
-        request,
-        204,
-        vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
-            (
-                "x-worker-xhr-intercept".to_owned(),
-                "request-stage".to_owned(),
-            ),
-        ],
-        RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
-    );
+        let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
+        handle.fulfill_pending_xhr(
+            request,
+            status,
+            vec![
+                ("content-type".to_owned(), "text/plain".to_owned()),
+                (
+                    "x-worker-xhr-intercept".to_owned(),
+                    "request-stage".to_owned(),
+                ),
+            ],
+            RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
+        );
 
-    assert_eq!(
-        recv_post_json(&mut handle).await,
-        r#"{"readyState":4,"status":204,"header":"request-stage","text":"fulfilled-worker-xhr"}"#
-    );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recv_post_json(&mut handle).await).unwrap(),
+            serde_json::json!({"readyState":4,"status":status,"header":"request-stage","text":expected_text})
+        );
+    }
 }
 
 #[tokio::test]
@@ -3607,6 +3618,7 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
             const payload = "upload=alpha&count=2";
             const uploadEvents = [];
             const uploadOrder = [];
+            xhr.onloadstart = () => uploadOrder.push("xhr:loadstart");
             ["loadstart", "progress", "load", "loadend"].forEach((type) => {
                 xhr.upload.addEventListener(type, (event) => {
                     uploadOrder.push(`listener-before:${event.type}`);
@@ -3651,11 +3663,187 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:20:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
+        r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:0:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["xhr:loadstart","listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
     );
     server
         .await
         .expect("worker xhr upload server should finish");
+}
+
+#[tokio::test]
+async fn worker_xhr_upload_listener_preflight_survives_sync_and_interception() {
+    ensure_v8();
+    for mode in ["async", "sync", "intercept", "none", "late", "clear"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let requires_preflight = !matches!(mode, "none" | "late");
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let methods: &[&str] = if requires_preflight {
+                &["OPTIONS", "POST"]
+            } else {
+                &["POST"]
+            };
+            for method in methods {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8(head).unwrap();
+                assert!(
+                    head.starts_with(&format!("{method} /upload HTTP/1.1\r\n")),
+                    "{mode}: {head}"
+                );
+                if *method == "OPTIONS" {
+                    let lower = head.to_ascii_lowercase();
+                    assert!(lower.contains("access-control-request-method: post\r\n"));
+                    assert!(!lower.contains("access-control-request-headers:"));
+                } else {
+                    let mut body = [0; 7];
+                    socket.read_exact(&mut body).await.unwrap();
+                    assert_eq!(&body, b"payload");
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+            }
+        });
+        let mut config = FetchConfig::default();
+        config.set_http_no_proxy(Some("*".to_owned()));
+        let loader = ResourceRequestClient::new(&config).unwrap();
+        let mut handle = spawn_worker_with_request_client(
+            format!(
+                r#"
+            onmessage = () => {{
+                const xhr = new XMLHttpRequest();
+                const mode = {mode:?};
+                const listener = () => {{}};
+                if (mode !== "none" && mode !== "late") xhr.upload.addEventListener("custom", listener);
+                xhr.onloadstart = () => {{
+                    if (mode === "late") xhr.upload.addEventListener("custom", listener);
+                    if (mode === "clear") xhr.upload.removeEventListener("custom", listener);
+                }};
+                const finish = () => {{ postMessage([xhr.status, xhr.responseText]); close(); }};
+                xhr.open("POST", {url:?}, mode !== "sync");
+                if (mode !== "sync") xhr.onloadend = finish;
+                xhr.send("payload");
+                if (mode === "sync") finish();
+            }};
+        "#
+            ),
+            "http://origin.test/worker.js".to_owned(),
+            loader,
+        );
+        if mode == "intercept" {
+            handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        }
+        handle.post_message(serialize_test_string("go"));
+        if mode == "intercept" {
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let WorkerToParentMessage::PendingSubresourceFetch(pending) = message else {
+                panic!("expected intercepted XHR, got {message:?}");
+            };
+            handle.continue_pending_xhr(pending_worker_xhr_continue(
+                pending.fetch_id,
+                47,
+                &pending.info,
+                false,
+            ));
+        }
+        assert_eq!(recv_post_json(&mut handle).await, "[200,\"ok\"]", "{mode}");
+        timeout(TIMEOUT, server).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn worker_xhr_partial_upload_can_abort_or_reopen_without_stale_completion() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    ensure_v8();
+    for reopen in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let total = 16 * 1024 * 1024;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let head = read_http_request_head(&mut socket).await.unwrap();
+            assert!(head.starts_with("POST /upload HTTP/1.1"));
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut bytes = 0;
+            let mut chunk = [0; 65536];
+            while let Ok(count) = socket.read(&mut chunk).await {
+                if count == 0 {
+                    break;
+                }
+                bytes += count;
+            }
+            if reopen {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let head = read_http_request_head(&mut socket).await.unwrap();
+                assert!(head.starts_with("GET /replacement HTTP/1.1"));
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+            }
+            bytes
+        });
+        let mut config = FetchConfig::default();
+        config.set_http_no_proxy(Some("*".to_owned()));
+        let loader = ResourceRequestClient::new(&config).unwrap();
+        let mut handle = spawn_worker_with_request_client(
+            format!(
+                r#"
+            const xhr = new XMLHttpRequest();
+            const events = [];
+            let partial = null;
+            for (const type of ["loadstart", "progress", "load", "loadend", "abort", "error"]) {{
+                xhr.upload.addEventListener(type, e => events.push([type, e.loaded, e.total, e.lengthComputable]));
+            }}
+            xhr.upload.onprogress = e => {{
+                if (!partial && e.loaded > 0 && e.loaded < e.total) {{
+                    partial = [e.loaded, e.total];
+                    if ({reopen}) {{ xhr.open("GET", "/replacement"); xhr.send(); }}
+                    else xhr.abort();
+                }}
+            }};
+            xhr.onloadend = () => {{ postMessage({{status: xhr.status, partial, events}}); close(); }};
+            xhr.open("POST", "/upload");
+            xhr.send("x".repeat({total}));
+            postMessage(events.map(e => e[0]));
+        "#
+            ),
+            format!("{origin}/worker.js"),
+            loader,
+        );
+        assert_eq!(recv_post_json(&mut handle).await, "[\"loadstart\"]");
+        let result: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(result["status"], if reopen { 200 } else { 0 });
+        assert_eq!(result["partial"][1], total);
+        let loaded = result["partial"][0].as_u64().unwrap();
+        assert!(loaded > 0 && loaded < total as u64);
+        let events = result["events"].as_array().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|event| event[0] == "load" || event[0] == "error")
+        );
+        let aborts: Vec<_> = events.iter().filter(|event| event[0] == "abort").collect();
+        let ends: Vec<_> = events
+            .iter()
+            .filter(|event| event[0] == "loadend")
+            .collect();
+        assert_eq!(aborts.len(), usize::from(!reopen));
+        assert_eq!(ends.len(), usize::from(!reopen));
+        if !reopen {
+            assert_eq!(*aborts[0], serde_json::json!(["abort", 0, 0, false]));
+            assert_eq!(*ends[0], serde_json::json!(["loadend", 0, 0, false]));
+        }
+        assert!(timeout(TIMEOUT, server).await.unwrap().unwrap() < total as usize);
+    }
 }
 
 #[tokio::test]
@@ -5078,7 +5266,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
                 ok: response.ok,
                 statusText: response.statusText,
                 redirected: response.redirected,
-                urlIsEmpty: response.url === "",
+                urlMatchesRequest: response.url === {url_literal},
                 bodyIsNull: response.body === null,
                 headers: Array.from(response.headers),
                 bodyUsedBefore,
@@ -5086,6 +5274,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
                 text,
                 cloneType: clone.type,
                 cloneStatus: clone.status,
+                cloneUrlMatchesRequest: clone.url === {url_literal},
                 cloneBodyIsNull: clone.body === null,
                 cloneText,
             }});
@@ -5106,7 +5295,7 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
         .expect("worker fetch manual-redirect server should finish");
     assert_eq!(
         post,
-        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlMatchesRequest":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneUrlMatchesRequest":true,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
@@ -5186,7 +5375,7 @@ async fn worker_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
     assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
     assert_eq!(
         post,
-        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+        r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
     );
 }
 
@@ -5240,7 +5429,6 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                     hasOrbMessage: String(error && error.message).includes("OpaqueResponseBlocking"),
                 }});
             }}
-            close();
         }})();
         "#
         ),
@@ -5284,6 +5472,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
         SubresourceNetworkOutcome::Failure { error_text }
             if error_text == crate::network_host::ABORTED_ERROR_TEXT
     ));
+    handle.terminate_and_join();
 }
 
 #[tokio::test]
@@ -5928,6 +6117,8 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition
                 });
+                postMessage({ outcome, events });
+                close();
             });
             let outcome;
             try {
@@ -5936,8 +6127,7 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
             } catch (error) {
                 outcome = `throw:${error.name}`;
             }
-            postMessage({ outcome, events });
-            close();
+            postMessage({ outcome, events: events.length });
             "#
             .to_owned(),
             "http://localhost:8000/worker/main.js".to_owned(),
@@ -5945,6 +6135,10 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
         .with_content_security_policies(vec!["connect-src 'none'".to_owned()]),
     );
 
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"outcome":"socket:0:ws://common/blank.html","events":0}"#
+    );
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"outcome":"socket:0:ws://common/blank.html","events":[{"blockedURI":"ws://common/blank.html","effectiveDirective":"connect-src","disposition":"enforce"}]}"#
@@ -6172,7 +6366,7 @@ async fn worker_classic_websocket_offline_reports_network_failure() {
 }
 
 #[tokio::test]
-async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
+async fn worker_importscripts_websocket_resolves_against_worker_settings_url() {
     ensure_v8();
     let imported_script = r#"
         const events = [];
@@ -6195,7 +6389,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
     )])
     .await;
     let websocket_base_url = base_url.replacen("http://", "ws://", 1);
-    let expected_url = format!("{websocket_base_url}/worker/imported/blocked/imported-ws");
+    let expected_url = format!("{websocket_base_url}/worker/blocked/imported-ws");
     let loader =
         ResourceRequestClient::new(&FetchConfig::default()).expect("worker importScripts loader");
     let mut handle = spawn_worker_with_request_client_and_blocked_url_patterns(
@@ -6205,7 +6399,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
         .into(),
         format!("{base_url}/worker/main.js"),
         loader,
-        vec![format!("{websocket_base_url}/worker/imported/blocked/*")],
+        vec![format!("{websocket_base_url}/worker/blocked/*")],
     );
 
     let network = timeout(TIMEOUT, handle.recv())

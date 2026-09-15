@@ -5602,7 +5602,7 @@ fn custom_element_inner_and_outer_text_replacements_enqueue_disconnected_callbac
 
     assert_eq!(
         result,
-        "0||0||inner:connected|inner:disconnected|outer:connected|outer:disconnected"
+        "0||1||inner:connected|inner:disconnected|outer:connected|outer:disconnected"
     );
 }
 
@@ -5645,32 +5645,102 @@ fn custom_element_popover_reflection_is_visible_on_html_element_prototype() {
 }
 
 #[test]
-fn element_aria_element_reference_reflection_preserves_assigned_value() {
+fn element_aria_element_reference_reflection_tracks_dom_owned_associations() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
     let result = vm
         .eval(
-            r#"
+            r##"
             (() => {
-              const target = document.createElement("div");
-              const element = document.createElement("div");
-              const defaultReferences = element.ariaDescribedByElements;
-              element.ariaControlsElements = [target];
-              element.ariaActiveDescendantElement = target;
+              const probe = callback => {
+                try {
+                  callback();
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const html = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body ||
+                html.appendChild(document.createElement("body"));
+              const container = document.createElement("div");
+              container.innerHTML = `
+                <input aria-activedescendant="first" aria-describedby="first second">
+                <p id="first"></p><p id="second"></p>`;
+              body.appendChild(container);
+              const element = container.querySelector("input");
+              const first = container.querySelector("#first");
+              const second = container.querySelector("#second");
+              const initialDescriptions = element.ariaDescribedByElements;
+              const initialActive = element.ariaActiveDescendantElement;
+
+              container.remove();
+              const disconnectedDescriptions = element.ariaDescribedByElements;
+              const disconnectedActive = element.ariaActiveDescendantElement;
+              body.appendChild(container);
+
+              const assigned = [first, second];
+              element.ariaControlsElements = assigned;
+              assigned.pop();
+              const explicitControlsAttributeBlank =
+                element.getAttribute("aria-controls") === "";
+              const controls = element.ariaControlsElements;
+              const cachedControls = element.ariaControlsElements;
+              container.remove();
+              const disconnectedControls = element.ariaControlsElements;
+              body.appendChild(container);
+
+              element.setAttribute("aria-controls", "second");
+              const contentAttributeControls = element.ariaControlsElements;
+              element.removeAttribute("aria-controls");
+
+              element.ariaActiveDescendantElement = first;
+              const explicitActive = element.ariaActiveDescendantElement;
+              element.ariaActiveDescendantElement = null;
+
+              const missing = document.createElement("div");
+              const reactions = [];
+              class AriaReferenceElement extends HTMLElement {
+                static observedAttributes = ["aria-controls"];
+                attributeChangedCallback() {
+                  reactions.push(this.ariaControlsElements?.[0] === first);
+                }
+              }
+              customElements.define("aria-reference-element", AriaReferenceElement);
+              const custom = document.createElement("aria-reference-element");
+              body.appendChild(custom);
+              custom.ariaControlsElements = [first];
               return [
-                Array.isArray(defaultReferences),
-                defaultReferences.length,
-                element.getAttribute("aria-controls") === "",
-                element.ariaControlsElements[0] === target,
-                element.getAttribute("aria-activedescendant") === "",
-                element.ariaActiveDescendantElement === target
+                missing.ariaDescribedByElements === null,
+                initialDescriptions.length === 2 && initialDescriptions[0] === first && initialDescriptions[1] === second,
+                initialActive === first,
+                disconnectedDescriptions.length === 2 && disconnectedDescriptions[0] === first && disconnectedDescriptions[1] === second,
+                disconnectedActive === first,
+                explicitControlsAttributeBlank,
+                controls.length === 2 && controls[0] === first && controls[1] === second,
+                Object.isFrozen(controls),
+                controls === cachedControls,
+                disconnectedControls === controls,
+                contentAttributeControls.length === 1 && contentAttributeControls[0] === second,
+                element.ariaControlsElements === null,
+                explicitActive === first,
+                element.ariaActiveDescendantElement === null,
+                !element.hasAttribute("aria-activedescendant"),
+                probe(() => { element.ariaActiveDescendantElement = "not an element"; }),
+                probe(() => { element.ariaControlsElements = [first, 1]; }),
+                probe(() => { element.ariaControlsElements = first; }),
+                reactions.length === 1 && reactions[0]
               ].join("|");
             })()
-            "#,
+            "##,
         )
         .expect("ARIA element reference reflection probe should evaluate");
 
-    assert_eq!(result, "true|0|true|true|true|true");
+    assert_eq!(
+        result,
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|TypeError|TypeError|TypeError|true"
+    );
 }
 
 #[test]
@@ -8057,6 +8127,58 @@ fn custom_elements_when_defined_rejects_invalid_name() {
     assert_eq!(result, "SyntaxError|true");
 }
 
+#[test]
+fn child_parser_checkpoints_once_before_adoption_agency_custom_element_construction() {
+    let mut vm = new_storage_test_vm("https://parser-checkpoint.test/");
+
+    vm.eval(
+        r##"
+            (() => {
+              globalThis.__childParserCheckpoint = "pending";
+              const frame = document.createElement("iframe");
+              frame.srcdoc = `<!doctype html><body><script>
+                class ParserCheckpointElement extends HTMLElement {
+                  constructor() {
+                    super();
+                    const nodeLabel = node => node.nodeType === Node.TEXT_NODE
+                      ? "#text:" + node.data
+                      : node.localName;
+                    top.__childParserCheckpoint = JSON.stringify(
+                      recordsList.map(records => records.map(record => [
+                        nodeLabel(record.target),
+                        Array.prototype.map.call(record.addedNodes, nodeLabel).join(",")
+                      ]))
+                    );
+                  }
+                }
+                customElements.define(
+                  "parser-checkpoint-element",
+                  ParserCheckpointElement
+                );
+                const recordsList = [];
+                new MutationObserver(records => recordsList.push(records)).observe(
+                  document.body,
+                  { childList: true, subtree: true }
+                );
+              </script><b><i>hello</b><parser-checkpoint-element>`;
+              (document.body || document.documentElement || document).appendChild(frame);
+              return "scheduled";
+            })()
+            "##,
+    )
+    .expect("child parser checkpoint setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval("globalThis.__childParserCheckpoint")
+        .expect("child parser checkpoint result should evaluate");
+
+    assert_eq!(
+        result,
+        r##"[[["body","b"],["b","i"],["i","#text:hello"],["body","i"]]]"##
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -8144,4 +8266,167 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
         .expect("child document.write custom element WPT shape result should evaluate");
 
     assert_eq!(result, expected);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_dynamic_markup_counter_exceptions_use_document_realm() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://dynamic-markup-exception-realm.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__dynamicMarkupExceptionRealm = "pending";
+              new Promise((resolve) => {
+                const frame = document.createElement("iframe");
+                frame.srcdoc = "";
+                frame.onload = () => resolve(frame.contentWindow);
+                (document.body || document.documentElement || document).appendChild(frame);
+              }).then((childWindow) => {
+                const childDocument = childWindow.document;
+                childDocument.open();
+                const results = [];
+                class DynamicMarkupProbe extends childWindow.HTMLElement {
+                  constructor() {
+                    super();
+                    const probe = (label, callback) => {
+                      try {
+                        callback();
+                        results.push([label, "no throw"]);
+                      } catch (error) {
+                        results.push([
+                          label,
+                          error.name,
+                          error.code,
+                          error instanceof childWindow.DOMException,
+                          error instanceof DOMException
+                        ]);
+                      }
+                    };
+                    probe("open", () => childDocument.open());
+                    probe("open-type", () => childDocument.open("text/html"));
+                    probe("close", () => childDocument.close());
+                    probe("write", () => childDocument.write("<b>write</b>"));
+                    probe("writeln", () => childDocument.writeln("<b>writeln</b>"));
+                    globalThis.__dynamicMarkupExceptionRealm = JSON.stringify({
+                      distinctConstructors: childWindow.DOMException !== DOMException,
+                      results
+                    });
+                  }
+                }
+                childWindow.customElements.define(
+                  "dynamic-markup-probe",
+                  DynamicMarkupProbe
+                );
+                childDocument.write(
+                  "<!doctype html><body><dynamic-markup-probe></dynamic-markup-probe>"
+                );
+                childDocument.close();
+              }, (error) => {
+                globalThis.__dynamicMarkupExceptionRealm =
+                  "reject:" + error.name + ":" + error.message;
+              });
+              return "scheduled";
+            })()
+            "#,
+    )
+    .expect("dynamic markup exception realm setup should evaluate");
+
+    let expected = r#"{"distinctConstructors":true,"results":[["open","InvalidStateError",11,true,false],["open-type","InvalidStateError",11,true,false],["close","InvalidStateError",11,true,false],["write","InvalidStateError",11,true,false],["writeln","InvalidStateError",11,true,false]]}"#;
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "globalThis.__dynamicMarkupExceptionRealm",
+        expected,
+        "child dynamic-markup exception realm",
+    )
+    .await;
+
+    let result = vm
+        .eval("globalThis.__dynamicMarkupExceptionRealm")
+        .expect("dynamic markup exception realm result should evaluate");
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn child_document_write_constructs_and_connects_predefined_custom_elements_without_a_body() {
+    let mut vm = new_storage_test_vm("https://document-write-custom-elements.test/");
+
+    vm.eval(
+        r#"
+            (() => {
+              const target = document.body || document.documentElement || document;
+              window.__writeCustomElementFrames = ["write", "writeln"].map(() => {
+                const frame = document.createElement("iframe");
+                target.appendChild(frame);
+                frame.srcdoc = "";
+                return frame;
+              });
+              return "scheduled";
+            })()
+            "#,
+    )
+    .expect("child document.write predefined custom element setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const exercise = (frame, method, name) => {
+                const childWindow = frame.contentWindow;
+                const childDocument = frame.contentDocument;
+                const registry = childWindow.customElements;
+                let constructorCount = 0;
+                let connectedCount = 0;
+                let errorName = null;
+                childWindow.addEventListener("error", event => {
+                  errorName = event.error && event.error.name;
+                  event.preventDefault();
+                }, { once: true });
+                class DefinedElement extends childWindow.HTMLElement {
+                  constructor() {
+                    super();
+                    constructorCount++;
+                  }
+                  connectedCallback() {
+                    connectedCount++;
+                  }
+                }
+                registry.define(name, DefinedElement);
+                const definitionBeforeWrite = registry.get(name) === DefinedElement;
+
+                childDocument[method](`<${name}></${name}>`);
+                const element = childDocument.querySelector(name);
+                return {
+                  registryPreserved: childWindow.customElements === registry,
+                  definitionBeforeWrite,
+                  definitionAfterWrite: registry.get(name) === DefinedElement,
+                  constructorCount,
+                  connectedCount,
+                  errorName,
+                  htmlElement: element instanceof childWindow.HTMLElement,
+                  customElement: element instanceof DefinedElement,
+                  ownerDocument: element.ownerDocument === childDocument
+                };
+              };
+
+              const [writeFrame, writelnFrame] = window.__writeCustomElementFrames;
+              return JSON.stringify({
+                write: exercise(writeFrame, "write", "write-defined-element"),
+                writeln: exercise(writelnFrame, "writeln", "writeln-defined-element")
+              });
+            })()
+            "#,
+        )
+        .expect("child document.write predefined custom element result should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"write":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"connectedCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true},"writeln":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"connectedCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true}}"#
+    );
 }

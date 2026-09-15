@@ -110,8 +110,8 @@ impl ScriptVm {
     /// The main-document lifecycle coordinator owns the ordinary task-end
     /// checkpoint. Keeping this primitive body-only prevents DCL and
     /// `readystatechange` helpers from silently becoming a second completion
-    /// authority. Parser-finish DCL temporarily uses the explicit compatibility
-    /// wrapper below until P5-A3 moves that direct successor as one unit.
+    /// authority. Parser completion admits DCL to the DOM task source after
+    /// finishing its own task-end checkpoint.
     pub(super) fn dispatch_document_lifecycle_event_body(
         &mut self,
         event_type: &str,
@@ -640,13 +640,13 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) -> Result<FollowupPageTaskDisposition> {
         self.enqueue_script_failure_lifecycle_work_with_load_delay_binding(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
             None,
         )
     }
@@ -656,14 +656,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Result<FollowupPageTaskDisposition> {
         let mut planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         if let Some(binding) = load_delay_binding {
             planned_failure_work.push(PostParseLifecycleWork::SettleMainDocumentScriptLoadDelay(
@@ -681,13 +681,13 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         match self.enqueue_script_failure_lifecycle_work_for_prepared_script(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         ) {
             Ok(FollowupPageTaskDisposition::Skipped) => {}
             Ok(FollowupPageTaskDisposition::Deferred | FollowupPageTaskDisposition::Enqueued) => {}
@@ -817,6 +817,30 @@ impl ScriptVm {
             self.sync_child_browsing_context_records();
         }
         Ok(result)
+    }
+
+    /// Execute one ready timer selected from the closed schedule ranges
+    /// recorded around classic defer script execution.
+    ///
+    /// Like the ordinary timer body, this does not checkpoint or reconcile
+    /// callback effects. The PageVm lifecycle owner commits the exact selected
+    /// callback completion after this method returns.
+    pub(super) fn run_next_timeout_queued_by_classic_defer_script_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        #[cfg(test)]
+        if let Some(message) = self.test_next_timeout_failure.take() {
+            return Err(anyhow!("{message}"));
+        }
+
+        let document_runtime: *mut DocumentRuntime = &mut *self.document_runtime;
+        self.with_default_context_scope(|scope, _host_ptr| {
+            // SAFETY: this is the same synchronous, non-escaping
+            // document-runtime borrow used by `run_next_timeout_body`; the
+            // schedule ranges only narrow which timer may be selected.
+            Ok(unsafe { &mut *document_runtime }
+                .run_next_timeout_queued_by_classic_defer_script(scope))
+        })
     }
 
     #[cfg(test)]

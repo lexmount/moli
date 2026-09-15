@@ -101,6 +101,7 @@ pub struct StylesheetElementRead {
     is_html_element: bool,
     local_name: String,
     parser_blocking_eligible: bool,
+    style_parser_children_pending: bool,
     rel: Option<String>,
     href: Option<String>,
     as_attr: Option<String>,
@@ -121,6 +122,7 @@ impl StylesheetElementRead {
         Some(Self {
             is_html_element: element.namespace() == "http://www.w3.org/1999/xhtml",
             local_name: element.local_name().to_owned(),
+            style_parser_children_pending: element.style_parser_children_pending(),
             parser_blocking_eligible: if element.is_html_element("link") {
                 element.link_created_by_parser()
             } else {
@@ -154,6 +156,7 @@ impl StylesheetElementRead {
             is_html_element: true,
             local_name: "link".to_owned(),
             parser_blocking_eligible: true,
+            style_parser_children_pending: false,
             rel: Some("stylesheet".to_owned()),
             href: Some(href.to_owned()),
             as_attr: None,
@@ -254,6 +257,7 @@ pub trait StylesheetBlockingReadView {
         self.document_base_url_clone()
     }
     fn document_node_id(&self) -> NativeNodeId;
+    fn document_is_quirks_mode(&self) -> bool;
 
     fn document_order_stylesheet_candidate_ids_before(
         &self,
@@ -285,6 +289,11 @@ impl StylesheetBlockingReadView for NativeDom {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.document_node_id()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        self.document()
+            .is_some_and(|document| document.is_quirks_mode())
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -331,6 +340,12 @@ impl StylesheetBlockingReadView for DomHost {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.document_handle()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        self.node(self.document_handle())
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -423,7 +438,8 @@ fn stylesheet_link_disposition_in_view(
         element.nonce.as_deref(),
         element.charset.as_deref(),
         element.fetch_priority.as_deref(),
-    );
+    )
+    .with_quirks_mode_mime_compatibility(document.document_is_quirks_mode());
     let is_alternate = link_rel_includes_token(rel, "alternate");
     let blocking = !is_alternate && media_blocks_scripts(element.media.as_deref());
     Some(if blocking {
@@ -677,10 +693,13 @@ fn parser_created_style_import_urls(
 ) -> Option<Vec<Url>> {
     let native_node_id = NativeNodeId::new(node_id.index());
     let element = document.stylesheet_element(native_node_id)?;
-    if !element.is_html_element("style") || !element.parser_blocking_eligible {
+    if !element.is_html_element("style")
+        || !element.parser_blocking_eligible
+        || element.style_parser_children_pending
+    {
         return None;
     }
-    if element.disabled || !media_blocks_scripts(element.media.as_deref()) {
+    if !media_blocks_scripts(element.media.as_deref()) {
         return None;
     }
     let css_text = document.text_content(native_node_id)?;
@@ -763,6 +782,47 @@ mod tests {
                 url::Url::parse("https://example.com/a.css").unwrap(),
                 url::Url::parse("https://example.com/path/b.css").unwrap(),
             ]
+        );
+    }
+
+    #[test]
+    fn style_disabled_content_attribute_does_not_suppress_parser_import_blocking() {
+        let document_url = url::Url::parse("https://example.com/path/page.html").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(document_url));
+        let style = host.create_parser_element_without_attributes(
+            "style".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+        let text = host.create_text_node("@import url('theme.css');");
+        assert!(host.set_attribute(style, "disabled", ""));
+        assert!(host.append_child(style, text));
+        assert!(host.append_child(host.document_handle(), style));
+
+        assert!(
+            document_owned_blocking_stylesheet_candidate_for_node(
+                &host,
+                moli_dom::NodeId::new(style.index()),
+            )
+            .is_none(),
+            "an open parser style must not start imports"
+        );
+        assert!(host.finish_parsing_style_children(style));
+
+        let candidate = document_owned_blocking_stylesheet_candidate_for_node(
+            &host,
+            moli_dom::NodeId::new(style.index()),
+        )
+        .expect("the unsupported style content attribute must not disable import blocking");
+        let super::DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport {
+            urls, ..
+        } = candidate
+        else {
+            panic!("expected a parser-created style import candidate");
+        };
+        assert_eq!(
+            urls,
+            [url::Url::parse("https://example.com/path/theme.css").unwrap()]
         );
     }
 

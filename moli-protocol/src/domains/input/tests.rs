@@ -1777,7 +1777,7 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
+async fn insert_text_enforces_maxlength_and_marks_short_values_user_edited() {
     let mut ctx = TestContext::new();
     with_loaded_document(
         &mut ctx,
@@ -1847,7 +1847,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: field.value, tooLong: field.validity.tooLong, valid: field.validity.valid})"
         )
         .await,
-        r#"{"value":"abcde","tooLong":true,"valid":false}"#
+        r#"{"value":"abcd","tooLong":false,"valid":true}"#
     );
 
     assert_eq!(
@@ -1877,7 +1877,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: bio.value, tooLong: bio.validity.tooLong, valid: bio.validity.valid})"
         )
         .await,
-        r#"{"value":"abcd","tooLong":true,"valid":false}"#
+        r#"{"value":"abc","tooLong":false,"valid":true}"#
     );
 
     evaluate_string(
@@ -1898,7 +1898,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: emoji.value, tooLong: emoji.validity.tooLong, valid: emoji.validity.valid})"
         )
         .await,
-        r#"{"value":"😀","tooLong":true,"valid":false}"#
+        r#"{"value":"","tooLong":false,"valid":true}"#
     );
 }
 
@@ -2414,6 +2414,122 @@ async fn dispatch_key_event_backspace_deletes_text_in_input() {
         evaluate_string(&mut ctx, "JSON.stringify(window.__editEvents)").await,
         r#"["ac"]"#
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dispatch_key_event_text_controls_preserve_surrogate_pairs() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(
+        &mut ctx,
+        "<html><body><input id='field'><textarea id='bio'></textarea></body></html>",
+    )
+    .await;
+
+    let mut command_id = 5000;
+    for control in ["field", "bio"] {
+        for (initial, key, start, end, modifiers, value, next_start, next_end) in [
+            ("A😀B", "Backspace", 3, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 1, 0, "AB", 1, 1),
+            ("A😀B", "ArrowLeft", 3, 3, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 1, 1, 0, "A😀B", 3, 3),
+            ("A😀B", "ArrowLeft", 3, 3, 8, "A😀B", 1, 3),
+            ("A😀B", "ArrowRight", 1, 1, 8, "A😀B", 1, 3),
+            ("A😀B", "Backspace", 2, 2, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 2, 2, 0, "A😀", 3, 3),
+            ("A😀B", "ArrowLeft", 2, 2, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 2, 2, 0, "A😀B", 4, 4),
+            ("A😀B", "Backspace", 0, 0, 0, "A😀B", 0, 0),
+            ("A😀B", "Delete", 4, 4, 0, "A😀B", 4, 4),
+            ("A😀B", "ArrowLeft", 2, 2, 8, "A😀B", 1, 3),
+            ("A😀B", "ArrowRight", 2, 2, 8, "A😀B", 3, 4),
+            ("A😀B", "Backspace", 1, 2, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 2, 0, "AB", 1, 1),
+            ("A😀B", "Backspace", 2, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 2, 3, 0, "A😀", 3, 3),
+            ("A😀B", "Backspace", 1, 3, 0, "AB", 1, 1),
+            ("A😀B", "Delete", 1, 3, 0, "AB", 1, 1),
+            ("A😀B", "Backspace", 0, 2, 0, "B", 0, 0),
+            ("A😀B", "Delete", 0, 2, 0, "B", 0, 0),
+            ("A😀B", "Backspace", 2, 4, 0, "A😀", 3, 3),
+            ("A😀B", "Delete", 2, 4, 0, "A😀", 3, 3),
+            ("A😀B", "ArrowLeft", 1, 2, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 1, 2, 0, "A😀B", 3, 3),
+            ("A😀B", "ArrowLeft", 2, 3, 0, "A😀B", 1, 1),
+            ("A😀B", "ArrowRight", 2, 3, 0, "A😀B", 4, 4),
+            ("", "Backspace", 0, 0, 0, "", 0, 0),
+            ("", "Delete", 0, 0, 0, "", 0, 0),
+            ("", "ArrowLeft", 0, 0, 0, "", 0, 0),
+            ("", "ArrowRight", 0, 0, 0, "", 0, 0),
+            ("", "ArrowLeft", 0, 0, 8, "", 0, 0),
+            ("", "ArrowRight", 0, 0, 8, "", 0, 0),
+            ("", "Home", 0, 0, 0, "", 0, 0),
+            ("", "End", 0, 0, 0, "", 0, 0),
+            ("", "Home", 0, 0, 8, "", 0, 0),
+            ("", "End", 0, 0, 8, "", 0, 0),
+            ("😀", "Backspace", 1, 1, 0, "", 0, 0),
+            ("😀", "Delete", 1, 1, 0, "😀", 1, 1),
+            ("😀", "ArrowLeft", 1, 1, 0, "😀", 0, 0),
+            ("😀", "ArrowRight", 1, 1, 0, "😀", 1, 1),
+            ("😀", "ArrowLeft", 1, 1, 8, "😀", 0, 2),
+            ("😀", "ArrowRight", 1, 1, 8, "😀", 1, 1),
+            ("😀", "Home", 1, 1, 0, "😀", 0, 0),
+            ("😀", "End", 1, 1, 0, "😀", 2, 2),
+            ("😀", "Home", 1, 1, 8, "😀", 0, 2),
+            ("😀", "End", 1, 1, 8, "😀", 2, 2),
+            ("A😀", "Backspace", 2, 2, 0, "A", 1, 1),
+            ("A😀", "Delete", 2, 2, 0, "A😀", 2, 2),
+            ("A😀", "ArrowLeft", 2, 2, 0, "A😀", 1, 1),
+            ("A😀", "ArrowRight", 2, 2, 0, "A😀", 2, 2),
+            ("A😀", "ArrowLeft", 2, 2, 8, "A😀", 1, 3),
+            ("A😀", "ArrowRight", 2, 2, 8, "A😀", 2, 2),
+            ("A😀", "Home", 2, 2, 0, "A😀", 0, 0),
+            ("A😀", "End", 2, 2, 0, "A😀", 3, 3),
+            ("A😀", "Home", 2, 2, 8, "A😀", 0, 3),
+            ("A😀", "End", 2, 2, 8, "A😀", 3, 3),
+            ("😀😀", "Backspace", 3, 3, 0, "😀", 2, 2),
+            ("😀😀", "Delete", 3, 3, 0, "😀😀", 3, 3),
+            ("😀😀", "ArrowLeft", 3, 3, 0, "😀😀", 2, 2),
+            ("😀😀", "ArrowRight", 3, 3, 0, "😀😀", 3, 3),
+            ("😀😀", "ArrowLeft", 3, 3, 8, "😀😀", 2, 4),
+            ("😀😀", "ArrowRight", 3, 3, 8, "😀😀", 3, 3),
+            ("😀😀", "Home", 3, 3, 0, "😀😀", 0, 0),
+            ("😀😀", "End", 3, 3, 0, "😀😀", 4, 4),
+            ("😀😀", "Home", 3, 3, 8, "😀😀", 0, 4),
+            ("😀😀", "End", 3, 3, 8, "😀😀", 4, 4),
+        ] {
+            assert_eq!(
+                evaluate_string(
+                    &mut ctx,
+                    &format!(
+                        "window.__utf16Control = document.getElementById('{control}'); \
+                         __utf16Control.value = '{initial}'; __utf16Control.focus(); \
+                         __utf16Control.setSelectionRange({start}, {end}); \
+                         JSON.stringify([__utf16Control.selectionStart, __utf16Control.selectionEnd])"
+                    )
+                )
+                .await,
+                json!([start, end]).to_string(),
+                "selection APIs must retain UTF-16 code unit offsets"
+            );
+            ctx.process_async(json!({
+                "id": command_id,
+                "method": "Input.dispatchKeyEvent",
+                "params": {"type": "keyDown", "key": key, "code": key, "modifiers": modifiers}
+            }))
+            .await;
+            ctx.expect_result(command_id, json!({}), None);
+            command_id += 1;
+            assert_eq!(
+                evaluate_string(
+                    &mut ctx,
+                    "JSON.stringify([__utf16Control.value, __utf16Control.selectionStart, __utf16Control.selectionEnd])"
+                )
+                .await,
+                json!([value, next_start, next_end]).to_string(),
+                "{control} {key} value={initial:?} modifiers={modifiers} with selection [{start}, {end}]"
+            );
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

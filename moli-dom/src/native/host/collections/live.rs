@@ -76,7 +76,8 @@ impl DomHost {
                     self.node(handle)
                         .and_then(Node::as_element)
                         .is_some_and(|element| {
-                            element.is_html_element("a") && element.has_attribute("href")
+                            (element.is_html_element("a") || element.is_html_element("area"))
+                                && element.has_attribute_ns("", "href")
                         })
                 })
             }
@@ -85,10 +86,16 @@ impl DomHost {
                     self.node(handle)
                         .and_then(Node::as_element)
                         .is_some_and(|element| {
-                            element.is_html_element("a") && element.has_attribute("name")
+                            element.is_html_element("a") && element.has_attribute_ns("", "name")
                         })
                 })
             }
+            LiveCollectionCacheKind::Embeds => {
+                self.collect_matching_elements(root, include_root, |handle| {
+                    self.is_html_element_named(handle, "embed")
+                })
+            }
+            LiveCollectionCacheKind::Applets => Vec::new(),
             LiveCollectionCacheKind::TableRows => self.table_row_elements(root),
             LiveCollectionCacheKind::TableBodies => self.table_body_elements(root),
             LiveCollectionCacheKind::TableSectionRows => self.table_section_row_elements(root),
