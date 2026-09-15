@@ -94,6 +94,7 @@ impl WindowScriptFailureReportTask {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContentSecurityPolicyViolationEventTask {
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    event_document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     target: Option<DomHandle>,
     violation: ContentSecurityPolicyUrlViolation,
 }
@@ -105,6 +106,7 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            event_document_owner: None,
             target: None,
             violation,
         }
@@ -117,6 +119,7 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            event_document_owner: None,
             target: Some(target),
             violation,
         }
@@ -132,6 +135,20 @@ impl ContentSecurityPolicyViolationEventTask {
 
     pub(crate) fn target(&self) -> Option<DomHandle> {
         self.target
+    }
+
+    pub(crate) fn with_event_document_owner(
+        mut self,
+        owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    ) -> Self {
+        self.event_document_owner = owner;
+        self
+    }
+
+    pub(crate) fn event_document_owner(
+        &self,
+    ) -> Option<crate::frame_owner_model::FrameDocumentTaskOwner> {
+        self.event_document_owner
     }
 }
 

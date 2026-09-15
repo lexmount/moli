@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContentSecurityPolicyResourceKind {
+    DocumentBase,
     DocumentConnect,
     DocumentFrame,
     DocumentImage,

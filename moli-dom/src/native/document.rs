@@ -6,6 +6,7 @@ use super::{NativeDom, NativeNodeId};
 
 mod base_url;
 
+pub use base_url::DocumentBaseUrlPolicyCheck;
 use base_url::DocumentBaseUrlState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
