@@ -253,11 +253,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "network_host/headers/store/init.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "script_vm/frame_script_jobs.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
