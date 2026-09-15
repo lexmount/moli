@@ -878,3 +878,64 @@ fn identical_main_script_update_resolves_existing_registration_without_starting_
         active_version_id
     );
 }
+
+#[test]
+fn script_resource_map_snapshot_preserves_aliases_and_requires_exact_run() {
+    let service = new_service_worker_runtime_service();
+    let (_, _, registration_id, version_id) = insert_starting_version(&service);
+    let run = exact_version_run(&service, version_id);
+    let owner = ServiceWorkerRunOwner::new(version_id, run.clone());
+    for name in ["a.js", "b.js"] {
+        let mut resource =
+            test_worker_script_resource(&url(&format!("https://example.test/{name}")));
+        resource.final_url = url("https://example.test/common.js");
+        resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+            source: format!("self.name = '{name}';").into(),
+            muted_errors: false,
+            redirect_urls: vec![resource.final_url.clone()],
+        });
+        service.finish_imported_script_loaded(
+            registration_id,
+            version_id,
+            run.clone(),
+            resource,
+        );
+    }
+    let snapshot = service.script_resource_map_snapshot(&owner).unwrap();
+    assert!(snapshot.can_import_new_scripts);
+    assert_eq!(snapshot.imported_scripts.len(), 2);
+    assert_eq!(
+        snapshot.imported_scripts[0].final_url,
+        snapshot.imported_scripts[1].final_url
+    );
+    assert_ne!(
+        snapshot.imported_scripts[0].request_url,
+        snapshot.imported_scripts[1].request_url
+    );
+    assert_ne!(
+        snapshot.imported_scripts[0].classic_script,
+        snapshot.imported_scripts[1].classic_script
+    );
+    assert!(
+        service
+            .script_resource_map_snapshot(&ServiceWorkerRunOwner::new(
+                version_id,
+                RendererServiceWorkerRunIdentity::fresh(),
+            ))
+            .is_none()
+    );
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .lifecycle_state = ServiceWorkerVersionLifecycleState::Activated;
+    assert!(
+        !service
+            .script_resource_map_snapshot(&owner)
+            .unwrap()
+            .can_import_new_scripts
+    );
+}
