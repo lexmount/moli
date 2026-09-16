@@ -4,7 +4,7 @@ use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterf
 
 use super::{WorkerAbortSignalState, WorkerAbortStore, local_object_in_scope, worker_abort_store};
 use crate::callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker};
-use crate::context_bootstrap::abort_signal_events;
+use crate::context_bootstrap::event_target_dispatch;
 use crate::context_bootstrap::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
     event_internal_bool_flag, set_event_internal_flag,
@@ -269,7 +269,7 @@ pub(crate) fn worker_abort_signal_dispatch_event_callback<'s>(
         return;
     };
     let Some((event, event_type)) =
-        abort_signal_events::prepare_script_dispatch(scope, parsed.event)
+        event_target_dispatch::prepare_script_dispatch(scope, parsed.event)
     else {
         rv.set_bool(false);
         return;
@@ -334,8 +334,8 @@ fn dispatch_event_callbacks<'s>(
     dispatch_snapshot: WorkerAbortDispatchSnapshot,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if !abort_signal_events::begin_dispatch(scope, signal, event) {
-        abort_signal_events::finish_dispatch(scope, event);
+    if !event_target_dispatch::begin_dispatch(scope, signal, event) {
+        event_target_dispatch::finish_dispatch(scope, event);
         return;
     }
     for listener_id in dispatch_snapshot.listener_ids {
@@ -372,7 +372,7 @@ fn dispatch_event_callbacks<'s>(
             &[event.into()],
         );
     }
-    abort_signal_events::finish_dispatch(scope, event);
+    event_target_dispatch::finish_dispatch(scope, event);
 }
 
 fn invoke_worker_abort_event_listener<'s>(

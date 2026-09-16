@@ -7919,13 +7919,13 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
     __lmMessagePortOnmessageHandler: { value: () => "proto-message", configurable: true },
     __lmMessagePortOnmessageerrorHandler: { value: () => "proto-error", configurable: true },
     __lmMessagePortOncloseHandler: { value: () => "proto-close", configurable: true },
-    __moliMessagePortListeners: { value: [], configurable: true }
+    __moliMessagePortEventListeners: { value: [], configurable: true }
   });
   Object.defineProperties(standalone, {
     __lmMessagePortOnmessageHandler: { value: () => "own-message", configurable: true },
     __lmMessagePortOnmessageerrorHandler: { value: () => "own-error", configurable: true },
     __lmMessagePortOncloseHandler: { value: () => "own-close", configurable: true },
-    __moliMessagePortListeners: { value: [], configurable: true }
+    __moliMessagePortEventListeners: { value: [], configurable: true }
   });
   Object.defineProperties(MessageChannel.prototype, {
     __moliMessageChannelPort1: { value: "proto-port1", configurable: true },
@@ -7944,12 +7944,14 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
     standaloneCtor: standalone.constructor && standalone.constructor.name,
     standaloneProtoCtor: Object.getPrototypeOf(standalone)?.constructor?.name ?? null,
     standaloneKeys: Object.keys(standalone).join(","),
+    eventTargetMethodsInherited: ["addEventListener", "removeEventListener", "dispatchEvent"].every(name =>
+      !Object.hasOwn(MessagePort.prototype, name) && standalone[name] === EventTarget.prototype[name]),
     messagePortMethods: [
       methodDescriptor(MessagePort.prototype, "postMessage"),
       methodDescriptor(MessagePort.prototype, "start"),
       methodDescriptor(MessagePort.prototype, "close"),
-      methodDescriptor(MessagePort.prototype, "addEventListener"),
-      methodDescriptor(MessagePort.prototype, "removeEventListener")
+      methodDescriptor(EventTarget.prototype, "addEventListener"),
+      methodDescriptor(EventTarget.prototype, "removeEventListener")
     ],
     messagePortAccessors: [
       accessorDescriptor(MessagePort.prototype, "onmessage"),
@@ -7984,7 +7986,7 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
 
     assert_eq!(
         result,
-        r#"{"constructorResult":"TypeError:true","standaloneTag":"[object MessagePort]","standaloneCtor":"MessagePort","standaloneProtoCtor":"MessagePort","standaloneKeys":"","messagePortMethods":["postMessage:function:postMessage:1:true:true:true","start:function:start:0:true:true:true","close:function:close:0:true:true:true","addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true"],"messagePortAccessors":["onmessage:function:get onmessage:0:true:function:true","onmessageerror:function:get onmessageerror:0:true:function:true","onclose:function:get onclose:0:true:function:true"],"messageChannelAccessors":["port1:function:get port1:0:true:undefined:true","port2:function:get port2:0:true:undefined:true"],"messagePortOwnSlots":[],"messageChannelOwnSlots":[],"standaloneOnmessage":"function","standaloneOnmessageIsSpoof":false,"standaloneOnmessageerror":"function","standaloneOnmessageerrorIsSpoof":false,"standaloneOnclose":"function","standaloneOncloseIsSpoof":false,"portTag":"[object MessagePort]","portCtor":"MessagePort","portKeys":"","portOnmessage":null,"channelKeys":"","stablePortAccessor":true,"channelPortSpoofed":false}"#
+        r#"{"constructorResult":"TypeError:true","standaloneTag":"[object MessagePort]","standaloneCtor":"MessagePort","standaloneProtoCtor":"MessagePort","standaloneKeys":"","eventTargetMethodsInherited":true,"messagePortMethods":["postMessage:function:postMessage:1:true:true:true","start:function:start:0:true:true:true","close:function:close:0:true:true:true","addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true"],"messagePortAccessors":["onmessage:function:get onmessage:0:true:function:true","onmessageerror:function:get onmessageerror:0:true:function:true","onclose:function:get onclose:0:true:function:true"],"messageChannelAccessors":["port1:function:get port1:0:true:undefined:true","port2:function:get port2:0:true:undefined:true"],"messagePortOwnSlots":[],"messageChannelOwnSlots":[],"standaloneOnmessage":"function","standaloneOnmessageIsSpoof":false,"standaloneOnmessageerror":"function","standaloneOnmessageerrorIsSpoof":false,"standaloneOnclose":"function","standaloneOncloseIsSpoof":false,"portTag":"[object MessagePort]","portCtor":"MessagePort","portKeys":"","portOnmessage":null,"channelKeys":"","stablePortAccessor":true,"channelPortSpoofed":false}"#
     );
 }
 

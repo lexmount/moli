@@ -1,5 +1,5 @@
 use super::AbortDispatchSnapshot;
-use crate::context_bootstrap::abort_signal_events;
+use crate::context_bootstrap::event_target_dispatch;
 use crate::context_bootstrap::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
     event_internal_bool_flag, set_event_internal_flag,
@@ -76,8 +76,8 @@ pub(super) fn invoke_abort_event_callbacks<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if !abort_signal_events::begin_dispatch(scope, signal, event) {
-        abort_signal_events::finish_dispatch(scope, event);
+    if !event_target_dispatch::begin_dispatch(scope, signal, event) {
+        event_target_dispatch::finish_dispatch(scope, event);
         return;
     }
     for listener in dispatch_snapshot.listeners {
@@ -120,5 +120,5 @@ pub(super) fn invoke_abort_event_callbacks<'s>(
             &[event.into()],
         );
     }
-    abort_signal_events::finish_dispatch(scope, event);
+    event_target_dispatch::finish_dispatch(scope, event);
 }

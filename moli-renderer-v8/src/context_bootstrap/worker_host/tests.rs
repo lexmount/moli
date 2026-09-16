@@ -553,7 +553,7 @@ fn constructor_declared_event_target_slots_ignore_reflection_and_spoofing() {
             if (typeof w.onmessage !== "function") {
                 throw new Error("onmessage getter should ignore public slot spoofing");
             }
-            w.dispatchEvent({ type: "message" });
+            w.dispatchEvent(new Event("message"));
             const result = calls.join("|");
             if (result !== "listener:message|handler:message") {
                 throw new Error(`Worker ordered dispatch was spoofed: ${result}`);
@@ -1500,7 +1500,7 @@ fn worker_event_handler_only_boolean_false_cancels_synthetic_event() {
           const w = new Worker("");
           const run = returned => {
             w.onerror = () => returned;
-            const event = { type: "error", cancelable: true, defaultPrevented: false };
+            const event = new Event("error", {cancelable: true});
             return [w.dispatchEvent(event), event.defaultPrevented];
           };
           const observations = [run(true), run(false), run(0), run("")];

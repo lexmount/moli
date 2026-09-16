@@ -186,28 +186,6 @@ impl JsContextHost {
         self.bridge.abort.unregister_target_listener(callback_id);
     }
 
-    pub(crate) fn register_abort_message_port_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        port_id: crate::types::MessagePortId,
-        listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-    ) -> bool {
-        self.bridge
-            .abort
-            .register_message_port_listener(scope, signal, port_id, listener_id)
-    }
-
-    pub(crate) fn unregister_abort_message_port_listener(
-        &mut self,
-        port_id: crate::types::MessagePortId,
-        listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-    ) {
-        self.bridge
-            .abort
-            .unregister_message_port_listener(port_id, listener_id);
-    }
-
     pub(crate) fn remove_registered_event_listener_by_id(
         &mut self,
         target: crate::document_runtime::EventTargetHandle,

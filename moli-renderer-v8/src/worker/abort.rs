@@ -2,9 +2,7 @@ use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
-use crate::context_bootstrap::MessagePortEventListenerId;
 use crate::exception_reporting::invoke_callback;
-use crate::types::MessagePortId;
 use crate::util::{get_private_value, set_private_value, v8_string, v8str};
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -43,15 +41,9 @@ pub(super) struct WorkerAbortSignalState {
     onabort: Option<v8::Global<v8::Function>>,
     listeners: HashMap<String, Vec<WorkerAbortListener>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
-    linked_message_port_listeners: Vec<WorkerAbortLinkedMessagePortListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
-}
-
-struct WorkerAbortLinkedMessagePortListener {
-    port_id: MessagePortId,
-    listener_id: MessagePortEventListenerId,
 }
 
 #[derive(WebApiObject)]
@@ -226,40 +218,6 @@ impl WorkerAbortStore {
         true
     }
 
-    pub(super) fn register_message_port_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) -> bool {
-        let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
-            return false;
-        };
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        state
-            .linked_message_port_listeners
-            .push(WorkerAbortLinkedMessagePortListener {
-                port_id,
-                listener_id,
-            });
-        true
-    }
-
-    pub(super) fn unregister_message_port_listener(
-        &mut self,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) {
-        for state in self.signals.values_mut() {
-            state
-                .linked_message_port_listeners
-                .retain(|linked| linked.port_id != port_id || linked.listener_id != listener_id);
-        }
-    }
-
     fn set_signal_sources(
         &mut self,
         dependent_signal_id: u32,
@@ -345,25 +303,15 @@ fn run_worker_abort_steps<'s>(
     signal_id: u32,
     reason: v8::Local<'s, v8::Value>,
 ) {
-    let (abort_algorithms, linked_message_port_listeners) = {
+    let abort_algorithms = {
         let mut store = store.borrow_mut();
         let Some(state) = store.signal_state_mut(signal_id) else {
             return;
         };
-        (
-            std::mem::take(&mut state.abort_algorithms),
-            std::mem::take(&mut state.linked_message_port_listeners),
-        )
+        std::mem::take(&mut state.abort_algorithms)
     };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
     invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms);
-    for linked in linked_message_port_listeners {
-        crate::worker::remove_worker_message_port_event_listener_by_id(
-            scope,
-            linked.port_id,
-            linked.listener_id,
-        );
-    }
     // Snapshot at dispatch time, after earlier signals and abort algorithms.
     let Some(dispatch_snapshot) = store
         .borrow()
@@ -469,20 +417,6 @@ pub(crate) fn unregister_worker_abort_signal_algorithm<'s>(
     store
         .borrow_mut()
         .unregister_abort_algorithm(scope, signal, algorithm)
-}
-
-pub(crate) fn register_worker_abort_signal_message_port_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    signal: v8::Local<'s, v8::Object>,
-    port_id: MessagePortId,
-    listener_id: MessagePortEventListenerId,
-) -> bool {
-    let Some(store) = worker_abort_store(scope) else {
-        return false;
-    };
-    store
-        .borrow_mut()
-        .register_message_port_listener(scope, signal, port_id, listener_id)
 }
 
 pub(crate) fn abort_worker_signal_by_id<'s>(

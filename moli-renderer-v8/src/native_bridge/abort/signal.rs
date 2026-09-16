@@ -1,6 +1,6 @@
 use super::AbortStore;
 use super::event::{invoke_abort_event_callbacks, local_object_in_scope};
-use crate::context_bootstrap::abort_signal_events;
+use crate::context_bootstrap::event_target_dispatch;
 use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::util::{context_host_ptr_from_global_bridge, v8str};
 use crate::webidl;
@@ -97,7 +97,7 @@ pub(crate) fn abort_signal_dispatch_event_callback<'s>(
         return;
     };
     let Some((event, event_type)) =
-        abort_signal_events::prepare_script_dispatch(scope, parsed.event)
+        event_target_dispatch::prepare_script_dispatch(scope, parsed.event)
     else {
         rv.set_bool(false);
         return;

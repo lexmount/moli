@@ -501,7 +501,6 @@ impl JsContextHost {
         }
         self.remove_event_callback_registrations(&retired);
         self.retire_child_window_event_callbacks(&retired);
-        self.remove_message_port_event_callbacks(&retired);
         self.bridge
             .abort
             .unregister_signal_event_callbacks(&retired);

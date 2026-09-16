@@ -14,7 +14,7 @@ pub(crate) fn prepare_script_dispatch<'s>(
     let Some((event, initialized)) =
         event.and_then(|event| event_initialized(scope, event).map(|flag| (event, flag)))
     else {
-        throw_type_error(scope, "AbortSignal.dispatchEvent requires an Event.");
+        throw_type_error(scope, "EventTarget.dispatchEvent requires an Event.");
         return None;
     };
     if !initialized || event_is_dispatching(scope, event) {
@@ -37,11 +37,11 @@ pub(crate) fn prepare_script_dispatch<'s>(
 // Even a pre-stopped event needs finish_dispatch, but its listeners must not run.
 pub(crate) fn begin_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    signal: v8::Local<'s, v8::Object>,
+    target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
-    set_event_dispatch_fields(scope, signal, event);
-    let path = v8::Array::new_with_elements(scope, &[signal.into()]);
+    set_event_dispatch_fields(scope, target, event);
+    let path = v8::Array::new_with_elements(scope, &[target.into()]);
     set_event_composed_path(scope, event, path);
     !event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT)
 }
