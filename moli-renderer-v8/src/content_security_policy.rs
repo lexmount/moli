@@ -278,22 +278,30 @@ fn security_policy_violation_event_declaration<'s>(
 }
 
 pub(crate) fn content_security_policy_headers(headers: &[(String, String)]) -> Vec<String> {
-    headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-security-policy"))
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .collect()
+    content_security_policy_header_values(headers, "content-security-policy")
 }
 
 pub(crate) fn content_security_policy_report_only_headers(
     headers: &[(String, String)],
 ) -> Vec<String> {
+    content_security_policy_header_values(headers, "content-security-policy-report-only")
+}
+
+fn content_security_policy_header_values(
+    headers: &[(String, String)],
+    header_name: &str,
+) -> Vec<String> {
+    // Each HTTP field can contain several independently enforced policies.
+    // Commas are CSP list delimiters even inside quotes in directive values;
+    // the quoted-string rules used by Reporting-Endpoints do not apply here.
+    // https://w3c.github.io/webappsec-csp/#parse-response-csp
     headers
         .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-security-policy-report-only"))
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .filter(|(name, _)| name.eq_ignore_ascii_case(header_name))
+        .flat_map(|(_, value)| value.split(','))
+        .map(str::trim_ascii)
+        .filter(|policy| !parsed_directives(policy).is_empty())
+        .map(str::to_owned)
         .collect()
 }
 
@@ -1458,9 +1466,10 @@ fn inline_source_violation_sample(source_list: &[&str], source: &str) -> String 
 }
 
 fn normalized_source_list(sources: Vec<&str>) -> Vec<&str> {
+    // The directive parser already splits on CSP's ASCII whitespace. Trimming
+    // again would turn invalid tokens containing vertical tabs into sources.
     sources
         .into_iter()
-        .map(str::trim)
         .filter(|source| !source.is_empty())
         .collect()
 }
@@ -2094,6 +2103,173 @@ mod tests {
             content_security_policy_report_only_headers(&headers),
             vec!["worker-src 'none'".to_owned()]
         );
+    }
+
+    #[test]
+    fn csp_headers_preserve_policy_order_and_disposition() {
+        let headers = vec![
+            (
+                "CONTENT-SECURITY-POLICY".to_owned(),
+                " , img-src *; report-uri /first, img-src 'none'; report-uri /second, ".to_owned(),
+            ),
+            (
+                "Content-Security-Policy-Report-Only".to_owned(),
+                "script-src * , script-src 'none'".to_owned(),
+            ),
+            (
+                "content-security-policy".to_owned(),
+                "worker-src 'self'".to_owned(),
+            ),
+        ];
+        assert_eq!(
+            content_security_policy_headers(&headers),
+            [
+                "img-src *; report-uri /first",
+                "img-src 'none'; report-uri /second",
+                "worker-src 'self'",
+            ]
+        );
+        assert_eq!(
+            content_security_policy_report_only_headers(&headers),
+            ["script-src *", "script-src 'none'"]
+        );
+    }
+
+    #[test]
+    fn csp_header_policy_lists_enforce_every_policy() {
+        for (value, request, expected) in [
+            (
+                "img-src * , img-src 'none'",
+                "https://cdn.test/asset",
+                false,
+            ),
+            ("img-src *,img-src 'none'", "https://cdn.test/asset", false),
+            (
+                "img-src *; ignored first, img-src 'none'; ignored second",
+                "https://cdn.test/asset",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo,ignored",
+                "https://cdn.test/foo",
+                true,
+            ),
+            (
+                "img-src https://cdn.test/foo,ignored",
+                "https://cdn.test/foo,ignored",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo%2cbar",
+                "https://cdn.test/foo%2cbar",
+                true,
+            ),
+            (
+                ", , img-src * , , img-src 'none', ,",
+                "https://cdn.test/asset",
+                false,
+            ),
+            (
+                "img-src *; img-src 'none', img-src *",
+                "https://cdn.test/asset",
+                true,
+            ),
+            (
+                "img-src https://cdn.test/foo, img-src https://cdn.test/bar",
+                "https://cdn.test/foo",
+                false,
+            ),
+            (
+                "img-src https://cdn.test/foo, img-src https://cdn.test/bar",
+                "https://cdn.test/bar",
+                false,
+            ),
+            (
+                "img-src *; ignored \"start, img-src 'none'; ignored end\"",
+                "https://cdn.test/asset",
+                false,
+            ),
+        ] {
+            let policies = content_security_policy_headers(&[(
+                "Content-Security-Policy".to_owned(),
+                value.to_owned(),
+            )]);
+            assert_eq!(
+                content_security_policy_allows_url(
+                    &policies,
+                    &protected_url(),
+                    &request_url(request),
+                    ContentSecurityPolicyResourceKind::DocumentImage,
+                ),
+                expected,
+                "{value:?} with {request}"
+            );
+        }
+    }
+
+    #[test]
+    fn csp_header_lists_keep_report_only_violations_with_their_policy() {
+        let headers = vec![
+            ("Content-Security-Policy".to_owned(), "img-src *".to_owned()),
+            (
+                "Content-Security-Policy-Report-Only".to_owned(),
+                "img-src *; report-uri /allowed, img-src 'none'; report-uri /blocked".to_owned(),
+            ),
+        ];
+        let protected = protected_url();
+        let request = request_url("https://cdn.test/asset");
+        assert!(content_security_policy_allows_url(
+            &content_security_policy_headers(&headers),
+            &protected,
+            &request,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+        ));
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+            &content_security_policy_report_only_headers(&headers),
+            &protected,
+            &request,
+            ContentSecurityPolicyResourceKind::DocumentImage,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Report,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        ).expect("the second report-only policy must produce a violation");
+        assert_eq!(
+            violation.disposition,
+            ContentSecurityPolicyDisposition::Report
+        );
+        assert_eq!(
+            violation.original_policy,
+            "img-src 'none'; report-uri /blocked"
+        );
+        assert_eq!(violation.report_uri_endpoints, ["https://app.test/blocked"]);
+    }
+
+    #[test]
+    fn csp_header_lists_preserve_invalid_whitespace_and_skip_empty_policies() {
+        for name in [
+            "content-security-policy",
+            "content-security-policy-report-only",
+        ] {
+            let collect = |value: &str| {
+                content_security_policy_header_values(&[(name.to_owned(), value.to_owned())], name)
+            };
+            assert!(collect(", ; ; , \t , img-src 'none'\u{00a0},").is_empty());
+            assert_eq!(
+                collect("\t\n\r\u{000c} img-src 'none' , \t"),
+                ["img-src 'none'"]
+            );
+            assert_eq!(
+                collect("img-src *\u{000b}, img-src 'none'"),
+                ["img-src *\u{000b}", "img-src 'none'"]
+            );
+            let policies = collect("img-src *\u{000b}");
+            assert!(!content_security_policy_allows_url(
+                &policies,
+                &protected_url(),
+                &request_url("https://cdn.test/asset"),
+                ContentSecurityPolicyResourceKind::DocumentImage,
+            ));
+        }
     }
 
     #[test]
