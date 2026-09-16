@@ -2351,6 +2351,65 @@ fn document_point_queries_use_real_paint_order_geometry() {
     );
 }
 #[test]
+fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
+    use moli_layout::{
+        GeometryProvider, LayoutFlushReason, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
+        LayoutQueryBatch, LayoutViewport,
+    };
+
+    let mut vm = new_parsed_test_vm(
+        "https://point-query-viewport.test/",
+        "<html><body style='margin:0'><div style='width:300px;height:100px'></div></body></html>",
+    );
+    let before = vm.layout_pass_observability_for_test().1;
+    let batch = LayoutQueryBatch::new(vec![
+        LayoutQuery::HitTest {
+            point: LayoutPoint::new(-1.0, -1.0),
+            ignore_pointer_events_none: false,
+        },
+        LayoutQuery::HitTestAll {
+            point: LayoutPoint::new(-1.0, -1.0),
+            ignore_pointer_events_none: false,
+        },
+        LayoutQuery::HitTest {
+            point: LayoutPoint::new(150.0, 20.0),
+            ignore_pointer_events_none: false,
+        },
+        LayoutQuery::HitTestAll {
+            point: LayoutPoint::new(150.0, 20.0),
+            ignore_pointer_events_none: false,
+        },
+    ]);
+    for (width, expect_hit) in [(320, true), (100, false), (320, true)] {
+        let answers = GeometryProvider::answer(
+            &mut *vm,
+            LayoutFlushReason::HitTest,
+            LayoutViewport::new(width, 200, 1.0),
+            &batch,
+        )
+        .expect("point query batch");
+        assert_eq!(answers.answers[0], LayoutQueryAnswer::HitTest(None));
+        assert_eq!(
+            answers.answers[1],
+            LayoutQueryAnswer::HitTestAll(Vec::new())
+        );
+        assert_eq!(
+            matches!(answers.answers[2], LayoutQueryAnswer::HitTest(Some(_))),
+            expect_hit
+        );
+        let LayoutQueryAnswer::HitTestAll(hits) = &answers.answers[3] else {
+            panic!("expected hit list")
+        };
+        assert_eq!(!hits.is_empty(), expect_hit);
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            before + 1,
+            "cold queries still prepare layout; later viewport checks reuse it"
+        );
+    }
+}
+
+#[test]
 fn document_point_queries_parse_webidl_coordinates() {
     let mut vm = new_parsed_test_vm(
         "https://document-point-query-webidl.test/path/index.html",

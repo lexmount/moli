@@ -4,9 +4,9 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutClipChainId, LayoutCoordinateSpaceId, LayoutFragmentId,
-        LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
-        LayoutTransform2D,
+        LayoutBoxModel, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
+        LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
+        LayoutRect, LayoutTransform2D,
     },
     tree::FrozenLayoutTree,
 };
@@ -91,14 +91,16 @@ where
         viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Option<LayoutHit<N>> {
+        if !self.viewport.contains(viewport_point) {
+            return None;
+        }
+        let mut clips = PointClipQuery::new(self, viewport_point);
         let mut foremost: Option<LayoutHit<N>> = None;
         for entry in self.hit_test_entries() {
             if foremost.is_some_and(|hit| hit.paint_order >= Some(entry.paint_order)) {
                 continue;
             }
-            if let Some(hit) =
-                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
-            {
+            if let Some(hit) = self.hit_for_entry(&entry, ignore_pointer_events_none, &mut clips) {
                 foremost = Some(hit);
             }
         }
@@ -110,11 +112,13 @@ where
         viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Vec<LayoutHit<N>> {
+        if !self.viewport.contains(viewport_point) {
+            return Vec::new();
+        }
+        let mut clips = PointClipQuery::new(self, viewport_point);
         let mut hits = self
             .hit_test_entries()
-            .filter_map(|entry| {
-                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
-            })
+            .filter_map(|entry| self.hit_for_entry(&entry, ignore_pointer_events_none, &mut clips))
             .collect::<Vec<_>>();
         hits.sort_by_key(|hit| std::cmp::Reverse(hit.paint_order));
         let mut seen = HashSet::new();
@@ -131,10 +135,14 @@ where
         viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Vec<LayoutPaintedSurfaceHit<N>> {
+        if !self.viewport.contains(viewport_point) {
+            return Vec::new();
+        }
+        let mut clips = PointClipQuery::new(self, viewport_point);
         let mut hits = self
             .hit_test_entries()
             .filter_map(|entry| {
-                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
+                self.hit_for_entry(&entry, ignore_pointer_events_none, &mut clips)
                     .map(LayoutPaintedSurfaceHit::Dom)
             })
             .chain(
@@ -246,13 +254,17 @@ where
     }
 
     pub fn caret_position(&self, viewport_point: LayoutPoint) -> Option<LayoutCaretPosition<N>> {
+        if !self.viewport.contains(viewport_point) {
+            return None;
+        }
+        let mut clips = PointClipQuery::new(self, viewport_point);
         // Caret distance ties follow front-to-back order. Keep that ordering
         // local to the caret query rather than sorting every point query.
         let mut entries = self.hit_test_entries().collect::<Vec<_>>();
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.paint_order));
         let top_entry = entries
             .iter()
-            .find(|entry| self.hit_for_entry(entry, viewport_point, true).is_some())?;
+            .find(|entry| self.hit_for_entry(entry, true, &mut clips).is_some())?;
         let top_box = self.fragment_box_id(top_entry.fragment)?;
         let text_entry = entries
             .iter()
@@ -439,21 +451,21 @@ where
     fn hit_for_entry(
         &self,
         entry: &LayoutHitTestEntry<N>,
-        viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
+        clips: &mut PointClipQuery<'_, N>,
     ) -> Option<LayoutHit<N>> {
         if !ignore_pointer_events_none && !entry.pointer_events {
-            return None;
-        }
-        if !self.point_passes_clip_chain(viewport_point, entry.clip_chain) {
             return None;
         }
         let inverse = self
             .coordinate_space(entry.coordinate_space)?
             .local_to_viewport
             .inverse()?;
-        let local_point = inverse.map_point(viewport_point);
+        let local_point = inverse.map_point(clips.point);
         if !entry.local_rect.contains(local_point) {
+            return None;
+        }
+        if !clips.passes(entry.clip_chain) {
             return None;
         }
         let local_content_box = self
@@ -480,6 +492,12 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    fn point_passes_clip(&self, viewport_point: LayoutPoint, node: &LayoutClipNode) -> bool {
+        self.coordinate_space(node.coordinate_space)
+            .and_then(|space| space.local_to_viewport.inverse())
+            .is_some_and(|inverse| node.rect.contains(inverse.map_point(viewport_point)))
+    }
+
     fn point_passes_clip_chain(
         &self,
         viewport_point: LayoutPoint,
@@ -489,17 +507,130 @@ where
             let Some(node) = self.clip_chain.get(id.index()) else {
                 return false;
             };
-            let Some(inverse) = self
-                .coordinate_space(node.coordinate_space)
-                .and_then(|space| space.local_to_viewport.inverse())
-            else {
-                return false;
-            };
-            if !node.rect.contains(inverse.map_point(viewport_point)) {
+            if !self.point_passes_clip(viewport_point, node) {
                 return false;
             }
             clip = node.parent;
         }
         true
+    }
+}
+
+/// Scratch for exactly one viewport point. Shared clip ancestors are checked
+/// once, and nothing survives the query or changes the retained tree.
+struct PointClipQuery<'a, N: Copy + Debug + Eq + Hash> {
+    tree: &'a FrozenLayoutTree<N>,
+    point: LayoutPoint,
+    results: Vec<Option<bool>>,
+}
+
+impl<'a, N: Copy + Debug + Eq + Hash> PointClipQuery<'a, N> {
+    fn new(tree: &'a FrozenLayoutTree<N>, point: LayoutPoint) -> Self {
+        Self {
+            tree,
+            point,
+            results: Vec::new(),
+        }
+    }
+
+    fn passes(&mut self, clip: Option<LayoutClipChainId>) -> bool {
+        if clip.is_none() {
+            return true;
+        }
+        // Allocate only after a candidate's local rectangle contains the point.
+        if self.results.is_empty() {
+            self.results.resize(self.tree.clip_chain.len(), None);
+        }
+        let mut current = clip;
+        let passed = loop {
+            let Some(id) = current else {
+                break true;
+            };
+            let Some(result) = self.results.get(id.index()) else {
+                break false;
+            };
+            if let Some(result) = result {
+                break *result;
+            }
+            let node = &self.tree.clip_chain[id.index()];
+            if !self.tree.point_passes_clip(self.point, node) {
+                self.results[id.index()] = Some(false);
+                break false;
+            }
+            current = node.parent;
+        };
+        // Propagate the chain result along the visited prefix. Walking it
+        // twice avoids recursion or a second allocation for deep clip chains.
+        current = clip;
+        while let Some(id) = current {
+            let Some(result) = self.results.get_mut(id.index()) else {
+                break;
+            };
+            if result.is_some() {
+                break;
+            }
+            *result = Some(passed);
+            current = self.tree.clip_chain[id.index()].parent;
+        }
+        passed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FrozenCoordinateSpace, LayoutSize, LayoutViewport};
+
+    #[test]
+    fn shared_clip_results_are_scoped_to_one_point() {
+        let root = LayoutClipChainId::from_index(0);
+        let broad = LayoutClipChainId::from_index(1);
+        let narrow = LayoutClipChainId::from_index(2);
+        let tree = FrozenLayoutTree::new(
+            0_u8,
+            LayoutViewport::new(100, 100, 1.0),
+            LayoutPoint::ZERO,
+            LayoutSize::new(100.0, 100.0),
+            LayoutOutputBoxId::from_index(0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            FrozenCoordinateSpace {
+                owner: None,
+                local_to_viewport: LayoutTransform2D::IDENTITY,
+                local_to_viewport_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
+            },
+            [(None, 100.0), (Some(root), 200.0), (Some(root), 40.0)]
+                .into_iter()
+                .map(|(parent, size)| LayoutClipNode {
+                    parent,
+                    owner: None,
+                    coordinate_space: LayoutCoordinateSpaceId::from_index(0),
+                    rect: LayoutRect::new(0.0, 0.0, size, size),
+                })
+                .collect(),
+            Vec::new(),
+            true,
+        );
+        let mut query = PointClipQuery::new(&tree, LayoutPoint::new(25.0, 25.0));
+        assert!(query.results.is_empty());
+        assert!(query.passes(Some(broad)));
+        assert_eq!(query.results, [Some(true), Some(true), None]);
+        assert!(query.passes(Some(narrow)));
+        assert_eq!(query.results, [Some(true), Some(true), Some(true)]);
+
+        for point in [
+            LayoutPoint::new(75.0, 25.0),
+            LayoutPoint::new(150.0, 25.0),
+            LayoutPoint::new(f32::NAN, 0.0),
+        ] {
+            let mut query = PointClipQuery::new(&tree, point);
+            for clip in [Some(broad), Some(narrow), Some(root), None, Some(broad)] {
+                assert_eq!(
+                    query.passes(clip),
+                    tree.point_passes_clip_chain(point, clip)
+                );
+            }
+        }
     }
 }

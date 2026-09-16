@@ -25,6 +25,15 @@ impl LayoutViewport {
             device_pixel_ratio,
         }
     }
+
+    /// Tests CSS coordinates against the half-open viewport, excluding NaN
+    /// and infinite points without walking any layout geometry.
+    pub fn contains(self, point: LayoutPoint) -> bool {
+        point.x >= 0.0
+            && point.y >= 0.0
+            && f64::from(point.x) < f64::from(self.css_width)
+            && f64::from(point.y) < f64::from(self.css_height)
+    }
 }
 
 /// A two-dimensional point in CSS pixels.
@@ -450,6 +459,27 @@ pub struct LayoutFragment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_contains_rejects_outside_edges_and_non_finite_points() {
+        let viewport = LayoutViewport::new(100, 80, 2.0);
+        assert!(viewport.contains(LayoutPoint::ZERO));
+        assert!(viewport.contains(LayoutPoint::new(99.5, 79.5)));
+        for point in [
+            LayoutPoint::new(-1.0, 0.0),
+            LayoutPoint::new(0.0, -1.0),
+            LayoutPoint::new(100.0, 0.0),
+            LayoutPoint::new(0.0, 80.0),
+            LayoutPoint::new(f32::NAN, 0.0),
+            LayoutPoint::new(0.0, f32::NAN),
+            LayoutPoint::new(f32::INFINITY, 0.0),
+            LayoutPoint::new(0.0, f32::NEG_INFINITY),
+        ] {
+            assert!(!viewport.contains(point), "{point:?}");
+        }
+        assert!(!LayoutViewport::new(0, 80, 1.0).contains(LayoutPoint::ZERO));
+        assert!(!LayoutViewport::new(100, 0, 1.0).contains(LayoutPoint::ZERO));
+    }
 
     #[test]
     fn affine_concatenation_and_inverse_round_trip() {

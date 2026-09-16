@@ -476,6 +476,15 @@ impl JsContextHost {
                         |candidate| self.offset_parent_candidate_is_exposed(*source, candidate),
                     ),
                 ),
+                // Layout preparation still runs, but an out-of-viewport point
+                // needs no fragment walk. Use the current request's viewport
+                // even when ordinary reads reuse an older, larger tree.
+                LayoutQuery::HitTest { point, .. } if !viewport.contains(*point) => {
+                    LayoutQueryAnswer::HitTest(None)
+                }
+                LayoutQuery::HitTestAll { point, .. } if !viewport.contains(*point) => {
+                    LayoutQueryAnswer::HitTestAll(Vec::new())
+                }
                 _ => tree.answer_query(query),
             })
             .collect();
