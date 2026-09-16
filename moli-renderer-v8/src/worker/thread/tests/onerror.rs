@@ -9,6 +9,7 @@ const SYNTHETIC_PROBE: &str = r#"
   let activeEvent, trace, mode;
   let callbackGets = 0;
   const later = event => { trace.push('after'); };
+  const capture = () => trace.push('capture');
   const replacement = function() { trace.push('replacement:' + arguments.length); return true; };
   const handler = function(message, filename, line, column, error) {
     trace.push({args:arguments.length, receiver:this===self,
@@ -25,10 +26,11 @@ const SYNTHETIC_PROBE: &str = r#"
     if (mode==='stop') event.stopPropagation();
   };
   self.addEventListener('error', before);
-  for (mode of ['order','replace','clear','reactivate','object','proxy','revoked-object','revoked-function','plain','forged','shadow','stopImmediate','stop']) {
+  for (mode of ['order','replace','clear','reactivate','object','proxy','revoked-object','revoked-function','plain','forged','shadow','stopImmediate','stop','capture']) {
     trace=[];
     self.onerror=null;
     self.removeEventListener('error', later);
+    self.removeEventListener('error', capture, true);
     let value=handler;
     if (mode==='object') value={handleEvent() { throw new Error('must not call handleEvent'); }};
     if (mode==='proxy') value=new Proxy(handler,{get() {callbackGets++; throw new Error('callback lookup');}});
@@ -36,6 +38,7 @@ const SYNTHETIC_PROBE: &str = r#"
     self.onerror=value;
     const identity=self.onerror===value;
     self.addEventListener('error',later);
+    if(mode==='capture')self.addEventListener('error',capture,true);
     activeEvent=mode==='plain'||mode==='forged'?new NativeEvent('error',{cancelable:true}):new NativeErrorEvent('error',{message:'message',filename:'source.js',lineno:12,colno:34,error:marker,cancelable:true});
     if(mode==='forged') Object.setPrototypeOf(activeEvent,NativeErrorEvent.prototype);
     let fieldReads=0;
@@ -46,6 +49,7 @@ const SYNTHETIC_PROBE: &str = r#"
   self.onerror=null;
   self.removeEventListener('error',before);
   self.removeEventListener('error',later);
+  self.removeEventListener('error',capture,true);
   rows.callbackGets=callbackGets;
   rows.returns=[];
   for(const value of [true,false,undefined,null,0,1,'truthy',{},new Boolean(true)]) {
@@ -100,6 +104,7 @@ self.addEventListener('error',event=>{
   trace.push({after:true,prevented:event.defaultPrevented,errorEvent:event instanceof NativeErrorEvent,trusted:event.isTrusted});
   event.preventDefault();
 });
+if(config.mode==='capture')self.addEventListener('error',()=>trace.push('capture'),true);
 if(config.mode==='poison-init')Object.defineProperty(Object.prototype,'bubbles',{get(){fieldReads++;throw new Error('init getter');},configurable:true});
 if(config.mode==='delete-constructor')delete self.ErrorEvent;
 if(config.mode==='replace-constructor')self.ErrorEvent=function(){ctorCalls++;return new Event('error',{cancelable:true});};
@@ -168,6 +173,11 @@ fn expected_synthetic_onerror() -> serde_json::Value {
         (
             "stop",
             serde_json::json!(["before", handler, "after"]),
+            false,
+        ),
+        (
+            "capture",
+            serde_json::json!(["capture", "before", handler, "after"]),
             false,
         ),
     ] {
@@ -239,6 +249,7 @@ async fn worker_onerror_native_errors_use_ordered_handlers_and_intrinsic_event_d
             "shadow",
             "delete-constructor",
             "replace-constructor",
+            "capture",
             "poison-init",
             "throw-undefined",
             "throw-null",
@@ -258,6 +269,9 @@ async fn worker_onerror_native_errors_use_ordered_handlers_and_intrinsic_event_d
             let actual: serde_json::Value =
                 serde_json::from_str(&expect_post_json(message)).unwrap();
             let mut trace = Vec::new();
+            if mode == "capture" {
+                trace.push(serde_json::json!("capture"));
+            }
             trace.push(serde_json::json!("before"));
             if mode != "stopImmediate" {
                 if matches!(mode, "replace" | "object") {
