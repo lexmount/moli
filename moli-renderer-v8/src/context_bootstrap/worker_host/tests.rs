@@ -1500,7 +1500,7 @@ fn worker_event_handler_only_boolean_false_cancels_synthetic_event() {
           const w = new Worker("");
           const run = returned => {
             w.onerror = () => returned;
-            const event = { type: "error", cancelable: true, defaultPrevented: false };
+            const event = new Event("error", {cancelable: true});
             return [w.dispatchEvent(event), event.defaultPrevented];
           };
           const observations = [run(true), run(false), run(0), run("")];
