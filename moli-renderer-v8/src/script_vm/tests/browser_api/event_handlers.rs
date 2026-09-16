@@ -1,6 +1,7 @@
 use super::*;
 
 mod child_window;
+mod compilation;
 mod popup;
 
 #[test]
