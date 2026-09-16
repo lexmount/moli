@@ -1,4 +1,3 @@
-mod abort_signal_events;
 mod callback_execution;
 mod error_reporting_guard;
 
@@ -1534,6 +1533,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 
 // ─── Basic tests ────────────────────────────────────────────────────
 
+mod abort_signal_events;
 mod abort_signal_statics;
 mod cors_redirects;
 mod imported_scripts;
