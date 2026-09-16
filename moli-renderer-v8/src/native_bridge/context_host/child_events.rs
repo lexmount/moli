@@ -2,8 +2,8 @@ use super::{JsContextHost, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES}
 use crate::{
     context_bootstrap::{
         EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
-        EventHandlerType, apply_event_handler_return_value, event_is_error_event,
-        set_event_internal_flag,
+        EventHandlerType, apply_event_handler_return_value, error_event_handler_arguments,
+        event_is_error_event, set_event_internal_flag,
     },
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
@@ -900,25 +900,9 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
-        && event_is_error_event(scope, event)
+        && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
-        vec![
-            event
-                .get(scope, v8str(scope, "message").into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-            event
-                .get(scope, v8str(scope, "filename").into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-            event
-                .get(scope, v8str(scope, "lineno").into())
-                .unwrap_or_else(|| v8::Number::new(scope, 0.0).into()),
-            event
-                .get(scope, v8str(scope, "colno").into())
-                .unwrap_or_else(|| v8::Number::new(scope, 0.0).into()),
-            event
-                .get(scope, v8str(scope, "error").into())
-                .unwrap_or_else(|| v8::null(scope).into()),
-        ]
+        arguments.to_vec()
     } else {
         vec![event.into()]
     }

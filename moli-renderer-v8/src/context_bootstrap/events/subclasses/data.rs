@@ -285,7 +285,7 @@ struct ErrorEventInitDeclaration<'scope> {
     filename: v8::Local<'scope, v8::String>,
     lineno: f64,
     colno: f64,
-    error: Option<v8::Local<'scope, v8::Value>>,
+    error: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -855,7 +855,8 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'
     let filename_value = v8_string(scope, &filename).expect("ErrorEvent filename");
     let lineno = init_number_property(scope, init, "lineno", 0.0);
     let colno = init_number_property(scope, init, "colno", 0.0);
-    let error = init_value_property(scope, init, "error");
+    let error =
+        init_value_property(scope, init, "error").unwrap_or_else(|| v8::undefined(scope).into());
     ErrorEventInitDeclaration::new(message_value, filename_value, lineno, colno, error)
         .initialize(scope, event)
         .expect("ErrorEvent init declaration should initialize");
@@ -866,7 +867,7 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'
         filename_value.into(),
         v8::Number::new(scope, lineno).into(),
         v8::Number::new(scope, colno).into(),
-        error.unwrap_or_else(|| v8::null(scope).into()),
+        error,
     ];
     let arguments = v8::Array::new_with_elements(scope, &arguments);
     set_private_value(

@@ -298,6 +298,9 @@ impl NativeBridgeBindings {
             wrapper.set_internal_field(1, v8::Number::new(scope, 0.0).into()),
             "synthetic Window wrapper must expose its shell marker"
         );
+        web_api_interfaces::Window::DESCRIPTOR
+            .initialize(scope, wrapper)
+            .expect("synthetic Window identity should initialize");
         set_named_constructor_prototype(scope, wrapper, "Window");
         wrapper
     }
