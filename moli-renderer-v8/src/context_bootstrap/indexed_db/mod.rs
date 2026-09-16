@@ -271,30 +271,6 @@ fn indexed_db_request_transaction_object<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn set_indexed_db_request_surface_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
-    slot: &'static str,
-    property: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(relevant_context) = request.get_creation_context(scope) else {
-        return;
-    };
-    set_indexed_db_slot_value(scope, request, slot, value);
-    if relevant_context == scope.get_current_context() {
-        let _ = request.set(scope, v8str(scope, property).into(), value);
-        return;
-    }
-
-    let request = v8::Global::new(scope, request);
-    let value = v8::Global::new(scope, value);
-    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-    let request = v8::Local::new(target_scope, &request);
-    let value = v8::Local::new(target_scope, &value);
-    let _ = request.set(target_scope, v8str(target_scope, property).into(), value);
-}
-
 fn object_bool_property(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
