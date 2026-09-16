@@ -30,7 +30,12 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn flush_open_succ
         return;
     };
     if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
-        finish_aborted_upgrade_open(scope, request, database);
+        // A connection closed after commit fails the open without aborting its
+        // upgrade. Deliver the error in this result task; do not reset to pending.
+        let error = dom_exception_value(scope, "The database open was aborted.", "AbortError");
+        define_non_enumerable_value_property(scope, request, INDEXED_DB_PENDING_ERROR_SLOT, error);
+        finish_indexed_db_connection_request(scope, request);
+        flush_request_error_task(scope, task);
         return;
     }
     // The complete event's microtasks may close the upgrade connection. Keep

@@ -6,26 +6,11 @@ use crate::context_bootstrap::{
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
-#[derive(WebApiObject)]
+#[derive(Default, WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::IDBRequest)]
-struct IdbRequestObjectDeclaration<'scope> {
+struct IdbRequestObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, enumerable)]
-    transaction: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, enumerable, init = "undefined")]
-    result: (),
-
-    #[webapi(data_property, enumerable, init = "null")]
-    error: (),
-
-    #[webapi(data_property, enumerable)]
-    ready_state: &'static str,
 
     #[webapi(
         accessor_property = "onsuccess",
@@ -168,9 +153,7 @@ fn create_request_object_in_current_context<'s>(
     let transaction_value = transaction
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
-    let request = IdbRequestObjectDeclaration::new(source, transaction_value, "pending")
-        .bind(scope)
-        .ok()?;
+    let request = IdbRequestObjectDeclaration::default().bind(scope).ok()?;
     if is_open {
         IdbOpenRequestHandlersDeclaration::default()
             .initialize(scope, request)

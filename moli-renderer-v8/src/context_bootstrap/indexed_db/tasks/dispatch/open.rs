@@ -21,20 +21,20 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         return;
     };
 
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_RESULT_SLOT,
-        "result",
         database.into(),
     );
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
         transaction.into(),
     );
+    let done = v8str(scope, "done").into();
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
 
     associate_indexed_db_upgrade_open(scope, transaction, request);
     let _ = dispatch_version_change_event(
