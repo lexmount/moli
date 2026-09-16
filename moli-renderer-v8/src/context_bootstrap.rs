@@ -292,6 +292,7 @@ pub(crate) use self::events::{
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
     submit_event_submitter_value,
     set_event_source_value,
+    error_event_handler_arguments,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,
