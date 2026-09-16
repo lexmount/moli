@@ -1549,10 +1549,9 @@ mod strict_script_mime;
 mod network;
 mod postmessage;
 mod stream_clone_failures;
-
 mod canvas_transform_snapshots;
 mod geometry_point_transform;
-
+mod synthetic_exceptions;
 mod tls;
 mod canvas_fill_rect;
 mod trusted_types_reporting;
