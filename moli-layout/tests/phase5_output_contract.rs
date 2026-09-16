@@ -2875,6 +2875,92 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
 }
 
 #[test]
+fn point_hits_select_paint_order_before_deduplicating_sources() {
+    let source = Source(vec![
+        Node::element("root", vec![2, 1, 3]),
+        Node::element("foremost", Vec::new()),
+        Node::element("back", Vec::new()),
+        Node::element("middle", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 150.0));
+    for (source, z_index) in [(1, 3), (2, 1), (3, 2)] {
+        styles.0.insert(
+            source,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(20.0),
+                        top: length(20.0),
+                        right: LengthPercentageAuto::auto(),
+                        bottom: LengthPercentageAuto::auto(),
+                    },
+                    size: Size {
+                        width: length(80.0),
+                        height: length(80.0),
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Absolute)
+            .with_z_index(z_index),
+        );
+    }
+    let mut output = build(&source, &mut styles);
+    let point = LayoutPoint::new(30.0, 30.0);
+    let hit = output.hit_test(point, false).unwrap();
+    assert_eq!(hit.source, 1, "the last stored box is not foremost");
+
+    // Generated boxes can retarget to the same DOM source. The lower box is
+    // stored first, but deduplication must retain the foremost fragment.
+    output
+        .tree
+        .boxes
+        .iter_mut()
+        .find(|layout_box| layout_box.hit_source == Some(2))
+        .unwrap()
+        .hit_source = Some(1);
+    let hits = output.hit_test_all(point, false);
+    assert_eq!(
+        hits.iter().map(|hit| hit.source).collect::<Vec<_>>(),
+        [1, 3, 0]
+    );
+    assert_eq!(hits[0].fragment, hit.fragment);
+    assert_eq!(output.hit_test(point, false), Some(hits[0]));
+    let surfaces = output.painted_surface_hits(point, false);
+    assert!(
+        surfaces
+            .windows(2)
+            .all(|pair| pair[0].paint_order() >= pair[1].paint_order())
+    );
+
+    for layout_box in &mut output.tree.boxes {
+        if layout_box.hit_source == Some(1) {
+            layout_box.geometry.pointer_events = false;
+        }
+    }
+    assert_eq!(output.hit_test(point, false).unwrap().source, 3);
+    assert_eq!(output.hit_test(point, true).unwrap().source, 1);
+    assert_eq!(
+        output
+            .hit_test_all(point, false)
+            .iter()
+            .map(|hit| hit.source)
+            .collect::<Vec<_>>(),
+        [3, 0]
+    );
+    assert!(
+        output
+            .hit_test(LayoutPoint::new(-1.0, -1.0), false)
+            .is_none()
+    );
+}
+
+#[test]
 fn transformed_hit_retains_exact_local_content_box_and_inverse_mapping() {
     let source = Source(vec![
         Node::element("root", vec![1]),

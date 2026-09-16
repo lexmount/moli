@@ -1,4 +1,4 @@
-//! Temporary hit-test candidates and caret projections derived per query.
+//! Streaming hit-test candidates and caret projections derived per query.
 
 use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
@@ -27,7 +27,7 @@ impl<N: Copy> LayoutPaintedSurfaceHit<N> {
     }
 }
 
-/// One front-to-back hit-test candidate.
+/// One hit-test candidate in fragment storage order.
 #[derive(Clone, Debug, PartialEq)]
 struct LayoutHitTestEntry<N> {
     source: N,
@@ -91,9 +91,18 @@ where
         viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Option<LayoutHit<N>> {
-        self.hit_test_entries().into_iter().find_map(|entry| {
-            self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
-        })
+        let mut foremost: Option<LayoutHit<N>> = None;
+        for entry in self.hit_test_entries() {
+            if foremost.is_some_and(|hit| hit.paint_order >= Some(entry.paint_order)) {
+                continue;
+            }
+            if let Some(hit) =
+                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
+            {
+                foremost = Some(hit);
+            }
+        }
+        foremost
     }
 
     pub fn hit_test_all(
@@ -101,17 +110,15 @@ where
         viewport_point: LayoutPoint,
         ignore_pointer_events_none: bool,
     ) -> Vec<LayoutHit<N>> {
+        let mut hits = self
+            .hit_test_entries()
+            .filter_map(|entry| {
+                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
+            })
+            .collect::<Vec<_>>();
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.paint_order));
         let mut seen = HashSet::new();
-        let mut hits = Vec::new();
-        for entry in self.hit_test_entries() {
-            let Some(hit) = self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
-            else {
-                continue;
-            };
-            if seen.insert(hit.source) {
-                hits.push(hit);
-            }
-        }
+        hits.retain(|hit| seen.insert(hit.source));
         hits
     }
 
@@ -126,7 +133,6 @@ where
     ) -> Vec<LayoutPaintedSurfaceHit<N>> {
         let mut hits = self
             .hit_test_entries()
-            .into_iter()
             .filter_map(|entry| {
                 self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
                     .map(LayoutPaintedSurfaceHit::Dom)
@@ -240,7 +246,10 @@ where
     }
 
     pub fn caret_position(&self, viewport_point: LayoutPoint) -> Option<LayoutCaretPosition<N>> {
-        let entries = self.hit_test_entries();
+        // Caret distance ties follow front-to-back order. Keep that ordering
+        // local to the caret query rather than sorting every point query.
+        let mut entries = self.hit_test_entries().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.paint_order));
         let top_entry = entries
             .iter()
             .find(|entry| self.hit_for_entry(entry, viewport_point, true).is_some())?;
@@ -285,40 +294,35 @@ where
         })
     }
 
-    /// Builds the front-to-back hit candidates for one query.
+    /// Streams candidates directly from canonical geometry, without retaining
+    /// an index or duplicating the fragment set into a query-local vector.
     ///
-    /// Paint order, source provenance, transforms, and clips are canonical
-    /// tree data. The duplicated candidate vector is deliberately temporary.
-    fn hit_test_entries(&self) -> Vec<LayoutHitTestEntry<N>> {
-        let mut entries = self
-            .fragments
-            .iter()
-            .filter_map(|fragment| {
-                let paint_order = fragment.paint_order?;
-                let (box_id, is_text) = match fragment.kind {
-                    LayoutFragmentKind::Box { box_id }
-                    | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
-                    LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
-                    LayoutFragmentKind::Line { .. } => return None,
-                };
-                let layout_box = self.boxes.get(box_id.index())?;
-                if !layout_box.visible {
-                    return None;
-                }
-                Some(LayoutHitTestEntry {
-                    source: layout_box.hit_source?,
-                    fragment: fragment.id,
-                    coordinate_space: fragment.coordinate_space,
-                    clip_chain: fragment.clip_chain,
-                    local_rect: fragment.rect,
-                    paint_order,
-                    is_text,
-                    pointer_events: layout_box.pointer_events,
-                })
+    /// Fragment storage order is not paint order; callers select or sort by
+    /// the explicit paint ordinal only after resolving geometric hits.
+    fn hit_test_entries(&self) -> impl Iterator<Item = LayoutHitTestEntry<N>> + '_ {
+        self.fragments.iter().filter_map(|fragment| {
+            let paint_order = fragment.paint_order?;
+            let (box_id, is_text) = match fragment.kind {
+                LayoutFragmentKind::Box { box_id }
+                | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
+                LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
+                LayoutFragmentKind::Line { .. } => return None,
+            };
+            let layout_box = self.boxes.get(box_id.index())?;
+            if !layout_box.visible {
+                return None;
+            }
+            Some(LayoutHitTestEntry {
+                source: layout_box.hit_source?,
+                fragment: fragment.id,
+                coordinate_space: fragment.coordinate_space,
+                clip_chain: fragment.clip_chain,
+                local_rect: fragment.rect,
+                paint_order,
+                is_text,
+                pointer_events: layout_box.pointer_events,
             })
-            .collect::<Vec<_>>();
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.paint_order));
-        entries
+        })
     }
 
     fn caret_position_for_text_entry(
