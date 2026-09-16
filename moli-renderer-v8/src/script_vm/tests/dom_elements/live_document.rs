@@ -6696,12 +6696,19 @@ fn global_drag_event_handlers_cover_window_document_and_elements() {
   document.dispatchEvent(new Event('drag'));
   div.dispatchEvent(new Event('drag'));
 
-  window.ondrag = {};
+  const handlerObject = {};
+  window.ondrag = handlerObject;
+  document.ondrag = handlerObject;
+  div.ondrag = handlerObject;
+  const retained = [window.ondrag, document.ondrag, div.ondrag]
+    .map(handler => handler === handlerObject);
+  window.ondrag = 0;
   document.ondrag = undefined;
   div.ondrag = null;
   return JSON.stringify({
     surfaces,
     calls,
+    retained,
     cleared: [window.ondrag, document.ondrag, div.ondrag]
   });
 })()
@@ -6711,7 +6718,7 @@ fn global_drag_event_handlers_cover_window_document_and_elements() {
 
     assert_eq!(
         result,
-        r#"{"surfaces":true,"calls":["window:drag","document:drag","element:drag"],"cleared":[null,null,null]}"#
+        r#"{"surfaces":true,"calls":["window:drag","document:drag","element:drag"],"retained":[true,true,true],"cleared":[null,null,null]}"#
     );
 }
 

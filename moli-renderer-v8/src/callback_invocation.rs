@@ -133,6 +133,7 @@ pub(crate) struct CallbackInvocation<'s, 'a> {
     relevant_identity: Option<WindowExecutionContextIdentity>,
     host_ptr: Option<*mut JsContextHost>,
     is_callable: bool,
+    legacy_event_handler: bool,
     operation_name: &'a str,
     arguments: &'a [v8::Local<'s, v8::Value>],
     current_event: Option<v8::Local<'s, v8::Object>>,
@@ -158,10 +159,19 @@ impl<'s, 'a> CallbackInvocation<'s, 'a> {
             relevant_identity: None,
             host_ptr: None,
             is_callable,
+            legacy_event_handler: false,
             operation_name,
             arguments,
             current_event,
         }
+    }
+
+    /// HTML event handlers are legacy callback functions. Non-callable
+    /// objects are retained by their owner but invoke as undefined, without
+    /// callback-interface operation lookup or entering the object's realm.
+    pub(crate) fn with_legacy_event_handler(mut self) -> Self {
+        self.legacy_event_handler = true;
+        self
     }
 
     pub(crate) fn with_execution_context_currentness(
@@ -235,6 +245,11 @@ impl CallbackInvoker {
     ) -> R {
         if let Some(host_ptr) = invocation.host_ptr {
             unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("callback invocation");
+        }
+        if invocation.legacy_event_handler && !invocation.is_callable {
+            let value: v8::Local<v8::Value> = v8::undefined(scope).into();
+            let value = v8::Global::new(scope, value);
+            return complete(scope, CallbackInvocationOutcome::Returned(value));
         }
         if let (Some(host_ptr), Some(identity)) =
             (invocation.host_ptr, invocation.relevant_identity)

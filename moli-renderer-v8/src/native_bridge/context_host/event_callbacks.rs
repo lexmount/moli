@@ -2,11 +2,18 @@ use super::{JsContextHost, WindowExecutionContextIdentity, WindowExecutionContex
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventCallbackKind {
+    Listener,
+    Handler,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct EventCallbackId(u64);
 
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
+    kind: EventCallbackKind,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     #[cfg(test)]
     incumbent_identity: Option<WindowExecutionContextIdentity>,
@@ -14,6 +21,7 @@ struct EventCallbackRecord {
 
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
+    kind: EventCallbackKind,
     relevant_identity: Option<WindowExecutionContextIdentity>,
 }
 
@@ -59,6 +67,30 @@ impl PreparedEventCallback {
 
     pub(crate) fn is_callable(&self) -> bool {
         self.callback.callable_at_conversion()
+    }
+
+    pub(crate) fn invocation<'s, 'a>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Value>,
+        arguments: &'a [v8::Local<'s, v8::Value>],
+        current_event: Option<v8::Local<'s, v8::Object>>,
+    ) -> crate::callback_invocation::CallbackInvocation<'s, 'a> {
+        let invocation = crate::callback_invocation::CallbackInvocation::new(
+            self.callback(scope),
+            receiver,
+            self.relevant_context(scope),
+            self.incumbent_context(scope),
+            self.is_callable(),
+            "handleEvent",
+            arguments,
+            current_event,
+        );
+        if self.kind == EventCallbackKind::Handler {
+            invocation.with_legacy_event_handler()
+        } else {
+            invocation
+        }
     }
 }
 
@@ -220,10 +252,10 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
     ) {
         let relevant_context = handler
-            .and_then(|handler| v8::Local::<v8::Object>::from(handler).get_creation_context(scope))
+            .and_then(|handler| handler.get_creation_context(scope))
             .unwrap_or_else(|| scope.get_current_context());
         let incumbent_context = scope
             .get_incumbent_context()
@@ -247,7 +279,12 @@ impl JsContextHost {
         target_context: v8::Local<'s, v8::Context>,
     ) {
         let callback_id = handler.map(|handler| {
-            self.register_event_callback(scope, handler.into(), target_context, target_context)
+            self.register_event_handler_callback(
+                scope,
+                handler.into(),
+                target_context,
+                target_context,
+            )
         });
         if let Some(previous) =
             self.set_compiled_event_handler_property(target, event_type, callback_id)
@@ -261,12 +298,17 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
     ) {
         let callback_id = handler.map(|handler| {
-            self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
+            self.register_event_handler_callback(
+                scope,
+                handler,
+                relevant_context,
+                incumbent_context,
+            )
         });
         if let Some(previous) = self.set_event_handler_property(target, event_type, callback_id) {
             self.release_event_callback(previous);
@@ -297,6 +339,18 @@ impl JsContextHost {
         self.register_webidl_event_callback(scope, callback)
     }
 
+    pub(crate) fn register_event_handler_callback<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Object>,
+        relevant_context: v8::Local<'s, v8::Context>,
+        incumbent_context: v8::Local<'s, v8::Context>,
+    ) -> EventCallbackId {
+        let callback =
+            WebIdlCallbackInterface::new(scope, callback, relevant_context, incumbent_context);
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Handler)
+    }
+
     /// Registers an already converted EventListener callback.
     ///
     /// EventTarget-like surfaces whose target storage is not the DOM event
@@ -308,9 +362,24 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         callback: WebIdlCallbackInterface,
     ) -> EventCallbackId {
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Listener)
+    }
+
+    fn register_event_callback_with_kind(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        callback: WebIdlCallbackInterface,
+        kind: EventCallbackKind,
+    ) -> EventCallbackId {
         let relevant_context = callback.relevant_context(scope);
+        // A non-callable handler does not execute in its object's realm.
+        // Retiring that realm must not clear the value from another target.
         let relevant_identity =
-            self.window_execution_context_identity_for_v8_context(scope, relevant_context);
+            if kind == EventCallbackKind::Handler && !callback.callable_at_conversion() {
+                None
+            } else {
+                self.window_execution_context_identity_for_v8_context(scope, relevant_context)
+            };
         #[cfg(test)]
         let incumbent_identity = {
             let incumbent_context = callback.incumbent_context(scope);
@@ -321,6 +390,7 @@ impl JsContextHost {
             id,
             EventCallbackRecord {
                 callback,
+                kind,
                 relevant_identity,
                 #[cfg(test)]
                 incumbent_identity,
@@ -416,6 +486,7 @@ impl JsContextHost {
         }
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
+            kind: record.kind,
             relevant_identity: record.relevant_identity,
         })
     }

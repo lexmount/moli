@@ -220,7 +220,7 @@ async fn event_handler_accessors_cover_attribute_property_and_body_onload_reflec
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-body-onload-reflection=\"function:true:true:true\"")
+            .contains("data-body-onload-reflection=\"function:true:true:true:true\"")
     );
 
     server.shutdown().await;
