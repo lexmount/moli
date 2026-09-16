@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; font: 0/0 sans-serif; background: white; }
+  .topic { width: 750px; margin: 10px; }
+  .topic td, .topic th { padding: 0; }
+  .avatar { width: 48px; height: 48px; vertical-align: bottom; background: #1f7f3f; }
+  .author-size { width: 64px; height: 64px; }
+  .dimension-owner { position: absolute; left: 900px; width: 200px; height: 120px; }
+  .dimension { display: block; padding: 0; border: 0; margin: 0; }
+  .author-dimension { width: 80px; height: 40px; }
+</style>
+<body>
+<script>
+  // V2EX-like independent topic tables: a short title must not enlarge the
+  // explicitly sized avatar column. A dimensioned replaced box avoids any
+  // dependency on network/image decoding while testing its final paint origin.
+  for (const tag of ['td', 'th']) {
+    for (const direction of ['ltr', 'rtl']) {
+      for (const variant of ['short', 'long', 'author']) {
+        const table = document.createElement('table');
+        table.className = 'topic';
+        table.style.direction = direction;
+        table.setAttribute('cellpadding', '0');
+        table.setAttribute('cellspacing', '0');
+        table.setAttribute('width', '750');
+        table.dataset.case = `${tag}-${direction}-${variant}`;
+        const author = variant === 'author';
+        table.dataset.expected = JSON.stringify(direction === 'ltr'
+          ? (author ? [64,10,606,70,8,0,48,48,64] : [48,10,622,70,0,0,48,48,48])
+          : (author ? [64,10,606,70,694,0,48,48,64] : [48,10,622,70,702,0,48,48,48]));
+        table.innerHTML = `<tr>
+          <${tag} width="48" height="48" align="center" valign="top" class="${author ? 'author-size' : ''}"><a><img class="avatar" width="48" height="48" alt=""></a></${tag}>
+          <td width="10"></td>
+          <td width="auto"><div style="width:${variant === 'long' ? 400 : 120}px;height:30px"></div></td>
+          <td width="70"><div style="width:20px;height:10px"></div></td>
+        </tr>`;
+        document.body.append(table);
+      }
+    }
+  }
+
+  const dimensionCases = [
+    {id:'fixed', width:'48', height:'32', expected:[48,32]},
+    {id:'percentage', width:'25%', height:'50%', expected:[50,60]},
+    {id:'legacy-fraction', width:' 24.5px', height:'18junk', expected:[24.5,18]},
+    {id:'missing', expected:[200,8]},
+    {id:'empty', width:'', height:'', expected:[200,8]},
+    {id:'zero', width:'0', height:'0', expected:[200,8]},
+    {id:'zero-percent', width:'0%', height:'0%', expected:[200,8]},
+    {id:'negative', width:'-48', height:'-32', expected:[200,8]},
+    {id:'leading-plus', width:'+48', height:'+32', expected:[200,8]},
+    {id:'leading-dot', width:'.5', height:'.5', expected:[200,8]},
+    {id:'relative', width:'10*', height:'10*', expected:[200,8]},
+    {id:'invalid', width:'auto', height:'bad', expected:[200,8]},
+    {id:'author', width:'48', height:'32', className:'author-dimension', expected:[80,40]},
+    {id:'inline-auto', width:'48', height:'32', style:'width:auto;height:auto', expected:[200,8]},
+    {id:'namespaced', namespace:'urn:dimension-test', width:'48', height:'32', expected:[200,8]},
+  ];
+  for (const tag of ['td','th']) {
+    for (const test of dimensionCases) {
+      const owner = document.createElement('div');
+      owner.className = 'dimension-owner';
+      const cell = document.createElement(tag);
+      cell.className = `dimension ${test.className || ''}`;
+      cell.dataset.case = `${tag}-${test.id}`;
+      cell.dataset.expected = JSON.stringify(test.expected);
+      cell.dataset.mutates = String(test.id === 'fixed');
+      cell.dataset.author = String(test.id === 'author');
+      for (const name of ['width','height']) {
+        if (test[name] !== undefined) cell.setAttributeNS(test.namespace || null, name, test[name]);
+      }
+      cell.style.cssText = test.style || '';
+      cell.innerHTML = '<div style="width:10px;height:8px"></div>';
+      owner.append(cell);
+      document.body.append(owner);
+    }
+  }
+  const ordinaryOwner = document.createElement('div');
+  ordinaryOwner.className = 'dimension-owner';
+  ordinaryOwner.innerHTML = '<div class="dimension" data-case="div-control" data-expected="[200,8]" width="48" height="32"><div style="width:10px;height:8px"></div></div>';
+  document.body.append(ordinaryOwner);
+
+  let dimensionPhase = 0;
+  function setTableCellDimensionPhase(phase) {
+    dimensionPhase = phase;
+    for (const cell of document.querySelectorAll('[data-mutates=true], [data-author=true]')) {
+      if (phase === 1) {
+        cell.setAttribute('width','96');
+        cell.setAttribute('height','64');
+      } else if (phase === 2) {
+        cell.removeAttribute('width');
+        cell.removeAttribute('height');
+      }
+    }
+  }
+  function collectTableCellDimensionChecks() {
+    const checks = Array.from(document.querySelectorAll('.topic'), table => {
+      const row = table.rows[0];
+      const rect = table.getBoundingClientRect();
+      const image = table.querySelector('img').getBoundingClientRect();
+      return {id:table.dataset.case,
+        actual:[...Array.from(row.cells, cell => cell.getBoundingClientRect().width),
+          image.x-rect.x,image.y-rect.y,image.width,image.height,row.cells[0].getBoundingClientRect().height],
+        expected:JSON.parse(table.dataset.expected),
+        pixel:[image.x+24,image.y+24]};
+    });
+    for (const cell of document.querySelectorAll('.dimension')) {
+      const rect = cell.getBoundingClientRect();
+      const expected = cell.dataset.mutates === 'true' && dimensionPhase !== 0
+        ? (dimensionPhase === 1 ? [96,64] : [200,8]) : JSON.parse(cell.dataset.expected);
+      checks.push({id:cell.dataset.case, actual:[rect.width,rect.height], expected});
+    }
+    return checks;
+  }
+</script>

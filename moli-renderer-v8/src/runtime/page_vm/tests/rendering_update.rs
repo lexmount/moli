@@ -2758,6 +2758,67 @@ html,body{{margin:0;padding:0;background:white}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_table_cell_dimension_hints_and_avatar_columns() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-dimensions.html")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        let fixture = include_str!("../../../../tests/fixtures/table-cell-dimensions.html");
+        page.vm_mut().eval(&format!(
+            "document.open();document.write({});document.close()",
+            serde_json::to_string(fixture)?,
+        ))?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        for phase in 0..3 {
+            page.vm_mut()
+                .eval(&format!("setTableCellDimensionPhase({phase})"))?;
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 1100, 1.0))?
+                .expect("table-cell dimension fixture must retain a layout root");
+            let checks: serde_json::Value = serde_json::from_str(
+                &page
+                    .vm_mut()
+                    .eval("JSON.stringify(collectTableCellDimensionChecks())")?,
+            )?;
+            let checks = checks.as_array().expect("table-cell dimension checks");
+            assert_eq!(checks.len(), 43);
+            let failures: Vec<_> = checks
+                .iter()
+                .filter(|check| check["actual"] != check["expected"])
+                .collect();
+            assert!(failures.is_empty(), "phase {phase}: {failures:#?}");
+
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            for check in checks {
+                let Some(point) = check["pixel"].as_array() else {
+                    continue;
+                };
+                let x = point[0].as_f64().expect("avatar pixel x") as u32;
+                let y = point[1].as_f64().expect("avatar pixel y") as u32;
+                let offset = ((y * image.width + x) * 4) as usize;
+                assert_eq!(
+                    &image.rgba[offset..offset + 4],
+                    [31, 127, 63, 255],
+                    "phase {phase}, avatar {} at ({x}, {y})",
+                    check["id"],
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table-cell dimension hints should preserve avatar alignment");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recascades_nearest_table_cell_presentation_style() {
     run_page_vm_async_test(async move {
         let loader =

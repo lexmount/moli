@@ -179,18 +179,22 @@ fn append_html_table_presentation_declarations(
 ) {
     let native = element.element();
     let local_name = native.local_name();
-    if local_name == "table" {
-        if let Some(width) = native
-            .attribute("width")
+    // Table-cell dimensions are presentation hints, just like table width.
+    // Keep them in the cascade so author CSS can override them and the table
+    // algorithm receives the same constraints as an authored CSS length.
+    if matches!(local_name, "table" | "td" | "th")
+        && let Some(width) = native
+            .attribute_ns("", "width")
             .and_then(|value| parse_html_dimension(value, true, false))
-        {
-            use style::values::generics::length::Size;
-            block.push(
-                PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(width))),
-                Importance::Normal,
-            );
-        }
+    {
+        use style::values::generics::length::Size;
+        block.push(
+            PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(width))),
+            Importance::Normal,
+        );
+    }
 
+    if local_name == "table" {
         if let Some(spacing) = native
             .attribute("cellspacing")
             .filter(|value| !value.is_empty())
@@ -229,6 +233,16 @@ fn append_html_table_presentation_declarations(
     }
 
     if matches!(local_name, "td" | "th") {
+        if let Some(height) = native
+            .attribute_ns("", "height")
+            .and_then(|value| parse_html_dimension(value, true, false))
+        {
+            use style::values::generics::length::Size;
+            block.push(
+                PropertyDeclaration::Height(Size::LengthPercentage(NonNegative(height))),
+                Importance::Normal,
+            );
+        }
         append_html_table_cell_padding_declarations(element, block);
     }
 }
