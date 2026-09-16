@@ -22,7 +22,6 @@ content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
@@ -522,9 +521,6 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -681,6 +677,7 @@ css/css-grid/alignment/grid-justify-baseline-002.html
 css/css-grid/alignment/grid-justify-baseline-003.html
 css/css-grid/alignment/grid-justify-baseline-004.html
 css/css-grid/alignment/grid-justify-baseline-005.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-002.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-003.html
@@ -2397,6 +2394,7 @@ css/cssom-view/elementFromPoint-003.html
 css/cssom-view/elementFromPoint-dynamic-anon-box.html
 css/cssom-view/elementFromPoint.html
 css/cssom-view/elementFromPosition.html
+css/cssom-view/elementsFromPoint-iframes.html
 css/cssom-view/elementsFromPoint-inline-htb-rtl.html
 css/cssom-view/elementsFromPoint-inline-vlr-rtl.html
 css/cssom-view/elementsFromPoint-inline-vrl-ltr.html
@@ -3074,6 +3072,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -3166,7 +3165,6 @@ html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3299,6 +3297,7 @@ html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
+html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-iframe.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-resolution-order.html
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-5.html
@@ -3533,7 +3532,6 @@ service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
-service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/synced-state.https.html
 service-workers/service-worker/unregister-then-register-new-script.https.html
 service-workers/service-worker/unregister-then-register.https.html
@@ -3751,7 +3749,6 @@ webidl/current-realm.html
 webidl/ecmascript-binding/constructors.html
 webidl/ecmascript-binding/default-toJSON-cross-realm.html
 webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html
-webidl/ecmascript-binding/invalid-this-value-cross-realm.html
 webidl/ecmascript-binding/window-named-properties-object.html
 webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
@@ -3780,7 +3777,6 @@ xhr/open-url-worker-origin.htm
 xhr/overridemimetype-blob.html
 xhr/overridemimetype-headers-received-state-force-shiftjis.htm
 xhr/overridemimetype-invalid-mime-type.htm
-xhr/response-invalid-responsetype.htm
 xhr/responsedocument-decoding.htm
 xhr/responsetext-decoding.htm
 xhr/responsexml-basic.htm
@@ -3792,4 +3788,5 @@ xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/status-async.htm
 xhr/status-basic.htm
+xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expired value before load fires
 xml/xml-prolog-accepted-versions.html

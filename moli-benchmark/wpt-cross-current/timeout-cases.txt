@@ -50,7 +50,6 @@ css/cssom-view/scrollIntoView-multiple-nested.html
 css/cssom-view/scrollIntoView-multiple.html
 css/cssom-view/smooth-scroll-nonstop.html
 css/cssom-view/smooth-scrollIntoView-with-smooth-fragment-scroll.html
-css/cssom/cssom-fontfacerule-constructors.html
 document-policy/required-policy/required-document-policy-nested.html
 dom/events/EventListener-invoke-legacy.html
 dom/events/scrolling/scrollend-fires-to-text-input.html
@@ -113,7 +112,6 @@ html/browsers/history/the-location-interface/location_replace_session_history.ht
 html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
-html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
 html/browsers/history/the-session-history-of-browsing-contexts/navigation-in-onload.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
@@ -141,6 +139,8 @@ html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
@@ -173,7 +173,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
-html/webappapis/dynamic-markup-insertion/document-write/iframe_010.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 html/webappapis/scripting/events/compile-event-handler-settings-objects.html
 html/webappapis/scripting/events/onerroreventhandler.html
@@ -202,9 +201,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
-navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
-navigation-api/navigate-event/navigate-history-back-noop.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
@@ -268,10 +265,10 @@ service-workers/service-worker/performance-timeline.https.html
 service-workers/service-worker/postmessage-to-client-message-queue.https.html
 service-workers/service-worker/referer.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
-service-workers/service-worker/rejections.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
+service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
