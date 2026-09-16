@@ -7109,6 +7109,46 @@ globalThis.transportProfileResult = 'pending';
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[tokio::test]
+async fn indexed_db_versionchange_coordinates_window_worker_and_two_worker_connections() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (holder, requester) in [
+        ("worker", "window"),
+        ("window", "worker"),
+        ("worker", "worker"),
+    ] {
+        for operation in ["upgrade", "delete"] {
+            for close_mode in ["microtask", "timer", "blocked"] {
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                    "https://indexeddb-cross-agent-connections.test/",
+                    &loader,
+                );
+                let config = serde_json::json!({"holder":holder,"requester":requester,"operation":operation,"closeMode":close_mode});
+                vm.eval(&format!("globalThis.connectionConfig = {config};"))
+                    .unwrap();
+                vm.eval(include_str!(
+                    "../../../tests/fixtures/indexeddb-cross-agent-connections.js"
+                ))
+                .unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(connectionProbe.state !== 'pending')",
+                    "true",
+                    "cross-agent connection notification should finish",
+                )
+                .await;
+                assert_eq!(
+                    vm.eval("connectionProbe.state").unwrap(),
+                    "pass",
+                    "{config}: {}",
+                    vm.eval("JSON.stringify(connectionProbe)").unwrap()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn indexed_db_connection_queue_waits_for_upgrade_requests_and_resolves_versions_at_head() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-connection-fifo.test/");
