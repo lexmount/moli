@@ -455,29 +455,31 @@ impl JsContextHost {
         viewport: LayoutViewport,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> LayoutAnswers<DomHandle> {
-        let mut answers = tree.answer_queries(queries, metrics);
-        for (query, answer) in queries.queries.iter().zip(&mut answers.answers) {
-            match (query, answer) {
-                (LayoutQuery::DocumentMetrics, LayoutQueryAnswer::DocumentMetrics(metrics)) => {
+        let answers = queries
+            .queries
+            .iter()
+            .map(|query| match query {
+                LayoutQuery::DocumentMetrics => {
                     // The content extent and scroll position are sampled
                     // geometry, but the viewport is explicit browser state.
                     // Window/viewport protocol commands must observe a resize
                     // immediately without forcing a new layout pass.
-                    metrics.viewport = viewport;
+                    LayoutQueryAnswer::DocumentMetrics(moli_layout::LayoutDocumentMetrics {
+                        viewport,
+                        viewport_scroll: tree.viewport_scroll,
+                        content_size: tree.content_size,
+                    })
                 }
-                (
-                    LayoutQuery::ElementMetrics { source },
-                    LayoutQueryAnswer::ElementMetrics(metrics),
-                ) => {
-                    *metrics = tree.element_metrics_for_source_with_offset_parent_filter(
+                LayoutQuery::ElementMetrics { source } => LayoutQueryAnswer::ElementMetrics(
+                    tree.element_metrics_for_source_with_offset_parent_filter(
                         *source,
                         |candidate| self.offset_parent_candidate_is_exposed(*source, candidate),
-                    );
-                }
-                _ => {}
-            }
-        }
-        answers
+                    ),
+                ),
+                _ => tree.answer_query(query),
+            })
+            .collect();
+        LayoutAnswers { answers, metrics }
     }
 
     /// Blink exposes only offset-parent candidates whose TreeScope is one of

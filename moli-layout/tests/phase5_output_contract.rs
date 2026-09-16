@@ -2090,12 +2090,18 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
         LayoutRect::new(0.0, 0.0, 120.0, 80.0),
     );
 
-    let answers = output.answer_queries(&LayoutQueryBatch::new(vec![
+    let queries = LayoutQueryBatch::new(vec![
         LayoutQuery::DocumentMetrics,
         LayoutQuery::BoxModel { source: 0 },
         LayoutQuery::ClientRects { source: 0 },
-    ]));
-    assert_eq!(answers.answers.len(), 3);
+        LayoutQuery::ElementMetrics { source: 0 },
+        LayoutQuery::ElementMetrics { source: usize::MAX },
+    ]);
+    let answers = output.answer_queries(&queries);
+    assert_eq!(answers.answers.len(), 5);
+    for (query, answer) in queries.queries.iter().zip(&answers.answers) {
+        assert_eq!(&output.tree.answer_query(query), answer);
+    }
     assert_eq!(answers.metrics.reason, LayoutFlushReason::Test);
     assert_eq!(answers.metrics.box_count, output.boxes.len());
     assert!(matches!(
@@ -2110,6 +2116,11 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
         &answers.answers[2],
         LayoutQueryAnswer::ClientRects(rects) if rects.len() == 1
     ));
+    assert!(matches!(
+        answers.answers[3],
+        LayoutQueryAnswer::ElementMetrics(Some(_))
+    ));
+    assert_eq!(answers.answers[4], LayoutQueryAnswer::ElementMetrics(None));
 }
 
 #[test]

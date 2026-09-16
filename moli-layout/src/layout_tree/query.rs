@@ -211,63 +211,67 @@ where
         let answers = batch
             .queries
             .iter()
-            .map(|query| match query {
-                LayoutQuery::DocumentMetrics => {
-                    LayoutQueryAnswer::DocumentMetrics(LayoutDocumentMetrics {
-                        viewport: self.viewport,
-                        viewport_scroll: self.viewport_scroll,
-                        content_size: self.content_size,
-                    })
-                }
-                LayoutQuery::BoxModel { source } => {
-                    LayoutQueryAnswer::BoxModel(self.box_model_for_source(*source))
-                }
-                LayoutQuery::ClientRects { source } => {
-                    LayoutQueryAnswer::ClientRects(self.client_rects_for_source(*source))
-                }
-                LayoutQuery::ContentQuads { source } => {
-                    LayoutQueryAnswer::ContentQuads(self.content_quads_for_source(*source))
-                }
-                LayoutQuery::TextRangeRects {
-                    source,
-                    utf16_range,
-                } => LayoutQueryAnswer::TextRangeRects(
-                    self.text_range_rects(*source, utf16_range.clone()),
-                ),
-                LayoutQuery::ElementMetrics { source } => {
-                    LayoutQueryAnswer::ElementMetrics(self.element_metrics_for_source(*source))
-                }
-                LayoutQuery::UsedGridTracks { source } => {
-                    LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))
-                }
-                LayoutQuery::ScrollIntoViewGeometry { source } => {
-                    LayoutQueryAnswer::ScrollIntoViewGeometry(
-                        self.scroll_into_view_geometry_for_source(*source),
-                    )
-                }
-                LayoutQuery::IntersectionGeometry { target, root } => {
-                    LayoutQueryAnswer::IntersectionGeometry(
-                        self.intersection_geometry(*target, *root),
-                    )
-                }
-                LayoutQuery::HitTest {
-                    point,
-                    ignore_pointer_events_none,
-                } => LayoutQueryAnswer::HitTest(self.hit_test(*point, *ignore_pointer_events_none)),
-                LayoutQuery::HitTestAll {
-                    point,
-                    ignore_pointer_events_none,
-                } => LayoutQueryAnswer::HitTestAll(
-                    self.hit_test_all(*point, *ignore_pointer_events_none),
-                ),
-                LayoutQuery::CaretPosition { point } => {
-                    LayoutQueryAnswer::CaretPosition(self.caret_position(*point))
-                }
-                LayoutQuery::EventOffset { source, point } => {
-                    LayoutQueryAnswer::EventOffset(self.event_offset_for_source(*source, *point))
-                }
-            })
+            .map(|query| self.answer_query(query))
             .collect();
         LayoutAnswers { answers, metrics }
+    }
+
+    /// Answers one query without allocating a batch. Consumers can specialize
+    /// selected queries without first computing and discarding their defaults.
+    pub fn answer_query(&self, query: &LayoutQuery<N>) -> LayoutQueryAnswer<N> {
+        match query {
+            LayoutQuery::DocumentMetrics => {
+                LayoutQueryAnswer::DocumentMetrics(LayoutDocumentMetrics {
+                    viewport: self.viewport,
+                    viewport_scroll: self.viewport_scroll,
+                    content_size: self.content_size,
+                })
+            }
+            LayoutQuery::BoxModel { source } => {
+                LayoutQueryAnswer::BoxModel(self.box_model_for_source(*source))
+            }
+            LayoutQuery::ClientRects { source } => {
+                LayoutQueryAnswer::ClientRects(self.client_rects_for_source(*source))
+            }
+            LayoutQuery::ContentQuads { source } => {
+                LayoutQueryAnswer::ContentQuads(self.content_quads_for_source(*source))
+            }
+            LayoutQuery::TextRangeRects {
+                source,
+                utf16_range,
+            } => LayoutQueryAnswer::TextRangeRects(
+                self.text_range_rects(*source, utf16_range.clone()),
+            ),
+            LayoutQuery::ElementMetrics { source } => {
+                LayoutQueryAnswer::ElementMetrics(self.element_metrics_for_source(*source))
+            }
+            LayoutQuery::UsedGridTracks { source } => {
+                LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))
+            }
+            LayoutQuery::ScrollIntoViewGeometry { source } => {
+                LayoutQueryAnswer::ScrollIntoViewGeometry(
+                    self.scroll_into_view_geometry_for_source(*source),
+                )
+            }
+            LayoutQuery::IntersectionGeometry { target, root } => {
+                LayoutQueryAnswer::IntersectionGeometry(self.intersection_geometry(*target, *root))
+            }
+            LayoutQuery::HitTest {
+                point,
+                ignore_pointer_events_none,
+            } => LayoutQueryAnswer::HitTest(self.hit_test(*point, *ignore_pointer_events_none)),
+            LayoutQuery::HitTestAll {
+                point,
+                ignore_pointer_events_none,
+            } => LayoutQueryAnswer::HitTestAll(
+                self.hit_test_all(*point, *ignore_pointer_events_none),
+            ),
+            LayoutQuery::CaretPosition { point } => {
+                LayoutQueryAnswer::CaretPosition(self.caret_position(*point))
+            }
+            LayoutQuery::EventOffset { source, point } => {
+                LayoutQueryAnswer::EventOffset(self.event_offset_for_source(*source, *point))
+            }
+        }
     }
 }
