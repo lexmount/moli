@@ -9,8 +9,12 @@ FileAPI/idlharness.html
 FileAPI/url/url-lifetime.html
 IndexedDB/abort-in-initial-upgradeneeded.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/abort-in-initial-upgradeneeded.any.js?moli-wpt-any=window
+IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=window
 IndexedDB/database-names-by-origin.html
 IndexedDB/idb_webworkers.htm
+IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-origin-isolation.html
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=window
@@ -23,6 +27,8 @@ IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=dedicat
 IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=window
+IndexedDB/upgrade-transaction-lifecycle-committed.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/upgrade-transaction-lifecycle-committed.any.js?moli-wpt-any=window
 IndexedDB/upgrade-transaction-lifecycle-user-aborted.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/upgrade-transaction-lifecycle-user-aborted.any.js?moli-wpt-any=window
 apng/supported-in-source-type.html
