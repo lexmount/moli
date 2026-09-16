@@ -166,8 +166,9 @@ impl<'s, 'a> CallbackInvocation<'s, 'a> {
         }
     }
 
-    /// HTML event handlers retain non-callable objects but do not look up
-    /// callback-interface operations or enter their realm when invoked.
+    /// HTML event handlers are legacy callback functions. Non-callable
+    /// objects are retained by their owner but invoke as undefined, without
+    /// callback-interface operation lookup or entering the object's realm.
     pub(crate) fn with_legacy_event_handler(mut self) -> Self {
         self.legacy_event_handler = true;
         self
@@ -247,7 +248,8 @@ impl CallbackInvoker {
         }
         if invocation.legacy_event_handler && !invocation.is_callable {
             let value: v8::Local<v8::Value> = v8::undefined(scope).into();
-            return CallbackInvocationOutcome::Returned(v8::Global::new(scope, value));
+            let value = v8::Global::new(scope, value);
+            return complete(scope, CallbackInvocationOutcome::Returned(value));
         }
         if let (Some(host_ptr), Some(identity)) =
             (invocation.host_ptr, invocation.relevant_identity)

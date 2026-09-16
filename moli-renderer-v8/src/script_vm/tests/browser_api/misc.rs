@@ -5281,7 +5281,16 @@ fn window_global_event_handler_accessors_match_declared_surface() {
                 window.onunhandledrejection === unhandledHandler,
                 window.onrejectionhandled === rejectionHandler
               ].join(":");
-              window.onerror = {};
+              const handlerObject = {};
+              window.onerror = handlerObject;
+              window.onunhandledrejection = handlerObject;
+              window.onrejectionhandled = handlerObject;
+              const retained = [
+                window.onerror === handlerObject,
+                window.onunhandledrejection === handlerObject,
+                window.onrejectionhandled === handlerObject
+              ].join(":");
+              window.onerror = false;
               window.onunhandledrejection = 1;
               window.onrejectionhandled = undefined;
               const cleared = [
@@ -5301,6 +5310,7 @@ fn window_global_event_handler_accessors_match_declared_surface() {
                   Object.keys(window).includes("onrejectionhandled")
                 ],
                 assigned,
+                retained,
                 cleared
               });
             })()
@@ -5310,7 +5320,7 @@ fn window_global_event_handler_accessors_match_declared_surface() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["onerror:true:function:get onerror:0:function:set onerror:1:true:true","onunhandledrejection:true:function:get onunhandledrejection:0:function:set onunhandledrejection:1:true:true","onrejectionhandled:true:function:get onrejectionhandled:0:function:set onrejectionhandled:1:true:true"],"keys":[true,true,true],"assigned":"true:true:true","cleared":"null:null:null"}"#
+        r#"{"descriptors":["onerror:true:function:get onerror:0:function:set onerror:1:true:true","onunhandledrejection:true:function:get onunhandledrejection:0:function:set onunhandledrejection:1:true:true","onrejectionhandled:true:function:get onrejectionhandled:0:function:set onrejectionhandled:1:true:true"],"keys":[true,true,true],"assigned":"true:true:true","retained":"true:true:true","cleared":"null:null:null"}"#
     );
 }
 
