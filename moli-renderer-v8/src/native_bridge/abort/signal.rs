@@ -1,26 +1,9 @@
 use super::AbortStore;
 use super::event::{invoke_abort_event_callbacks, local_object_in_scope};
 use crate::context_bootstrap::abort_signal_events;
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::util::{context_host_ptr_from_global_bridge, v8str};
 use crate::webidl;
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AbortSignal.addEventListener")]
-struct AbortSignalAddEventListenerArgs {
-    #[webidl(required)]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<webidl::WebIdlCallbackInterface>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AbortSignal.removeEventListener")]
-struct AbortSignalRemoveEventListenerArgs {
-    #[webidl(required)]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<webidl::WebIdlCallbackInterface>,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "AbortSignal.dispatchEvent")]
@@ -43,7 +26,7 @@ pub(crate) fn abort_signal_add_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(parsed) = webidl::parse_args::<AbortSignalAddEventListenerArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<AddEventListenerArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
@@ -51,7 +34,7 @@ pub(crate) fn abort_signal_add_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let options = webidl::event_listener_options(scope, &args, 2, true);
+    let options = parsed.options.options;
     unsafe { &mut *host_ptr }.register_abort_signal_event_listener(
         scope,
         signal,
@@ -76,8 +59,7 @@ pub(crate) fn abort_signal_remove_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(parsed) = webidl::parse_args::<AbortSignalRemoveEventListenerArgs>(scope, &args)
-    else {
+    let Some(parsed) = webidl::parse_args::<RemoveEventListenerArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
@@ -85,7 +67,7 @@ pub(crate) fn abort_signal_remove_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let capture = webidl::event_listener_options(scope, &args, 2, true).capture;
+    let capture = parsed.options.capture;
     unsafe { &mut *host_ptr }.unregister_abort_signal_event_listener(
         scope,
         signal,

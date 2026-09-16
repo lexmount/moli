@@ -143,8 +143,15 @@ pub struct EventListenerOptions {
 }
 
 #[derive(WebIdlDictionary)]
-#[webidl(prefix = "AddEventListenerOptions")]
+#[webidl(prefix = "EventListenerOptions")]
 pub(crate) struct EventListenerOptionsMembers {
+    #[webidl(default = false)]
+    pub(crate) capture: bool,
+}
+
+#[derive(WebIdlDictionary)]
+#[webidl(prefix = "AddEventListenerOptions")]
+pub(crate) struct AddEventListenerOptionsMembers {
     #[webidl(default = false)]
     pub(crate) capture: bool,
     #[webidl(default = false)]

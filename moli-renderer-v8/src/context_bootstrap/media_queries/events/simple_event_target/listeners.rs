@@ -1,6 +1,7 @@
 use super::*;
-use crate::abort_signal_route::{ResolvedAbortSignal, event_listener_signal_from_options_value};
+use crate::abort_signal_route::ResolvedAbortSignal;
 use crate::callback_invocation::CallbackInvocation;
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::native_bridge::WindowExecutionContextIdentity;
 use crate::util::{
     context_host_ptr_from_global_bridge, get_private_object, get_private_value,
@@ -190,117 +191,27 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
     }
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.addEventListener")]
-struct SimpleObjectAddListenerArgs<'s> {
-    #[webidl(with = simple_object_add_listener_call)]
-    call: webidl::ParseOutcome<SimpleObjectAddListenerCall<'s>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.removeEventListener")]
-struct SimpleObjectRemoveListenerArgs<'s> {
-    #[webidl(with = simple_object_remove_listener_call)]
-    call: webidl::ParseOutcome<SimpleObjectRemoveListenerCall<'s>>,
-}
-
-struct SimpleObjectAddListenerCall<'s> {
-    event_type: String,
-    listener: SimpleObjectResolvedEventListener<'s>,
-    options: webidl::EventListenerOptions,
-    signal: Option<ResolvedAbortSignal<'s>>,
-}
-
-struct SimpleObjectRemoveListenerCall<'s> {
-    event_type: String,
-    listener: v8::Local<'s, v8::Value>,
-    options: webidl::EventListenerOptions,
-}
-
-fn required_simple_object_event_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    prefix: &'static str,
-    missing_message: &'static str,
-) -> Result<String, webidl::WebIdlError> {
-    if args.length() == 0 {
-        return Err(webidl::WebIdlError::custom_message(missing_message));
-    }
-    webidl::convert::<webidl::DomString>(scope, args.get(0), webidl::Context::argument(prefix, 1))
-        .map(Into::into)
-}
-
-fn simple_object_add_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<SimpleObjectAddListenerCall<'s>>, webidl::WebIdlError> {
-    let event_type = required_simple_object_event_type(
-        scope,
-        args,
-        "EventTarget.addEventListener",
-        "Failed to execute 'addEventListener' on 'EventTarget': 1 argument required, but only 0 present.",
-    )?;
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let Some(signal) = event_listener_signal_from_options_value(scope, args.get(2)) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let Some(listener) = simple_object_event_listener_parts(scope, args.get(1)) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    Ok(webidl::ParseOutcome::Parsed(SimpleObjectAddListenerCall {
-        event_type,
-        listener,
-        options,
-        signal,
-    }))
-}
-
-fn simple_object_remove_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<SimpleObjectRemoveListenerCall<'s>>, webidl::WebIdlError> {
-    let event_type = required_simple_object_event_type(
-        scope,
-        args,
-        "EventTarget.removeEventListener",
-        "Failed to execute 'removeEventListener' on 'EventTarget': 1 argument required, but only 0 present.",
-    )?;
-    let listener = args.get(1);
-    if listener.is_null_or_undefined() {
-        return Ok(webidl::ParseOutcome::Skip);
-    }
-    let options = webidl::event_listener_options(scope, args, 2, false);
-    Ok(webidl::ParseOutcome::Parsed(
-        SimpleObjectRemoveListenerCall {
-            event_type,
-            listener,
-            options,
-        },
-    ))
-}
-
 pub(crate) fn simple_object_event_target_add_listener<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(parsed) = webidl::parse_args::<SimpleObjectAddListenerArgs>(scope, args) else {
+    let Some(call) = webidl::parse_args::<AddEventListenerArgs>(scope, args) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
+    let listener = simple_object_event_listener_parts(scope, listener);
     let target = args.this();
     simple_object_event_target_register_resolved_listener(
         scope,
         target,
         slot_name,
         call.event_type,
-        call.listener,
-        call.options,
-        call.signal,
+        listener,
+        call.options.options,
+        call.options.signal,
     );
 }
 
@@ -320,21 +231,7 @@ pub(crate) fn simple_object_event_target_register_webidl_listener<'s>(
     listener: webidl::WebIdlCallbackInterface,
     options: webidl::EventListenerOptions,
 ) {
-    let callback_value = listener.value(scope);
-    let callback = v8::Local::<v8::Object>::try_from(callback_value)
-        .expect("converted EventListener callback must remain an object");
-    let relevant_context = listener.relevant_context(scope);
-    let incumbent_context = listener.incumbent_context(scope);
-    let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
-        simple_callback_context_anchors_for_contexts(scope, relevant_context, incumbent_context);
-    let listener = SimpleObjectResolvedEventListener {
-        original: callback.into(),
-        callback,
-        relevant_context_anchor,
-        incumbent_context_anchor,
-        relevant_identity,
-        is_callable: listener.callable_at_conversion(),
-    };
+    let listener = simple_object_event_listener_parts(scope, listener);
     simple_object_event_target_register_resolved_listener(
         scope, target, slot_name, event_type, listener, options, None,
     );
@@ -416,19 +313,20 @@ pub(crate) fn simple_object_event_target_remove_listener<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(parsed) = webidl::parse_args::<SimpleObjectRemoveListenerArgs>(scope, args) else {
+    let Some(call) = webidl::parse_args::<RemoveEventListenerArgs>(scope, args) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
+    let listener = listener.value(scope);
     let target = args.this();
     simple_object_event_remove_listener_value_for_type(
         scope,
         target,
         slot_name,
         &call.event_type,
-        call.listener,
+        listener,
         call.options.capture,
     );
 }
@@ -949,22 +847,23 @@ fn remove_simple_object_event_type_order<'s>(
 
 fn simple_object_event_listener_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<SimpleObjectResolvedEventListener<'s>> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let callback = v8::Local::<v8::Object>::try_from(value).ok()?;
+    listener: webidl::WebIdlCallbackInterface,
+) -> SimpleObjectResolvedEventListener<'s> {
+    let callback_value = listener.value(scope);
+    let callback = v8::Local::<v8::Object>::try_from(callback_value)
+        .expect("converted EventListener callback must remain an object");
+    let relevant_context = listener.relevant_context(scope);
+    let incumbent_context = listener.incumbent_context(scope);
     let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
-        simple_callback_context_anchors(scope, callback);
-    Some(SimpleObjectResolvedEventListener {
-        original: value,
+        simple_callback_context_anchors_for_contexts(scope, relevant_context, incumbent_context);
+    SimpleObjectResolvedEventListener {
+        original: callback.into(),
         callback,
         relevant_context_anchor,
         incumbent_context_anchor,
         relevant_identity,
-        is_callable: callback.is_callable(),
-    })
+        is_callable: listener.callable_at_conversion(),
+    }
 }
 
 fn simple_callback_context_anchors<'s>(

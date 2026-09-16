@@ -17,6 +17,7 @@ mod crypto_subtle_x25519;
 mod date_locale;
 mod details;
 mod event_handlers;
+mod event_listener_options;
 mod events_selection_storage;
 mod fullscreen;
 mod gamepad;

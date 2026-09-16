@@ -9,6 +9,7 @@ use crate::context_bootstrap::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
     event_internal_bool_flag, set_event_internal_flag,
 };
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::exception_reporting::{CallbackExceptionLogLevel, invoke_callback};
 use crate::util::v8str;
 use crate::webidl;
@@ -47,24 +48,6 @@ pub(super) struct WorkerAbortDispatchSnapshot {
 struct PreparedWorkerAbortListener {
     callback: PreparedWebIdlCallbackInterface,
     passive: bool,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AbortSignal.addEventListener")]
-struct WorkerAbortAddEventListenerArgs {
-    #[webidl(required)]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<WebIdlCallbackInterface>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AbortSignal.removeEventListener")]
-struct WorkerAbortRemoveEventListenerArgs {
-    #[webidl(required)]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<WebIdlCallbackInterface>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -215,7 +198,7 @@ pub(crate) fn worker_abort_signal_add_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(parsed) = webidl::parse_args::<WorkerAbortAddEventListenerArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<AddEventListenerArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
@@ -223,7 +206,7 @@ pub(crate) fn worker_abort_signal_add_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let options = webidl::event_listener_options(scope, &args, 2, true);
+    let options = parsed.options.options;
     store.borrow_mut().register_event_listener(
         scope,
         signal_id,
@@ -248,8 +231,7 @@ pub(crate) fn worker_abort_signal_remove_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(parsed) = webidl::parse_args::<WorkerAbortRemoveEventListenerArgs>(scope, &args)
-    else {
+    let Some(parsed) = webidl::parse_args::<RemoveEventListenerArgs>(scope, &args) else {
         rv.set_undefined();
         return;
     };
@@ -257,7 +239,7 @@ pub(crate) fn worker_abort_signal_remove_event_listener_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let capture = webidl::event_listener_options(scope, &args, 2, true).capture;
+    let capture = parsed.options.capture;
     store.borrow_mut().remove_event_listener(
         scope,
         signal_id,

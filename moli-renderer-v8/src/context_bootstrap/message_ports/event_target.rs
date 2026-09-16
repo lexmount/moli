@@ -1,31 +1,13 @@
 use super::*;
-use crate::abort_signal_route::event_listener_signal_from_options_value;
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::webidl;
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "MessagePort.addEventListener")]
-struct MessagePortAddEventListenerArgs {
-    #[webidl(required, name = "type")]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<webidl::WebIdlCallbackInterface>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "MessagePort.removeEventListener")]
-struct MessagePortRemoveEventListenerArgs {
-    #[webidl(required, name = "type")]
-    event_type: String,
-    #[webidl(required, converter = "callback_interface", nullable)]
-    listener: Option<webidl::WebIdlCallbackInterface>,
-}
 
 pub(in crate::context_bootstrap) fn message_port_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<MessagePortAddEventListenerArgs>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<AddEventListenerArgs>(scope, &args) else {
         return;
     };
     if !message_port_supports_event_type(&parsed.event_type) {
@@ -36,10 +18,8 @@ pub(in crate::context_bootstrap) fn message_port_add_event_listener_callback<'s>
         rv.set_undefined();
         return;
     };
-    let options = webidl::event_listener_options(scope, &args, 2, true);
-    let Some(signal) = event_listener_signal_from_options_value(scope, args.get(2)) else {
-        return;
-    };
+    let options = parsed.options.options;
+    let signal = parsed.options.signal;
     if signal.is_some_and(|signal| signal.is_aborted(scope)) {
         rv.set_undefined();
         return;
@@ -71,8 +51,7 @@ pub(in crate::context_bootstrap) fn message_port_remove_event_listener_callback<
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<MessagePortRemoveEventListenerArgs>(scope, &args)
-    else {
+    let Some(parsed) = webidl::parse_args::<RemoveEventListenerArgs>(scope, &args) else {
         return;
     };
     if !message_port_supports_event_type(&parsed.event_type) {
@@ -83,7 +62,7 @@ pub(in crate::context_bootstrap) fn message_port_remove_event_listener_callback<
         rv.set_undefined();
         return;
     };
-    let capture = webidl::event_listener_options(scope, &args, 2, false).capture;
+    let capture = parsed.options.capture;
     remove_message_port_event_listener(scope, args.this(), &parsed.event_type, &listener, capture);
     rv.set_undefined();
 }
