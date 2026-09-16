@@ -524,6 +524,9 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
 
     for rejection in pending {
         let promise = v8::Local::new(scope, &rejection.promise);
+        if promise.has_handler() {
+            continue;
+        }
         let reason = rejection
             .reason
             .as_ref()
@@ -4358,10 +4361,12 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
-    // A module bootstrap failure may arrive on a later evaluation task,
-    // after V8 has unwound the script or rejection job that owns its report.
-    let execution_scope = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
-        .then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
+    // Initial module evaluation failures can arrive after V8 has unwound
+    // the script or rejection job. Keep their error listeners in one checkpoint.
+    let owns_error_checkpoint = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
+        || matches!(source, WorkerErrorSource::InitialScriptEvaluation);
+    let execution_scope =
+        owns_error_checkpoint.then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
     let exception = if report.muted_errors {
         report.summary = "Script error.".to_owned();
         report.source = Some(String::new());
@@ -4389,7 +4394,7 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
         );
     }
     drop(execution_scope);
-    if matches!(parent_phase, WorkerErrorPhase::Bootstrap) {
+    if owns_error_checkpoint {
         crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
     handled
