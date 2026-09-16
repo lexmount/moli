@@ -62,19 +62,13 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     old_version: u64,
     new_version: Option<u64>,
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "IDBVersionChangeEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(event_ctor) =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
+            scope,
+            "IDBVersionChangeEvent",
+        )
     else {
-        return dispatch_idb_named_event(scope, target, event_type, |scope, event| {
-            IdbVersionChangeEventFieldsDeclaration::new(
-                old_version,
-                version_change_nullable_version_value(scope, new_version),
-            )
-            .initialize(scope, event)
-            .expect("IDBVersionChangeEvent fallback fields declaration should initialize");
-        });
+        return true;
     };
     let Some(event_type) = v8_string(scope, event_type) else {
         return true;
@@ -88,6 +82,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     )
     .initialize(scope, event)
     .expect("IDBVersionChangeEvent dispatched fields declaration should initialize");
+    events::mark_event_trusted(scope, event);
     dispatch_idb_event_object(scope, target, event)
 }
 
