@@ -73,6 +73,7 @@ mod session_description;
 mod shadow_root_init;
 mod simple_event_dispatch;
 mod simple_event_target_handlers;
+mod simple_event_dispatch;
 mod simple_handler_object;
 mod speech_synthesis;
 mod speech_synthesis_events;
