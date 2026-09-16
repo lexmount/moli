@@ -38,11 +38,9 @@ pub(super) fn install_database_and_transaction_template_bindings<'s>(
 ) {
     match interface_name {
         "IDBDatabase" => {
-            install_idb_event_target_methods(scope, prototype);
             IdbDatabasePrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "IDBTransaction" => {
-            install_idb_event_target_methods(scope, prototype);
             IdbTransactionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         _ => {}
