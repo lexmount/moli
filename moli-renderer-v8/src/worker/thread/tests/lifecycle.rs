@@ -9766,12 +9766,16 @@ async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_glob
                 constructed: false,
                 violation: null,
                 error: null,
-                ping: false
+                ping: false,
+                globalErrors: 0
             };
+            onerror = () => { ++result.globalErrors; return true; };
             function finish() {
                 if (result.violation && result.error) {
-                    postMessage(result);
-                    close();
+                    setTimeout(() => {
+                        postMessage(result);
+                        close();
+                    }, 0);
                 }
             }
             const child = new Worker("data:text/javascript,postMessage('ping')");
@@ -9796,8 +9800,12 @@ async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_glob
             child.addEventListener("error", event => {
                 event.preventDefault();
                 result.error = {
-                    messageIncludesCsp: event.message.includes("Content Security Policy"),
-                    filename: event.filename
+                    type: event.type,
+                    intrinsicEvent: Object.getPrototypeOf(event) === Event.prototype,
+                    target: event.target === child,
+                    trusted: event.isTrusted,
+                    flags: [event.bubbles, event.cancelable, event.composed, event.defaultPrevented],
+                    hasErrorDetails: ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
                 };
                 finish();
             });
@@ -9811,7 +9819,7 @@ async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_glob
 
     assert_eq!(
         recv_post_json(&mut handle).await,
-        r#"{"constructed":true,"violation":{"type":"securitypolicyviolation","effectiveDirective":"worker-src","violatedDirective":"worker-src","blockedURI":"data","documentURI":"https://app.example/parent.js","originalPolicy":"worker-src 'none'","disposition":"enforce","instance":true},"error":{"messageIncludesCsp":true,"filename":"data:text/javascript,postMessage('ping')"},"ping":false}"#
+        r#"{"constructed":true,"violation":{"type":"securitypolicyviolation","effectiveDirective":"worker-src","violatedDirective":"worker-src","blockedURI":"data","documentURI":"https://app.example/parent.js","originalPolicy":"worker-src 'none'","disposition":"enforce","instance":true},"error":{"type":"error","intrinsicEvent":true,"target":true,"trusted":true,"flags":[false,false,false,false],"hasErrorDetails":false},"ping":false,"globalErrors":0}"#
     );
 }
 
