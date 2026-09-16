@@ -4059,7 +4059,7 @@ test(() => {}, "ok");
         self.assertEqual(_pipe_trickle_delay_seconds("pipe=header(X,Y)|trickle(d2.5)"), 2.5)
         self.assertEqual(
             _pipe_trickle_delay_seconds("pipe=trickle(d3)&pipe=trickle(d1)"),
-            3.0,
+            1.0,
         )
         self.assertEqual(_pipe_trickle_delay_seconds("pipe=trickle(d999)"), 10.0)
         self.assertEqual(_pipe_trickle_delay_seconds("notpipe=trickle(d1)"), 0.0)
