@@ -18,8 +18,9 @@ use super::{
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
         ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey, JsContextHost,
-        PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
-        RuntimeObservableContextToken, WindowExecutionContextOwner, WindowTaskTarget,
+        OwnerDispatchScope, PendingWindowMessage, PendingWindowMessageEndpoint,
+        PendingWindowMessageSource, RuntimeObservableContextToken, WindowExecutionContextOwner,
+        WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
         active_child_window_handle, active_lightweight_popup_id,
         current_or_live_delegate_node_arg_handle,
         element::{
@@ -146,6 +147,44 @@ struct IdleDeadlinePrototypeDeclaration {
     time_remaining: (),
 }
 
+fn capture_window_event_target_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Result<Option<WindowOperationReceiver>, ()> {
+    // EventTarget branding already ran in the generated binding. Freeze the
+    // Window owner here, before argument conversion can replace its realm.
+    if !web_api_interfaces::Window::is_instance(scope, receiver) {
+        return Ok(None);
+    }
+    match WindowOperationReceiver::capture_and_authorize(scope, receiver, host) {
+        Ok(receiver) => Ok(Some(receiver)),
+        Err(WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            throw_type_error(scope, "Illegal invocation");
+            Err(())
+        }
+        Err(WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            Err(())
+        }
+    }
+}
+
+fn captured_window_event_target(
+    receiver: WindowOperationReceiver,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
+    let binding = receiver.resolve_live_binding(host)?;
+    match binding.dispatch_scope() {
+        OwnerDispatchScope::Child(handle) => host
+            .current_child_window_event_target(handle)
+            .map(EventTargetHandle::ChildWindow),
+        OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+            Some(EventTargetHandle::Window)
+        }
+    }
+}
+
 pub(super) fn event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -159,6 +198,9 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
+        return;
+    };
     let parsed = parse_listener_args::<AddEventListenerArgs>(scope, &args, "addEventListener");
     let Some(call) = parsed else {
         return;
@@ -175,14 +217,11 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         return;
     }
-    let child_window_target = child_window_handle(scope, args.this());
-    let target = if let Some(handle) = child_window_target {
-        let Some(target) = host.current_child_window_event_target(handle) else {
-            // Detachment clears the Window's listeners and execution context,
-            // but retained references still have a valid EventTarget receiver.
+    let target = if let Some(receiver) = window_receiver {
+        let Some(target) = captured_window_event_target(receiver, host) else {
             return;
         };
-        Some(EventTargetHandle::ChildWindow(target))
+        Some(target)
     } else {
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
@@ -230,7 +269,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
             capture,
         );
     }
-    if child_window_target.is_none() && call.event_type == "animationstart" {
+    if !matches!(target, EventTargetHandle::ChildWindow(_)) && call.event_type == "animationstart" {
         queue_animation_start_for_listener_target(scope, host_ptr, target);
     }
 }
@@ -281,6 +320,9 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
+        return;
+    };
     let Some(call) =
         parse_listener_args::<RemoveEventListenerArgs>(scope, &args, "removeEventListener")
     else {
@@ -290,12 +332,11 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let capture = call.options.capture;
-    let target = if let Some(handle) = child_window_handle(scope, args.this()) {
-        let Some(target) = host.current_child_window_event_target(handle) else {
-            // The listeners were already removed when this Window detached.
+    let target = if let Some(receiver) = window_receiver {
+        let Some(target) = captured_window_event_target(receiver, host) else {
             return;
         };
-        Some(EventTargetHandle::ChildWindow(target))
+        Some(target)
     } else {
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
@@ -325,13 +366,15 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let child_window_target = child_window_handle(scope, args.this());
-    let target = if child_window_target.is_none() {
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
+        return;
+    };
+    let target = if window_receiver.is_none() {
         event_target_handle_from_this(scope, &args, host_ptr, host)
     } else {
         None
     };
-    if child_window_target.is_none() && target.is_none() {
+    if window_receiver.is_none() && target.is_none() {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -384,14 +427,38 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
 
     set_event_trusted(scope, event, false);
     let event_type = event_type_string(scope, event);
-    if let Some(handle) = child_window_target {
-        let event_type = event_type.as_deref().unwrap_or_default();
-        host.dispatch_child_window_event(scope, handle, event_type, event);
-        rv.set_bool(!crate::context_bootstrap::event_bool_attribute(
-            scope,
-            event,
-            "defaultPrevented",
-        ));
+    if let Some(receiver) = window_receiver {
+        let Some(binding) = receiver.resolve_live_binding(host) else {
+            rv.set_bool(true);
+            return;
+        };
+        let event = v8::Global::new(scope, event);
+        let result = binding.with_current_scope(scope, host_ptr, |scope, dispatch_scope| {
+            let event = v8::Local::new(scope, &event);
+            let host = unsafe { &mut *host_ptr };
+            if let OwnerDispatchScope::Child(handle) = dispatch_scope {
+                host.dispatch_child_window_event(
+                    scope,
+                    handle,
+                    event_type.as_deref().unwrap_or_default(),
+                    event,
+                );
+                Ok(!crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented"))
+            } else {
+                host.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)
+                    .map(|dispatch| {
+                        if let Some(event_type) = event_type.as_deref() {
+                            increment_performance_event_count(scope, event_type);
+                        }
+                        dispatch.dispatch_event_return_value()
+                    })
+            }
+        });
+        match result {
+            Some(Ok(returned)) => rv.set_bool(returned),
+            Some(Err(message)) => throw_type_error(scope, &message),
+            None => rv.set_bool(true),
+        }
         return;
     }
     let Some(target) = target else {

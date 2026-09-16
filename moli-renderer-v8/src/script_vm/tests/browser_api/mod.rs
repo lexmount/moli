@@ -62,6 +62,7 @@ mod value_events;
 mod web_audio;
 mod webrtc;
 mod webrtc_events;
+mod window_event_target;
 mod window_legacy_objects;
 mod window_onerror;
 mod worker_listener_invocation;
