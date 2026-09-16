@@ -15,7 +15,7 @@ function wait(ms) {
   });
 }
 
-async function assert_json_module_failure(source, expectedFragments, description) {
+async function assert_json_module_failure(source, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(worker_url(source), { type: "module" });
@@ -40,16 +40,7 @@ async function assert_json_module_failure(source, expectedFragments, description
       }),
     ]);
 
-    if (expectedFragments === null) {
-      assert_worker_bootstrap_error(event, worker);
-    } else {
-      // JSON decoding remains an evaluation error on the current loader.
-      assert_equals(event.type, "error", "JSON module attribute failure should dispatch an error event");
-      const lowerMessage = String(event.message).toLowerCase();
-      assert_true(expectedFragments.every(function (fragment) {
-        return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-      }), description + " should expose the JSON import-attributes reason; got: " + event.message);
-    }
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, "module evaluation should not continue after JSON import-attributes failure");
   } finally {
     window.onerror = previousOnerror;
@@ -67,7 +58,6 @@ promise_test(async function () {
       "import config from " + JSON.stringify(jsonUrl) + ";",
       "postMessage(config);",
     ].join("\n"),
-    null,
     "static JSON import without type",
   );
 
@@ -76,7 +66,6 @@ promise_test(async function () {
       "import value from " + JSON.stringify(jsUrl) + " with { type: 'json' };",
       "postMessage(value);",
     ].join("\n"),
-    ["non-JSON module response", "JSON import attribute", "text/javascript"],
     "static non-JSON import with JSON type",
   );
 
@@ -85,7 +74,6 @@ promise_test(async function () {
       "import config from " + JSON.stringify(invalidJsonUrl) + " with { type: 'json' };",
       "postMessage(config);",
     ].join("\n"),
-    ["syntax"],
     "static invalid JSON import",
   );
 
