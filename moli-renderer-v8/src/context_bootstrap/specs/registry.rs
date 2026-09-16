@@ -346,7 +346,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaQueryListEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::MediaQueryListEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::SecurityPolicyViolationEvent::DESCRIPTOR,
