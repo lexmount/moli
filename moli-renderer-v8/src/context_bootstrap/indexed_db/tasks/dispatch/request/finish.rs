@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::context_bootstrap::indexed_db) fn release_request_dispatch_refs<'s>(
+fn release_request_dispatch_refs<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
