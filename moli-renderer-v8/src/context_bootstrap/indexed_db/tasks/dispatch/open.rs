@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::abort_indexed_db_transaction_after_dispatch;
 use crate::context_bootstrap::indexed_db::{
     associate_indexed_db_upgrade_open,
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
@@ -37,13 +38,18 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
     set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
 
     associate_indexed_db_upgrade_open(scope, transaction, request);
-    let _ = dispatch_version_change_event(
+    let result = dispatch_version_change_event(
         scope,
         request,
         "upgradeneeded",
         old_version,
         Some(new_version),
     );
+
+    if result.did_throw {
+        let error = dom_exception_value(scope, "An IndexedDB event listener threw.", "AbortError");
+        abort_indexed_db_transaction_after_dispatch(scope, transaction, error);
+    }
 
     // Use the same pending-request and microtask lifetime as ordinary transactions.
     // Request callbacks (including their microtasks) may enqueue more work or abort.

@@ -350,7 +350,7 @@ fn indexed_db_internal_slots_are_not_object_own_properties() {
 }
 
 #[test]
-fn indexed_db_request_state_attributes_are_inherited_while_handlers_remain_own() {
+fn indexed_db_request_state_and_event_handlers_are_inherited() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-request-enumerable.test/");
 
@@ -417,7 +417,7 @@ fn indexed_db_request_state_attributes_are_inherited_while_handlers_remain_own()
 
     assert_eq!(
         result,
-        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["name","objectStoreNames","onabort","onclose","onerror","onversionchange","version"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":[],"openHandlers":[false,false],"databaseKeys":["name","objectStoreNames","version"],"databaseHandlers":[false,false,false,false],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames"],"transactionHandlers":[false,false,false],"transactionMode":"readonly","transactionStores":true,"requestKeys":[],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
@@ -5342,9 +5342,11 @@ fn indexed_db_cursor_update_and_delete_fail_in_readonly_transactions() {
       req.onsuccess = () => {
         const cursor = req.result;
         const updateReq = cursor.update({ value: 2 });
-        updateReq.onerror = () => {
+        updateReq.onerror = event => {
+          event.preventDefault();
           const deleteReq = cursor.delete();
-          deleteReq.onerror = () => {
+          deleteReq.onerror = event => {
+            event.preventDefault();
             globalThis.__indexedDbCursorReadonlyError = [
               updateReq.error && updateReq.error.name,
               deleteReq.error && deleteReq.error.name
@@ -5393,7 +5395,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
       readReq.onsuccess = () => {
         globalThis.__indexedDbAbortResult = [
           requestError,
-          tx.error && tx.error.name,
+          tx.error === null ? "null" : tx.error.name,
           String(readReq.result)
         ].join("|");
       };
@@ -5410,7 +5412,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbAbortResult)")
         .expect("indexeddb abort result should be readable");
 
-    assert_eq!(result, "AbortError|AbortError|undefined");
+    assert_eq!(result, "AbortError|null|undefined");
 }
 
 #[test]
