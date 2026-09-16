@@ -358,6 +358,7 @@ struct IndexedDbRequestLifecycleState {
     pending_result: Option<RealmValueHandle>,
     pending_error: Option<RealmValueHandle>,
     pending_cursor: Option<RealmValueHandle>,
+    deleted_database_version: Option<u64>,
     pending_cursor_position: Option<f64>,
 }
 
@@ -381,6 +382,7 @@ impl IndexedDbRequestLifecycleState {
             blocked_dispatched,
             pending_result: None,
             pending_error: None,
+            deleted_database_version: None,
             pending_cursor: None,
             pending_cursor_position: None,
         }
@@ -830,8 +832,35 @@ pub(super) fn release_indexed_db_request_dispatch_refs<'s>(
     };
     request.pending_result = None;
     request.pending_error = None;
+    request.deleted_database_version = None;
     request.pending_cursor = None;
     request.pending_cursor_position = None;
+}
+
+pub(super) fn set_indexed_db_deleted_database_version(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+    version: u64,
+) {
+    let id = indexed_db_typed_state_id(scope, request).expect("delete request id");
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    let mut table = table.borrow_mut();
+    let request = table.requests.get_mut(&id).expect("delete request state");
+    request.deleted_database_version = Some(version);
+}
+
+pub(super) fn take_indexed_db_deleted_database_version(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+) -> Option<u64> {
+    let id = indexed_db_typed_state_id(scope, request)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    table
+        .borrow_mut()
+        .requests
+        .get_mut(&id)?
+        .deleted_database_version
+        .take()
 }
 
 pub(super) fn mark_indexed_db_request_awaiting_operation_result(

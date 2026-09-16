@@ -16,23 +16,17 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
     }
-    if let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT) {
-        set_indexed_db_request_surface_value(
-            scope,
-            request,
-            INDEXED_DB_REQUEST_ERROR_SLOT,
-            "error",
-            error,
-        );
-    }
-    let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
+        INDEXED_DB_REQUEST_RESULT_SLOT,
+        v8::undefined(scope).into(),
     );
+    if let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT) {
+        set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, error);
+    }
+    let done = v8str(scope, "done").into();
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
     let _ = dispatch_idb_named_event(scope, request, "error", |_, _| {});
     finish::finish_request_dispatch(scope, request);
     if let Some(transaction) = transaction {
