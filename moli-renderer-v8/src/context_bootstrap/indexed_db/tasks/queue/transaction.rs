@@ -9,6 +9,21 @@ pub(in crate::context_bootstrap::indexed_db) use self::abort::enqueue_transactio
 pub(in crate::context_bootstrap::indexed_db) use self::commit::enqueue_transaction_commit_task;
 pub(in crate::context_bootstrap::indexed_db) use self::successor::enqueue_next_readwrite_transaction_start;
 
+pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    let task = v8::Object::new(scope);
+    crate::context_bootstrap::indexed_db::register_indexed_db_transaction_error_task(
+        scope,
+        task,
+        transaction,
+        error,
+    );
+    enqueue_indexed_db_task(scope, task);
+}
+
 fn create_transaction_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &'static str,
