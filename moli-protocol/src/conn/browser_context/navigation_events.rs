@@ -15,10 +15,14 @@ impl CdpConnection {
         // A terminal attempt can retire its projection before a queued response
         // event is consumed. Recover the exact retained response first.
         let mut events = Box::pin(self.project_browser_navigation_responses(contents)).await;
-        let Ok(snapshot) = self
-            .browser
-            .context_handle(contents.context())
-            .and_then(|context| context.navigation_snapshot(contents))
+        let Some(snapshot) = self
+            .browser_context_by_browser_id(contents.context())
+            .and_then(|context| {
+                context
+                    .browser_context_handle()
+                    .navigation_snapshot(contents)
+                    .ok()
+            })
         else {
             return events;
         };
@@ -114,10 +118,13 @@ impl CdpConnection {
         // have failed in between: consume its exact terminal response before
         // spending publication cursors on a synthetic supersession result.
         let response = self
-            .browser
-            .context_handle(contents.context())
-            .and_then(|context| context.navigation_responses(contents))
-            .ok()
+            .browser_context_by_browser_id(contents.context())
+            .and_then(|context| {
+                context
+                    .browser_context_handle()
+                    .navigation_responses(contents)
+                    .ok()
+            })
             .and_then(|responses| {
                 responses
                     .into_iter()

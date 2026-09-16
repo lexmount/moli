@@ -46,10 +46,9 @@ async fn document_write_async_classic_waits_in_its_exact_main_runtime_source() {
 
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                owner_wake_rx
-                    .recv()
-                    .await
-                    .expect("owner wake route should remain open");
+                while page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ResourceCompletion,
+                ).await? {}
                 if page_vm
                     .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                             PageMainDocumentRuntimeActionKind::PostParseWork,
@@ -58,6 +57,10 @@ async fn document_write_async_classic_waits_in_its_exact_main_runtime_source() {
                 {
                     return Ok::<(), anyhow::Error>(());
                 }
+                owner_wake_rx
+                    .recv()
+                    .await
+                    .expect("owner wake route should remain open");
             }
         })
         .await

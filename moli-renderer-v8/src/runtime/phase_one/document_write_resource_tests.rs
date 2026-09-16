@@ -427,7 +427,8 @@ async fn wait_for_standalone_resource_result(
     loop {
         let source = wait_for_standalone_page_resource(&mut pending).await;
         if !matches!(source.next_ready_owner().map(|owner| owner.local_owner()),
-            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::SharedScriptSource(_)
+                | crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
                 crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork
             ))) {
             return (pending, source);
@@ -445,7 +446,8 @@ async fn wait_for_standalone_stylesheet_completion(
 ) -> PendingStandaloneDocumentWritePage {
     loop {
         if matches!(pending.runtime.page_vm.page_resource_completion_queue().next_ready_owner().map(|owner| owner.local_owner()),
-            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))) {
+            Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::SharedScriptSource(_)
+                | crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))) {
             pending = run_standalone_selected_page_task(pending,
                 crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion).await;
             continue;

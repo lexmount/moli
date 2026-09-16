@@ -9,7 +9,6 @@ use super::TargetRuntimeObservableSourceSummary;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TargetRuntimeObservableState {
-    emitted_console_entries: usize,
     emitted_console_entries_by_context: HashMap<i64, usize>,
     emitted_exception_entries: usize,
 }
@@ -23,20 +22,11 @@ impl TargetRuntimeObservableState {
         &self,
         summary: &TargetRuntimeObservableSourceSummary,
     ) -> bool {
-        self.has_unemitted_console(
-            summary.console_messages_with_context(),
-            summary.console_messages_by_context(),
-        ) || self.has_unemitted_exceptions(summary.lifecycle_errors())
+        self.has_unemitted_console(summary.console_messages_by_context())
+            || self.has_unemitted_exceptions(summary.lifecycle_errors())
     }
 
-    fn has_unemitted_console(
-        &self,
-        console_messages_with_context: usize,
-        console_messages_by_context: &BTreeMap<i64, usize>,
-    ) -> bool {
-        if self.emitted_console_entries_by_context.is_empty() && self.emitted_console_entries > 0 {
-            return console_messages_with_context > self.emitted_console_entries;
-        }
+    fn has_unemitted_console(&self, console_messages_by_context: &BTreeMap<i64, usize>) -> bool {
         console_messages_by_context
             .iter()
             .any(|(execution_context_id, count)| {
@@ -55,7 +45,7 @@ impl TargetRuntimeObservableState {
 
     #[cfg(test)]
     pub(crate) fn emitted_console_entries(&self) -> usize {
-        self.emitted_console_entries
+        self.emitted_console_entries_by_context.values().sum()
     }
 
     #[cfg(test)]
@@ -93,7 +83,6 @@ impl TargetRuntimeObservableState {
     #[cfg(test)]
     pub(in crate::domains) fn emission_snapshot(
         &self,
-        default_execution_context_id: Option<i64>,
         all_console_messages: Vec<RuntimeConsoleMessageSnapshot>,
         lifecycle_errors: &[String],
     ) -> RuntimeObservableEmissionSnapshot {
@@ -106,10 +95,8 @@ impl TargetRuntimeObservableState {
                 let seen = seen_context_counts
                     .entry(message.execution_context_id)
                     .or_default();
-                let emitted = self.emitted_console_entries_for_context(
-                    message.execution_context_id,
-                    default_execution_context_id,
-                );
+                let emitted =
+                    self.emitted_console_entries_for_context(message.execution_context_id);
                 let should_emit = *seen >= emitted;
                 *seen += 1;
                 should_emit
@@ -132,7 +119,7 @@ impl TargetRuntimeObservableState {
         default_execution_context_id: Option<i64>,
         summary: &TargetRuntimeObservableSourceSummary,
     ) -> HashMap<i64, usize> {
-        let mut counts = self.context_console_counts(default_execution_context_id);
+        let mut counts = self.emitted_console_entries_by_context.clone();
         if summary.console_messages_by_context().is_empty() {
             if let Some(execution_context_id) = default_execution_context_id {
                 let count = counts.entry(execution_context_id).or_default();
@@ -147,38 +134,14 @@ impl TargetRuntimeObservableState {
         counts
     }
 
-    fn context_console_counts(
-        &self,
-        default_execution_context_id: Option<i64>,
-    ) -> HashMap<i64, usize> {
-        let mut counts = self.emitted_console_entries_by_context.clone();
-        if counts.is_empty()
-            && self.emitted_console_entries > 0
-            && let Some(execution_context_id) = default_execution_context_id
-        {
-            counts.insert(execution_context_id, self.emitted_console_entries);
-        }
-        counts
-    }
-
-    pub(crate) fn emitted_console_entries_for_context(
-        &self,
-        execution_context_id: i64,
-        default_execution_context_id: Option<i64>,
-    ) -> usize {
+    pub(crate) fn emitted_console_entries_for_context(&self, execution_context_id: i64) -> usize {
         self.emitted_console_entries_by_context
             .get(&execution_context_id)
             .copied()
-            .or_else(|| {
-                (self.emitted_console_entries_by_context.is_empty()
-                    && Some(execution_context_id) == default_execution_context_id)
-                    .then_some(self.emitted_console_entries)
-            })
             .unwrap_or_default()
     }
 
     pub(crate) fn mark_emitted_console_counts(&mut self, counts: HashMap<i64, usize>) {
-        self.emitted_console_entries = counts.values().sum();
         self.emitted_console_entries_by_context = counts;
     }
 
@@ -189,15 +152,9 @@ impl TargetRuntimeObservableState {
     pub(crate) fn advance_to_current(
         &mut self,
         console_counts_by_context: HashMap<i64, usize>,
-        owner_queue_console_entries: usize,
         exception_entries: usize,
     ) {
-        if console_counts_by_context.is_empty() {
-            self.emitted_console_entries = owner_queue_console_entries;
-            self.emitted_console_entries_by_context.clear();
-        } else {
-            self.mark_emitted_console_counts(console_counts_by_context);
-        }
+        self.mark_emitted_console_counts(console_counts_by_context);
         self.emitted_exception_entries = exception_entries;
     }
 }
@@ -223,19 +180,22 @@ mod tests {
     use super::{TargetRuntimeObservableSourceSummary, TargetRuntimeObservableState};
 
     #[test]
-    fn runtime_observable_state_tracks_context_cursors_and_owner_queue_aggregate_cursor() {
+    fn runtime_observable_state_tracks_and_clears_exact_context_cursors() {
         let mut state = TargetRuntimeObservableState::default();
         state.mark_emitted_console_counts(HashMap::from([(1, 2), (7, 1)]));
 
-        assert!(!state.has_unemitted_console(3, &BTreeMap::from([(1, 2), (7, 1)])));
-        assert!(state.has_unemitted_console(4, &BTreeMap::from([(1, 2), (7, 2)])));
-        assert_eq!(state.emitted_console_entries_for_context(1, None), 2);
-        assert_eq!(state.emitted_console_entries_for_context(7, None), 1);
-        assert_eq!(state.emitted_console_entries_for_context(9, None), 0);
+        assert!(!state.has_unemitted_console(&BTreeMap::from([(1, 2), (7, 1)])));
+        assert!(state.has_unemitted_console(&BTreeMap::from([(1, 2), (7, 2)])));
+        assert_eq!(state.emitted_console_entries_for_context(1), 2);
+        assert_eq!(state.emitted_console_entries_for_context(7), 1);
+        assert_eq!(state.emitted_console_entries_for_context(9), 0);
 
-        state.advance_to_current(HashMap::new(), 5, 3);
-        assert_eq!(state.emitted_console_entries_for_context(42, Some(42)), 5);
-        assert_eq!(state.emitted_console_entries_for_context(7, Some(42)), 0);
+        state.advance_to_current(HashMap::from([(42, 5)]), 3);
+        assert_eq!(state.emitted_console_entries_for_context(42), 5);
+        assert_eq!(state.emitted_console_entries_for_context(7), 0);
+        state.advance_to_current(HashMap::new(), 3);
+        assert_eq!(state.emitted_console_entries(), 0);
+        assert_eq!(state.emitted_console_entries_for_context(42), 0);
         assert!(
             !state.has_unemitted_source(&TargetRuntimeObservableSourceSummary::from_counts(
                 0,
@@ -299,7 +259,6 @@ mod tests {
         state.mark_emitted_exception_entries(1);
 
         let snapshot = state.emission_snapshot(
-            Some(1),
             vec![
                 console_message(1, "old-default"),
                 console_message(1, "new-default"),
@@ -319,15 +278,15 @@ mod tests {
 
         state.mark_emitted_console_counts(snapshot.context_console_counts().clone());
         state.mark_emitted_exception_entries(snapshot.exception_end());
-        assert_eq!(state.emitted_console_entries_for_context(1, Some(1)), 2);
-        assert_eq!(state.emitted_console_entries_for_context(2, Some(1)), 1);
+        assert_eq!(state.emitted_console_entries_for_context(1), 2);
+        assert_eq!(state.emitted_console_entries_for_context(2), 1);
         assert_eq!(state.emitted_exception_entries(), 2);
     }
 
     #[test]
     fn runtime_observable_lifecycle_error_cursor_advances_without_default_context() {
         let mut state = TargetRuntimeObservableState::default();
-        let snapshot = state.emission_snapshot(None, Vec::new(), &["error".to_owned()]);
+        let snapshot = state.emission_snapshot(Vec::new(), &["error".to_owned()]);
 
         assert_eq!(snapshot.lifecycle_errors(), ["error"]);
         state.mark_emitted_console_counts(snapshot.context_console_counts().clone());

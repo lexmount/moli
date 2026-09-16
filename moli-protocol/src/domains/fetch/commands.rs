@@ -1,7 +1,4 @@
-use crate::conn::{
-    CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID, DocumentFetchCommand,
-    monotonic_timestamp_seconds,
-};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, DocumentFetchCommand};
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
     DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
@@ -9,7 +6,7 @@ use crate::devtools_runtime::{
     DevToolsProtocol, DevToolsRequestId,
 };
 use crate::domains::command_output::CommandOutputPlan;
-use crate::domains::{activity, network, page};
+use crate::domains::{activity, page};
 use moli_core::page::{RendererSyntheticResponseBody, SubresourceResourceType};
 use moli_url_policy::BrowserUrlScheme;
 use url::Url;
@@ -543,29 +540,13 @@ fn start_devtools_fail_intercepted_request_command(
     ) {
         let pending = pending;
         if let Some(continuation) = pending.detached_parser_script_fetch_continuation() {
-            if !continuation.fail(error_text.clone()) {
+            if !continuation.fail(error_text) {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     "RequestNotFound",
                 ));
             }
-            let mut plan = CommandOutputPlan::success();
-            let mut events = Vec::new();
-            let loader_id = conn
-                .current_document_loader_id_for_owner(owner)
-                .unwrap_or_else(|| DEFAULT_LOADER_ID.to_owned());
-            network::emit_loading_failed(
-                &mut events,
-                command_session_id,
-                &pending.network_request_id,
-                &pending.frame_id,
-                &loader_id,
-                monotonic_timestamp_seconds(),
-                &error_text,
-                pending.resource_type.into(),
-            );
-            plan.extend_background_events(events);
-            return FetchCommandTaskStep::Complete(plan);
+            return FetchCommandTaskStep::Complete(CommandOutputPlan::success());
         }
         let pending_page = match super::start_subresource_fetch_command(
             conn,

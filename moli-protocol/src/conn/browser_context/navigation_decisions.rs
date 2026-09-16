@@ -86,9 +86,16 @@ impl CdpConnection {
         &mut self,
         contents: WebContentsHandle,
     ) -> Vec<BackgroundProtocolEvent> {
-        let Ok(context) = self.browser.context_handle(contents.context()) else {
+        let Some(projection) = self.browser_context_by_browser_id(contents.context()) else {
             return Vec::new();
         };
+        let context = projection.browser_context_handle().clone();
+        let projected = projection
+            .target_id_for_web_contents(contents.id())
+            .and_then(|target| {
+                projection.projected_renderer_document_lifecycle_binding_for_target(target)
+            })
+            .map(|binding| (binding.document_id, binding.navigation));
         let Ok(responses) = context.navigation_responses(contents) else {
             return Vec::new();
         };
@@ -97,7 +104,9 @@ impl CdpConnection {
             out.extend(self.project_native_navigation_network(&response, false));
             let document =
                 moli_core::browser::DocumentHandle::new(contents, response.request.document);
-            if context.document_commit_snapshot(document).is_ok() {
+            if projected != Some((document.id(), Some(response.request.navigation)))
+                && context.document_commit_snapshot(document).is_ok()
+            {
                 out.extend(self.project_browser_document_commit(document).await);
             }
             out.extend(self.project_native_navigation_network(&response, true));
@@ -117,10 +126,13 @@ impl CdpConnection {
         complete: bool,
     ) -> Vec<BackgroundProtocolEvent> {
         let response = self
-            .browser
-            .context_handle(document.web_contents().context())
-            .and_then(|context| context.navigation_responses(document.web_contents()))
-            .ok()
+            .browser_context_by_browser_id(document.web_contents().context())
+            .and_then(|context| {
+                context
+                    .browser_context_handle()
+                    .navigation_responses(document.web_contents())
+                    .ok()
+            })
             .and_then(|responses| {
                 responses
                     .into_iter()
@@ -151,9 +163,25 @@ impl CdpConnection {
         complete: bool,
     ) -> Vec<BackgroundProtocolEvent> {
         let contents = response.request.web_contents;
-        let Ok(context) = self.browser.context_handle(contents.context()) else {
+        let Some(projection) = self.browser_context_by_browser_id(contents.context()) else {
             return Vec::new();
         };
+        let Some(target) = projection.target_id_for_web_contents(contents.id()) else {
+            return Vec::new();
+        };
+        let Some(pending) =
+            projection.native_navigation_dispatch(target, response.request.navigation)
+        else {
+            return Vec::new();
+        };
+        // Both publication cursors are terminal. Snapshot recovery must not
+        // turn later lifecycle events into repeated native status queries.
+        if pending.navigation.navigate_id.is_none()
+            && projection.native_navigation_response_completed(target, response.request.navigation)
+        {
+            return Vec::new();
+        }
+        let context = projection.browser_context_handle().clone();
         let head = response.response.as_ref().ok();
         let download = head.is_some_and(|head| {
             moli_web_mime::response_headers_indicate_attachment_download(&head.headers)

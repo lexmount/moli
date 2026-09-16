@@ -3744,18 +3744,24 @@ console.info('slot snapshot console');
         )
         .expect("console log after user buffer tamper");
 
-    let messages = page_vm
-        .vm_mut()
-        .snapshot_console_messages_with_context()
-        .expect("runtime console messages with context");
+    let snapshot = page_vm
+        .page_diagnostics_snapshot()
+        .expect("runtime console diagnostics");
+    let messages = snapshot
+        .runtime_observable_source()
+        .expect("runtime console source")
+        .source_items();
     assert!(
-        messages.iter().any(|message| {
+        messages.iter().any(|item| {
+            let RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. } = item else {
+                return false;
+            };
             message.message == "info: slot snapshot console"
                 && message.args.first().and_then(|arg| arg.get("value"))
                     == Some(&json!("slot snapshot console"))
                 && message.execution_context_id > 0
         }),
-        "runtime console message snapshot should come from context slots: {messages:?}"
+        "runtime console message snapshot should come from the native source queue: {messages:?}"
     );
 }
 

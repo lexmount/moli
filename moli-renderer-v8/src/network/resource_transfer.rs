@@ -24,7 +24,16 @@ pub(crate) struct ResourceTransfer {
 enum ResourceTransferState {
     Requested(RendererNetworkRequest),
     Responding(RendererNetworkRequest),
-    Finished,
+    Finished(SubresourceNetworkRequestHandle),
+}
+
+impl ResourceTransferState {
+    fn handle(&self) -> SubresourceNetworkRequestHandle {
+        match self {
+            Self::Requested(network) | Self::Responding(network) => network.handle(),
+            Self::Finished(handle) => *handle,
+        }
+    }
 }
 
 impl ResourceTransfer {
@@ -85,16 +94,16 @@ impl ResourceTransfer {
     }
 
     pub(crate) fn handle(&self) -> SubresourceNetworkRequestHandle {
-        self.request().handle()
+        self.state.lock().handle()
     }
 
-    pub(crate) fn request(&self) -> RendererNetworkRequest {
+    /// Completion releases the source lease. A late continuation must not
+    /// acquire it again, even while another consumer still retains the handle.
+    pub(crate) fn request(&self) -> Option<RendererNetworkRequest> {
         match &*self.state.lock() {
             ResourceTransferState::Requested(network)
-            | ResourceTransferState::Responding(network) => network.clone(),
-            ResourceTransferState::Finished => {
-                panic!("completed request has no continuation")
-            }
+            | ResourceTransferState::Responding(network) => Some(network.clone()),
+            ResourceTransferState::Finished(_) => None,
         }
     }
 
@@ -112,7 +121,7 @@ impl ResourceTransfer {
             ResourceTransferState::Requested(_) => {
                 panic!("resource data must follow its response head")
             }
-            ResourceTransferState::Finished => {}
+            ResourceTransferState::Finished(_) => {}
         }
     }
 
@@ -189,11 +198,15 @@ impl ResourceTransfer {
         >,
         mut observer: impl FnMut(RendererNetworkObservation),
     ) {
-        let previous = std::mem::replace(&mut *self.state.lock(), ResourceTransferState::Finished);
+        let previous = {
+            let mut state = self.state.lock();
+            let finished = ResourceTransferState::Finished(state.handle());
+            std::mem::replace(&mut *state, finished)
+        };
         let network = match &previous {
             ResourceTransferState::Requested(network)
             | ResourceTransferState::Responding(network) => network,
-            ResourceTransferState::Finished => return,
+            ResourceTransferState::Finished(_) => return,
         };
         let body = match result(network) {
             Ok((head, body)) => match previous {
@@ -204,7 +217,7 @@ impl ResourceTransfer {
                 ResourceTransferState::Responding(_) => {
                     SubresourceBodyFinished::ready_after_streaming(network.handle(), body)
                 }
-                ResourceTransferState::Finished => unreachable!(),
+                ResourceTransferState::Finished(_) => unreachable!(),
             },
             Err(ResourceResponseFailure::Request(message)) => {
                 SubresourceBodyFinished::failed(network.handle(), message)
@@ -238,7 +251,8 @@ impl ResourceTransfer {
 impl ResourceResponseObserver for ResourceTransfer {
     fn response_started(&self, response: Arc<ResourceResponseHead>) {
         let mut state = self.state.lock();
-        match std::mem::replace(&mut *state, ResourceTransferState::Finished) {
+        let finished = ResourceTransferState::Finished(state.handle());
+        match std::mem::replace(&mut *state, finished) {
             ResourceTransferState::Requested(network) => {
                 Self::record_response(&network, response.as_ref().clone(), &mut |observation| {
                     self.observe(observation);
@@ -248,7 +262,7 @@ impl ResourceResponseObserver for ResourceTransfer {
             ResourceTransferState::Responding(_) => {
                 panic!("one resource response head per consumer")
             }
-            ResourceTransferState::Finished => {}
+            ResourceTransferState::Finished(_) => {}
         }
     }
 
@@ -263,7 +277,7 @@ impl ResourceResponseObserver for ResourceTransfer {
 
 impl Drop for ResourceTransfer {
     fn drop(&mut self) {
-        if !matches!(self.state.get_mut(), ResourceTransferState::Finished) {
+        if !matches!(self.state.get_mut(), ResourceTransferState::Finished(_)) {
             self.failed(&ResourceResponseFailure::Request(
                 "Resource load cancelled".into(),
             ));

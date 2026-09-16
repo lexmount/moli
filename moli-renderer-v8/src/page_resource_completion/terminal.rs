@@ -19,6 +19,11 @@ use super::{
 /// Document that created it.
 #[derive(Debug)]
 pub(crate) enum RendererPageResourceTerminal {
+    SharedScriptSource {
+        owner: crate::native_bridge::WindowDocumentOwner,
+        completion: crate::planning::SharedScriptSourceLoadCompleter,
+        outcome: Box<crate::planning::PreparedScriptSourceLoadOutcome>,
+    },
     DocumentWriteExternalScript {
         completion: DocumentWriteExternalScriptLoadCompletion,
     },
@@ -82,6 +87,22 @@ pub(crate) struct RendererPageResourceCompletion {
 }
 
 impl RendererPageResourceCompletion {
+    pub(crate) fn shared_script_source(
+        root_document: RendererDocumentToken,
+        owner: crate::native_bridge::WindowDocumentOwner,
+        completion: crate::planning::SharedScriptSourceLoadCompleter,
+        outcome: crate::planning::PreparedScriptSourceLoadOutcome,
+    ) -> Self {
+        Self {
+            root_document,
+            terminal: RendererPageResourceTerminal::SharedScriptSource {
+                owner,
+                completion,
+                outcome: Box::new(outcome),
+            },
+        }
+    }
+
     pub(crate) fn document_write_external_script(
         root_document: RendererDocumentToken,
         completion: DocumentWriteExternalScriptLoadCompletion,
@@ -268,6 +289,12 @@ impl RendererPageResourceCompletion {
 
     pub(crate) fn owner(&self) -> RendererPageResourceCompletionOwner {
         match &self.terminal {
+            RendererPageResourceTerminal::SharedScriptSource { owner, .. } => {
+                RendererPageResourceCompletionOwner::shared_script_source(
+                    self.root_document,
+                    *owner,
+                )
+            }
             RendererPageResourceTerminal::DocumentWriteExternalScript { completion } => {
                 RendererPageResourceCompletionOwner::document_write_external_script(
                     self.root_document,
@@ -371,6 +398,9 @@ impl RendererPageResourceCompletion {
 
     pub(crate) fn activity_source(&self) -> RendererOwnerResourceActivitySource {
         match &self.terminal {
+            RendererPageResourceTerminal::SharedScriptSource { .. } => {
+                RendererOwnerResourceActivitySource::AsyncSubresource
+            }
             RendererPageResourceTerminal::DocumentWriteExternalScript { .. } => {
                 RendererOwnerResourceActivitySource::DocumentWriteExternalScript
             }

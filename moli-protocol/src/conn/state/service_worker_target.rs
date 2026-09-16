@@ -1,4 +1,4 @@
-use super::worker_output_history::WorkerOutputHistory;
+use moli_page_types::OutputHistory;
 use std::collections::{BTreeMap, BTreeSet};
 
 use moli_core::page::{
@@ -52,9 +52,9 @@ pub(crate) struct ServiceWorkerTargetState {
     run_state: ServiceWorkerTargetRunState,
     inspector_target_crashed_session_ids: BTreeSet<String>,
     runtime_execution_context: Option<RuntimeExecutionContextEvent>,
-    console_messages: WorkerOutputHistory<RuntimeConsoleMessageSnapshot>,
-    exception_messages: WorkerOutputHistory<ServiceWorkerRuntimeExceptionSnapshot>,
-    fetch_diagnostics: WorkerOutputHistory<RendererServiceWorkerFetchDiagnostic>,
+    console_messages: OutputHistory<RuntimeConsoleMessageSnapshot>,
+    exception_messages: OutputHistory<ServiceWorkerRuntimeExceptionSnapshot>,
+    fetch_diagnostics: OutputHistory<RendererServiceWorkerFetchDiagnostic>,
     classic_log_cursors: BTreeMap<String, usize>,
 }
 
@@ -163,9 +163,9 @@ impl ServiceWorkerTargetState {
             run_state,
             inspector_target_crashed_session_ids: BTreeSet::new(),
             runtime_execution_context: None,
-            console_messages: WorkerOutputHistory::default(),
-            exception_messages: WorkerOutputHistory::default(),
-            fetch_diagnostics: WorkerOutputHistory::default(),
+            console_messages: OutputHistory::default(),
+            exception_messages: OutputHistory::default(),
+            fetch_diagnostics: OutputHistory::default(),
             classic_log_cursors: BTreeMap::new(),
         }
     }

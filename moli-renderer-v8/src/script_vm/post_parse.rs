@@ -1,10 +1,10 @@
 use super::{IsolateBootstrapCache, ScriptVmContextBootstrap};
 use crate::{
+    context_bootstrap::finish_context_bootstrap,
     context_bootstrap::{
         SharedStorageBucketStore, WeakIndexedDbManager, set_indexed_db_manager_for_context,
         set_storage_bucket_store_for_context,
     },
-    context_bootstrap::{finish_context_bootstrap, install_console_message_buffers_for_context},
     document_runtime::{DeferredPageTaskLane, DocumentRuntime, DomHandle},
     host::ScriptHandleSource,
     host_bindings::install_host_bindings,
@@ -248,7 +248,6 @@ impl ScriptVmContextBootstrap {
         install_promise_reject_dispatch_for_context(local_context, promise_reject_dispatch);
         set_indexed_db_manager_for_context(local_context, indexed_db_manager);
         set_storage_bucket_store_for_context(local_context, storage_bucket_store);
-        install_console_message_buffers_for_context(local_context);
         let scope = &mut v8::ContextScope::new(scope, local_context);
         let bootstrap_global = local_context.global(scope);
         // Window-owned accessors installed below must resolve against this

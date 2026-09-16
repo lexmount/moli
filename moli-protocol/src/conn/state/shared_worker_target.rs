@@ -1,4 +1,4 @@
-use super::worker_output_history::WorkerOutputHistory;
+use moli_page_types::OutputHistory;
 use std::collections::BTreeMap;
 
 use moli_core::page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot};
@@ -45,7 +45,7 @@ pub(crate) struct SharedWorkerTargetState {
     pub(crate) name: String,
     pub(crate) execution_ready: bool,
     runtime_execution_context: Option<RuntimeExecutionContextEvent>,
-    console_messages: WorkerOutputHistory<RuntimeConsoleMessageSnapshot>,
+    console_messages: OutputHistory<RuntimeConsoleMessageSnapshot>,
 }
 
 #[derive(Debug)]
@@ -82,7 +82,7 @@ impl SharedWorkerTargetState {
             name,
             execution_ready,
             runtime_execution_context: None,
-            console_messages: WorkerOutputHistory::default(),
+            console_messages: OutputHistory::default(),
         }
     }
 

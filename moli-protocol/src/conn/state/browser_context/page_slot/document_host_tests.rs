@@ -677,6 +677,19 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
     );
 
     let waiter = prepare_navigation(&mut owner, "data:text/html,<title>successor</title>").await;
+    let successor_renderer = prepared_renderer(&owner, &waiter);
+    let successor_document = waiter.request().document;
+    assert!(owner.routes_current_renderer_page_owner_for_target(TARGET, renderer, document));
+    assert!(!owner.routes_current_renderer_page_owner_for_target(
+        TARGET,
+        successor_renderer,
+        document
+    ));
+    assert!(!owner.routes_current_renderer_page_owner_for_target(
+        TARGET,
+        successor_renderer,
+        successor_document
+    ));
     // Deliberately finish the Browser transaction without projecting its commit.
     // The old renderer has closed; its final FIFO facts still belong to the
     // observer's old request correlations, not to the successor Document.
@@ -686,6 +699,16 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
         .await
         .unwrap();
     assert_ne!(owner.target_document_id(TARGET), Some(document));
+    assert!(!owner.routes_current_renderer_page_owner_for_target(TARGET, renderer, document));
+    assert!(owner.routes_current_renderer_page_owner_for_target(
+        TARGET,
+        successor_renderer,
+        successor_document
+    ));
+    assert_eq!(
+        owner.projected_renderer_document_lifecycle_binding_for_target(TARGET),
+        Some(&binding)
+    );
     assert!(
         owner
             .renderer_document_lifecycle_binding_for_target(TARGET)

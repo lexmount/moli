@@ -83,6 +83,8 @@ pub(in crate::domains::observable_output) struct ObservableConsoleLogEmissionCur
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::domains::observable_output) struct TargetObservableOutputQueue {
+    console_start: usize,
+    lifecycle_start: usize,
     observable_output_items: Vec<ScriptObservableOutputItem>,
     network_log_entries: Vec<TargetNetworkLogEntry>,
     #[cfg(test)]
@@ -613,6 +615,7 @@ impl TargetObservableOutputQueue {
             observable_output_items,
             network_log_entries: Vec::new(),
             runtime_source_output: None,
+            ..Self::default()
         }
     }
 
@@ -629,7 +632,12 @@ impl TargetObservableOutputQueue {
         let observable_output_items = runtime_source_output
             .map(TargetRuntimeObservableSourceOutput::observable_output_items)
             .unwrap_or_default();
+        let (console_start, lifecycle_start) = runtime_source_output
+            .map(TargetRuntimeObservableSourceOutput::observable_output_start)
+            .unwrap_or_default();
         Self {
+            console_start,
+            lifecycle_start,
             observable_output_items,
             network_log_entries: Vec::new(),
             #[cfg(test)]
@@ -641,16 +649,11 @@ impl TargetObservableOutputQueue {
         runtime_slot: &TargetRuntimeSlot,
         network_entries: &[TargetNetworkLogEntry],
     ) -> Self {
-        let observable_output_items = runtime_slot
-            .observable_output_latest_source_tail()
-            .map(|source| source.observable_output_items())
-            .unwrap_or_default();
-        Self {
-            observable_output_items,
-            network_log_entries: network_entries.to_vec(),
-            #[cfg(test)]
-            runtime_source_output: None,
-        }
+        let mut queue = Self::from_runtime_source_output_ref(
+            runtime_slot.observable_output_latest_source_tail().as_ref(),
+        );
+        queue.network_log_entries = network_entries.to_vec();
+        queue
     }
 
     #[cfg(test)]
@@ -662,6 +665,7 @@ impl TargetObservableOutputQueue {
             observable_output_items: snapshot.observable_output_items,
             network_log_entries,
             runtime_source_output: None,
+            ..Self::default()
         }
     }
 
@@ -698,11 +702,12 @@ impl TargetObservableOutputQueue {
     }
 
     pub(super) fn console_message_count(&self) -> usize {
-        count_console_observable_output_items(&self.observable_output_items)
+        self.console_start + count_console_observable_output_items(&self.observable_output_items)
     }
 
     pub(super) fn lifecycle_error_count(&self) -> usize {
-        count_lifecycle_error_observable_output_items(&self.observable_output_items)
+        self.lifecycle_start
+            + count_lifecycle_error_observable_output_items(&self.observable_output_items)
     }
 
     pub(super) fn network_log_count(&self) -> usize {
@@ -825,15 +830,15 @@ impl TargetObservableOutputQueue {
                 )
             }
         };
-        let range = ObservableConsoleLogPreparedRange::for_domain(
+        let mut range = ObservableConsoleLogPreparedRange::for_domain(
             domain,
             url.to_owned(),
             document_id,
             ConsoleLogPreparedRangeInput {
-                console_start,
-                console_end,
-                lifecycle_start,
-                lifecycle_end,
+                console_start: console_start.saturating_sub(self.console_start),
+                console_end: console_end - self.console_start,
+                lifecycle_start: lifecycle_start.saturating_sub(self.lifecycle_start),
+                lifecycle_end: lifecycle_end - self.lifecycle_start,
                 network_start,
                 network_end,
                 include_console_api_messages,
@@ -842,6 +847,10 @@ impl TargetObservableOutputQueue {
             },
             log_cursor,
         );
+        if let Some(range) = range.as_mut() {
+            range.console_end += self.console_start;
+            range.lifecycle_end += self.lifecycle_start;
+        }
         match (domain, range) {
             (ObservableConsoleLogDomain::Console, Some(range)) => prepared.push_console(range),
             (ObservableConsoleLogDomain::Log, Some(range)) => {
@@ -1054,6 +1063,58 @@ mod tests {
         source: RendererRuntimeObservableSourceSummary,
     ) -> RendererPageDiagnosticsSnapshot {
         RendererPageDiagnosticsSnapshot::from_runtime_observable_source(source)
+    }
+
+    #[test]
+    fn console_and_log_preserve_cursors_across_runtime_history_eviction() {
+        let mut history =
+            crate::domains::observable_output::TargetRuntimeObservableQueueState::default();
+        let mut owner = crate::conn::TargetOwnerState::default();
+        for index in 0..1200 {
+            let source = history
+                .append_renderer_lifecycle_error(
+                    "http://example.test/errors".into(),
+                    document_id(17),
+                    index.to_string(),
+                    Some(7),
+                )
+                .unwrap();
+            let queue = TargetObservableOutputQueue::from_runtime_source_output(Some(source));
+            let prepared = queue.console_log_backlog_ranges(
+                "http://example.test/errors",
+                document_id(17),
+                true,
+                true,
+                true,
+                &owner,
+                &Default::default(),
+                None,
+            );
+            let console = prepared.console.unwrap();
+            assert_eq!(console.items().len(), 1);
+            assert_eq!(console.lifecycle_end(), index + 1);
+            assert_eq!(prepared.log[0].range.items().len(), 1);
+            assert_eq!(prepared.log[0].range.lifecycle_end(), index + 1);
+            owner
+                .console_output_state
+                .advance_console_domain_to_current(0, index + 1);
+        }
+        let replay =
+            TargetObservableOutputQueue::from_runtime_source_output(history.latest_source_tail());
+        let prepared = replay.console_log_backlog_ranges(
+            "http://example.test/errors",
+            document_id(17),
+            true,
+            true,
+            true,
+            &Default::default(),
+            &Default::default(),
+            None,
+        );
+        assert_eq!(prepared.console.as_ref().unwrap().items().len(), 1000);
+        assert_eq!(prepared.console.unwrap().lifecycle_end(), 1200);
+        assert_eq!(prepared.log[0].range.items().len(), 1000);
+        assert_eq!(prepared.log[0].range.lifecycle_end(), 1200);
     }
 
     #[test]
@@ -1640,6 +1701,7 @@ mod tests {
             ],
             network_log_entries: Vec::new(),
             runtime_source_output: None,
+            ..TargetObservableOutputQueue::default()
         };
 
         let mut prepared = queue.console_log_backlog_ranges(
@@ -1715,6 +1777,7 @@ mod tests {
             ],
             network_log_entries: Vec::new(),
             runtime_source_output: None,
+            ..TargetObservableOutputQueue::default()
         };
 
         let mut prepared = queue.console_log_backlog_ranges(

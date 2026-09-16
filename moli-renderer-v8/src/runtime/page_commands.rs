@@ -339,11 +339,6 @@ impl PageVm {
                         .child_default_execution_context_id_for_frame_id(&frame_id),
                 ),
             ),
-            RendererPageCommand::RuntimeConsoleMessagesWithContext => {
-                Ok(RendererPageReply::RuntimeConsoleMessageSnapshots(
-                    self.vm_mut().snapshot_console_messages_with_context()?,
-                ))
-            }
             RendererPageCommand::RuntimeHeapUsage => {
                 Ok(RendererPageReply::RuntimeHeapUsage(Box::new(
                     self.vm_mut()

@@ -56,8 +56,16 @@ struct DocumentResourceLoaderAuthority {
 struct DocumentResourceNetwork {
     reporter: crate::runtime::RendererDocumentNetworkReporter,
     observer: Arc<dyn Fn(crate::runtime::RendererNetworkObservation) + Send + Sync>,
+    script_completion: Arc<ScriptSourceCompletion>,
     frame_id: Option<String>,
 }
+
+type ScriptSourceCompletion = dyn Fn(
+        crate::native_bridge::WindowDocumentOwner,
+        crate::planning::SharedScriptSourceLoadCompleter,
+        crate::planning::PreparedScriptSourceLoadOutcome,
+    ) + Send
+    + Sync;
 
 struct DocumentResourceLoaderLifecycle {
     state: DocumentResourceLoaderState,
@@ -286,8 +294,40 @@ impl DocumentResourceLoader {
         self.network = Some(Arc::new(DocumentResourceNetwork {
             reporter,
             observer: completion.network_observer(),
+            script_completion: Arc::new(move |owner, result, outcome| {
+                let _ = completion.send_shared_script_source(owner, result, outcome);
+            }),
             frame_id,
         }));
+    }
+
+    pub(crate) fn script_source_completion(
+        &self,
+    ) -> impl FnOnce(
+        crate::planning::SharedScriptSourceLoadCompleter,
+        crate::planning::PreparedScriptSourceLoadOutcome,
+    ) + Send
+    + 'static {
+        #[cfg(not(test))]
+        assert!(
+            self.network.is_some(),
+            "Document resource output must be bound before loading scripts"
+        );
+        let sender = self
+            .network
+            .as_ref()
+            .map(|network| network.script_completion.clone());
+        let owner = self.owner();
+        move |completion, outcome| {
+            if let Some(sender) = sender {
+                sender(owner, completion, outcome);
+            } else {
+                #[cfg(test)]
+                completion.finish(outcome);
+                #[cfg(not(test))]
+                unreachable!("Document script load must retain its completion route");
+            }
+        }
     }
 
     pub(crate) fn prepare_resource_request(

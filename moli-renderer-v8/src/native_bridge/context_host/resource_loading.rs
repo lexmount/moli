@@ -367,6 +367,7 @@ impl JsContextHost {
         self.pending_subresource_response_stream(internal_id)
             .network
             .request()
+            .unwrap()
     }
 
     pub(crate) fn subresource_network(

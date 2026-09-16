@@ -5519,7 +5519,17 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .expect("preload scanner should start the parser-blocking script");
             let preload_outcome = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                preload.wait_outcome(),
+                async {
+                    loop {
+                        if let Some(outcome) = preload.try_outcome() {
+                            return outcome;
+                        }
+                        assert!(page_vm.wait_for_page_resource_completion_for_test().await);
+                        assert!(page_vm.run_exact_selected_page_task_for_test(
+                            crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+                        ).await.unwrap());
+                    }
+                },
             )
             .await
             .expect("script preload should complete before the stylesheet gate is released");

@@ -1,6 +1,7 @@
 use super::BrowserContext;
 #[cfg(test)]
-use moli_core::browser::{DocumentLifetime, DocumentLifetimeObserver};
+use moli_core::browser::DocumentLifetime;
+use moli_core::browser::DocumentLifetimeObserver;
 #[cfg(test)]
 use moli_core::page::RendererLifecycleEventStamp;
 use moli_core::{
@@ -76,10 +77,33 @@ impl CommittedRendererDocumentBinding {
 
 #[derive(Debug, Default)]
 struct RendererDocumentLifecycleProtocolState {
-    binding: Option<CommittedRendererDocumentBinding>,
+    binding: Option<ObservedRendererDocumentBinding>,
     visible: Option<RendererDocumentLifecycleSnapshot>,
     last_sequence: Option<u64>,
     load_visibility: RendererDocumentLoadVisibility,
+}
+
+#[derive(Debug)]
+struct ObservedRendererDocumentBinding {
+    snapshot: CommittedRendererDocumentBinding,
+    lifetime: DocumentLifetimeObserver,
+}
+
+impl RendererDocumentLifecycleProtocolState {
+    fn binding(&self) -> Option<&CommittedRendererDocumentBinding> {
+        self.binding.as_ref().map(|binding| &binding.snapshot)
+    }
+
+    fn binding_mut(&mut self) -> Option<&mut CommittedRendererDocumentBinding> {
+        self.binding.as_mut().map(|binding| &mut binding.snapshot)
+    }
+
+    fn current_binding(&self) -> Option<&CommittedRendererDocumentBinding> {
+        self.binding
+            .as_ref()
+            .filter(|binding| binding.lifetime.is_current())
+            .map(|binding| &binding.snapshot)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -169,6 +193,7 @@ enum PendingRendererPageBinding {
 }
 
 impl PendingRendererPageBinding {
+    #[cfg(test)]
     fn renderer_page(&self) -> RendererPageResidenceIdentity {
         match self {
             #[cfg(test)]
@@ -294,8 +319,7 @@ impl TargetPageSlot {
     ) -> bool {
         let binding_matches = self
             .renderer_document_lifecycle
-            .binding
-            .as_ref()
+            .binding()
             .is_some_and(|binding| binding.loader_id == loader_id);
         if !binding_matches {
             return false;
@@ -469,7 +493,7 @@ impl TargetPageSlot {
         let Some(observation) = self.root_post_load_observation.as_ref() else {
             return false;
         };
-        self.renderer_document_lifecycle.binding.as_ref() == Some(&observation.binding)
+        self.renderer_document_lifecycle.binding() == Some(&observation.binding)
     }
 
     pub(super) fn retiring_document_lifecycle_binding(
@@ -480,8 +504,7 @@ impl TargetPageSlot {
         // The Browser may already contain the successor. Match the occurrence's
         // retired Document, not the current Browser identity or navigation.
         self.renderer_document_lifecycle
-            .binding
-            .as_ref()
+            .binding()
             .filter(|binding| {
                 binding.document_id == document
                     && binding.renderer_frame.page_id == renderer.page_id()
@@ -1122,22 +1145,79 @@ impl BrowserContext {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn routes_renderer_page_for_target(
         &self,
         target_id: &str,
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
-        self.web_contents_handle_for_target(target_id)
-            .is_some_and(|handle| {
+        self.document_handle_for_target(target_id)
+            .and_then(|document| {
                 self.browser_context
-                    .document_renderer_matches(handle, renderer_page)
+                    .document_renderer_residence(document)
+                    .ok()
             })
+            == Some(renderer_page)
             || self
                 .page_slot_for_target(target_id)
                 .expect("registered Target projection")
                 .pending_renderer_page
                 .as_ref()
                 .is_some_and(|binding| binding.renderer_page() == renderer_page)
+    }
+
+    pub(crate) fn routes_current_renderer_page_owner_for_target(
+        &self,
+        target_id: &str,
+        renderer_page: RendererPageResidenceIdentity,
+        document_id: DocumentId,
+    ) -> bool {
+        if let Some(target) = self.page_targets.get(target_id)
+            && let Some(binding) = target
+                .runtime_slot
+                .page_slot()
+                .renderer_document_lifecycle
+                .binding
+                .as_ref()
+            && binding.snapshot.document_id == document_id
+        {
+            if !binding.lifetime.is_current() {
+                return false;
+            }
+            if binding.snapshot.renderer_frame.page_id == renderer_page.page_id()
+                && target
+                    .runtime_slot
+                    .current_renderer_inspection_binding()
+                    .is_some_and(|inspection| inspection.renderer_page_residence() == renderer_page)
+            {
+                return true;
+            }
+        }
+        // Construction and failed inspection rebinds may have no projected
+        // binding yet. Resolve those exceptional paths at the native owner.
+        let matches = self
+            .web_contents_handle_for_target(target_id)
+            .is_some_and(|contents| {
+                self.browser_context
+                    .document_renderer_residence(moli_core::browser::DocumentHandle::new(
+                        contents,
+                        document_id,
+                    ))
+                    .ok()
+                    == Some(renderer_page)
+            });
+        #[cfg(test)]
+        let matches = matches
+            || self.page_slot_for_target(target_id).is_some_and(|slot| {
+                slot.document_fixture
+                    .as_ref()
+                    .is_some_and(|fixture| fixture.id == document_id)
+                    && slot
+                        .pending_renderer_page
+                        .as_ref()
+                        .is_some_and(|binding| binding.renderer_page() == renderer_page)
+            });
+        matches
     }
 
     pub(in crate::conn) fn prepared_navigation_projection_matches(
@@ -1645,9 +1725,6 @@ impl BrowserContext {
             browser_sequence,
             artifacts,
         } = lifecycle;
-        if self.target_document_id(target_id) != Some(document) {
-            return Vec::new();
-        }
         let Some(initial_snapshot) = DocumentLifecycle::creation_prefix_snapshot(&artifacts) else {
             tracing::warn!(
                 active_document = ?artifacts.active_document,
@@ -1664,12 +1741,40 @@ impl BrowserContext {
             lifecycle_snapshot,
             initial_lifecycle_events,
         } = artifacts;
-        let Some(document_id) = self.target_document_id(target_id) else {
-            tracing::debug!(
-                ?active_document,
-                ?active_epoch,
-                "dropping renderer lifecycle artifacts without a current Page attachment"
-            );
+        let Some(contents) = self.web_contents_handle_for_target(target_id) else {
+            return Vec::new();
+        };
+        if navigation.is_some_and(|navigation| {
+            self.browser_context
+                .committed_document_navigation(contents)
+                .ok()
+                .flatten()
+                != Some(navigation)
+        }) {
+            return Vec::new();
+        }
+        let lifetime = self
+            .browser_context
+            .observe_document_lifetime(moli_core::browser::DocumentHandle::new(contents, document))
+            .ok();
+        #[cfg(test)]
+        let lifetime = lifetime.or_else(|| {
+            if self
+                .browser_context
+                .document_handle(contents)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return None;
+            }
+            self.page_slot_for_target_mut(target_id)?
+                .document_fixture
+                .as_mut()
+                .filter(|fixture| fixture.id == document)
+                .map(|fixture| fixture.lifetime.observe())
+        });
+        let Some(lifetime) = lifetime.filter(DocumentLifetimeObserver::is_current) else {
             return Vec::new();
         };
         let binding = CommittedRendererDocumentBinding {
@@ -1679,7 +1784,7 @@ impl BrowserContext {
             navigation,
             frame_id,
             loader_id,
-            document_id,
+            document_id: document,
             browser_sequence,
             document_open_replacement_epoch: None,
         };
@@ -1687,8 +1792,7 @@ impl BrowserContext {
             .page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle
-            .binding
-            .as_ref()
+            .binding()
             != Some(&binding)
         {
             self.page_slot_for_target_mut(target_id)
@@ -1709,7 +1813,10 @@ impl BrowserContext {
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
-            binding: Some(binding),
+            binding: Some(ObservedRendererDocumentBinding {
+                snapshot: binding,
+                lifetime,
+            }),
             visible: Some(initial_snapshot),
             last_sequence: None,
             load_visibility: RendererDocumentLoadVisibility::default(),
@@ -1742,25 +1849,8 @@ impl BrowserContext {
         events: Vec<RendererDocumentLifecycleEvent>,
     ) -> Vec<RendererDocumentLifecycleEvent> {
         let binding_is_current = self
-            .page_slot_for_target(target_id)
-            .expect("registered Target projection")
-            .renderer_document_lifecycle
-            .binding
-            .as_ref()
-            .is_some_and(|binding| {
-                Some(binding.document_id) == self.target_document_id(target_id)
-                    && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.browser_context
-                            .committed_document_navigation(
-                                self.web_contents_handle_for_target(target_id)
-                                    .expect("registered Target must reference live WebContents"),
-                            )
-                            .ok()
-                            .flatten()
-                            .as_ref()
-                            == Some(navigation)
-                    })
-            });
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .is_some();
         if !binding_is_current {
             if !events.is_empty() {
                 tracing::debug!(
@@ -1798,15 +1888,13 @@ impl BrowserContext {
                 .page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .renderer_document_lifecycle
-                .binding
-                .as_ref()
+                .binding()
                 .is_some_and(|binding| event.epoch != binding.renderer_epoch);
             if self
                 .page_slot_for_target(target_id)
                 .unwrap()
                 .renderer_document_lifecycle
-                .binding
-                .as_ref()
+                .binding()
                 .is_none_or(|binding| {
                     binding.renderer_frame != event.frame
                         || binding.renderer_document != event.document
@@ -1842,8 +1930,7 @@ impl BrowserContext {
                 self.page_slot_for_target_mut(target_id)
                     .expect("registered Target projection")
                     .renderer_document_lifecycle
-                    .binding
-                    .as_mut()
+                    .binding_mut()
                     .expect("validated lifecycle binding")
                     .renderer_epoch = event.epoch;
             }
@@ -1851,8 +1938,7 @@ impl BrowserContext {
                 self.page_slot_for_target_mut(target_id)
                     .expect("registered Target projection")
                     .renderer_document_lifecycle
-                    .binding
-                    .as_mut()
+                    .binding_mut()
                     .expect("validated lifecycle binding")
                     .document_open_replacement_epoch = matches!(
                     reason,
@@ -1927,25 +2013,21 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<&CommittedRendererDocumentBinding> {
+        self.page_slot_for_target(target_id)?
+            .renderer_document_lifecycle
+            .current_binding()
+    }
+
+    /// The commit already consumed by this observer. It may lag behind Core;
+    /// use it for projection progress, never to authorize Document operations.
+    pub(crate) fn projected_renderer_document_lifecycle_binding_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<&CommittedRendererDocumentBinding> {
         self.page_slot_for_target(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle
-            .binding
-            .as_ref()
-            .filter(|binding| {
-                Some(binding.document_id) == self.target_document_id(target_id)
-                    && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.browser_context
-                            .committed_document_navigation(
-                                self.web_contents_handle_for_target(target_id)
-                                    .expect("registered Target must reference live WebContents"),
-                            )
-                            .ok()
-                            .flatten()
-                            .as_ref()
-                            == Some(navigation)
-                    })
-            })
+            .binding()
     }
 
     #[cfg(test)]
@@ -2025,8 +2107,8 @@ impl BrowserContext {
             .page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle
-            .binding
-            .clone()?;
+            .binding()
+            .cloned()?;
         if binding.loader_id != expected_loader_id {
             return None;
         }
@@ -2062,8 +2144,8 @@ impl BrowserContext {
             .page_slot_for_target(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle
-            .binding
-            .clone()
+            .binding()
+            .cloned()
         else {
             return RendererDocumentLifecycleObserver::resolved(
                 RendererDocumentLifecycleObservation::Unavailable,
@@ -2121,15 +2203,8 @@ impl BrowserContext {
         loader_id: &str,
     ) -> bool {
         let Some(binding) = self
-            .page_slot_for_target(target_id)
-            .expect("registered Target projection")
-            .renderer_document_lifecycle
-            .binding
-            .as_ref()
-            .filter(|binding| {
-                binding.loader_id == loader_id
-                    && Some(binding.document_id) == self.target_document_id(target_id)
-            })
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .filter(|binding| binding.loader_id == loader_id)
             .cloned()
         else {
             return false;

@@ -40,6 +40,12 @@ pub struct DocumentLifetimeObserver {
 }
 
 impl DocumentLifetimeObserver {
+    /// Read the native retirement signal without queuing an owner operation.
+    /// Document commands still validate their exact handle at the owner.
+    pub fn is_current(&self) -> bool {
+        self.receiver.has_changed().is_ok() && !*self.receiver.borrow()
+    }
+
     pub async fn wait(mut self) -> DocumentRetirement {
         loop {
             if *self.receiver.borrow_and_update() {
@@ -69,12 +75,15 @@ mod tests {
         );
         let first = lifetime.observe();
         let second = lifetime.observe();
+        assert!(first.is_current());
+        assert!(second.is_current());
         let moved = lifetime;
 
         let mut first_wait = Box::pin(first.wait());
         let mut context = Context::from_waker(Waker::noop());
         assert_eq!(first_wait.as_mut().poll(&mut context), Poll::Pending);
         moved.supersede();
+        assert!(!second.is_current());
         assert_eq!(first_wait.await, DocumentRetirement::Superseded);
         assert_eq!(second.wait().await, DocumentRetirement::Superseded);
     }
@@ -84,6 +93,7 @@ mod tests {
         let mut lifetime = DocumentLifetime::default();
         let observer = lifetime.observe();
         drop(lifetime);
+        assert!(!observer.is_current());
         assert_eq!(observer.wait().await, DocumentRetirement::Unavailable);
     }
 }

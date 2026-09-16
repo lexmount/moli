@@ -714,7 +714,6 @@ async fn flush_post_subresource_network_activity_background_events_async(
     frame_id: &str,
     network_request_id: &str,
 ) {
-    conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
     project_network_backlog_for_owner(conn, out, owner, frame_id, Some(network_request_id));
     clear_fetch_pause_network_announcement(conn, owner, network_request_id);
 }

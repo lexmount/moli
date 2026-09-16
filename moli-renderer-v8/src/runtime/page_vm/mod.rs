@@ -449,7 +449,7 @@ impl ScriptExecutionReportSnapshotSignature {
             runs: report.runs().len(),
             globals: report.globals().len(),
             globals_snapshot_state: report.globals_snapshot_state(),
-            observable_outputs: report.observable_output_items().len(),
+            observable_outputs: report.observable_output_end(),
             subresource_network_records: report.subresource_network_records().len(),
             websocket_network_events: report.websocket_network_events().len(),
             websocket_lifecycle_events: report.websocket_lifecycle_events().len(),

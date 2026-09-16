@@ -35,7 +35,7 @@ pub(crate) struct SharedScriptSourceLoad {
 
 #[derive(Debug)]
 pub(crate) struct SharedScriptSourceLoadCompleter {
-    load: SharedScriptSourceLoad,
+    load: std::sync::Weak<SharedScriptSourceLoadInner>,
     owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
 }
 
@@ -89,7 +89,8 @@ impl SharedScriptSourceLoad {
             loader.bind_service_worker(runtime, client_id);
         }
         let task_runner = loader.task_runner();
-        Self::spawn_outcome_with_owner_wake(
+        let completion = loader.script_source_completion();
+        Self::spawn_outcome(
             async move {
                 load_script_source(
                     &script,
@@ -102,6 +103,7 @@ impl SharedScriptSourceLoad {
             },
             task_runner,
             owner_wake,
+            completion,
         )
     }
 
@@ -121,10 +123,13 @@ impl SharedScriptSourceLoad {
         }
     }
 
-    pub(crate) fn spawn_outcome_with_owner_wake<F>(
+    fn spawn_outcome<F>(
         task: F,
         task_runner: RendererResourceTaskRunner,
         owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
+        publish: impl FnOnce(SharedScriptSourceLoadCompleter, PreparedScriptSourceLoadOutcome)
+        + Send
+        + 'static,
     ) -> Self
     where
         F: std::future::Future<Output = PreparedScriptSourceLoadOutcome> + Send + 'static,
@@ -133,16 +138,13 @@ impl SharedScriptSourceLoad {
         // The producer must not keep its own consumers alive. The last
         // parser/preload consumer drops this task and its in-flight request;
         // dropping just one shared consumer leaves the others unaffected.
-        let completion = Arc::downgrade(&load.inner);
+        let completion = SharedScriptSourceLoadCompleter {
+            load: Arc::downgrade(&load.inner),
+            owner_wake,
+        };
         let task = task_runner.spawn_abortable(async move {
             let result = task.await;
-            let Some(inner) = completion.upgrade() else {
-                return;
-            };
-            SharedScriptSourceLoad { inner }.finish(result);
-            if let Some(owner_wake) = owner_wake {
-                owner_wake.signal_parse_time_document_script_work();
-            }
+            publish(completion, result);
         });
         *load.inner.task.lock() = Some(task);
         load
@@ -154,7 +156,10 @@ impl SharedScriptSourceLoad {
         let load = Self::pending();
         (
             load.clone(),
-            SharedScriptSourceLoadCompleter { load, owner_wake },
+            SharedScriptSourceLoadCompleter {
+                load: Arc::downgrade(&load.inner),
+                owner_wake,
+            },
         )
     }
 
@@ -229,7 +234,7 @@ impl SharedScriptSourceLoad {
     where
         F: std::future::Future<Output = std::result::Result<String, String>> + Send + 'static,
     {
-        Self::spawn_outcome_with_owner_wake(
+        Self::spawn_outcome(
             async move {
                 PreparedScriptSourceLoadOutcome {
                     source_result: task.await,
@@ -239,6 +244,7 @@ impl SharedScriptSourceLoad {
             },
             RendererResourceTaskRunner::from_current_tokio().expect("test resource runtime"),
             None,
+            SharedScriptSourceLoadCompleter::finish,
         )
     }
 }
@@ -249,7 +255,10 @@ impl SharedScriptSourceLoadCompleter {
     }
 
     fn complete(&mut self, result: PreparedScriptSourceLoadOutcome) {
-        self.load.finish(result);
+        let Some(inner) = self.load.upgrade() else {
+            return;
+        };
+        SharedScriptSourceLoad { inner }.finish(result);
         if let Some(owner_wake) = self.owner_wake.take() {
             owner_wake.signal_parse_time_document_script_work();
         }
@@ -258,9 +267,13 @@ impl SharedScriptSourceLoadCompleter {
 
 impl Drop for SharedScriptSourceLoadCompleter {
     fn drop(&mut self) {
-        if self.load.try_outcome().is_none() {
+        if self
+            .load
+            .upgrade()
+            .is_some_and(|inner| SharedScriptSourceLoad { inner }.try_outcome().is_none())
+        {
             self.complete(failed_external_script_source_load_outcome(
-                "parser script fetch interception closed before completion".to_owned(),
+                "script source load closed before completion".to_owned(),
             ));
         }
     }
@@ -702,6 +715,96 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn shared_script_source_cannot_overtake_its_queued_network_receipts() {
+        use crate::frame_owner_model::{
+            DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
+        };
+        use crate::network::{ResourceRequestClient, context::DocumentFetchContext};
+        use crate::runtime::{
+            RendererBrowserContextRuntimeId, RendererDocumentLifecycleJournalHandle,
+            RendererNetworkReporter, RendererOwnerLocalHostId,
+        };
+
+        let client = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut loader = DocumentResourceLoader::new(
+            (*client).clone(),
+            RendererResourceTaskRunner::from_current_tokio().unwrap(),
+            DocumentFetchContext::new(
+                crate::native_bridge::WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                    FrameSchedulerLaneId(1),
+                    LocalWindowId(1),
+                    DocumentId(1),
+                )),
+                url.clone(),
+                url,
+                "https://example.test",
+            ),
+        );
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        loader.bind_network(
+            RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(1))
+                .for_document(
+                    RendererOwnerLocalHostId::new_for_testing(1),
+                    RendererDocumentLifecycleJournalHandle::new_initial(
+                        crate::PageId::new_for_testing(1),
+                    )
+                    .identity(),
+                ),
+            queue.sender(),
+            None,
+        );
+        let load = SharedScriptSourceLoad::spawn(
+            prepared_external_script(
+                "data:text/javascript,globalThis.ready=true",
+                ScriptKind::Classic,
+            ),
+            loader,
+            None,
+            None,
+            SubresourceRequestInitiatorType::Parser,
+            None,
+            None,
+        );
+        // Let the actual producer finish while the Page has consumed no tasks.
+        // A previously admitted parser turn can run at exactly this boundary.
+        let producer = load.inner.task.lock().take().unwrap();
+        producer.await.unwrap();
+        assert!(queue.has_ready_completion());
+        assert!(
+            load.try_outcome().is_none(),
+            "transport completion cannot expose script source ahead of its Page receipts"
+        );
+        let mut stages = Vec::new();
+        loop {
+            assert!(load.try_outcome().is_none());
+            match queue.pop_next_page_terminal().expect("source completion follows its receipts") {
+                crate::page_resource_completion::RendererPageResourceTerminal::AsyncSubresource { event } => {
+                    let crate::types::AsyncSubresourceFetchEvent::NativeNetwork(observation) = *event else {
+                        panic!("script loading must only queue its own native receipts")
+                    };
+                    stages.push(observation.item().clone());
+                }
+                crate::page_resource_completion::RendererPageResourceTerminal::SharedScriptSource { completion, outcome, .. } => {
+                    assert_eq!(stages.len(), 3, "start, response, and terminal precede source readiness");
+                    let crate::runtime::RendererNetworkOutputItem::Resource(terminal) = &stages[2] else {
+                        panic!("expected resource receipt")
+                    };
+                    assert!(matches!(terminal.as_ref(), crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(_)));
+                    completion.finish(*outcome);
+                    break;
+                }
+                terminal => panic!("unexpected source task: {terminal:?}"),
+            }
+        }
+        assert_eq!(
+            load.try_outcome().unwrap().source_result.unwrap(),
+            "globalThis.ready=true"
+        );
+        assert!(!queue.has_ready_completion());
+    }
+
+    #[tokio::test]
     async fn shared_source_load_last_consumer_cancels_its_producer() {
         struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
         impl Drop for Dropped {
@@ -755,7 +858,7 @@ mod tests {
             wake_tx,
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(71)),
         );
-        let load = SharedScriptSourceLoad::spawn_outcome_with_owner_wake(
+        let load = SharedScriptSourceLoad::spawn_outcome(
             async {
                 PreparedScriptSourceLoadOutcome {
                     source_result: Ok("window.ready = true;".to_owned()),
@@ -766,6 +869,7 @@ mod tests {
             RendererResourceTaskRunner::from_current_tokio()
                 .expect("Tokio test should expose its resource task runner"),
             Some(owner_wake),
+            SharedScriptSourceLoadCompleter::finish,
         );
 
         let _ = load.wait_outcome().await;
@@ -898,10 +1002,7 @@ mod tests {
         let error = outcome
             .source_result
             .expect_err("dropped completer should fail source load");
-        assert_eq!(
-            error,
-            "parser script fetch interception closed before completion"
-        );
+        assert_eq!(error, "script source load closed before completion");
         let network_result = outcome
             .network_result
             .expect("dropped completer should record failed network result");

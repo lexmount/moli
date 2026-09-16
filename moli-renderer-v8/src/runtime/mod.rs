@@ -101,6 +101,7 @@ mod popup;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
 mod phase_one;
 mod protocol_output;
+pub(crate) use protocol_output::console_payload_bytes;
 mod script_preloads;
 mod service_worker_run;
 

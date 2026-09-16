@@ -829,17 +829,9 @@ async fn attached_session_fetch_response_stage_body_commands_use_session_owner()
         .expect("stream handle")
         .to_owned();
 
-    ctx.process_async(json!({
-        "id": 35_928,
-        "method": "IO.read",
-        "sessionId": "SID-attached",
-        "params": { "handle": stream }
-    }))
-    .await;
-    ctx.expect_result(
-        35_928,
-        json!({ "base64Encoded": false, "data": "attached stream body", "eof": true }),
-        Some("SID-attached"),
+    assert_eq!(
+        read_taken_response_stream(&mut ctx, &stream, 35_928, Some("SID-attached")).await,
+        "attached stream body"
     );
 
     ctx.process_async(json!({
@@ -1012,6 +1004,40 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
     server.abort();
 }
 
+async fn read_taken_response_stream(
+    ctx: &mut TestContext,
+    handle: &str,
+    command_id: u64,
+    session_id: Option<&str>,
+) -> String {
+    let mut body = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let mut command = json!({
+                "id": command_id, "method": "IO.read",
+                "params": { "handle": handle }
+            });
+            if let Some(session_id) = session_id {
+                command["sessionId"] = json!(session_id);
+            }
+            ctx.process_async(command).await;
+            let read = take_response_by_id(ctx, command_id);
+            assert_eq!(
+                read.get("sessionId").and_then(serde_json::Value::as_str),
+                session_id
+            );
+            assert_eq!(read["result"]["base64Encoded"], false, "{read:?}");
+            body.push_str(read["result"]["data"].as_str().expect("stream data"));
+            if read["result"]["eof"].as_bool().expect("stream EOF flag") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the taken stream must reach its physical EOF");
+    body
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
     async fn page() -> impl IntoResponse {
@@ -1112,20 +1138,9 @@ async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
         .expect("response body stream handle")
         .to_owned();
 
-    ctx.process_async(json!({
-        "id": 35_953,
-        "method": "IO.read",
-        "params": { "handle": stream_handle }
-    }))
-    .await;
-    ctx.expect_result(
-        35_953,
-        json!({
-            "base64Encoded": false,
-            "data": "multi stream body",
-            "eof": true
-        }),
-        None,
+    assert_eq!(
+        read_taken_response_stream(&mut ctx, &stream_handle, 35_953, None).await,
+        "multi stream body"
     );
 
     ctx.process_async(json!({
@@ -1331,24 +1346,7 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
         .expect("response body stream handle")
         .to_owned();
 
-    let mut body = String::new();
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        loop {
-            ctx.process_async(json!({
-                "id": 35_962, "method": "IO.read",
-                "params": { "handle": stream_handle }
-            }))
-            .await;
-            let read = take_response_by_id(&mut ctx, 35_962);
-            assert_eq!(read["result"]["base64Encoded"], false, "{read:?}");
-            body.push_str(read["result"]["data"].as_str().expect("stream data"));
-            if read["result"]["eof"].as_bool().expect("stream EOF flag") {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("the taken stream must reach its physical EOF");
+    let body = read_taken_response_stream(&mut ctx, &stream_handle, 35_962, None).await;
     assert_eq!(body, "mixed body taken");
 
     ctx.process_async(json!({
@@ -2443,20 +2441,9 @@ async fn csp_report_response_stage_take_body_as_stream_observes_report_body() {
         .expect("CSP report response body stream handle")
         .to_owned();
 
-    ctx.process_async(json!({
-        "id": 37_066,
-        "method": "IO.read",
-        "params": { "handle": stream_handle }
-    }))
-    .await;
-    ctx.expect_result(
-        37_066,
-        json!({
-            "base64Encoded": false,
-            "data": "csp-report-response-body:true",
-            "eof": true
-        }),
-        None,
+    assert_eq!(
+        read_taken_response_stream(&mut ctx, &stream_handle, 37_066, None).await,
+        "csp-report-response-body:true"
     );
 
     ctx.process_async(json!({

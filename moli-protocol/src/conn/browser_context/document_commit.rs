@@ -20,14 +20,12 @@ impl CdpConnection {
             return Vec::new();
         };
         if context
-            .renderer_document_lifecycle_binding_for_target(target)
+            .projected_renderer_document_lifecycle_binding_for_target(target)
             .is_some_and(|binding| binding.document_id == source.document_id())
         {
             return Vec::new();
         }
-        let Ok(native_context) = self.browser.context_handle(contents.context()) else {
-            return Vec::new();
-        };
+        let native_context = context.browser_context_handle().clone();
         let Ok(navigation) = native_context.navigation_snapshot(contents) else {
             return Vec::new();
         };

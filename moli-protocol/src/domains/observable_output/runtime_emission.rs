@@ -24,26 +24,11 @@ pub(in crate::domains) fn advance_runtime_observable_cursors_to_current_for_owne
         runtime_observable_cursor_end_from_owner_queue_for_owner(conn, owner)
     {
         let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-            owner_state.runtime_observable_state.advance_to_current(
-                context_console_counts,
-                0,
-                exception_entries,
-            );
+            owner_state
+                .runtime_observable_state
+                .advance_to_current(context_console_counts, exception_entries);
         });
-        return;
     }
-    let Some((owner_queue_console_entries, exception_entries)) =
-        runtime_observable_cursor_end_from_owner_observable_queue_for_owner(conn, owner)
-    else {
-        return;
-    };
-    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        owner_state.runtime_observable_state.advance_to_current(
-            HashMap::new(),
-            owner_queue_console_entries,
-            exception_entries,
-        );
-    });
 }
 
 fn runtime_observable_cursor_end_from_owner_queue_for_owner(
@@ -56,15 +41,6 @@ fn runtime_observable_cursor_end_from_owner_queue_for_owner(
     (source.url() == url && conn.current_document_id_for_owner(owner) == Some(source.document_id()))
         .then_some(source)?
         .cursor_end()
-}
-
-fn runtime_observable_cursor_end_from_owner_observable_queue_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<(usize, usize)> {
-    conn.runtime_session_owner_slot_for_owner(owner)
-        .ok()?
-        .observable_output_cursor_end()
 }
 
 #[cfg(test)]

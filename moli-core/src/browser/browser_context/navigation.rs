@@ -95,18 +95,6 @@ impl BrowserContext {
             .accepts_document_preparation(navigation, renderer))
     }
 
-    pub fn document_renderer_matches(
-        &self,
-        handle: WebContentsHandle,
-        renderer: RendererPageResidenceIdentity,
-    ) -> bool {
-        self.document_handle(handle)
-            .ok()
-            .flatten()
-            .and_then(|document| self.document_renderer_residence(document).ok())
-            == Some(renderer)
-    }
-
     pub fn retire_document(
         &mut self,
         handle: WebContentsHandle,

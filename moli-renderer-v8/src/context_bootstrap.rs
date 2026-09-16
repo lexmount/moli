@@ -395,12 +395,7 @@ pub(crate) use self::shared::{
 pub(crate) use self::shared::{
     SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT,
 };
-pub(crate) use self::shared::{
-    console_arg_remote_object_json, current_console_stack,
-    install_console_message_buffers_for_context,
-    snapshot_console_message_details_for_current_context,
-    snapshot_console_messages_for_current_context,
-};
+pub(crate) use self::shared::{console_arg_remote_object_json, current_console_stack};
 pub(crate) use self::shared_worker_host::dispatch_shared_worker_client_error;
 use self::specs::constructor_specs;
 pub(crate) use self::storage_buckets::set_storage_bucket_store_for_context;

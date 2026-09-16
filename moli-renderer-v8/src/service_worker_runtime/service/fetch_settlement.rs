@@ -330,6 +330,9 @@ impl ServiceWorkerRuntimeService {
                 completion_tx,
                 network,
             } => {
+                let Some(request_network) = network.network.request() else {
+                    return;
+                };
                 crate::network_host::spawn_async_subresource_fetch(
                     job.resource_task_runner,
                     completion_tx.clone(),
@@ -340,7 +343,7 @@ impl ServiceWorkerRuntimeService {
                     job.internal_id,
                     network.clone(),
                     crate::network_host::CorsPreflightNetworkObserver {
-                        request: network.network.request(),
+                        request: request_network,
                         observer: completion_tx.network_observer(),
                         frame_id: job.network_context.frame_id,
                         resource_type: job.network_context.resource_type,
@@ -3778,6 +3781,42 @@ mod tests {
 
         expect_direct_fetch_fallback(&mut direct_completion_rx);
         assert!(!completion_queue.has_ready_completion());
+    }
+
+    #[test]
+    fn cancelled_page_request_rejects_late_service_worker_fallback() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(22);
+        let version_id = ServiceWorkerVersionId(1);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        insert_active_fetch_job(&service, event_id, version_id, &run, 302, queue.sender());
+        let response = {
+            let state = service.inner.state.lock();
+            let ServiceWorkerFetchResultSender::Page { network, .. } =
+                &state.pending_fetch_jobs[&event_id].result_tx
+            else {
+                panic!("Page request must retain its original response")
+            };
+            network.clone()
+        };
+        // The Page commits its abort before cancelling transport/removing the
+        // service job. A queued ServiceWorker completion can win that interval.
+        response
+            .network
+            .failed(&response.failure(crate::network_host::ABORTED_ERROR_TEXT.into()));
+        service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+            event_id,
+            owner: ServiceWorkerRunOwner::new(version_id, run),
+            result: ServiceWorkerFetchResult::Fallback,
+        });
+        let state = service.inner.state.lock();
+        assert!(!state.pending_fetch_jobs.contains_key(&event_id));
+        assert_eq!(state.versions[&version_id].in_flight_event_count, 0);
+        assert!(
+            !queue.has_ready_completion(),
+            "a terminal request cannot restart transport"
+        );
     }
 
     #[test]

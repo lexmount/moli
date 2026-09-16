@@ -1300,10 +1300,31 @@ mod tests {
             .entries
             .load_for_key(&classic_preload_key_for_streaming_test(script_url.as_str()))
             .expect("ready chunk should create script preload");
-        let outcome =
-            tokio::time::timeout(std::time::Duration::from_secs(2), preload.wait_outcome())
-                .await
-                .expect("script preload should finish");
+        let outcome = tokio::task::LocalSet::new()
+            .run_until(tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if let Some(outcome) = preload.try_outcome() {
+                        return outcome;
+                    }
+                    assert!(
+                        runtime
+                            .page_vm
+                            .wait_for_page_resource_completion_for_test()
+                            .await
+                    );
+                    assert!(
+                        runtime
+                            .page_vm
+                            .run_exact_selected_page_task_for_test(
+                                crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+                            )
+                            .await
+                            .unwrap()
+                    );
+                }
+            }))
+            .await
+            .expect("script preload should finish");
         assert_eq!(
             outcome
                 .source_result

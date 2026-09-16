@@ -86,6 +86,10 @@ impl PendingRuntimeObservableConsoleSourceEvent {
         &self.message
     }
 
+    pub(crate) fn retained_payload_bytes(&self) -> usize {
+        crate::runtime::console_payload_bytes(&self.message, &self.args, self.stack.as_deref())
+    }
+
     pub(crate) fn into_runtime_console_message_snapshot(
         self,
         execution_context_id: i64,
@@ -624,7 +628,7 @@ impl JsContextHost {
         // that history does not delay or rediscover the protocol fact: the
         // concrete record below already owns its exact V8 context identity.
         self.pending_runtime_observable_console_source_events
-            .push(event);
+            .push(event, protocol_message.retained_payload_bytes());
         self.append_live_turn_observation(
             crate::runtime::RendererProtocolObservation::RuntimeConsole(protocol_message),
         );
@@ -634,6 +638,8 @@ impl JsContextHost {
         &mut self,
     ) -> Vec<PendingRuntimeObservableConsoleSourceEvent> {
         std::mem::take(&mut self.pending_runtime_observable_console_source_events)
+            .into_items()
+            .collect()
     }
 }
 

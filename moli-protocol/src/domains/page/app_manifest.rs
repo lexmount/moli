@@ -202,7 +202,6 @@ pub(super) fn complete_get_app_manifest_command(
             };
             let mut ordered_events = Vec::new();
             command_context.consume_renderer_command_turn_output(output);
-            conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
             emit_pending_network_backlog_activity_background_events(
                 conn,
                 &mut ordered_events,

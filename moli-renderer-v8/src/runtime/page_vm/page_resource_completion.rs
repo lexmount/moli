@@ -41,6 +41,30 @@ impl PageVm {
         let owner = completion.owner();
         let source = completion.activity_source();
         let action = match completion.into_terminal() {
+            RendererPageResourceTerminal::SharedScriptSource {
+                completion,
+                outcome,
+                ..
+            } => {
+                let current_owner = self.current_page_resource_completion_owner(owner);
+                if current_owner == Some(owner) {
+                    // Network receipts precede this terminal in the same FIFO.
+                    // Only now may parser/preload consumers observe ready source.
+                    completion.finish(*outcome);
+                    PageResourceCompletionTurnAction::applied(
+                        source,
+                        owner,
+                        crate::page_resource_completion::PageResourceCompletionOutputEffect::None,
+                    )
+                } else {
+                    PageResourceCompletionTurnAction::discarded_stale(
+                        source,
+                        owner,
+                        current_owner,
+                        crate::page_resource_completion::PageResourceCompletionOutputEffect::None,
+                    )
+                }
+            }
             RendererPageResourceTerminal::DocumentWriteExternalScript { completion } => {
                 self.apply_document_write_external_script_terminal(source, owner, completion)?
             }

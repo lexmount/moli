@@ -619,6 +619,7 @@ impl BrowserContext {
         self.document(document).map(|_| ())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn document_observable_output_snapshot(
         &self,
         document: DocumentHandle,

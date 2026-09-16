@@ -1057,7 +1057,7 @@ fn background_target_keeps_owner_state_independent_from_network_artifacts() {
     assert_eq!(
         restored
             .runtime_observable_state
-            .emitted_console_entries_for_context(42, None),
+            .emitted_console_entries_for_context(42),
         3
     );
     assert_eq!(

@@ -194,34 +194,6 @@ impl CdpConnection {
             .await;
         let predecessor = diagnostics.renderer_output_predecessor();
         self.finish_document_diagnostics_snapshot(diagnostics)?;
-        // Backlog fixtures historically started with the fully loaded report.
-        // Native commit is earlier: capture only this exact Document's report
-        // after Load, without rebuilding or consuming its concrete source FIFO.
-        let snapshot = self
-            .browser
-            .context_handle(document.web_contents().context())?
-            .document_observable_output_snapshot(document)?;
-        let context = self
-            .browser_context_by_browser_id_mut(document.web_contents().context())
-            .ok_or("fixture Context retired before its report projection")?;
-        let target = context
-            .page_targets
-            .get_for_web_contents(document.web_contents().id())
-            .ok_or("fixture Target retired before its report projection")?
-            .target_id()
-            .to_owned();
-        let slot = &mut context
-            .page_targets
-            .get_mut(&target)
-            .expect("resolved fixture Target")
-            .runtime_slot;
-        if slot
-            .current_renderer_attachment()
-            .is_none_or(|attachment| attachment.document() != document.id())
-        {
-            return Err("fixture Document replaced before its report projection".into());
-        }
-        slot.ingest_observable_output_snapshot(&snapshot);
         Ok((committed, predecessor))
     }
 

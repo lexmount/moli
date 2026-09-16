@@ -38,7 +38,11 @@ impl WorkerResponseSender {
             body_source_id: None,
             stream_to_script: false,
             preflight: crate::network_host::CorsPreflightNetworkObserver {
-                request: pending.response.network.request(),
+                request: pending
+                    .response
+                    .network
+                    .request()
+                    .expect("admitted Worker fetch"),
                 observer: Arc::new(move |event| observer.publish(event)),
                 frame_id: None,
                 resource_type: SubresourceResourceType::Fetch,
@@ -55,7 +59,7 @@ impl WorkerResponseSender {
         deliver: impl Fn(WorkerXhrCompletion) + Send + Sync + 'static,
     ) -> Self {
         let preflight = crate::network_host::CorsPreflightNetworkObserver {
-            request: response.network.request(),
+            request: response.network.request().expect("admitted Worker XHR"),
             observer: Arc::new(move |event| observer.publish(event)),
             frame_id: None,
             resource_type: SubresourceResourceType::Xhr,
@@ -414,7 +418,7 @@ mod tests {
             body_source_id: None,
             stream_to_script: false,
             preflight: crate::network_host::CorsPreflightNetworkObserver {
-                request: response.network.request(),
+                request: response.network.request().unwrap(),
                 observer: Arc::new(|_| {}),
                 frame_id: None,
                 resource_type: SubresourceResourceType::Fetch,

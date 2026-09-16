@@ -61,6 +61,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+                let handle = transfer.handle();
                 if streamed {
                     transfer.response_started(head.clone());
                     transfer.data_received(2);
@@ -77,6 +78,15 @@ mod tests {
                 } else {
                     transfer.response_completed(&response);
                 }
+                assert_eq!(
+                    transfer.handle(),
+                    handle,
+                    "completion preserves request identity"
+                );
+                assert!(
+                    transfer.request().is_none(),
+                    "completion releases continuation permission"
+                );
                 // Late callbacks and the final lease drop cannot duplicate or
                 // change the committed terminal result.
                 transfer.failed(&ResourceResponseFailure::Request("late".into()));

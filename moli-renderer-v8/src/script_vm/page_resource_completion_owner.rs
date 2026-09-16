@@ -22,6 +22,13 @@ impl ScriptVm {
         expected: RendererPageResourceCompletionOwner,
     ) -> Option<RendererPageResourceCompletionOwner> {
         match expected.local_owner() {
+            RendererPageResourceCompletionLocalOwner::SharedScriptSource(owner) => self
+                ._context_host
+                .borrow()
+                .window_document_owner_is_current(owner)
+                .then(|| {
+                    RendererPageResourceCompletionOwner::shared_script_source(root_document, owner)
+                }),
             RendererPageResourceCompletionLocalOwner::MainDocument(_) => {
                 self.current_main_document_task_owner().map(|owner| {
                     RendererPageResourceCompletionOwner::main_document(root_document, owner)

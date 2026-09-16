@@ -564,15 +564,6 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_act
     .await;
 
     let queue_console_entries = {
-        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-background"));
-        let (context_id, target_id) = ctx
-            .conn
-            .resolved_page_owner_identity_for_owner(&owner)
-            .unwrap();
-        ctx.conn
-            .browser_context_by_id_mut(&context_id)
-            .unwrap()
-            .ingest_owner_page_observable_output_updates_for_target(&target_id);
         let runtime_slot = ctx
             .conn
             .runtime_session_owner_slot_mut(Some("SID-background"))

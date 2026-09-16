@@ -32,8 +32,7 @@ use crate::{
         RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
         RendererRuntimeInspectorResponseSender, RendererRuntimeRealmInfo,
         RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
-        RendererScrollIntoViewResult, RuntimeConsoleMessageSnapshot,
-        SharedRendererBackendNodeRegistry,
+        RendererScrollIntoViewResult, SharedRendererBackendNodeRegistry,
     },
     runtime_binding_data::{build_runtime_binding_data, runtime_binding_callback},
     script_provenance::CompiledStringProvenance,
@@ -6592,34 +6591,7 @@ impl ScriptVm {
         self.sync_runtime_observable_source_events()?;
         Ok(self
             .runtime_observable_source_queue
-            .take_report_observable_output(
-                self.runtime_observable_default_execution_context_id(),
-                self.page_default_runtime_observable_context_token,
-            ))
-    }
-
-    pub(super) fn snapshot_console_messages_with_context(
-        &mut self,
-    ) -> Result<Vec<RuntimeConsoleMessageSnapshot>> {
-        let contexts = self.page_runtime_observable_contexts();
-        let mut messages = Vec::new();
-        for context in contexts {
-            let Some(execution_context_id) = context.execution_context_id else {
-                continue;
-            };
-            let mut context_messages =
-                self.snapshot_console_message_details_in_context(context.context)?;
-            for mut message in context_messages.drain(..) {
-                if let Some(object) = message.as_object_mut() {
-                    object.insert("executionContextId".to_owned(), json!(execution_context_id));
-                }
-                messages.push(
-                    serde_json::from_value::<RuntimeConsoleMessageSnapshot>(message)
-                        .context("runtime console message snapshot has invalid shape")?,
-                );
-            }
-        }
-        Ok(messages)
+            .take_report_observable_output(self.page_default_runtime_observable_context_token))
     }
 
     fn page_runtime_observable_contexts(&self) -> Vec<PageRuntimeObservableContext> {
@@ -6676,15 +6648,10 @@ impl ScriptVm {
                     .map(|execution_context_id| (context.context_token, execution_context_id))
             })
             .collect::<BTreeMap<_, _>>();
-        let active_contexts = contexts
-            .iter()
-            .filter_map(|context| context.execution_context_id)
-            .collect::<BTreeSet<_>>();
         let mut host = self._context_host.borrow_mut();
         let pending_console_events = host.take_pending_runtime_observable_console_source_events();
         drop(host);
         self.runtime_observable_source_queue.sync_source_events(
-            &active_contexts,
             &active_tokens,
             &token_to_execution_context_id,
             pending_console_events,
@@ -6923,65 +6890,6 @@ impl ScriptVm {
                 }
                 Ok(())
             })
-    }
-
-    fn snapshot_console_messages_in_context(
-        &mut self,
-        context_ptr: *const v8::Global<v8::Context>,
-    ) -> Result<Vec<String>> {
-        // SAFETY: callers pass pointers to `self.page_default_context` or page realm context entries owned by this `ScriptVm`.
-        // The snapshot operation only reads a context slot; it does not mutate or remove any
-        // context while the raw pointer is used.
-        // This is an internal console snapshot, not an owner-visible script turn.
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
-            Ok(crate::context_bootstrap::snapshot_console_messages_for_current_context(scope))
-        })
-        .context("failed to snapshot console output")
-    }
-
-    fn snapshot_console_message_details_in_context(
-        &mut self,
-        context_ptr: *const v8::Global<v8::Context>,
-    ) -> Result<Vec<Value>> {
-        // SAFETY: callers pass pointers to `self.page_default_context` or page realm context entries owned by this `ScriptVm`.
-        // The snapshot operation only reads a context slot; it does not mutate or remove any
-        // context while the raw pointer is used.
-        // This is an internal console snapshot, not an owner-visible script turn.
-        let mut details = self
-            .with_context_scope_by_ptr(context_ptr, |scope, _| {
-                Ok(
-                    crate::context_bootstrap::snapshot_console_message_details_for_current_context(
-                        scope,
-                    ),
-                )
-            })
-            .context("failed to snapshot console detail output")?;
-        if !details.is_empty() {
-            return Ok(details);
-        }
-
-        details = self
-            .snapshot_console_messages_in_context(context_ptr)?
-            .into_iter()
-            .map(|message| {
-                let text = message
-                    .split_once(": ")
-                    .map(|(_, text)| text)
-                    .unwrap_or(message.as_str())
-                    .to_owned();
-                json!({
-                    "message": message,
-                    "text": text,
-                    "args": [
-                        {
-                            "type": "string",
-                            "value": text,
-                        }
-                    ],
-                })
-            })
-            .collect();
-        Ok(details)
     }
 }
 

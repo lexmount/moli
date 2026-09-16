@@ -187,7 +187,6 @@ impl BrowserContext {
     ) -> Option<PendingDocumentRetirement> {
         let target_id = self.active_target_id_owned().expect("active target");
         let previous = self.retire_loaded_document_with_reason_for_target(&target_id, reason);
-        self.ingest_active_target_output_updates();
         self.active_page_target_mut()
             .owner_state
             .clear_loaded_document_context_state();
@@ -199,14 +198,6 @@ impl BrowserContext {
     pub(crate) fn clear_loaded_page(&mut self) -> bool {
         self.clear_loaded_page_with_reason(TargetPageAbsenceReason::TestFixture)
             .is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn ingest_active_target_output_updates(&mut self) -> bool {
-        let Some(target_id) = self.active_target_id_owned() else {
-            return false;
-        };
-        self.ingest_owner_page_observable_output_updates_for_target(&target_id)
     }
 
     #[cfg(test)]
@@ -282,7 +273,7 @@ impl BrowserContext {
         }
         let metadata = commit.metadata;
         if self
-            .renderer_document_lifecycle_binding_for_target(target_id)
+            .projected_renderer_document_lifecycle_binding_for_target(target_id)
             .is_some_and(|binding| binding.browser_sequence >= metadata.lifecycle.browser_sequence)
         {
             return None;

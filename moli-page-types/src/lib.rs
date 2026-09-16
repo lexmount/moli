@@ -10,12 +10,14 @@ mod inspector_state;
 mod layout;
 mod navigation_history;
 mod navigator_overrides;
+mod output_history;
 mod renderer_transport_memory;
 mod session_history;
 
 pub use session_history::{SessionHistoryCommit, SessionHistorySeed, SessionHistoryUpdate};
 mod response_body_source;
 
+pub use output_history::OutputHistory;
 pub use response_body_source::{SubresourceResponseBodyRead, SubresourceResponseBodySource};
 
 use std::{
@@ -574,7 +576,7 @@ pub struct ScriptExecutionReport {
     pub runs: Vec<ScriptRun>,
     globals: Arc<BTreeMap<String, JsValueSnapshot>>,
     globals_snapshot_state: ScriptGlobalsSnapshotState,
-    observable_output_items: Vec<ScriptObservableOutputItem>,
+    observable_output_items: OutputHistory<ScriptObservableOutputItem>,
     console_messages: Vec<String>,
     lifecycle_errors: Vec<String>,
     inspector_issues: Vec<InspectorIssueSnapshot>,
@@ -615,9 +617,6 @@ pub enum ScriptNetworkOutputItem {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptObservableOutput {
     items: Vec<ScriptObservableOutputItem>,
-    console_messages: Vec<String>,
-    lifecycle_errors: Vec<String>,
-    inspector_issues: Vec<InspectorIssueSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -811,18 +810,7 @@ impl ScriptObservableOutput {
     }
 
     pub fn push_item(&mut self, item: ScriptObservableOutputItem) {
-        self.items.push(item.clone());
-        match item {
-            ScriptObservableOutputItem::ConsoleMessage(message) => {
-                self.console_messages.push(message);
-            }
-            ScriptObservableOutputItem::LifecycleError(error) => {
-                self.lifecycle_errors.push(error);
-            }
-            ScriptObservableOutputItem::InspectorIssue(issue) => {
-                self.inspector_issues.push(*issue);
-            }
-        }
+        self.items.push(item);
     }
 }
 
@@ -907,7 +895,11 @@ impl ScriptExecutionReport {
     }
 
     pub fn observable_output_items(&self) -> &[ScriptObservableOutputItem] {
-        &self.observable_output_items
+        self.observable_output_items.as_slice()
+    }
+
+    pub fn observable_output_end(&self) -> usize {
+        self.observable_output_items.end()
     }
 
     pub fn extend_observable_output(&mut self, output: ScriptObservableOutput) {
@@ -923,7 +915,28 @@ impl ScriptExecutionReport {
     }
 
     fn push_observable_output_item(&mut self, item: ScriptObservableOutputItem) {
-        self.observable_output_items.push(item.clone());
+        let payload_bytes = match &item {
+            ScriptObservableOutputItem::ConsoleMessage(text)
+            | ScriptObservableOutputItem::LifecycleError(text) => text.capacity(),
+            ScriptObservableOutputItem::InspectorIssue(issue) => {
+                issue.renderer_transport_charge_bytes()
+            }
+        };
+        // Include the derived report views in the same retention budget.
+        let evicted = self
+            .observable_output_items
+            .push(item.clone(), payload_bytes.saturating_mul(2));
+        let (mut consoles, mut errors, mut issues) = (0, 0, 0);
+        for old in evicted {
+            match old {
+                ScriptObservableOutputItem::ConsoleMessage(_) => consoles += 1,
+                ScriptObservableOutputItem::LifecycleError(_) => errors += 1,
+                ScriptObservableOutputItem::InspectorIssue(_) => issues += 1,
+            }
+        }
+        self.console_messages.drain(..consoles);
+        self.lifecycle_errors.drain(..errors);
+        self.inspector_issues.drain(..issues);
         match item {
             ScriptObservableOutputItem::ConsoleMessage(message) => {
                 self.console_messages.push(message);
@@ -4041,6 +4054,39 @@ mod tests {
                 ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event),
             ],
             "script network output iteration should preserve explicit producer append order"
+        );
+    }
+
+    #[test]
+    fn script_report_retention_evicts_derived_views_and_keeps_revision() {
+        let mut report = ScriptExecutionReport::default();
+        for index in 0..1100 {
+            let item = if index % 2 == 0 {
+                ScriptObservableOutputItem::ConsoleMessage(index.to_string())
+            } else {
+                ScriptObservableOutputItem::LifecycleError(index.to_string())
+            };
+            report.extend_observable_output(ScriptObservableOutput::from_items([item]));
+        }
+        assert_eq!(report.observable_output_end(), 1100);
+        assert_eq!(report.observable_output_items().len(), 1000);
+        assert_eq!(
+            report.console_messages(),
+            (100..1100)
+                .step_by(2)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            report.lifecycle_errors(),
+            (101..1100)
+                .step_by(2)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            report.observable_output_items().first(),
+            Some(&ScriptObservableOutputItem::ConsoleMessage("100".into()))
         );
     }
 

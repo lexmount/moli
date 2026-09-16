@@ -1007,7 +1007,7 @@ pub(crate) struct JsContextHost {
     pending_runtime_binding_calls: Vec<PendingRuntimeBindingCall>,
     next_runtime_observable_context_token: RuntimeObservableContextToken,
     pending_runtime_observable_console_source_events:
-        Vec<PendingRuntimeObservableConsoleSourceEvent>,
+        moli_page_types::OutputHistory<PendingRuntimeObservableConsoleSourceEvent>,
     #[cfg(test)]
     pending_file_chooser_activations: Vec<RendererPendingFileChooserActivation>,
     #[cfg(test)]

@@ -1,40 +1,4 @@
 use super::*;
-use std::{cell::RefCell, rc::Rc};
-
-#[derive(Debug, Default)]
-pub(crate) struct ConsoleMessageBuffers {
-    messages: Vec<String>,
-    details: Vec<serde_json::Value>,
-}
-
-pub(crate) fn install_console_message_buffers_for_context(context: v8::Local<'_, v8::Context>) {
-    let _previous = context.set_slot(Rc::new(RefCell::new(ConsoleMessageBuffers::default())));
-}
-
-fn current_console_message_buffers(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<Rc<RefCell<ConsoleMessageBuffers>>> {
-    scope
-        .get_current_context()
-        .get_slot::<RefCell<ConsoleMessageBuffers>>()
-}
-
-pub(crate) fn snapshot_console_messages_for_current_context(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Vec<String> {
-    current_console_message_buffers(scope)
-        .map(|buffers| buffers.borrow().messages.clone())
-        .unwrap_or_default()
-}
-
-pub(crate) fn snapshot_console_message_details_for_current_context(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Vec<serde_json::Value> {
-    current_console_message_buffers(scope)
-        .map(|buffers| buffers.borrow().details.clone())
-        .unwrap_or_default()
-}
-
 pub(in crate::context_bootstrap) fn append_console_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -50,26 +14,6 @@ pub(in crate::context_bootstrap) fn append_console_message<'s>(
     let text = parts.join(" ");
     let message = format!("{level}: {text}");
     let stack = current_console_stack(scope);
-
-    if let Some(buffers) = current_console_message_buffers(scope) {
-        let mut buffers = buffers.borrow_mut();
-        buffers.messages.push(message.clone());
-        let mut entry = serde_json::json!({
-            "level": level,
-            "text": text,
-            "message": message,
-            "args": arg_snapshot_values.clone(),
-        });
-        if let Some(stack) = stack.as_deref()
-            && let Some(object) = entry.as_object_mut()
-        {
-            object.insert(
-                "stack".to_owned(),
-                serde_json::Value::String(stack.to_owned()),
-            );
-        }
-        buffers.details.push(entry);
-    }
 
     record_runtime_observable_console_source_event(scope, message, arg_snapshot_values, stack);
 }

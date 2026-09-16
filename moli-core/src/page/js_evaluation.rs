@@ -1,7 +1,6 @@
 use anyhow::{Result, anyhow};
 
 use super::Page;
-use super::RuntimeConsoleMessageSnapshot;
 use super::{
     CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput, RendererRuntimeRealmInfo,
 };
@@ -152,20 +151,6 @@ impl Page {
             "create isolated world page command",
             "an execution context reply",
             RendererPageReply::ExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub async fn runtime_console_messages_with_context_async(
-        &mut self,
-    ) -> Result<Vec<RuntimeConsoleMessageSnapshot>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::RuntimeConsoleMessagesWithContext)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "runtime console messages with context page command",
-            "runtime console snapshots",
-            RendererPageReply::RuntimeConsoleMessageSnapshots(messages) => Ok(messages),
         )
     }
 

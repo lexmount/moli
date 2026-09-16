@@ -148,26 +148,15 @@ impl ScriptVm {
     }
 
     fn record_worker_console_message(&mut self, message: crate::worker::WorkerConsoleMessage) {
-        if let Some(execution_context_id) = self.runtime_observable_default_execution_context_id() {
-            self.runtime_observable_source_queue.record_console_message(
-                crate::runtime::RuntimeConsoleMessageSnapshot {
-                    execution_context_id,
-                    message: message.message,
-                    args: message.args,
-                    stack: message.stack,
-                },
+        self.runtime_observable_source_queue
+            .record_pending_console_event(
+                crate::native_bridge::PendingRuntimeObservableConsoleSourceEvent::new(
+                    self.page_default_runtime_observable_context_token,
+                    message.message,
+                    message.args,
+                    message.stack,
+                ),
             );
-        } else {
-            self.runtime_observable_source_queue
-                .record_pending_console_event(
-                    crate::native_bridge::PendingRuntimeObservableConsoleSourceEvent::new(
-                        self.page_default_runtime_observable_context_token,
-                        message.message,
-                        message.args,
-                        message.stack,
-                    ),
-                );
-        }
     }
 
     fn apply_shared_worker_host_bridge_record_body(

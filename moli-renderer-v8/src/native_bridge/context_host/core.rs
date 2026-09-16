@@ -396,7 +396,7 @@ impl JsContextHost {
             #[cfg(test)]
             pending_runtime_binding_calls: Vec::new(),
             next_runtime_observable_context_token: super::RuntimeObservableContextToken::first(),
-            pending_runtime_observable_console_source_events: Vec::new(),
+            pending_runtime_observable_console_source_events: Default::default(),
             #[cfg(test)]
             pending_file_chooser_activations: Vec::new(),
             #[cfg(test)]

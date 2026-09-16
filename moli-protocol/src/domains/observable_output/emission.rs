@@ -655,10 +655,19 @@ mod tests {
 
         let mut prepared_slot =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('late')", false)
-            .await
-            .expect("late console message should evaluate");
+        ctx.process_async(json!({
+            "id": 1, "method": "Runtime.evaluate", "sessionId": "SID-1",
+            "params": {"expression": "console.warn('late')"},
+        }))
+        .await;
+        assert!(
+            ctx.sent.iter().any(|message| {
+                message["id"] == json!(1)
+                    && message["result"]["result"]["type"] == json!("undefined")
+                    && message["result"].get("exceptionDetails").is_none()
+            }),
+            "late console evaluation must cross its real output fence"
+        );
 
         let console_plan = ObservableActivityEmissionPlan::prepare_async(
             ObservableOutputProjectionStep::Console,
@@ -1205,11 +1214,6 @@ mod tests {
         )
         .await;
         set_source_only_runtime_frontend(&mut ctx, true);
-        {
-            let context = ctx.conn.browser_context.as_mut().unwrap();
-            let target_id = context.active_target_id_owned().unwrap();
-            context.ingest_owner_page_observable_output_updates_for_target(&target_id);
-        }
 
         let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
             ObservableOutputProjectionStep::RuntimeObservable,

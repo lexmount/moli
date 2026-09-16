@@ -333,6 +333,22 @@ pub(crate) struct RendererResourceCompletionSender {
 }
 
 impl RendererResourceCompletionSender {
+    pub(crate) fn send_shared_script_source(
+        &self,
+        owner: crate::native_bridge::WindowDocumentOwner,
+        completion: crate::planning::SharedScriptSourceLoadCompleter,
+        outcome: crate::planning::PreparedScriptSourceLoadOutcome,
+    ) -> Result<(), RendererResourceCompletionRouteClosed> {
+        self.send_page_completion(|root_document| {
+            RendererPageResourceCompletion::shared_script_source(
+                root_document,
+                owner,
+                completion,
+                outcome,
+            )
+        })
+    }
+
     pub(crate) fn for_page_scheduler(
         page_completion_sender: RendererPageResourceCompletionSender,
         root_document: RendererDocumentToken,

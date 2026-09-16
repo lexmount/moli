@@ -362,17 +362,19 @@ impl BrowserHandle {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Result<BrowserContextHandle, String> {
-        let id = self.execute(move |browser| {
+        let (id, renderer_runtime_id) = self.execute(move |browser| {
             let context = BrowserContext::new(handles, kind, http_cache_root, http_cache_max_bytes);
             context.renderer_runtime().bind_resource_task_runner(
                 moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("Browser owner runs on its resource executor"),
             );
-            browser.insert_context(context)
+            let renderer_runtime_id = context.renderer_runtime().id();
+            (browser.insert_context(context), renderer_runtime_id)
         })?;
         Ok(BrowserContextHandle {
             browser: self.clone(),
             id,
+            renderer_runtime_id,
         })
     }
 
@@ -382,10 +384,15 @@ impl BrowserHandle {
     }
 
     pub fn context_handle(&self, id: BrowserContextId) -> Result<BrowserContextHandle, String> {
-        self.execute(move |browser| browser.context(id).map(|_| ()))??;
+        let renderer_runtime_id = self.execute(move |browser| {
+            browser
+                .context(id)
+                .map(|context| context.renderer_runtime().id())
+        })??;
         Ok(BrowserContextHandle {
             browser: self.clone(),
             id,
+            renderer_runtime_id,
         })
     }
 
@@ -646,6 +653,7 @@ impl BrowserService {
 pub struct BrowserContextHandle {
     browser: BrowserHandle,
     id: BrowserContextId,
+    renderer_runtime_id: crate::RendererBrowserContextRuntimeId,
 }
 
 /// Completion of a Browser-owned WebContents teardown.
@@ -718,6 +726,12 @@ impl WebContentsCreation {
 impl BrowserContextHandle {
     pub fn id(&self) -> BrowserContextId {
         self.id
+    }
+
+    /// Immutable identity of this Context's renderer runtime. Like `id`, this
+    /// identifies the capability after retirement; it does not establish liveness.
+    pub fn renderer_runtime_id(&self) -> crate::RendererBrowserContextRuntimeId {
+        self.renderer_runtime_id
     }
 
     pub fn is_live(&self) -> bool {
@@ -1175,11 +1189,9 @@ impl BrowserContextHandle {
         fn default_locale_override() -> Option<String>;
         fn default_timezone_override() -> Option<String>;
         fn has_loaded_document(handle: WebContentsHandle) -> bool;
-        fn document_renderer_matches(handle: WebContentsHandle, renderer: super::RendererPageResidenceIdentity) -> bool;
         fn has_inflight_background_navigation() -> bool;
         fn loaded_document_renderer_owner_ids() -> std::collections::HashSet<u64>;
         fn dedicated_worker_running_isolate_count() -> usize;
-        fn routes_renderer_browser_context_runtime(runtime: crate::RendererBrowserContextRuntimeId) -> bool;
         fn renderer_memory_diagnostics() -> serde_json::Value;
         fn shared_worker_runtime_diagnostics() -> crate::runtime::RendererSharedWorkerRuntimeDiagnostics;
         fn javascript_dialog_handler_enabled() -> bool;
@@ -1672,7 +1684,6 @@ impl BrowserContextHandle {
         fn set_document_javascript_dialog_handler_enabled(document: super::DocumentHandle, enabled: bool) -> ();
         fn start_document_csp_bypass_update(document: super::DocumentHandle, bypass: bool) -> super::PendingDocumentCspBypassUpdate;
         fn document_subresource_network_records(document: super::DocumentHandle) -> Vec<crate::page::SubresourceNetworkRecord>;
-        fn document_observable_output_snapshot(document: super::DocumentHandle) -> Vec<crate::page::ScriptObservableOutputItem>;
         fn start_document_lifecycle_stop(document: super::DocumentHandle) -> super::PendingDocumentLifecycleStop;
         fn start_document_diagnostics_snapshot(document: super::DocumentHandle) -> super::PendingDocumentDiagnosticsSnapshot;
         fn start_document_storage_key_snapshot(document: super::DocumentHandle) -> super::PendingDocumentStorageKeySnapshot;
@@ -2108,9 +2119,14 @@ impl BrowserContextHandle {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    forward_context_try_read! {
+        fn document_observable_output_snapshot(document: super::DocumentHandle) -> Vec<crate::page::ScriptObservableOutputItem>;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn renderer_runtime_id_for_test(&self) -> crate::RendererBrowserContextRuntimeId {
-        self.read_live(BrowserContext::renderer_runtime_id_for_test)
+        self.renderer_runtime_id()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -2378,8 +2394,30 @@ mod tests {
             )
             .expect("context creation should succeed");
         assert!(handle.is_live());
+        let renderer = handle.renderer_runtime_id();
+        assert_eq!(
+            service
+                .handle()
+                .context_handle(handle.id())
+                .unwrap()
+                .renderer_runtime_id(),
+            renderer,
+        );
         assert!(handle.remove().expect("context removal should succeed"));
         assert!(!handle.is_live());
+        assert_eq!(handle.renderer_runtime_id(), renderer);
+        assert!(service.handle().context_handle(handle.id()).is_err());
+        let replacement = service
+            .handle()
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_ne!(replacement.id(), handle.id());
+        assert_ne!(replacement.renderer_runtime_id(), renderer);
         service.shutdown();
     }
 }

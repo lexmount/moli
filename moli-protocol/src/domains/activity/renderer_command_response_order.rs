@@ -222,18 +222,18 @@ impl RendererCommandResponseOrder {
         mut outputs: PreparedProtocolOutputs,
         command_context: &mut CommandDispatchContext,
     ) {
-        let Some(route) =
-            RendererCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
-        else {
+        let prepared_cause = outputs
+            .top_level_location_navigation_runtime_command_cause()
+            .cloned();
+        let Some(renderer_cause) = prepared_cause.as_ref().or(renderer_cause) else {
             outputs
                 .project_async(conn, delivery_scope, command_context)
                 .await;
             return;
         };
-        let prepared_cause = outputs
-            .top_level_location_navigation_runtime_command_cause()
-            .cloned();
-        let Some(renderer_cause) = prepared_cause.as_ref().or(renderer_cause) else {
+        let Some(route) =
+            RendererCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
+        else {
             outputs
                 .project_async(conn, delivery_scope, command_context)
                 .await;

@@ -5703,6 +5703,10 @@ async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_se
         .as_str()
         .expect("parser script requestId")
         .to_owned();
+    let network_request_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("parser script Network requestId")
+        .to_owned();
     assert!(
         !observed.iter().any(|message| {
             message["sessionId"].as_str() == Some(active.session_id.as_str())
@@ -5761,6 +5765,18 @@ async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_se
             .iter()
             .any(|message| message["id"] == json!(12_u64)),
         "Page.navigate should reply while parser script abort is handled: {observed:#?}"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|message| {
+                message["sessionId"].as_str() == Some(background.session_id.as_str())
+                    && message["method"] == "Network.loadingFailed"
+                    && message["params"]["requestId"] == network_request_id
+            })
+            .count(),
+        1,
+        "the original script request must publish exactly one terminal before Page load: {observed:#?}"
     );
 
     let execution = cdp_runtime_evaluate_string(

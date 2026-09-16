@@ -4118,7 +4118,6 @@ impl CdpConnection {
             .ok_or("NoDocumentLoaded")?
             .evaluate_target_expression_for_test(&target_id, expression, await_promise)
             .await?;
-        self.ingest_runtime_session_owner_output_updates_for_owner(&owner);
         Ok(payload)
     }
 
@@ -4164,7 +4163,7 @@ impl CdpConnection {
         let turn = self
             .consume_runtime_protocol_message_completion(&completed.route, completed.completion)?;
         let (completion, _predecessor) = turn.into_completion_and_predecessor();
-        let (reply, snapshot, _) = completion.into_parts();
+        let (reply, _, _) = completion.into_parts();
         let moli_renderer_v8::RendererPageReply::RuntimeInspectorProtocolMessages(output) = reply
         else {
             unreachable!("Runtime.enable completion was validated as an inspector reply");
@@ -4180,8 +4179,6 @@ impl CdpConnection {
         {
             return Err("Runtime.enable completed after session owner disappeared".to_owned());
         }
-        self.runtime_protocol_message_started_slot_mut(&completed.route)?
-            .ingest_observable_output_snapshot(snapshot.script_execution.observable_output_items());
         let mut replay = RuntimeEnableEventsReplay::from_renderer_messages(messages);
         let _ =
             self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&owner, true);
@@ -4281,25 +4278,6 @@ impl CdpConnection {
         completion
             .into_runtime_protocol_message_command_turn()
             .map_err(|error| format!("runtime inspector dispatch failed: {error}"))
-    }
-
-    fn ingest_runtime_protocol_message_started_route_output_updates(
-        &mut self,
-        route: &RuntimeProtocolMessagePageRoute,
-        output: &RendererCommandTurnOutput,
-    ) {
-        if let Ok(slot) = self.runtime_protocol_message_started_slot_mut(route) {
-            // DevTools observes the frozen command result, independently of
-            // Browser Page-cache refresh. Retired routes never feed the
-            // replacement document's queue.
-            slot.ingest_observable_output_snapshot(
-                output
-                    .completion()
-                    .page_state()
-                    .script_execution
-                    .observable_output_items(),
-            );
-        }
     }
 
     pub(crate) fn run_dedicated_worker_if_waiting_for_debugger_for_session(
@@ -4563,17 +4541,6 @@ impl CdpConnection {
         diagnostics["isolateScope"]["estimatedLiveV8IsolateCount"] =
             json!(estimated_live_v8_isolate_count);
         diagnostics
-    }
-
-    pub(crate) fn ingest_runtime_session_owner_output_updates_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) {
-        if let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
-            && let Some(context) = self.browser_context_by_id_mut(&context_id)
-        {
-            context.ingest_owner_page_observable_output_updates_for_target(&target_id);
-        }
     }
 
     pub(crate) fn runtime_session_owner_frame_id(
@@ -4892,17 +4859,6 @@ impl CdpConnection {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
-        self.ingest_runtime_protocol_message_started_route_output_updates(
-            &completed.route,
-            &output,
-        );
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "runtime_inspector_output_ingested",
-                elapsed_ms = started.elapsed().as_millis(),
-            );
-        }
         let runtime_messages = output.runtime_inspector_output_mut().ok_or_else(|| {
             "runtime inspector dispatch completed with a non-Runtime renderer reply".to_owned()
         })?;
@@ -5195,10 +5151,6 @@ impl CdpConnection {
                 }
             };
             command_turn_output.bind_renderer_agent_attachment(new_attachment_id);
-            self.ingest_runtime_protocol_message_started_route_output_updates(
-                &completed.route,
-                &command_turn_output,
-            );
             let mut command = CommandDispatchContext::default();
             let completion = command.consume_renderer_command_turn_output(command_turn_output);
             events.extend(command.take_protocol_events());
@@ -6614,6 +6566,48 @@ mod tests {
         (ctx, completed)
     }
 
+    fn assert_native_observations_match_report(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        items: &[moli_core::page::ScriptObservableOutputItem],
+    ) {
+        use moli_core::page::ScriptObservableOutputItem;
+        let runtime = conn
+            .runtime_session_owner_slot_for_owner(owner)
+            .unwrap()
+            .observable_output_queue_snapshot()
+            .unwrap()
+            .observable_output_items;
+        let expected_runtime: Vec<_> = items
+            .iter()
+            .filter(|item| !matches!(item, ScriptObservableOutputItem::InspectorIssue(_)))
+            .cloned()
+            .collect();
+        assert_eq!(
+            runtime, expected_runtime,
+            "all native Runtime facts retain their order"
+        );
+        let storage = &conn
+            .target_owner_state_for_owner(owner)
+            .unwrap()
+            .audits_storage_state;
+        let issues = storage
+            .pending_cursor_from(storage.generation(), 0)
+            .and_then(|cursor| storage.issues_for_cursor(cursor))
+            .unwrap_or_default();
+        let expected_issues: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptObservableOutputItem::InspectorIssue(issue) => Some((**issue).clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            issues, expected_issues,
+            "native Audits storage retains every issue"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn inspector_completion_updates_current_document_cache_and_output() {
         let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
@@ -6632,6 +6626,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(output.renderer_output_predecessor(), predecessor);
+        ctx.route_direct_command_renderer_predecessor_for_test(predecessor.unwrap())
+            .await;
         assert_eq!(
             output
                 .runtime_inspector_output()
@@ -6653,15 +6649,10 @@ mod tests {
         let (_, title, cached_items) = cached_document_state_for_route(&mut ctx.conn, &route);
         assert_eq!(title, "after-inspection");
         assert_eq!(cached_items, items);
-        let slot = ctx
-            .conn
-            .runtime_protocol_message_started_slot_mut(&route)
-            .unwrap();
-        assert_eq!(
-            slot.observable_output_queue_snapshot()
-                .unwrap()
-                .observable_output_items,
-            items
+        assert_native_observations_match_report(
+            &ctx.conn,
+            &CommandOwnerScope::capture(&ctx.conn, None),
+            items,
         );
     }
 
@@ -6706,6 +6697,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(output.renderer_output_predecessor(), predecessor);
+        ctx.route_direct_command_renderer_predecessor_for_test(predecessor.unwrap())
+            .await;
         assert_eq!(
             output.completion().page_state().document_title(),
             "after-inspection"
@@ -6746,24 +6739,20 @@ mod tests {
             .script_execution
             .observable_output_items();
         assert!(!items.is_empty());
-        ctx.conn
-            .ingest_runtime_protocol_message_started_route_output_updates(
-                &completed.route,
-                &output,
-            );
+        ctx.route_direct_command_renderer_predecessor_for_test(
+            output
+                .renderer_output_predecessor()
+                .expect("console output fence"),
+        )
+        .await;
         assert_ne!(
             cached_document_state_for_route(&mut ctx.conn, &completed.route).1,
             "after-inspection"
         );
-        let slot = ctx
-            .conn
-            .runtime_protocol_message_started_slot_mut(&completed.route)
-            .unwrap();
-        assert_eq!(
-            slot.observable_output_queue_snapshot()
-                .unwrap()
-                .observable_output_items,
-            items
+        assert_native_observations_match_report(
+            &ctx.conn,
+            &CommandOwnerScope::capture(&ctx.conn, None),
+            items,
         );
     }
 
@@ -7129,17 +7118,8 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, RuntimeEnableReplayEvent::Context(_)))
         );
-        let slot = ctx
-            .conn
-            .runtime_session_owner_slot_for_owner(&owner)
-            .unwrap();
         assert!(ctx.conn.has_loaded_page_for_owner(&owner));
-        assert_eq!(
-            slot.observable_output_queue_snapshot()
-                .unwrap()
-                .observable_output_items,
-            items
-        );
+        assert_native_observations_match_report(&ctx.conn, &owner, &items);
         assert_eq!(document.document_title_for_test(), "inspection enable");
         assert!(
             ctx.conn

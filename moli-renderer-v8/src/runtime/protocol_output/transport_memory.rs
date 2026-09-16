@@ -57,7 +57,11 @@ fn json_charge(value: &serde_json::Value) -> usize {
     }
 }
 
-fn console_payload_bytes(message: &str, args: &[serde_json::Value], stack: Option<&str>) -> usize {
+pub(crate) fn console_payload_bytes(
+    message: &str,
+    args: &[serde_json::Value],
+    stack: Option<&str>,
+) -> usize {
     args.iter().fold(
         string_charge(message).saturating_add(stack.map(string_charge).unwrap_or(0)),
         |total, value| total.saturating_add(json_charge(value)),

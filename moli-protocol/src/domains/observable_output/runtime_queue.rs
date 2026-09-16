@@ -9,6 +9,7 @@ use moli_core::page::{
 use moli_core::page::{RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem};
 
 use crate::conn::DocumentId;
+use moli_page_types::OutputHistory;
 
 use super::items::{
     ObservableRuntimePreparedItem, ObservableRuntimePreparedItems, runtime_console_api_called_item,
@@ -30,10 +31,11 @@ impl TargetRuntimeObservableQueueSnapshot {
         &self,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
         let latest = self.source_outputs.last()?;
-        let sources = self.source_outputs.iter().filter(|source| {
-            source.url() == latest.url() && source.document_id() == latest.document_id()
-        });
-        TargetRuntimeObservableSourceOutput::combine_same_identity(sources)
+        let sources = self
+            .source_outputs
+            .iter()
+            .filter(|source| source.document_id() == latest.document_id());
+        TargetRuntimeObservableSourceOutput::combine_same_document(sources)
     }
 }
 
@@ -75,17 +77,17 @@ impl TargetRuntimeObservableSourceOutput {
         })
     }
 
-    fn combine_same_identity<'a>(sources: impl IntoIterator<Item = &'a Self>) -> Option<Self> {
+    fn combine_same_document<'a>(sources: impl IntoIterator<Item = &'a Self>) -> Option<Self> {
         let mut sources = sources.into_iter();
         let first = sources.next()?;
         let mut combined = first.clone();
         for source in sources {
-            if combined.url != source.url
-                || combined.document_id != source.document_id
+            if combined.document_id != source.document_id
                 || combined.source_item_end_index != source.source_item_start_index
             {
                 return None;
             }
+            combined.url.clone_from(&source.url);
             combined.source_item_end_index = source.source_item_end_index;
             combined.default_execution_context_id = source.default_execution_context_id;
             combined
@@ -148,10 +150,8 @@ impl TargetRuntimeObservableSourceOutput {
                     if !include_console_api_messages {
                         continue;
                     }
-                    let emitted = owner_state.emitted_console_entries_for_context(
-                        message.execution_context_id,
-                        summary.default_execution_context_id(),
-                    );
+                    let emitted = owner_state
+                        .emitted_console_entries_for_context(message.execution_context_id);
                     if *context_count_end > emitted {
                         items.push(ObservableRuntimePreparedItem::output(
                             runtime_console_api_called_item(message),
@@ -190,6 +190,15 @@ impl TargetRuntimeObservableSourceOutput {
                 .source_context_console_counts(summary.default_execution_context_id(), &summary),
             exception_end,
         ))
+    }
+
+    pub(super) fn observable_output_start(&self) -> (usize, usize) {
+        let console = self
+            .default_execution_context_id
+            .and_then(|id| self.start_summary.console_messages_by_context.get(&id))
+            .copied()
+            .unwrap_or(0);
+        (console, self.start_summary.lifecycle_errors)
     }
 
     pub(crate) fn observable_output_items(&self) -> Vec<ScriptObservableOutputItem> {
@@ -496,56 +505,14 @@ impl RuntimeObservableEmissionSnapshot {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TargetRuntimeObservableQueueState {
-    observable_output_items: Vec<ScriptObservableOutputItem>,
-    latest_source_tail: Option<TargetRuntimeObservableSourceOutput>,
-    source_tails_by_identity: HashMap<(String, DocumentId), TargetRuntimeObservableSourceOutput>,
-    source_outputs: Vec<TargetRuntimeObservableSourceOutput>,
+    source_cursors: HashMap<DocumentId, (usize, TargetRuntimeObservableSourceSummary)>,
+    source_outputs: OutputHistory<TargetRuntimeObservableSourceOutput>,
 }
 
 impl TargetRuntimeObservableQueueState {
     pub(crate) fn reset(&mut self) {
-        self.observable_output_items.clear();
-        self.latest_source_tail = None;
-        self.source_tails_by_identity.clear();
-        self.source_outputs.clear();
-    }
-
-    pub(crate) fn reset_output_queue(&mut self) {
-        self.reset();
-    }
-
-    /// Reconciles a cumulative report snapshot, including producer rewinds.
-    pub(crate) fn ingest_observable_output_snapshot(
-        &mut self,
-        items: &[ScriptObservableOutputItem],
-    ) {
-        if self.observable_output_items.len() > items.len()
-            || self
-                .observable_output_items
-                .iter()
-                .zip(items.iter())
-                .any(|(previous, next)| previous != next)
-        {
-            self.observable_output_items.clear();
-        }
-
-        let start_item_index = self.observable_output_items.len();
-        self.observable_output_items
-            .extend(items[start_item_index..].iter().cloned());
-    }
-
-    fn console_event_count(&self) -> usize {
-        self.observable_output_items
-            .iter()
-            .filter(|item| matches!(item, ScriptObservableOutputItem::ConsoleMessage(_)))
-            .count()
-    }
-
-    fn lifecycle_error_event_count(&self) -> usize {
-        self.observable_output_items
-            .iter()
-            .filter(|item| matches!(item, ScriptObservableOutputItem::LifecycleError(_)))
-            .count()
+        self.source_cursors.clear();
+        self.source_outputs = OutputHistory::default();
     }
 
     #[cfg(test)]
@@ -574,9 +541,8 @@ impl TargetRuntimeObservableQueueState {
         if summary.is_empty() {
             return None;
         }
-        let source_url = url.clone();
         let source_item_count = source_items.len();
-        let Some(cursor) = self.source_tail_for_identity(&url, document_id) else {
+        let Some(cursor) = self.source_tail_for_document(document_id) else {
             self.append_source_output(
                 url,
                 document_id,
@@ -588,7 +554,7 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         };
         let Some(cursor_summary) = cursor.source_summary() else {
             self.rebuild_source_outputs_from_renderer_source(
@@ -597,10 +563,10 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         };
         if cursor_summary == summary {
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         }
         if source_item_count < cursor.source_item_end_index {
             self.rebuild_source_outputs_from_renderer_source(
@@ -609,7 +575,7 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         }
         let delta_items = source_items[cursor.source_item_end_index..].to_vec();
         if delta_items.is_empty() {
@@ -619,7 +585,7 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         }
         let Some(delta_summary) =
             cursor_summary.advance_with_items(summary.default_execution_context_id(), &delta_items)
@@ -630,7 +596,7 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         };
         if delta_summary != summary {
             self.rebuild_source_outputs_from_renderer_source(
@@ -639,7 +605,7 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, document_id);
+            return self.source_tail_for_document(document_id);
         }
         if !self.append_source_output(
             url.clone(),
@@ -657,26 +623,24 @@ impl TargetRuntimeObservableQueueState {
                 source_items,
             );
         }
-        self.source_tail_for_identity(&source_url, document_id)
+        self.source_tail_for_document(document_id)
     }
 
     /// Appends one concrete console fact already ordered by the renderer
     /// output stream.
     ///
-    /// Unlike the legacy renderer summary path, this never rebuilds or diffs
-    /// a source snapshot. Protocol owns the durable per-attachment cursor and
-    /// advances it exactly once for the admitted record.
+    /// Protocol owns the durable per-attachment cursor and advances it exactly
+    /// once for the admitted record.
     pub(crate) fn append_renderer_console_message(
         &mut self,
         url: String,
         document_id: DocumentId,
         message: RuntimeConsoleMessageSnapshot,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let key = (url.clone(), document_id);
         let (source_item_start_index, start_summary) = self
-            .source_tails_by_identity
-            .get(&key)
-            .and_then(|tail| Some((tail.source_item_end_index, tail.source_summary()?)))
+            .source_cursors
+            .get(&document_id)
+            .cloned()
             .unwrap_or_else(|| {
                 (
                     0,
@@ -712,7 +676,7 @@ impl TargetRuntimeObservableQueueState {
             ),
             "one concrete Runtime console record must form a valid source delta"
         );
-        self.source_tail_for_identity(&url, document_id)
+        self.source_outputs.iter().next_back().cloned()
     }
 
     /// Appends one concrete renderer lifecycle error in stream order.
@@ -727,11 +691,10 @@ impl TargetRuntimeObservableQueueState {
         text: String,
         execution_context_id: Option<i64>,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let key = (url.clone(), document_id);
         let (source_item_start_index, start_summary) = self
-            .source_tails_by_identity
-            .get(&key)
-            .and_then(|tail| Some((tail.source_item_end_index, tail.source_summary()?)))
+            .source_cursors
+            .get(&document_id)
+            .cloned()
             .unwrap_or_else(|| {
                 (
                     0,
@@ -761,17 +724,18 @@ impl TargetRuntimeObservableQueueState {
             ),
             "one concrete Runtime lifecycle error must form a valid source delta"
         );
-        self.source_tail_for_identity(&url, document_id)
+        self.source_outputs.iter().next_back().cloned()
     }
 
-    fn source_tail_for_identity(
+    fn source_tail_for_document(
         &self,
-        url: &str,
         document_id: DocumentId,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        self.source_tails_by_identity
-            .get(&(url.to_owned(), document_id))
-            .cloned()
+        TargetRuntimeObservableSourceOutput::combine_same_document(
+            self.source_outputs
+                .iter()
+                .filter(|source| source.document_id == document_id),
+        )
     }
 
     #[cfg(test)]
@@ -780,21 +744,13 @@ impl TargetRuntimeObservableQueueState {
     }
 
     pub(crate) fn latest_source_tail(&self) -> Option<TargetRuntimeObservableSourceOutput> {
-        self.latest_source_tail.clone()
-    }
-
-    pub(crate) fn observable_output_cursor_end(&self) -> Option<(usize, usize)> {
-        (!self.observable_output_items.is_empty()).then(|| {
-            (
-                self.console_event_count(),
-                self.lifecycle_error_event_count(),
-            )
-        })
+        let latest = self.source_outputs.iter().next_back()?;
+        self.source_tail_for_document(latest.document_id())
     }
 
     #[cfg(test)]
     pub(crate) fn source_snapshot(&self) -> TargetRuntimeObservableQueueSnapshot {
-        self.snapshot_with_source_outputs(self.source_outputs.clone())
+        self.snapshot_with_source_outputs(self.source_outputs.iter().cloned().collect())
     }
 
     #[cfg(test)]
@@ -803,7 +759,25 @@ impl TargetRuntimeObservableQueueState {
         source_outputs: Vec<TargetRuntimeObservableSourceOutput>,
     ) -> TargetRuntimeObservableQueueSnapshot {
         TargetRuntimeObservableQueueSnapshot {
-            observable_output_items: self.observable_output_items.clone(),
+            observable_output_items: self
+                .latest_source_tail()
+                .map(|source| {
+                    source
+                        .source_items
+                        .iter()
+                        .map(|item| match item {
+                            TargetRuntimeObservableSourceItem::ConsoleMessage {
+                                message, ..
+                            } => {
+                                ScriptObservableOutputItem::ConsoleMessage(message.message.clone())
+                            }
+                            TargetRuntimeObservableSourceItem::LifecycleError { text, .. } => {
+                                ScriptObservableOutputItem::LifecycleError(text.clone())
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             source_outputs,
         }
     }
@@ -829,21 +803,31 @@ impl TargetRuntimeObservableQueueState {
         ) else {
             return false;
         };
-        self.remember_latest_source_tail(&output);
-        self.source_outputs.push(output);
+        self.source_cursors
+            .insert(document_id, (source_item_end_index, summary));
+        let bytes = output.source_items.iter().fold(
+            output.url.capacity().saturating_add(
+                output
+                    .start_summary
+                    .console_messages_by_context
+                    .len()
+                    .saturating_mul(64),
+            ),
+            |total, item| {
+                total
+                    .saturating_add(std::mem::size_of::<TargetRuntimeObservableSourceItem>())
+                    .saturating_add(match item {
+                        TargetRuntimeObservableSourceItem::ConsoleMessage { message, .. } => {
+                            message.retained_payload_bytes()
+                        }
+                        TargetRuntimeObservableSourceItem::LifecycleError { text, .. } => {
+                            text.capacity()
+                        }
+                    })
+            },
+        );
+        self.source_outputs.push(output, bytes);
         true
-    }
-
-    fn remember_latest_source_tail(&mut self, output: &TargetRuntimeObservableSourceOutput) {
-        let key = (output.url.clone(), output.document_id);
-        let next = if let Some(current) = self.source_tails_by_identity.remove(&key) {
-            TargetRuntimeObservableSourceOutput::combine_same_identity([&current, output])
-                .unwrap_or_else(|| output.clone())
-        } else {
-            output.clone()
-        };
-        self.source_tails_by_identity.insert(key, next.clone());
-        self.latest_source_tail = Some(next);
     }
 
     #[cfg(test)]
@@ -855,9 +839,8 @@ impl TargetRuntimeObservableQueueState {
         source_items: Vec<TargetRuntimeObservableSourceItem>,
     ) {
         let source_item_count = source_items.len();
-        self.source_outputs.clear();
-        self.latest_source_tail = None;
-        self.source_tails_by_identity.clear();
+        self.source_outputs = OutputHistory::default();
+        self.source_cursors.clear();
         self.append_source_output(
             url,
             document_id,
@@ -880,9 +863,10 @@ mod tests {
         RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem,
     };
 
+    use super::{HashMap, TargetRuntimeObservableState};
     use super::{
-        TargetRuntimeObservableQueueSnapshot, TargetRuntimeObservableQueueState,
-        TargetRuntimeObservableSourceItem, TargetRuntimeObservableSourceSummary,
+        TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceItem,
+        TargetRuntimeObservableSourceSummary,
     };
     use crate::conn::DocumentId;
 
@@ -896,166 +880,88 @@ mod tests {
         RendererPageDiagnosticsSnapshot::from_runtime_observable_source(source)
     }
 
-    fn observable_output_items(
-        console: &[&str],
-        lifecycle_errors: &[&str],
-    ) -> Vec<ScriptObservableOutputItem> {
-        let mut events = console
-            .iter()
-            .map(|message| ScriptObservableOutputItem::ConsoleMessage((*message).to_owned()))
-            .collect::<Vec<_>>();
-        events.extend(
-            lifecycle_errors
-                .iter()
-                .map(|error| ScriptObservableOutputItem::LifecycleError((*error).to_owned())),
+    #[test]
+    fn native_runtime_retention_bounds_replay_without_replaying_live_output() {
+        let mut queue = TargetRuntimeObservableQueueState::default();
+        for index in 0..1500 {
+            let output = queue
+                .append_renderer_console_message(
+                    format!("http://example.test/page#{}", index % 2),
+                    document_id(17),
+                    runtime_console_message(7, &index.to_string()),
+                )
+                .unwrap();
+            assert_eq!(
+                output.source_items().len(),
+                1,
+                "live delivery contains only the new fact"
+            );
+            assert_eq!(output.source_item_end_index(), index + 1);
+        }
+        let tail = queue.latest_source_tail().unwrap();
+        assert_eq!(tail.source_item_start_index(), 500);
+        assert_eq!(tail.source_item_end_index(), 1500);
+        assert_eq!(tail.source_items().len(), 1000);
+        assert_eq!(
+            tail.source_console_messages().first().unwrap().message,
+            "500"
         );
-        events
-    }
-
-    fn apply_observable_page_output_update(
-        queue: &mut TargetRuntimeObservableQueueState,
-        items: &[ScriptObservableOutputItem],
-    ) {
-        queue.ingest_observable_output_snapshot(items);
+        let mut state = TargetRuntimeObservableState::default();
+        state.mark_emitted_console_counts(HashMap::from([(7, 1500)]));
+        assert!(tail.source_items_prepared_for_state(&state, true).is_none());
+        let next = queue
+            .append_renderer_console_message(
+                "http://example.test/page".into(),
+                document_id(17),
+                runtime_console_message(7, "next"),
+            )
+            .unwrap();
+        assert!(next.source_items_prepared_for_state(&state, true).is_some());
+        assert_eq!(next.summary().console_messages_by_context()[&7], 1501);
+        assert!(queue.source_outputs.retained_bytes() <= 10 * 1024 * 1024);
     }
 
     #[test]
-    fn target_runtime_observable_queue_appends_matching_tail() {
+    fn native_runtime_queue_preserves_order_and_resets_document_cursors() {
         let mut queue = TargetRuntimeObservableQueueState::default();
-
-        apply_observable_page_output_update(
-            &mut queue,
-            &[
-                ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-                ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-            ],
+        let url = "https://example.test/".to_owned();
+        queue.append_renderer_console_message(
+            url.clone(),
+            document_id(17),
+            runtime_console_message(7, "console-a"),
         );
-        apply_observable_page_output_update(
-            &mut queue,
-            &[
-                ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-                ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-                ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-                ScriptObservableOutputItem::LifecycleError("error-b".to_owned()),
-            ],
+        queue.append_renderer_lifecycle_error(
+            url.clone(),
+            document_id(17),
+            "error-a".into(),
+            Some(7),
         );
-
+        queue.append_renderer_console_message(
+            url.clone(),
+            document_id(17),
+            runtime_console_message(7, "console-b"),
+        );
+        let source = queue.latest_source_tail().unwrap();
         assert_eq!(
-            queue.snapshot(),
-            TargetRuntimeObservableQueueSnapshot {
-                observable_output_items: vec![
-                    ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-                    ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-                    ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-                    ScriptObservableOutputItem::LifecycleError("error-b".to_owned()),
-                ],
-                source_outputs: Vec::new(),
-            }
+            queue.snapshot().observable_output_items,
+            vec![
+                ScriptObservableOutputItem::ConsoleMessage("console-a".into()),
+                ScriptObservableOutputItem::LifecycleError("error-a".into()),
+                ScriptObservableOutputItem::ConsoleMessage("console-b".into()),
+            ]
         );
-    }
-
-    #[test]
-    fn target_runtime_observable_queue_append_update_preserves_producer_item_order() {
-        let mut queue = TargetRuntimeObservableQueueState::default();
-        let first_items = vec![ScriptObservableOutputItem::ConsoleMessage(
-            "console-a".to_owned(),
-        )];
-        let all_items = vec![
-            ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-            ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-            ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-        ];
-
-        apply_observable_page_output_update(&mut queue, &first_items);
-        apply_observable_page_output_update(&mut queue, &all_items);
-
-        assert_eq!(
-            queue.snapshot(),
-            TargetRuntimeObservableQueueSnapshot {
-                observable_output_items: vec![
-                    ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-                    ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-                    ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-                ],
-                source_outputs: Vec::new(),
-            },
-            "observable producer item append update should append from the source item cursor instead of regrouping by event family"
-        );
-        assert_eq!(queue.observable_output_items.len(), 3);
-    }
-
-    #[test]
-    fn target_runtime_observable_queue_reports_owner_output_cursor_end() {
-        let mut queue = TargetRuntimeObservableQueueState::default();
-        assert_eq!(
-            queue.observable_output_cursor_end(),
-            None,
-            "empty owner output queue should not masquerade as a synced cursor source"
-        );
-
-        apply_observable_page_output_update(
-            &mut queue,
-            &observable_output_items(&["console-a", "console-b"], &["error-a"]),
-        );
-
-        assert_eq!(
-            queue.observable_output_cursor_end(),
-            Some((2, 1)),
-            "aggregate cursor should be derived from already-ingested owner output only"
-        );
-    }
-
-    #[test]
-    fn target_runtime_observable_queue_recovers_producer_items_on_prefix_drift() {
-        let mut queue = TargetRuntimeObservableQueueState::default();
-        let first_items = vec![ScriptObservableOutputItem::ConsoleMessage("old".to_owned())];
-        let replacement_items = vec![ScriptObservableOutputItem::LifecycleError(
-            "replacement".to_owned(),
-        )];
-
-        apply_observable_page_output_update(&mut queue, &first_items);
-        apply_observable_page_output_update(&mut queue, &replacement_items);
-
-        assert_eq!(
-            queue.snapshot(),
-            TargetRuntimeObservableQueueSnapshot {
-                observable_output_items: vec![ScriptObservableOutputItem::LifecycleError(
-                    "replacement".to_owned()
-                )],
-                source_outputs: Vec::new(),
-            },
-            "observable producer item prefix drift must rebuild same-count replacement output instead of trusting the previous item cursor"
-        );
-        assert_eq!(queue.observable_output_items.len(), 1);
-    }
-
-    #[test]
-    fn target_runtime_observable_queue_rebuilds_on_rewind_or_replacement() {
-        let mut queue = TargetRuntimeObservableQueueState::default();
-
-        apply_observable_page_output_update(
-            &mut queue,
-            &[
-                ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-                ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-                ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-                ScriptObservableOutputItem::LifecycleError("error-b".to_owned()),
-            ],
-        );
-        apply_observable_page_output_update(
-            &mut queue,
-            &[ScriptObservableOutputItem::ConsoleMessage(
-                "console-new".to_owned(),
-            )],
-        );
-
-        assert_eq!(
-            queue.snapshot(),
-            TargetRuntimeObservableQueueSnapshot {
-                observable_output_items: observable_output_items(&["console-new"], &[]),
-                source_outputs: Vec::new(),
-            }
-        );
+        assert_eq!(source.cursor_end(), Some((HashMap::from([(7, 2)]), 1)));
+        queue.reset();
+        assert!(queue.latest_source_tail().is_none());
+        let fresh = queue
+            .append_renderer_console_message(
+                url,
+                document_id(18),
+                runtime_console_message(7, "new"),
+            )
+            .unwrap();
+        assert_eq!(fresh.source_item_start_index(), 0);
+        assert_eq!(fresh.cursor_end(), Some((HashMap::from([(7, 1)]), 0)));
     }
 
     #[test]
@@ -1290,11 +1196,9 @@ mod tests {
             1,
             "source tail cache should resume the prior identity cursor instead of rebuilding from zero"
         );
-        let first_tail = queue
-            .source_tail_for_identity("http://example.test/first-source", document_id(17))
-            .expect(
-                "first identity source tail should stay cached after a different latest source",
-            );
+        let first_tail = queue.source_tail_for_document(document_id(17)).expect(
+            "first identity source tail should stay cached after a different latest source",
+        );
         assert_eq!(
             first_tail.source_console_messages(),
             vec![

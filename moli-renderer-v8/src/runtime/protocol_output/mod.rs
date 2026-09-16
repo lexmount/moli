@@ -3,6 +3,7 @@ mod identity;
 mod item;
 mod transport;
 mod transport_memory;
+pub(crate) use transport_memory::console_payload_bytes;
 mod turn_journal;
 
 pub use fence::RendererOutputFence;

@@ -1977,147 +1977,81 @@ impl RendererRuntimeObservableSourceSummary {
     }
 }
 
-fn source_items_for_snapshot(
-    default_execution_context_id: Option<i64>,
-    source_items: &[RendererRuntimeObservableSourceItem],
-) -> Vec<RendererRuntimeObservableSourceItem> {
-    source_items
-        .iter()
-        .cloned()
-        .map(|item| match item {
-            RendererRuntimeObservableSourceItem::ConsoleMessage {
-                message,
-                context_count_end,
-            } => RendererRuntimeObservableSourceItem::console_message(message, context_count_end),
-            RendererRuntimeObservableSourceItem::LifecycleError {
-                text,
-                exception_index,
-                ..
-            } => RendererRuntimeObservableSourceItem::lifecycle_error(
-                text,
-                default_execution_context_id,
-                exception_index,
-            ),
-        })
-        .collect()
-}
-
-fn source_item_next_context_count(
-    source_items: &[RendererRuntimeObservableSourceItem],
-    execution_context_id: i64,
-) -> usize {
-    source_items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. }
-                    if message.execution_context_id == execution_context_id
-            )
-        })
-        .count()
-        .checked_add(1)
-        .expect("runtime observable source item context count overflow")
-}
-
-fn source_item_next_lifecycle_error_index(
-    source_items: &[RendererRuntimeObservableSourceItem],
-) -> usize {
-    source_items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::LifecycleError { .. }
-            )
-        })
-        .count()
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeObservableSourceEvent {
+    Console {
+        event: PendingRuntimeObservableConsoleSourceEvent,
+        context_count_end: usize,
+    },
+    LifecycleError {
+        text: String,
+        exception_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RendererRuntimeObservableSourceQueue {
-    source_items: Vec<RendererRuntimeObservableSourceItem>,
-    pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
-    report_default_console_message_count: usize,
+    source_items: moli_page_types::OutputHistory<RuntimeObservableSourceEvent>,
+    console_counts: BTreeMap<RuntimeObservableContextToken, usize>,
+    contexts: BTreeMap<RuntimeObservableContextToken, i64>,
+    report_end: usize,
+    exception_count: usize,
 }
 
 impl RendererRuntimeObservableSourceQueue {
-    pub(crate) fn record_lifecycle_error(&mut self, message: String) {
-        let exception_index = source_item_next_lifecycle_error_index(&self.source_items);
-        self.source_items
-            .push(RendererRuntimeObservableSourceItem::lifecycle_error(
-                message,
-                None,
+    pub(crate) fn record_lifecycle_error(&mut self, text: String) {
+        let bytes = text.capacity();
+        let exception_index = self.exception_count;
+        self.exception_count = self
+            .exception_count
+            .checked_add(1)
+            .expect("exception count overflow");
+        self.source_items.push(
+            RuntimeObservableSourceEvent::LifecycleError {
+                text,
                 exception_index,
-            ));
+            },
+            bytes,
+        );
     }
 
     pub(crate) fn record_pending_console_event(
         &mut self,
         event: PendingRuntimeObservableConsoleSourceEvent,
     ) {
-        self.pending_console_events.push(event);
-    }
-
-    pub(crate) fn record_console_message(&mut self, message: RuntimeConsoleMessageSnapshot) {
-        let context_count_end =
-            source_item_next_context_count(&self.source_items, message.execution_context_id);
-        self.source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                message,
-                context_count_end,
-            ));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sync_console_events(
-        &mut self,
-        active_contexts: &BTreeSet<i64>,
-        active_tokens: &BTreeSet<RuntimeObservableContextToken>,
-        token_to_execution_context_id: &BTreeMap<RuntimeObservableContextToken, i64>,
-        pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
-    ) {
-        self.sync_source_events(
-            active_contexts,
-            active_tokens,
-            token_to_execution_context_id,
-            pending_console_events,
+        let count = self
+            .console_counts
+            .entry(event.context_token())
+            .or_default();
+        *count = count.checked_add(1).expect("console count overflow");
+        let bytes = event.retained_payload_bytes();
+        self.source_items.push(
+            RuntimeObservableSourceEvent::Console {
+                event,
+                context_count_end: *count,
+            },
+            bytes,
         );
     }
 
     pub(crate) fn sync_source_events(
         &mut self,
-        active_contexts: &BTreeSet<i64>,
         active_tokens: &BTreeSet<RuntimeObservableContextToken>,
-        token_to_execution_context_id: &BTreeMap<RuntimeObservableContextToken, i64>,
+        contexts: &BTreeMap<RuntimeObservableContextToken, i64>,
         pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
     ) {
         self.source_items.retain(|item| match item {
-            RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. } => {
-                active_contexts.contains(&message.execution_context_id)
+            RuntimeObservableSourceEvent::Console { event, .. } => {
+                active_tokens.contains(&event.context_token())
             }
-            RendererRuntimeObservableSourceItem::LifecycleError { .. } => true,
+            RuntimeObservableSourceEvent::LifecycleError { .. } => true,
         });
-
-        self.pending_console_events.extend(pending_console_events);
-        let pending_events = std::mem::take(&mut self.pending_console_events);
-        for event in pending_events {
-            if !active_tokens.contains(&event.context_token()) {
-                continue;
-            }
-            if let Some(execution_context_id) =
-                token_to_execution_context_id.get(&event.context_token())
-            {
-                let context_count_end =
-                    source_item_next_context_count(&self.source_items, *execution_context_id);
-                let message = event.into_runtime_console_message_snapshot(*execution_context_id);
-                self.source_items
-                    .push(RendererRuntimeObservableSourceItem::console_message(
-                        message,
-                        context_count_end,
-                    ));
-            } else {
-                self.pending_console_events.push(event);
+        self.console_counts
+            .retain(|token, _| active_tokens.contains(token));
+        self.contexts.clone_from(contexts);
+        for event in pending_console_events {
+            if active_tokens.contains(&event.context_token()) {
+                self.record_pending_console_event(event);
             }
         }
     }
@@ -2126,60 +2060,60 @@ impl RendererRuntimeObservableSourceQueue {
         &self,
         default_execution_context_id: Option<i64>,
     ) -> Option<RendererRuntimeObservableSourceSummary> {
+        let items = self
+            .source_items
+            .iter()
+            .filter_map(|item| match item {
+                RuntimeObservableSourceEvent::Console {
+                    event,
+                    context_count_end,
+                } => {
+                    let id = *self.contexts.get(&event.context_token())?;
+                    Some(RendererRuntimeObservableSourceItem::console_message(
+                        event.clone().into_runtime_console_message_snapshot(id),
+                        *context_count_end,
+                    ))
+                }
+                RuntimeObservableSourceEvent::LifecycleError {
+                    text,
+                    exception_index,
+                } => Some(RendererRuntimeObservableSourceItem::lifecycle_error(
+                    text.clone(),
+                    default_execution_context_id,
+                    *exception_index,
+                )),
+            })
+            .collect();
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
             default_execution_context_id,
-            source_items_for_snapshot(default_execution_context_id, &self.source_items),
+            items,
         );
         (!source.is_empty()).then_some(source)
     }
 
     pub(crate) fn take_report_observable_output(
         &mut self,
-        default_execution_context_id: Option<i64>,
         default_context_token: RuntimeObservableContextToken,
     ) -> ScriptObservableOutput {
         let mut output = ScriptObservableOutput::default();
-        let mut default_console_message_count = 0usize;
-        for item in &self.source_items {
+        for item in self.source_items.iter_since(self.report_end) {
             match item {
-                RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. }
-                    if Some(message.execution_context_id) == default_execution_context_id =>
+                RuntimeObservableSourceEvent::Console { event, .. }
+                    if event.context_token() == default_context_token =>
                 {
-                    if default_console_message_count >= self.report_default_console_message_count {
-                        output.push_item(ScriptObservableOutputItem::ConsoleMessage(
-                            message.message.clone(),
-                        ));
-                    }
-                    default_console_message_count = default_console_message_count
-                        .checked_add(1)
-                        .expect("report observable console message count overflow");
+                    output.push_item(ScriptObservableOutputItem::ConsoleMessage(
+                        event.message().to_owned(),
+                    ));
                 }
-                RendererRuntimeObservableSourceItem::LifecycleError { text, .. } => {
+                RuntimeObservableSourceEvent::LifecycleError { text, .. } => {
                     output.push_item(ScriptObservableOutputItem::LifecycleError(text.clone()));
                 }
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. } => {}
+                RuntimeObservableSourceEvent::Console { .. } => {}
             }
         }
-        for event in &self.pending_console_events {
-            if event.context_token() != default_context_token {
-                continue;
-            }
-            if default_console_message_count >= self.report_default_console_message_count {
-                output.push_item(ScriptObservableOutputItem::ConsoleMessage(
-                    event.message().to_owned(),
-                ));
-            }
-            default_console_message_count = default_console_message_count
-                .checked_add(1)
-                .expect("report observable pending console message count overflow");
-        }
-        self.report_default_console_message_count = default_console_message_count;
-        self.source_items.retain(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. }
-            )
-        });
+        self.report_end = self.source_items.end();
+        self.source_items
+            .retain(|item| matches!(item, RuntimeObservableSourceEvent::Console { .. }));
         output
     }
 
@@ -2250,10 +2184,8 @@ impl RendererRuntimeObservableSourceQueue {
         self.source_items
             .iter()
             .filter_map(|item| match item {
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. } => None,
-                RendererRuntimeObservableSourceItem::LifecycleError { text, .. } => {
-                    Some(text.clone())
-                }
+                RuntimeObservableSourceEvent::LifecycleError { text, .. } => Some(text.clone()),
+                RuntimeObservableSourceEvent::Console { .. } => None,
             })
             .collect()
     }
@@ -2418,8 +2350,8 @@ mod page_diagnostics_snapshot_tests {
             ],
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2436,23 +2368,23 @@ mod page_diagnostics_snapshot_tests {
 
     #[test]
     fn runtime_observable_source_queue_projects_report_output_by_producer_cursor() {
-        let mut queue = RendererRuntimeObservableSourceQueue::default();
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(5, "log: first"),
-                1,
-            ));
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(9, "log: isolated"),
-                1,
-            ));
+        let mut queue = RendererRuntimeObservableSourceQueue {
+            contexts: BTreeMap::from([
+                (RuntimeObservableContextToken::from_raw(50), 5),
+                (RuntimeObservableContextToken::from_raw(90), 9),
+            ]),
+            ..Default::default()
+        };
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: first"),
+        );
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(90, "log: isolated"),
+        );
         queue.record_lifecycle_error("first failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2470,16 +2402,13 @@ mod page_diagnostics_snapshot_tests {
             "projecting report output must not drain RuntimeObservable console source items"
         );
 
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(5, "log: second"),
-                2,
-            ));
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: second"),
+        );
         queue.record_lifecycle_error("second failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2492,20 +2421,85 @@ mod page_diagnostics_snapshot_tests {
     }
 
     #[test]
+    fn runtime_observable_retention_preserves_pending_report_and_live_cursors() {
+        let mut queue = RendererRuntimeObservableSourceQueue::default();
+        let default = RuntimeObservableContextToken::from_raw(50);
+        let isolated = RuntimeObservableContextToken::from_raw(90);
+        for index in 0..1200 {
+            queue.record_pending_console_event(
+                PendingRuntimeObservableConsoleSourceEvent::new_for_testing(
+                    if index % 2 == 0 { 50 } else { 90 },
+                    index.to_string(),
+                ),
+            );
+        }
+        let items: Vec<_> = queue
+            .take_report_observable_output(default)
+            .into_items()
+            .collect();
+        assert_eq!(
+            items,
+            (200..1200)
+                .step_by(2)
+                .map(|i| ScriptObservableOutputItem::ConsoleMessage(i.to_string()))
+                .collect::<Vec<_>>()
+        );
+        queue.sync_source_events(
+            &BTreeSet::from([default, isolated]),
+            &BTreeMap::from([(default, 5), (isolated, 9)]),
+            Vec::new(),
+        );
+        assert!(queue.take_report_observable_output(default).is_empty());
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "next"),
+        );
+        queue.record_lifecycle_error("failure".into());
+        let source = queue.snapshot(Some(5)).unwrap();
+        assert!(
+            matches!(&source.source_items()[998], RendererRuntimeObservableSourceItem::ConsoleMessage { context_count_end: 601, message } if message.message == "next")
+        );
+        assert_eq!(
+            queue
+                .take_report_observable_output(default)
+                .into_items()
+                .collect::<Vec<_>>(),
+            vec![
+                ScriptObservableOutputItem::ConsoleMessage("next".into()),
+                ScriptObservableOutputItem::LifecycleError("failure".into()),
+            ]
+        );
+        // Retirement removes the isolated realm, without rewinding the report.
+        queue.sync_source_events(
+            &BTreeSet::from([default]),
+            &BTreeMap::from([(default, 5)]),
+            Vec::new(),
+        );
+        assert!(queue.take_report_observable_output(default).is_empty());
+        assert_eq!(
+            queue
+                .snapshot(Some(5))
+                .unwrap()
+                .console_messages_by_context()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn runtime_observable_source_queue_projects_pending_default_console_to_report() {
         let mut queue = RendererRuntimeObservableSourceQueue::default();
-        queue.pending_console_events.push(
+        queue.record_pending_console_event(
             PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: pending default"),
         );
-        queue.pending_console_events.push(
+        queue.record_pending_console_event(
             PendingRuntimeObservableConsoleSourceEvent::new_for_testing(
                 90,
                 "log: pending isolated",
             ),
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2515,8 +2509,7 @@ mod page_diagnostics_snapshot_tests {
             "default-token console output should reach the page report before Runtime source resolution"
         );
 
-        queue.sync_console_events(
-            &BTreeSet::from([5, 9]),
+        queue.sync_source_events(
             &BTreeSet::from([
                 RuntimeObservableContextToken::from_raw(50),
                 RuntimeObservableContextToken::from_raw(90),
@@ -2527,8 +2520,8 @@ mod page_diagnostics_snapshot_tests {
             ]),
             Vec::new(),
         );
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         assert!(
             report_output.is_empty(),
             "pending default console output must not be reported again after it resolves into source items"
@@ -4962,7 +4955,6 @@ pub enum RendererPageCommand {
     LiveChildDefaultRuntimeRealmInventory,
     ChildFrameIdForDefaultExecutionContextId(i64),
     ChildDefaultExecutionContextIdForFrameId(String),
-    RuntimeConsoleMessagesWithContext,
     RuntimeHeapUsage,
     RuntimeCollectGarbage,
     #[cfg(test)]
@@ -5664,7 +5656,6 @@ impl RendererPageCommand {
             Self::PageDiagnosticsSnapshot
                 | Self::HasPendingLocationNavigation
                 | Self::LiveChildDefaultRuntimeRealmInventory
-                | Self::RuntimeConsoleMessagesWithContext
                 | Self::ChildFrameTreeSnapshot
                 | Self::PendingSubresourceRequestCount
         )
@@ -6094,7 +6085,6 @@ pub enum RendererPageReply {
     ElementClickDispatch(Result<RendererInputDispatchOutcome, RendererElementClickError>),
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
-    RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
     RuntimeRealmInventory(Vec<RendererRuntimeRealmInfo>),
     ExecutionContextId(i64),

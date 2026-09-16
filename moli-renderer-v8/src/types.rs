@@ -492,7 +492,7 @@ impl PendingSubresourceFetchState {
         completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
     ) -> crate::network_host::CorsPreflightNetworkObserver {
         crate::network_host::CorsPreflightNetworkObserver {
-            request: self.network().request(),
+            request: self.network().request().expect("admitted pending request"),
             observer: completion_tx.network_observer(),
             frame_id: self.info.frame_id.clone(),
             resource_type: self.info.resource_type,
