@@ -649,6 +649,9 @@ impl HtmlTreeSinkStream {
             // The live owner admits async execution only after its checkpoint;
             // ordinary preload discovery continues on the separate preload lane.
             let result = match result {
+                RawParserStep::OwnerInterrupted => {
+                    ParserPumpStep::Yield(ParserYield::OwnerInterrupted)
+                }
                 RawParserStep::Script(node_id) => {
                     let target = self.parser.sink().borrow_target();
                     let (start_line, start_column) =
