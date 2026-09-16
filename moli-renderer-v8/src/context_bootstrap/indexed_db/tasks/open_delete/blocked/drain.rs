@@ -8,6 +8,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_drain_blocked_open_request
         return;
     };
     let next = v8::Array::new(scope, 0);
+    let mut waiting_keys = std::collections::BTreeSet::new();
     for index in 0..queue.length() {
         let Some(value) = queue.get_index(scope, index) else {
             continue;
@@ -17,7 +18,13 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_drain_blocked_open_request
         };
         let database_key = indexed_db_blocked_task_payload(scope, task)
             .map(|payload| database_registry_key(&payload.origin, &payload.name));
-        if !try_execute_unblocked_request(scope, task) {
+        let waiting_for_earlier = database_key
+            .as_ref()
+            .is_some_and(|key| waiting_keys.contains(key));
+        if waiting_for_earlier || !try_execute_unblocked_request(scope, task) {
+            if let Some(key) = database_key {
+                waiting_keys.insert(key);
+            }
             let _ = next.set_index(scope, next.length(), task.into());
         } else {
             if let Some(database_key) = database_key.as_deref() {
@@ -50,6 +57,9 @@ fn try_execute_unblocked_request_in_owner_scope<'s>(
     let Some(payload) = indexed_db_blocked_task_payload(scope, task) else {
         return false;
     };
+    if payload.notifications_pending {
+        return false;
+    }
     let key = database_registry_key(&payload.origin, &payload.name);
     if has_open_database_connections_for_key(scope, &key) {
         return false;
