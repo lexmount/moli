@@ -1547,6 +1547,7 @@ mod modules;
 mod strict_script_mime;
 
 mod network;
+mod onerror;
 mod postmessage;
 mod stream_clone_failures;
 mod canvas_transform_snapshots;
