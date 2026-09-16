@@ -67,7 +67,7 @@ fn connect_with_runtime_service(
                 client.send_error(
                     "Failed to connect SharedWorker: loading host is unavailable.",
                     params.key.script_url(),
-                    WorkerParentErrorEventKind::ErrorEvent,
+                    WorkerParentErrorEventKind::Event,
                 );
                 client.close_ports();
                 runtime_service.remove_client(client_id);
@@ -88,7 +88,7 @@ fn connect_with_runtime_service(
             client.send_error(
                 shared_worker_compatibility_error_message(&error),
                 params.key.script_url(),
-                WorkerParentErrorEventKind::ErrorEvent,
+                WorkerParentErrorEventKind::Event,
             );
             client.close_ports();
             client_id

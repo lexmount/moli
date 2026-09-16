@@ -845,7 +845,7 @@ fn queue_nested_worker_script_load_error(
                 lineno: 0,
                 colno: 0,
                 event_kind: crate::worker::WorkerParentErrorEventKind::Event,
-                phase: crate::worker::WorkerErrorPhase::Runtime,
+                phase: crate::worker::WorkerErrorPhase::Bootstrap,
                 source: crate::worker::WorkerErrorSource::Runtime,
             }),
         });

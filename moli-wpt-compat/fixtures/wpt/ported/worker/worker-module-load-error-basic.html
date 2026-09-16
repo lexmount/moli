@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -23,7 +24,7 @@ function wait_for(promise, description) {
   ]);
 }
 
-async function assert_module_graph_failure(workerUrl, expectedFragments, description) {
+async function assert_module_graph_failure(workerUrl, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(workerUrl, { type: "module" });
@@ -46,11 +47,7 @@ async function assert_module_graph_failure(workerUrl, expectedFragments, descrip
       "module worker " + description + " graph failure",
     );
 
-    assert_equals(event.type, "error", "module graph failure should dispatch an error event");
-    const lowerMessage = String(event.message).toLowerCase();
-    assert_true(expectedFragments.some(function (fragment) {
-      return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-    }), "graph failure should expose the dependency load or resolution reason");
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, "module evaluation should not continue after the graph failure");
   } finally {
     window.onerror = previousOnerror;
@@ -65,7 +62,6 @@ promise_test(async function () {
   ).href;
   await assert_module_graph_failure(
     missingHttpMainUrl,
-    ["404", "not found"],
     "HTTP dependency 404",
   );
 
@@ -75,7 +71,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_graph_failure(
     worker_url(unsupportedSchemeSource),
-    ["unsupported scheme", "ftp"],
     "unsupported dependency scheme",
   );
 
@@ -85,7 +80,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_graph_failure(
     worker_url(invalidSpecifierSource),
-    ["failed to resolve", "invalid"],
     "invalid dependency specifier",
   );
 }, "Dedicated module workers report dependency load and resolution failures before evaluation");

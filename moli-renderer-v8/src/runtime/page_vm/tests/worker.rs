@@ -2996,13 +2996,9 @@ async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_is
 #[tokio::test]
 async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports() {
     run_page_vm_async_test(async move {
-        let (dependency_base_url, dependency_server) = spawn_path_response_http_server(vec![(
-            "/dependency.js",
-            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *",
-            "export const value = 'unexpected';".to_owned(),
-            Duration::ZERO,
-        )])
-        .await;
+        let (dependency_base_url, mut dependency_request, dependency_server) =
+            spawn_shared_worker_script_capture_http_server("export const value = 'unexpected';")
+                .await;
         let dependency_url = format!("{dependency_base_url}/dependency.js");
         let worker_source = format!(
             r#"
@@ -3044,7 +3040,13 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
                         };
                         worker.onerror = event => {
                             event.preventDefault();
-                            globalThis.__moduleWorkerCspResult = "error:" + event.message;
+                            globalThis.__moduleWorkerCspResult = JSON.stringify([
+                                event.type,
+                                Object.getPrototypeOf(event) === Event.prototype,
+                                event.bubbles, event.cancelable, event.composed, event.isTrusted,
+                                event.defaultPrevented,
+                                ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
+                            ]);
                             globalThis.__moduleWorkerCspDone = true;
                         };
                     })()
@@ -3059,9 +3061,10 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
                 let result = page_vm
                     .vm_mut()
                     .eval("globalThis.__moduleWorkerCspResult")?;
-                assert!(
-                    result.starts_with("error:") && result.contains("Content Security Policy"),
-                    "static module import should be blocked by creator worker-src: {result:?}"
+                assert_eq!(
+                    result,
+                    r#"["error",true,false,false,false,true,false,false]"#,
+                    "blocked static import should fire a bootstrap Event before evaluation"
                 );
                 anyhow::Ok(())
             })
@@ -3070,6 +3073,10 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
         server
             .await
             .expect("external module worker CSP server should finish");
+        assert!(
+            matches!(dependency_request.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
+            "creator CSP must block the dependency before any HTTP request is sent"
+        );
         dependency_server.abort();
     })
     .await;
@@ -4017,7 +4024,6 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
         )])
         .await;
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
-        let missing_worker_url = format!("{base_url}/does-not-exist.js");
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
 
@@ -4034,7 +4040,17 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
                         });
                         const worker = new Worker("/does-not-exist.js");
                         worker.onerror = event => {
-                            globalThis.__missingWorkerEvents.push("worker:" + event.message);
+                            event.preventDefault();
+                            globalThis.__missingWorkerEvents.push({
+                                target: "worker",
+                                type: event.type,
+                                constructor: event.constructor.name,
+                                trusted: event.isTrusted,
+                                cancelable: event.cancelable,
+                                defaultPrevented: event.defaultPrevented,
+                                hasErrorDetails: ["message", "filename", "lineno", "colno", "error"]
+                                    .some(name => name in event)
+                            });
                             globalThis.__missingWorkerDone = true;
                         };
                     })()
@@ -4055,9 +4071,7 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
                     page_vm
                         .vm_mut()
                         .eval("JSON.stringify(globalThis.__missingWorkerEvents)")?,
-                    format!(
-                        r#"["worker:HTTP request `{missing_worker_url}` returned 404 Not Found"]"#
-                    )
+                    r#"[{"target":"worker","type":"error","constructor":"Event","trusted":true,"cancelable":false,"defaultPrevented":false,"hasErrorDetails":false}]"#
                 );
                 anyhow::Ok(())
             })
@@ -4088,7 +4102,10 @@ async fn shared_worker_rejects_cross_origin_redirected_script() {
                         globalThis.__sharedWorkerRedirectDone = false;
                         const worker = new SharedWorker("/redirect-source.js", "cross-origin-redirect-script");
                         worker.onerror = (event) => {
-                            globalThis.__sharedWorkerRedirectOutcome = "error:" + event.message;
+                            globalThis.__sharedWorkerRedirectOutcome = JSON.stringify([
+                                event.type, event.constructor.name, event.cancelable,
+                                "message" in event, event.isTrusted
+                            ]);
                             globalThis.__sharedWorkerRedirectDone = true;
                         };
                         worker.port.onmessage = (event) => {
@@ -4106,9 +4123,10 @@ async fn shared_worker_rejects_cross_origin_redirected_script() {
                 )
                 .await?;
                 let outcome = page_vm.vm_mut().eval("globalThis.__sharedWorkerRedirectOutcome")?;
-                assert!(
-                    outcome.starts_with("error:"),
-                    "redirected cross-origin script must not execute, got {outcome:?}"
+                assert_eq!(
+                    outcome,
+                    r#"["error","Event",false,false,true]"#,
+                    "redirected cross-origin script must fail with a plain Event"
                 );
                 anyhow::Ok(())
             })
@@ -5015,7 +5033,7 @@ async fn shared_worker_terminal_error_forgets_page_client_wrapper_tracking() {
                     page_vm
                         .vm_mut()
                         .eval("JSON.stringify(globalThis.__sharedWorkerTerminalErrorRecord)")?,
-                    r#"{"type":"error","cancelable":true,"hasMessage":true}"#
+                    r#"{"type":"error","cancelable":false,"hasMessage":false}"#
                 );
                 wait_for_shared_worker_client_count(
                     &mut page_vm,

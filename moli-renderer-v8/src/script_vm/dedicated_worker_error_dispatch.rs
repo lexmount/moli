@@ -1,7 +1,7 @@
 //! DedicatedWorker error-event dispatch and propagation.
 //!
 //! This is deliberately separate from ordinary Worker message dispatch.
-//! `dispatch_worker_error_event_with_*` retains the established inner
+//! `dispatch_worker_error_event_with_kind` retains the established inner
 //! checkpoint used to settle listener cancellation before deciding whether an
 //! uncanceled Worker error propagates to the owning Window. That semantic
 //! checkpoint is not the HTML task-end checkpoint: the selected Page-task
@@ -16,7 +16,7 @@ pub(super) fn dispatch_script_load_failure<'s>(
     script_url: &str,
 ) {
     let worker_error = v8::null(scope).into();
-    crate::context_bootstrap::dispatch_worker_error_event_with_error(
+    crate::context_bootstrap::dispatch_worker_error_event_with_kind(
         scope,
         worker,
         error_message,
@@ -24,6 +24,7 @@ pub(super) fn dispatch_script_load_failure<'s>(
         0,
         0,
         worker_error,
+        crate::worker::WorkerParentErrorEventKind::Event,
     );
 }
 
