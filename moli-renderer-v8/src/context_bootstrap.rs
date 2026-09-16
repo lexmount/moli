@@ -333,6 +333,7 @@ pub(crate) use self::events::{
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
     submit_event_submitter_value,
     set_event_source_value,
+    error_event_handler_arguments,
 };
 #[cfg(test)]
 pub(crate) use self::file_api::drag_data_read_count_for_test;
