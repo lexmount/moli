@@ -1,17 +1,15 @@
-use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
-use super::super::util::{get_private_value, set_private_value, v8str};
+use super::super::util::{get_private_value, set_private_value};
 use crate::context_bootstrap::new_dom_exception_value;
-use moli_webapi_declare::WebApiObject;
 
 mod controller;
 mod event;
 mod signal;
 mod statics;
 
-use crate::context_bootstrap::abort_signal_events;
+use crate::context_bootstrap::{abort_signal, abort_signal_events};
 pub(crate) use controller::{
     abort_controller_abort_callback, abort_controller_constructor_callback,
     abort_controller_signal_getter_callback,
@@ -53,13 +51,6 @@ struct AbortLinkedTargetListener {
     event_type: String,
     callback_id: super::EventCallbackId,
     capture: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::AbortSignal)]
-struct AbortSignalObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: v8::Local<'scope, v8::Object>,
 }
 
 impl AbortStore {
@@ -385,19 +376,13 @@ pub(super) fn timeout_error_value<'s>(
     dom_exception_value(scope, "signal timed out", "TimeoutError")
 }
 
-fn create_signal_with_prototype<'s>(
+fn create_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    prototype_source: v8::Local<'_, v8::Object>,
     host: &mut super::JsContextHost,
     aborted: bool,
     reason: Option<v8::Local<'_, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = prototype_source
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let signal = AbortSignalObjectDeclaration::new(prototype)
-        .bind(scope)
-        .ok()?;
+    let signal = abort_signal::new_signal(scope)?;
     host.native_bridge_mut()
         .abort
         .init_signal(scope, signal, aborted, reason);
