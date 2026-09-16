@@ -50,6 +50,7 @@ pub(super) enum IndexedDbTaskKind {
     TransactionStart,
     TransactionCommit,
     TransactionAbort,
+    TransactionOperationError,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -204,7 +205,8 @@ impl IndexedDbTaskState {
             | IndexedDbTaskKind::DatabasesSettle
             | IndexedDbTaskKind::TransactionStart
             | IndexedDbTaskKind::TransactionCommit
-            | IndexedDbTaskKind::TransactionAbort => self.owner.dispatch_scope(),
+            | IndexedDbTaskKind::TransactionAbort
+            | IndexedDbTaskKind::TransactionOperationError => self.owner.dispatch_scope(),
         }
     }
 }
@@ -336,6 +338,7 @@ struct IndexedDbVersionChangeTaskPayload {
 
 struct IndexedDbTransactionTaskPayload {
     transaction: v8::Global<v8::Value>,
+    operation_error: Option<IndexedDbError>,
 }
 
 impl IndexedDbTransactionTaskPayload {
@@ -343,6 +346,7 @@ impl IndexedDbTransactionTaskPayload {
         let transaction: v8::Local<'_, v8::Value> = transaction.into();
         Self {
             transaction: v8::Global::new(scope, transaction),
+            operation_error: None,
         }
     }
 }
@@ -1623,6 +1627,7 @@ pub(super) fn register_indexed_db_transaction_task<'s>(
         IndexedDbTaskKind::TransactionStart
             | IndexedDbTaskKind::TransactionCommit
             | IndexedDbTaskKind::TransactionAbort
+            | IndexedDbTaskKind::TransactionOperationError
     ));
     let owner = indexed_db_typed_execution_owner(scope, transaction)
         .expect("IDB transaction task should have typed owner state");
@@ -1631,6 +1636,42 @@ pub(super) fn register_indexed_db_transaction_task<'s>(
     let payload = IndexedDbTransactionTaskPayload::new(scope, transaction);
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     table.borrow_mut().transaction_tasks.insert(id, payload);
+}
+
+pub(super) fn register_indexed_db_transaction_error_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    register_indexed_db_transaction_task(
+        scope,
+        task,
+        IndexedDbTaskKind::TransactionOperationError,
+        transaction,
+    );
+    let id = indexed_db_typed_task_id(scope, task).expect("registered transaction error task");
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .transaction_tasks
+        .get_mut(&id)
+        .expect("registered transaction error payload")
+        .operation_error = Some(error);
+}
+
+pub(super) fn indexed_db_transaction_task_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+) -> Option<IndexedDbError> {
+    let id = indexed_db_typed_task_id(scope, task)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow()
+        .transaction_tasks
+        .get(&id)?
+        .operation_error
+        .clone()
 }
 
 pub(super) fn indexed_db_transaction_task_transaction<'s>(
