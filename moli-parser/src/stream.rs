@@ -627,6 +627,9 @@ impl HtmlTreeSinkStream {
             // The live owner admits async execution only after its checkpoint;
             // ordinary preload discovery continues on the separate preload lane.
             let result = match result {
+                RawParserStep::OwnerInterrupted => {
+                    ParserPumpStep::Yield(ParserYield::OwnerInterrupted)
+                }
                 RawParserStep::Script(node_id) => {
                     let target = self.parser.sink().borrow_target();
                     let (start_line, start_column) =
@@ -1806,7 +1809,7 @@ mod tests {
     #[test]
     fn parser_script_handoff_only_exposes_nonceable_nonces() {
         fn handoff_nonce(markup: &str) -> Option<String> {
-            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
                 Url::parse("https://example.test/page.html").expect("test url"),
             );
             let outcome = stream.pump_parser_step(markup);
@@ -2500,7 +2503,7 @@ mod tests {
             ("<html><body><svg><style id='sheet'>", "</style></svg>"),
             ("<html><head><style id='sheet'>", ""),
         ] {
-            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
                 Url::parse("https://example.test/page").unwrap(),
             );
             stream.pump_parser_step(&format!("{opening}p {{ col"));

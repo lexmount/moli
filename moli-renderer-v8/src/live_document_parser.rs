@@ -850,7 +850,8 @@ impl DocumentParserSession {
         request: ParserScriptPreparationRequest,
         owner: &mut impl LiveDocumentParserOwner,
     ) -> ParserScriptHandoff {
-        self.stream_handle()
+        self.html_stream_handle()
+            .expect("only HTML parsers defer script preparation")
             .borrow()
             .prepare_script_with_runtime_dom_consumer(request, owner)
     }

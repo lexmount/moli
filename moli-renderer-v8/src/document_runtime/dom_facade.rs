@@ -95,7 +95,10 @@ impl DocumentRuntime {
         effects: DomMutationEffects,
     ) {
         self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
-            scope, host_ptr, effects, RuntimeMutationOptions::parser_tree_sink(),
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::parser_tree_sink(),
         );
     }
 

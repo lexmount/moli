@@ -83,18 +83,6 @@ impl RuntimeMutationOptions {
         }
     }
 
-    pub(crate) const fn child_parser_tree_sink() -> Self {
-        Self {
-            source: DomMutationSource::ParserTreeSink,
-            connected_script_policy: ConnectedScriptMutationPolicy::DeferToOwner,
-            hide_nonce_content_attributes: false,
-            dispatch_atomic_move_callbacks: false,
-            parser_created: true,
-            check_inline_style_csp: false,
-            defer_document_followups_to_parser_owner: true,
-        }
-    }
-
     pub(crate) const fn with_connected_script_policy(
         mut self,
         policy: ConnectedScriptMutationPolicy,
