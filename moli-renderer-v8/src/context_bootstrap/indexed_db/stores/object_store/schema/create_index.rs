@@ -69,10 +69,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     }) {
         Ok(info) => {
             let _ = set_database_index_metadata(scope, database, &store_name, &info);
-            if let Some(metadata) = indexed_db_database_store_metadata(scope, database, &store_name)
-            {
-                let _ = sync_store_surface_from_metadata(scope, store, metadata);
-            }
             if let Some(index) = create_index_object(scope, store, &info) {
                 rv.set(index.into());
             } else {

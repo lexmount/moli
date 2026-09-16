@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn finish_aborted_upgrade_open<'s>(
+pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn finish_aborted_upgrade_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
@@ -37,6 +37,12 @@ pub(super) fn finish_aborted_upgrade_open<'s>(
         "result",
         undefined,
     );
-    let _ = dispatch_idb_named_event(scope, request, "error", |_, _| {});
-    release_request_dispatch_refs(scope, request);
+    set_indexed_db_request_surface_value(
+        scope,
+        request,
+        INDEXED_DB_REQUEST_TRANSACTION_SLOT,
+        "transaction",
+        v8::null(scope).into(),
+    );
+    enqueue_request_task(scope, "request-error", request);
 }

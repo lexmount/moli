@@ -36,7 +36,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let storage_key = storage_scope.storage_key().to_owned();
     let database_key = database_registry_key(&storage_key, &info.name);
-    let object_store_names = new_idb_dom_string_list(scope, &info.object_store_names);
+    let object_store_names = new_idb_name_list(scope, &info.object_store_names);
     let database =
         IdbDatabaseObjectDeclaration::new(&info.name, info.version as f64, object_store_names)
             .bind(scope)
@@ -55,7 +55,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         database_key.clone(),
         storage_scope,
     );
-    let _ = refresh_database_surface(scope, database);
+    let _ = refresh_database_metadata(scope, database, info);
     register_open_database_connection(scope, owner, handle, database_key, info.version, database);
     Some(database)
 }

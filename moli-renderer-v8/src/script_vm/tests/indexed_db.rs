@@ -5491,6 +5491,177 @@ fn indexed_db_aborted_upgrade_closes_provisional_connection_before_reopen_and_de
 }
 
 #[test]
+fn indexed_db_initial_upgrade_abort_restores_metadata_synchronously() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-initial-rollback.test/");
+    vm.eval(r#"
+globalThis.rollback = [];
+const open = indexedDB.open('initial-rollback', 7);
+let db, tx, store, index;
+function snapshot() {
+  return [db.version, Array.from(db.objectStoreNames),
+          Array.from(tx.objectStoreNames), Array.from(store.indexNames)];
+}
+open.onupgradeneeded = () => {
+  db = open.result;
+  tx = open.transaction;
+  store = db.createObjectStore('records');
+  index = store.createIndex('by-value', 'value');
+  for (const name of ['\uE000', '\u{10000}', 'z', 'a']) {
+    db.createObjectStore(name);
+    store.createIndex(name, 'value');
+  }
+  rollback.push(snapshot());
+  tx.onabort = () => rollback.push(['abort', open.transaction === tx, snapshot()]);
+  Object.defineProperty(tx, 'db', {get() { throw new Error('author db getter'); }});
+  tx.abort();
+  rollback.push(snapshot());
+  for (const source of [store, index]) {
+    for (const method of ['get', 'getKey', 'getAll', 'getAllKeys', 'count', 'openCursor', 'openKeyCursor']) {
+      try { source[method](1); rollback.push(method + ':accepted'); }
+      catch (error) { rollback.push(error.name); }
+    }
+  }
+  for (const method of ['add', 'put', 'delete', 'clear']) {
+    try { store[method](1, 1); rollback.push(method + ':accepted'); }
+    catch (error) { rollback.push(error.name); }
+  }
+};
+open.onerror = () => rollback.push(['error', open.error.name, open.result === undefined,
+                                  open.transaction === null, snapshot()]);
+"#).expect("initial upgrade rollback should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(rollback)")
+        .expect("initial upgrade rollback should run");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let entries = result.as_array().unwrap();
+    assert_eq!(
+        entries[0],
+        serde_json::json!([
+            7,
+            ["a", "records", "z", "\u{10000}", "\u{e000}"],
+            ["a", "records", "z", "\u{10000}", "\u{e000}"],
+            ["a", "by-value", "z", "\u{10000}", "\u{e000}"]
+        ])
+    );
+    assert_eq!(entries[1], serde_json::json!([0, [], [], []]));
+    assert_eq!(
+        &entries[2..20],
+        vec![serde_json::json!("InvalidStateError"); 18]
+    );
+    assert!(entries.contains(&serde_json::json!([
+        "error",
+        "AbortError",
+        true,
+        true,
+        [0, [], [], []]
+    ])));
+    assert_eq!(
+        entries[20],
+        serde_json::json!(["abort", true, [0, [], [], []]])
+    );
+    assert_eq!(entries[21][0], "error");
+    assert_eq!(entries.len(), 22);
+}
+
+#[test]
+fn indexed_db_upgrade_abort_restores_existing_handles_without_reviving_replacements() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-rollback.test/");
+    vm.eval(r#"
+globalThis.rollback = [];
+const initial = indexedDB.open('upgrade-rollback', 9);
+initial.onupgradeneeded = () => {
+  const store = initial.result.createObjectStore('records');
+  store.createIndex('by-value', 'value');
+  store.put({value: 'original'}, 1);
+};
+function failure(operation) {
+  try { operation(); return 'accepted'; } catch (error) { return error.name; }
+}
+initial.onsuccess = () => {
+  initial.result.close();
+  const open = indexedDB.open('upgrade-rollback', 10);
+  let db, tx, store, alias, index, replacement, replacementIndex;
+  function snapshot() {
+    return [db.version, Array.from(db.objectStoreNames), Array.from(tx.objectStoreNames),
+            Array.from(store.indexNames), Array.from(alias.indexNames), Array.from(replacement.indexNames),
+            failure(() => store.get(1)), failure(() => index.get(1)),
+            failure(() => replacement.get(1)), failure(() => replacementIndex.get(1))];
+  }
+  open.onupgradeneeded = () => {
+    db = open.result;
+    tx = open.transaction;
+    store = tx.objectStore('records');
+    alias = tx.objectStore('records');
+    index = store.index('by-value');
+    store.put({value: 'changed'}, 1);
+    store.createIndex('aa-transient', 'value');
+    rollback.push([db.version, Array.from(alias.indexNames)]);
+    store.deleteIndex('by-value');
+    const newIndex = alias.createIndex('by-value', 'other');
+    rollback.push(failure(() => index.get(1)));
+    db.deleteObjectStore('records');
+    rollback.push([Array.from(store.indexNames), Array.from(alias.indexNames), failure(() => store.get(1))]);
+    replacement = db.createObjectStore('records', {keyPath: 'id', autoIncrement: true});
+    replacementIndex = replacement.createIndex('by-value', 'other');
+    db.createObjectStore('temporary');
+    tx.abort();
+    rollback.push(snapshot());
+    rollback.push(failure(() => newIndex.get(1)));
+    tx.onabort = () => rollback.push(['abort', snapshot()]);
+  };
+  open.onerror = () => {
+    rollback.push(['error', snapshot()]);
+    const reopen = indexedDB.open('upgrade-rollback');
+    reopen.onsuccess = () => {
+      const reopened = reopen.result;
+      const st = reopened.transaction('records').objectStore('records');
+      rollback.push([reopened.version, Array.from(reopened.objectStoreNames), st.keyPath,
+                     st.autoIncrement, Array.from(st.indexNames)]);
+      const get = st.get(1);
+      get.onsuccess = () => { rollback.push(get.result); reopened.close(); };
+    };
+  };
+};
+"#).expect("upgrade rollback should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(rollback)")
+        .expect("upgrade rollback should run");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let entries = result.as_array().unwrap();
+    let restored = serde_json::json!([
+        9,
+        ["records"],
+        ["records"],
+        ["by-value"],
+        ["by-value"],
+        [],
+        "TransactionInactiveError",
+        "TransactionInactiveError",
+        "InvalidStateError",
+        "InvalidStateError"
+    ]);
+    assert_eq!(
+        entries[0],
+        serde_json::json!([10, ["aa-transient", "by-value"]])
+    );
+    assert_eq!(entries[1], "InvalidStateError");
+    assert_eq!(entries[2], serde_json::json!([[], [], "InvalidStateError"]));
+    assert_eq!(entries[3], restored);
+    assert_eq!(entries[4], "InvalidStateError");
+    assert!(entries.contains(&serde_json::json!(["error", restored])));
+    assert!(entries.contains(&serde_json::json!(["abort", restored])));
+    assert!(entries.contains(&serde_json::json!([
+        9,
+        ["records"],
+        null,
+        false,
+        ["by-value"]
+    ])));
+    assert!(entries.contains(&serde_json::json!({"value": "original"})));
+    assert_eq!(entries.len(), 9);
+}
+
+#[test]
 fn indexed_db_upgrade_open_dispatches_versionchange_and_blocked_until_close() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-open-blocked.test/");
 

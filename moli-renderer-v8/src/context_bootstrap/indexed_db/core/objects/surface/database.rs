@@ -23,6 +23,22 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
         return Ok(());
     };
     let info = with_indexed_db_manager(scope, |manager| manager.database_info(handle))?;
+    refresh_database_metadata(scope, database, &info)?;
+    let object_store_names = new_idb_name_list(scope, &info.object_store_names);
+    IdbDatabaseSurfaceDeclaration::new(&info.name, info.version as f64, object_store_names)
+        .initialize(scope, database)
+        .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
+    Ok(())
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+    info: &DatabaseInfo,
+) -> std::result::Result<(), IndexedDbError> {
+    let Some(handle) = database_handle_from_value(scope, database.into()) else {
+        return Ok(());
+    };
     let mut metadata = Vec::with_capacity(info.object_store_names.len());
     for store_name in &info.object_store_names {
         let store = with_indexed_db_manager(scope, |manager| {
@@ -36,11 +52,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
         }
         metadata.push(IndexedDbObjectStoreMetadata::new(store, indexes));
     }
-    let object_store_names = new_idb_dom_string_list(scope, &info.object_store_names);
     let _ = replace_indexed_db_database_metadata(scope, database, metadata);
-    IdbDatabaseSurfaceDeclaration::new(&info.name, info.version as f64, object_store_names)
-        .initialize(scope, database)
-        .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
     Ok(())
 }
 
