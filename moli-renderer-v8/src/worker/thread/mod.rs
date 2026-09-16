@@ -3432,6 +3432,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
     let common = Rc::clone(&state.borrow().common);

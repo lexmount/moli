@@ -4,6 +4,7 @@
 //! It does not expose JS objects or DOM events. The renderer is expected to
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
+mod connection_notifications;
 mod connection_queue;
 mod cursor;
 mod name;
@@ -25,6 +26,9 @@ pub use transaction_queue::{
 mod types;
 mod usage;
 
+pub use connection_notifications::{
+    ConnectionNotifications, VersionChangeBatch, VersionChangeCompletion, VersionChangeNotification,
+};
 pub use connection_queue::{
     ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
 };

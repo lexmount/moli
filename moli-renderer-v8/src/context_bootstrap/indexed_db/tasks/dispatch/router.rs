@@ -10,8 +10,20 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
 }
 
 pub(crate) fn flush_next_indexed_db_task(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    if take_indexed_db_connection_request_wake(scope) {
-        flush_drain_blocked_open_requests_task(scope);
+    if let Some(entry) = take_worker_indexed_db_source_entry(scope) {
+        match entry {
+            IndexedDbTaskSourceEntry::RuntimeQueue(id) => {
+                flush_indexed_db_task_by_id(scope, id);
+            }
+            IndexedDbTaskSourceEntry::DrainBlockedOpenRequests => {
+                flush_drain_blocked_open_requests_task(scope)
+            }
+            IndexedDbTaskSourceEntry::VersionChange(handle) => {
+                crate::context_bootstrap::indexed_db::flush_indexed_db_connection_notification(
+                    scope, handle,
+                );
+            }
+        }
         return true;
     }
     let Some(task) = pop_first_indexed_db_task(scope) else {

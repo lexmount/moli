@@ -83,7 +83,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_cursor_request<'s>(
         return None;
     }
     let request = create_request_object(scope, cursor.into(), transaction)?;
-    queue_transaction_request(scope, transaction, request);
     let handle = transaction_handle_from_value(scope, transaction.into())?;
     let store_name = cursor_store_name(scope, cursor)?;
     Some((request, handle, store_name))

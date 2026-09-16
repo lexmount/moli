@@ -35,7 +35,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_store_request<'s>(
 ) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
     let transaction = object_store_active_transaction(scope, source)?;
     let request = create_request_object(scope, source.into(), transaction)?;
-    queue_transaction_request(scope, transaction, request);
     Some((request, transaction))
 }
 
