@@ -5,6 +5,7 @@ use moli_crypto::sha256_hex;
 
 mod json_parse;
 mod response_mime;
+mod runtime_errors;
 mod source_phase;
 
 const WORKER_WASM_IMPORT_PM: &[u8] = &[

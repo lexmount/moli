@@ -54,7 +54,7 @@ use dispatch::{
     dispatch_service_worker_notification_event, dispatch_service_worker_periodic_sync_event,
     dispatch_service_worker_push_event, dispatch_service_worker_sync_event,
     dispatch_shared_worker_connect_event, dispatch_worker_error_event,
-    dispatch_worker_exception_with_phase, dispatch_worker_exception_with_phase_and_source,
+    dispatch_worker_exception_with_phase_and_source,
     enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
     finish_service_worker_navigation_preload_stream, fire_timer_callback,
@@ -1890,11 +1890,7 @@ async fn worker_main(
             WorkerBootstrapStart::Failed { error, phase } => {
                 let (report, exception, parent_event_kind) = *error;
                 let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-                let error_source = if script_kind == WorkerScriptKind::Classic {
-                    WorkerErrorSource::InitialScriptEvaluation
-                } else {
-                    WorkerErrorSource::Runtime
-                };
+                let error_source = WorkerErrorSource::InitialScriptEvaluation;
                 bootstrap_completion.mark_failure(
                     &report,
                     &script_url,
@@ -1902,7 +1898,7 @@ async fn worker_main(
                     phase,
                     error_source,
                 );
-                let handled = dispatch_worker_exception_with_phase_and_source(
+                dispatch_worker_exception_with_phase_and_source(
                     scope,
                     global,
                     report,
@@ -1914,8 +1910,7 @@ async fn worker_main(
                     &script_url,
                 );
                 bootstrap_failed = phase == WorkerErrorPhase::Bootstrap
-                    && !handled
-                    && parent_event_kind == WorkerParentErrorEventKind::Event;
+                    || matches!(state.borrow().global_kind, WorkerGlobalKind::Service { .. });
             }
         }
 
@@ -3206,8 +3201,10 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingFetches => {}
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
-                        WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
+                        WorkerModuleBootstrapResume::Failed(failure) => {
+                            pending_module_bootstrap = None;
+                            let phase = failure.phase;
+                            let (report, exception, parent_event_kind) = *failure.error;
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
@@ -3215,21 +3212,35 @@ async fn worker_main(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                             );
-                            dispatch_worker_exception_with_phase(
+                            dispatch_worker_exception_with_phase_and_source(
                                 scope,
                                 global,
                                 report,
                                 exception,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                                 &parent_tx,
                                 &script_url,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
+                            if phase == WorkerErrorPhase::Bootstrap
+                                || matches!(
+                                    state.borrow().global_kind,
+                                    WorkerGlobalKind::Service { .. }
+                                )
+                            {
+                                break;
+                            }
+                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                            drain_worker_dynamic_module_imports(
+                                scope,
+                                &state,
+                                &module_graph_fetch_tx,
+                            );
                         }
                     }
                 } else {
@@ -3291,8 +3302,10 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingFetches => {}
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
-                        WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
+                        WorkerModuleBootstrapResume::Failed(failure) => {
+                            pending_module_bootstrap = None;
+                            let phase = failure.phase;
+                            let (report, exception, parent_event_kind) = *failure.error;
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
@@ -3300,21 +3313,35 @@ async fn worker_main(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                             );
-                            dispatch_worker_exception_with_phase(
+                            dispatch_worker_exception_with_phase_and_source(
                                 scope,
                                 global,
                                 report,
                                 exception,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                                 &parent_tx,
                                 &script_url,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
+                            if phase == WorkerErrorPhase::Bootstrap
+                                || matches!(
+                                    state.borrow().global_kind,
+                                    WorkerGlobalKind::Service { .. }
+                                )
+                            {
+                                break;
+                            }
+                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                            drain_worker_dynamic_module_imports(
+                                scope,
+                                &state,
+                                &module_graph_fetch_tx,
+                            );
                         }
                     }
                 } else {
@@ -3630,9 +3657,9 @@ impl From<WorkerModuleBootstrapStart> for WorkerBootstrapStart {
         match start {
             WorkerModuleBootstrapStart::Complete => Self::Complete,
             WorkerModuleBootstrapStart::Pending(pending) => Self::Pending(pending),
-            WorkerModuleBootstrapStart::Failed(error) => Self::Failed {
-                error,
-                phase: WorkerErrorPhase::Bootstrap,
+            WorkerModuleBootstrapStart::Failed(failure) => Self::Failed {
+                error: failure.error,
+                phase: failure.phase,
             },
         }
     }
