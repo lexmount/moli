@@ -78,6 +78,9 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
         IndexedDbTaskKind::TransactionAbort => flush_transaction_abort_task(scope, task),
+        IndexedDbTaskKind::TransactionOperationError => {
+            flush_transaction_operation_error_task(scope, task)
+        }
     }
     if !indexed_db_runtime_array_contains_object(
         scope,

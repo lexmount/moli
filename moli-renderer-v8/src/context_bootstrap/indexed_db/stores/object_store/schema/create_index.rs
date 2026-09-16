@@ -1,4 +1,7 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    enqueue_transaction_operation_error, validate_existing_index_entries,
+};
 use crate::webidl;
 use moli_indexeddb::{IndexOptionsValidationError, validate_index_options};
 
@@ -44,7 +47,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
         return;
     }
     let store = args.this();
-    let Some((_transaction, database, handle, store_name)) =
+    let Some((transaction, database, handle, store_name)) =
         object_store_versionchange_common(scope, store)
     else {
         let error = dom_exception_value(
@@ -69,6 +72,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     }) {
         Ok(info) => {
             let _ = set_database_index_metadata(scope, database, &store_name, &info);
+            // Existing operations execute eagerly, but their results are
+            // delivered in the database task queue. Capture this creation's
+            // constraint result now so later writes/deletes cannot change it,
+            // and deliver its failure in the same operation order.
+            if let Err(error) = validate_existing_index_entries(scope, handle, &store_name, &info) {
+                enqueue_transaction_operation_error(scope, transaction, error);
+            }
             if let Some(index) = create_index_object(scope, store, &info) {
                 rv.set(index.into());
             } else {
