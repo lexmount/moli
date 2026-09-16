@@ -1,6 +1,7 @@
 use super::*;
 
 mod child_window;
+mod compilation;
 
 #[test]
 fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
