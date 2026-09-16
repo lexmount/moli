@@ -2935,9 +2935,11 @@ fn transformed_hit_retains_exact_local_content_box_and_inverse_mapping() {
         .local_content_box
         .expect("box hit should retain its unprojected content box");
     assert_rect(local_content, LayoutRect::new(7.0, 7.0, 100.0, 60.0));
-    let projected_content = hit
-        .box_model
-        .expect("box hit should retain its projected protocol model")
+    // Full CSSOM geometry is an explicit query, not part of every hit. It
+    // still comes from the same tree without another layout pass.
+    let projected_content = output
+        .box_model_for_source(hit.source)
+        .expect("the hit source should have a projected protocol model")
         .content
         .bounding_rect();
     assert_close(projected_content.width, 50.0);

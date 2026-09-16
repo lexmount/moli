@@ -56,8 +56,8 @@ pub struct LayoutHit<N> {
     /// The exact physical content box in the hit fragment's own coordinate
     /// space.
     ///
-    /// Unlike `box_model`, this rectangle has not been projected through CSS
-    /// transforms. Embedded-content consumers use it to enter the child frame
+    /// This rectangle has not been projected through CSS transforms.
+    /// Embedded-content consumers use it to enter the child frame
     /// without reconstructing the iframe's used size from authored CSS.
     pub local_content_box: Option<LayoutRect>,
     /// Converts a point from this tree's viewport into the hit fragment's
@@ -65,11 +65,6 @@ pub struct LayoutHit<N> {
     /// frame and native-scrollbar routing can compose the same inverse
     /// transforms that produced `local_point`.
     pub viewport_to_local: LayoutTransform2D,
-    /// Box geometry copied from the same frozen tree when the hit source owns a
-    /// CSS box. Consumers use it for source-dependent follow-up work such as
-    /// descending through a transformed child-frame content box without
-    /// forcing a second parent-document pass.
-    pub box_model: Option<LayoutBoxModel>,
 }
 
 /// Caret geometry resolved from the same text fragments and coordinate spaces
@@ -473,7 +468,6 @@ where
             is_text: entry.is_text,
             local_content_box,
             viewport_to_local: inverse,
-            box_model: self.box_model_for_source(entry.source),
         })
     }
 }

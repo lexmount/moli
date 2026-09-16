@@ -93,7 +93,6 @@ pub(crate) fn answer_queries(
                         is_text: false,
                         local_content_box: None,
                         viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                        box_model: mock_box_model(runtime, source),
                     }),
             ),
             LayoutQuery::HitTestAll {
@@ -110,7 +109,6 @@ pub(crate) fn answer_queries(
                             is_text: false,
                             local_content_box: None,
                             viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                            box_model: mock_box_model(runtime, source),
                         }]
                     })
                     .unwrap_or_default(),
