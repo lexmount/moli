@@ -44,7 +44,7 @@ pub(in crate::network_host::xhr) fn schedule_xhr_timeout(
     let timer_id = host.queue_timeout(
         scope,
         callback,
-        delay_ms,
+        u64::from(delay_ms),
         crate::host::HostTimerOwner::Window,
         Vec::new(),
     );

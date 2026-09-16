@@ -1,5 +1,6 @@
-use super::{AbortStore, abort_error_value, create_signal_with_prototype, timeout_error_value};
-use crate::util::{context_host_ptr_from_global_bridge, v8_string, v8str};
+use super::{AbortStore, abort_error_value, create_signal, timeout_error_value};
+use crate::context_bootstrap::abort_signal;
+use crate::util::context_host_ptr_from_global_bridge;
 use crate::webidl;
 
 pub(crate) fn abort_signal_static_abort_callback(
@@ -17,7 +18,7 @@ pub(crate) fn abort_signal_static_abort_callback(
     } else {
         Some(abort_error_value(scope))
     };
-    let Some(signal) = create_signal_with_prototype(scope, args.this(), host, true, reason) else {
+    let Some(signal) = create_signal(scope, host, true, reason) else {
         rv.set_null();
         return;
     };
@@ -29,13 +30,15 @@ pub(crate) fn abort_signal_timeout_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<abort_signal::TimeoutArgs>(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_null();
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let delay = webidl::non_negative_milliseconds_arg(scope, &args, 0, "AbortSignal.timeout");
-    let Some(signal) = create_signal_with_prototype(scope, args.this(), host, false, None) else {
+    let Some(signal) = create_signal(scope, host, false, None) else {
         rv.set_null();
         return;
     };
@@ -54,7 +57,7 @@ pub(crate) fn abort_signal_timeout_callback<'s>(
     let timeout_id = host.queue_timeout(
         scope,
         callback,
-        delay,
+        parsed.milliseconds,
         crate::host::HostTimerOwner::Window,
         Vec::new(),
     );
@@ -68,12 +71,15 @@ pub(crate) fn abort_signal_any_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<abort_signal::AnyArgs<'s>>(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_null();
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(signal) = create_signal_with_prototype(scope, args.this(), host, false, None) else {
+    let Some(signal) = create_signal(scope, host, false, None) else {
         rv.set_null();
         return;
     };
@@ -82,15 +88,7 @@ pub(crate) fn abort_signal_any_callback<'s>(
         return;
     };
 
-    let signals = match collect_abort_signal_iterable(scope, args.get(0)) {
-        Ok(signals) => signals,
-        Err(message) => {
-            if let Some(message) = v8_string(scope, &message) {
-                scope.throw_exception(v8::Exception::type_error(scope, message));
-            }
-            return;
-        }
-    };
+    let signals = parsed.signals;
 
     for source_signal in &signals {
         let Some(source_signal_id) = AbortStore::signal_id_from_object(scope, *source_signal)
@@ -120,84 +118,6 @@ pub(crate) fn abort_signal_any_callback<'s>(
     );
 
     rv.set(signal.into());
-}
-
-fn collect_abort_signal_iterable<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    iterable: v8::Local<'s, v8::Value>,
-) -> Result<Vec<v8::Local<'s, v8::Object>>, String> {
-    if iterable.is_null_or_undefined() {
-        return Err(
-            "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-        );
-    }
-    let Ok(iterable_object) = v8::Local::<v8::Object>::try_from(iterable) else {
-        return Err(
-            "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-        );
-    };
-    let iterator_symbol = v8::Symbol::get_iterator(scope);
-    let Some(iterator_method) = iterable_object
-        .get(scope, iterator_symbol.into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return Err(
-            "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-        );
-    };
-    let Some(iterator) = iterator_method
-        .call(scope, iterable, &[])
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return Err(
-            "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-        );
-    };
-    let Some(next_method) = iterator
-        .get(scope, v8str(scope, "next").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return Err(
-            "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-        );
-    };
-    let mut signals = Vec::new();
-    loop {
-        let Some(step) = next_method
-            .call(scope, iterator.into(), &[])
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            return Err(
-                "Failed to execute 'any' on 'AbortSignal': parameter 1 is not iterable.".to_owned(),
-            );
-        };
-        let done = step
-            .get(scope, v8str(scope, "done").into())
-            .is_some_and(|value| value.boolean_value(scope));
-        if done {
-            break;
-        }
-        let Some(value) = step.get(scope, v8str(scope, "value").into()) else {
-            return Err(
-                "Failed to execute 'any' on 'AbortSignal': iterable yielded a non-AbortSignal value."
-                    .to_owned(),
-            );
-        };
-        let Ok(signal) = v8::Local::<v8::Object>::try_from(value) else {
-            return Err(
-                "Failed to execute 'any' on 'AbortSignal': iterable yielded a non-AbortSignal value."
-                    .to_owned(),
-            );
-        };
-        if AbortStore::signal_id_from_object(scope, signal).is_none() {
-            return Err(
-                "Failed to execute 'any' on 'AbortSignal': iterable yielded a non-AbortSignal value."
-                    .to_owned(),
-            );
-        }
-        signals.push(signal);
-    }
-    Ok(signals)
 }
 
 fn abort_signal_timeout_fire_native_callback(

@@ -268,7 +268,7 @@ impl HostTimeoutScheduler {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-        delay_ms: u32,
+        delay_ms: u64,
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
@@ -326,7 +326,7 @@ impl HostTimeoutScheduler {
                     is_interval: false,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -479,7 +479,7 @@ impl HostTimeoutScheduler {
                     is_interval,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -531,7 +531,7 @@ impl HostTimeoutScheduler {
                     is_interval: false,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -583,7 +583,7 @@ impl HostTimeoutScheduler {
                     is_interval: true,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
