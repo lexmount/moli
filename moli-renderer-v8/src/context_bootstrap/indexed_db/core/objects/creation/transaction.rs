@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -18,12 +19,6 @@ struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(init = "null")]
     error: (),
     object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(init = "null")]
-    onabort: (),
-    #[webapi(init = "null")]
-    oncomplete: (),
-    #[webapi(init = "null")]
-    onerror: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
@@ -51,5 +46,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         storage_scope,
     );
     register_indexed_db_transaction_lifecycle(scope, tx, db, handle, handle_raw.is_some(), db_key);
+    initialize_indexed_db_event_target(scope, tx, Some(db));
     Some(tx)
 }

@@ -30,6 +30,18 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
     let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
         return;
     };
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_COMMITTING_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
     let quota_commit = match storage_bucket_quota_check_for_transaction(scope, transaction) {
         Some(Ok(quota)) => Some(quota),
         Some(Err(error)) => {

@@ -138,47 +138,20 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
         'phases: for capture_phase in [true, false] {
             // DOM clones the listener list for each invocation phase. A listener
             // added during capture can participate in the subsequent bubble phase.
-            let listeners =
-                simple_object_event_listeners_snapshot(scope, target, slot_name, event_type);
-            for listener in listeners
-                .iter()
-                .filter(|listener| listener.capture == capture_phase)
-            {
-                let Some(listener) =
-                    listener.prepare_for_invocation(scope, target, slot_name, event_type)
-                else {
-                    continue;
-                };
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                let outcome = invoke_simple_event_listener_collecting_errors(
-                    scope,
-                    event_type,
-                    &format!("simple event target {event_type} listener"),
-                    &listener,
-                    target.into(),
-                    if listener.handler_slot.is_some() {
-                        handler_arguments
-                    } else {
-                        &ordinary_arguments
-                    },
-                    event,
-                    callback_errors.as_deref_mut(),
-                );
-                dispatched |= outcome.invoked;
-                if listener.handler_slot.is_some()
-                    && let Some(returned) = outcome.value
-                {
-                    apply_event_handler_return_value(
-                        scope,
-                        event,
-                        v8::Local::new(scope, &returned),
-                        handler_type,
-                    );
-                }
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
-                if event_stop_immediate_propagation(scope, event) {
-                    break 'phases;
-                }
+            let result = invoke_simple_event_target_listeners(
+                scope,
+                target,
+                slot_name,
+                event_type,
+                event,
+                capture_phase,
+                handler_arguments,
+                handler_type,
+                callback_errors.as_deref_mut(),
+            );
+            dispatched |= result.dispatched;
+            if event_stop_immediate_propagation(scope, event) {
+                break 'phases;
             }
             if event_internal_bool_flag(
                 scope,
@@ -195,6 +168,73 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     SimpleEventDispatchResult {
         uncanceled: !default_prevented,
         dispatched,
+    }
+}
+
+pub(crate) struct SimpleEventListenerInvocationResult {
+    pub(crate) dispatched: bool,
+    pub(crate) did_throw: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_simple_event_target_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    slot_name: &str,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+    capture_phase: bool,
+    handler_arguments: &[v8::Local<'s, v8::Value>],
+    handler_type: EventHandlerType,
+    mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+) -> SimpleEventListenerInvocationResult {
+    let mut dispatched = false;
+    let mut did_throw = false;
+    let ordinary_arguments = [event.into()];
+    let listeners = simple_object_event_listeners_snapshot(scope, target, slot_name, event_type);
+    for listener in listeners
+        .iter()
+        .filter(|listener| listener.capture == capture_phase)
+    {
+        let Some(listener) = listener.prepare_for_invocation(scope, target, slot_name, event_type)
+        else {
+            continue;
+        };
+        set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
+        let outcome = invoke_simple_event_listener_collecting_errors(
+            scope,
+            event_type,
+            &format!("simple event target {event_type} listener"),
+            &listener,
+            target.into(),
+            if listener.handler_slot.is_some() {
+                handler_arguments
+            } else {
+                &ordinary_arguments
+            },
+            event,
+            callback_errors.as_deref_mut(),
+        );
+        dispatched |= outcome.invoked;
+        did_throw |= outcome.did_throw;
+        if listener.handler_slot.is_some()
+            && let Some(returned) = outcome.value
+        {
+            apply_event_handler_return_value(
+                scope,
+                event,
+                v8::Local::new(scope, &returned),
+                handler_type,
+            );
+        }
+        set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
+        if event_stop_immediate_propagation(scope, event) {
+            break;
+        }
+    }
+    SimpleEventListenerInvocationResult {
+        dispatched,
+        did_throw,
     }
 }
 
@@ -222,6 +262,7 @@ pub(crate) fn invoke_simple_event_listener<'s>(
 
 struct SimpleEventCallbackResult {
     invoked: bool,
+    did_throw: bool,
     value: Option<v8::Global<v8::Value>>,
 }
 
@@ -368,6 +409,7 @@ fn invoke_simple_event_callback_with_invocation<'s>(
         |scope, outcome| match outcome {
             CallbackInvocationOutcome::Returned(value) => SimpleEventCallbackResult {
                 invoked: true,
+                did_throw: false,
                 value: Some(value),
             },
             CallbackInvocationOutcome::Threw(report) => {
@@ -388,11 +430,13 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                 }
                 SimpleEventCallbackResult {
                     invoked: true,
+                    did_throw: true,
                     value: None,
                 }
             }
             CallbackInvocationOutcome::Retired => SimpleEventCallbackResult {
                 invoked: false,
+                did_throw: false,
                 value: None,
             },
         },

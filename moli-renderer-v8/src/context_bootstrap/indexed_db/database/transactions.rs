@@ -22,6 +22,7 @@ pub(in crate::context_bootstrap::indexed_db) use self::database::{
     idb_database_close_callback, idb_database_transaction_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::lifecycle::{
+    abort_indexed_db_transaction_after_dispatch, abort_indexed_db_transaction_with_error,
     finish_transaction_abort, idb_transaction_abort_callback, idb_transaction_commit_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::object_store::idb_transaction_object_store_callback;
