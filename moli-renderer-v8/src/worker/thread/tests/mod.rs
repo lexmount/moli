@@ -1529,6 +1529,7 @@ mod lifecycle;
 mod modules;
 mod network;
 mod postmessage;
+mod synthetic_exceptions;
 mod tls;
 mod trusted_types_reporting;
 mod xhr_failure;

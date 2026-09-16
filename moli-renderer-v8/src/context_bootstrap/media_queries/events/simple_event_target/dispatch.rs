@@ -288,6 +288,9 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                         None,
                         &report,
                     );
+                } else {
+                    let _ =
+                        crate::worker::dispatch_current_worker_callback_exception(scope, *report);
                 }
                 None
             }
