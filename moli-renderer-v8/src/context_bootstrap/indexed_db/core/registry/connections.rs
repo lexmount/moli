@@ -23,20 +23,6 @@ pub(in crate::context_bootstrap::indexed_db) fn has_open_database_connections_fo
     !local_open_database_connections_for_key(scope, key).is_empty()
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn open_database_connection_version_for_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    key: &str,
-) -> Option<u64> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        return unsafe { &*host_ptr }.indexed_db_open_connection_version(key);
-    }
-    local_open_database_connections_for_key(scope, key)
-        .into_iter()
-        .filter_map(|database| object_number_property(scope, database, "version"))
-        .map(|version| version as u64)
-        .max()
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_connections<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: &str,
@@ -45,10 +31,19 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_c
     blocked_task: v8::Local<'s, v8::Object>,
 ) {
     set_indexed_db_blocked_notifications_pending(scope, blocked_task, true);
+    let mut notifications = Vec::new();
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         for database in local_open_database_connections_for_key(scope, key) {
-            enqueue_version_change_task(scope, database, old_version, new_version);
+            notifications.extend(enqueue_version_change_task(
+                scope,
+                database,
+                old_version,
+                new_version,
+            ));
         }
+        crate::context_bootstrap::microtask_checkpoint::enqueue_indexed_db_version_change_completion(
+            scope, blocked_task, notifications,
+        );
         enqueue_blocked_recheck_task(scope, blocked_task);
         return;
     };
@@ -71,8 +66,18 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_c
             continue;
         }
         let database = v8::Local::new(target_scope, &connection.database);
-        enqueue_version_change_task(target_scope, database, old_version, new_version);
+        notifications.extend(enqueue_version_change_task(
+            target_scope,
+            database,
+            old_version,
+            new_version,
+        ));
     }
+    crate::context_bootstrap::microtask_checkpoint::enqueue_indexed_db_version_change_completion(
+        scope,
+        blocked_task,
+        notifications,
+    );
     enqueue_blocked_recheck_task(scope, blocked_task);
 }
 
@@ -81,7 +86,6 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
     owner: IndexedDbExecutionOwner,
     handle: DatabaseHandle,
     database_key: String,
-    version: u64,
     database: v8::Local<'_, v8::Object>,
 ) {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -95,7 +99,6 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
             execution_context,
             handle,
             database_key,
-            version,
             database,
         );
         return;

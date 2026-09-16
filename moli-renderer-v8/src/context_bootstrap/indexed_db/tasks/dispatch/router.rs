@@ -10,6 +10,10 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
 }
 
 pub(crate) fn flush_next_indexed_db_task(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    if take_indexed_db_connection_request_wake(scope) {
+        flush_drain_blocked_open_requests_task(scope);
+        return true;
+    }
     let Some(task) = pop_first_indexed_db_task(scope) else {
         return false;
     };
@@ -52,8 +56,9 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
         IndexedDbTaskKind::OpenSuccess => flush_open_success_task(scope, task),
-        IndexedDbTaskKind::OpenBlocked => flush_open_blocked_task(scope, task),
-        IndexedDbTaskKind::DeleteBlocked => flush_delete_blocked_task(scope, task),
+        IndexedDbTaskKind::OpenBlocked | IndexedDbTaskKind::DeleteBlocked => {
+            flush_drain_blocked_open_requests_task(scope)
+        }
         IndexedDbTaskKind::VersionChange => flush_version_change_task(scope, task),
         IndexedDbTaskKind::BlockedRecheck => flush_blocked_recheck_task(scope, task),
         IndexedDbTaskKind::DrainBlockedOpens => flush_drain_blocked_open_requests_task(scope),

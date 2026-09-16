@@ -6580,3 +6580,303 @@ first.onsuccess = () => {
         assert_eq!(result, expected, "{operation} must skip closed connections");
     }
 }
+
+#[test]
+fn indexed_db_connection_queue_waits_for_upgrade_requests_and_resolves_versions_at_head() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-connection-fifo.test/");
+    vm.eval(r#"
+globalThis.connectionEvents = [];
+const name = 'connection-fifo';
+const first = indexedDB.open(name, 3);
+first.onupgradeneeded = () => {
+  const store = first.result.createObjectStore('records');
+  const put = store.put('committed', 1);
+  put.onsuccess = () => queueMicrotask(() => {
+    connectionEvents.push('put-microtask');
+    store.put('also committed', 2).onsuccess = () => connectionEvents.push('second-put');
+  });
+  first.transaction.oncomplete = () => connectionEvents.push('complete');
+};
+first.onsuccess = () => {
+  connectionEvents.push('first');
+  first.result.close();
+};
+for (const version of [undefined, 3]) {
+  const request = indexedDB.open(name, version);
+  request.onupgradeneeded = () => connectionEvents.push('unexpected-upgrade');
+  request.onerror = () => connectionEvents.push(`error:${request.error.name}`);
+  request.onsuccess = () => {
+    connectionEvents.push(`open:${request.result.version}:${request.result.objectStoreNames[0]}`);
+    request.result.close();
+  };
+}
+const deletion = indexedDB.deleteDatabase(name);
+deletion.onerror = () => connectionEvents.push(`delete-error:${deletion.error.name}`);
+deletion.onsuccess = () => connectionEvents.push('delete');
+const fresh = indexedDB.open(name);
+fresh.onupgradeneeded = event => connectionEvents.push(`fresh:${event.oldVersion}:${fresh.result.version}:${fresh.result.objectStoreNames.length}`);
+fresh.onsuccess = () => { connectionEvents.push('fresh-success'); fresh.result.close(); };
+"#).expect("connection sequence should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("JSON.stringify(connectionEvents)")
+            .unwrap(),
+        r#"["put-microtask","second-put","complete","first","open:3:records","open:3:records","delete","fresh:0:1:0","fresh-success"]"#
+    );
+}
+
+#[test]
+fn indexed_db_connection_queue_advances_after_abort_and_version_error() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-connection-failure.test/");
+    vm.eval(r#"
+globalThis.connectionEvents = [];
+const name = 'connection-failure';
+const aborted = indexedDB.open(name, 4);
+aborted.onupgradeneeded = () => {
+  aborted.result.createObjectStore('rolled-back');
+  queueMicrotask(() => aborted.transaction.abort());
+};
+aborted.onerror = () => connectionEvents.push(`aborted:${aborted.error.name}`);
+const retry = indexedDB.open(name, 2);
+retry.onupgradeneeded = event => connectionEvents.push(`retry:${event.oldVersion}:${retry.result.objectStoreNames.length}`);
+retry.onsuccess = () => { connectionEvents.push('retry-success'); retry.result.close(); };
+const outdated = indexedDB.open(name, 1);
+outdated.onsuccess = () => { connectionEvents.push('unexpected-outdated-success'); outdated.result.close(); };
+outdated.onerror = () => connectionEvents.push(`outdated:${outdated.error.name}`);
+const final = indexedDB.open(name);
+final.onupgradeneeded = () => connectionEvents.push('unexpected-final-upgrade');
+final.onsuccess = () => { connectionEvents.push(`final:${final.result.version}`); final.result.close(); };
+"#).expect("failing connection sequence should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("JSON.stringify(connectionEvents)")
+            .unwrap(),
+        r#"["aborted:AbortError","retry:0:0","retry-success","outdated:VersionError","final:2"]"#
+    );
+}
+
+#[test]
+fn indexed_db_connection_queue_notifies_each_successive_connection_without_blocking_other_names() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-connection-notifications.test/");
+    vm.eval(r#"
+globalThis.connectionEvents = [];
+const connections = [];
+const name = 'connection-notifications';
+function open(version) {
+  const request = indexedDB.open(name, version);
+  request.onsuccess = () => {
+    const db = request.result;
+    connections.push(db);
+    connectionEvents.push(`open:${db.version}`);
+    db.onversionchange = event => connectionEvents.push(`versionchange:${event.oldVersion}:${event.newVersion}`);
+  };
+}
+function remove() {
+  const request = indexedDB.deleteDatabase(name);
+  request.onblocked = () => {
+    connectionEvents.push('blocked');
+    connections.shift().close();
+  };
+  request.onsuccess = () => connectionEvents.push('delete');
+  request.onerror = () => connectionEvents.push(`error:${request.error.name}`);
+}
+open(1);
+remove();
+open(2);
+remove();
+const other = indexedDB.open('independent');
+other.onsuccess = () => { globalThis.independentFinished = true; other.result.close(); };
+"#).expect("repeated connection notifications should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("JSON.stringify(connectionEvents)")
+            .unwrap(),
+        r#"["open:1","versionchange:1:null","blocked","delete","open:2","versionchange:2:null","blocked","delete"]"#
+    );
+    assert_eq!(vm.eval("independentFinished").unwrap(), "true");
+}
+
+#[tokio::test]
+async fn indexed_db_connection_queue_preserves_blocked_when_a_timer_closes_the_connection() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for close_in_timer in [true, false] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://indexeddb-connection-timer.test/",
+            &loader,
+        );
+        vm.eval(&format!("globalThis.closeInTimer = {close_in_timer};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.connectionEvents = [];
+globalThis.connectionDone = false;
+const name = 'connection-timer';
+const initial = indexedDB.open(name, 1);
+initial.onsuccess = () => {
+  function open(version) {
+    const request = indexedDB.open(name, version);
+    request.onerror = () => connectionEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      const db = request.result;
+      connectionEvents.push(`open:${version}`);
+      db.onversionchange = () => {
+        connectionEvents.push(`versionchange:${version}`);
+        if (closeInTimer) setTimeout(() => db.close(), 0);
+        else Promise.resolve().then(() => queueMicrotask(() => db.close()));
+      };
+    };
+  }
+  function remove(last) {
+    const request = indexedDB.deleteDatabase(name);
+    request.onblocked = () => connectionEvents.push('blocked');
+    request.onerror = () => connectionEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      connectionEvents.push('delete');
+      if (last) connectionDone = true;
+    };
+  }
+  open(2);
+  remove(false);
+  open(3);
+  remove(true);
+  initial.result.close();
+};
+"#,
+        )
+        .expect("connection timer sequence should schedule");
+        // Use normal source arbitration so timers can run between IndexedDB
+        // tasks. Selecting only IndexedDB tasks would hide the lost event.
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(connectionDone)",
+            "true",
+            "connection queue should complete with timer and microtask closes",
+        )
+        .await;
+        let expected = if close_in_timer {
+            r#"["open:2","versionchange:2","blocked","delete","open:3","versionchange:3","blocked","delete"]"#
+        } else {
+            r#"["open:2","versionchange:2","delete","open:3","versionchange:3","delete"]"#
+        };
+        assert_eq!(
+            vm.eval("JSON.stringify(connectionEvents)").unwrap(),
+            expected,
+            "close in timer: {close_in_timer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn indexed_db_connection_queue_wakes_window_and_worker_after_the_other_finishes_upgrade() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-connection-worker.test/",
+        &loader,
+    );
+    vm.eval(r#"
+globalThis.connectionResult = 'pending';
+let releaseWindowUpgrade = false;
+const source = `
+  let releaseUpgrade = false;
+  onmessage = event => {
+    if (event.data === 'release') { releaseUpgrade = true; return; }
+    if (event.data === 'open-window') {
+      const open = indexedDB.open('window-upgrade');
+      open.onupgradeneeded = () => postMessage('error:worker-overtook-window');
+      open.onerror = () => postMessage('error:' + open.error.name);
+      open.onsuccess = () => {
+        postMessage('worker:' + open.result.version + ':' + open.result.objectStoreNames[0]);
+        open.result.close();
+      };
+      postMessage('queued-window');
+    }
+  };
+  const first = indexedDB.open('worker-upgrade', 3);
+  first.onerror = () => postMessage('error:' + first.error.name);
+  first.onupgradeneeded = () => {
+    const store = first.result.createObjectStore('from-worker');
+    function keepAlive() {
+      store.get(1).onsuccess = () => { if (!releaseUpgrade) keepAlive(); };
+    }
+    keepAlive();
+    postMessage('upgrading-worker');
+  };
+  first.onsuccess = () => first.result.close();
+`;
+const url = URL.createObjectURL(new Blob([source], {type:'text/javascript'}));
+const worker = new Worker(url);
+worker.onerror = event => { connectionResult = 'worker-error:' + event.message; };
+worker.onmessage = event => {
+  if (String(event.data).startsWith('error:')) { connectionResult = event.data; return; }
+  if (event.data === 'upgrading-worker') {
+    const open = indexedDB.open('worker-upgrade');
+    open.onupgradeneeded = () => { connectionResult = 'error:window-overtook-worker'; };
+    open.onerror = () => { connectionResult = 'error:' + open.error.name; };
+    open.onsuccess = () => {
+      globalThis.windowConnection = 'window:' + open.result.version + ':' + open.result.objectStoreNames[0];
+      open.result.close();
+      const next = indexedDB.open('window-upgrade', 5);
+      next.onupgradeneeded = () => {
+        const store = next.result.createObjectStore('from-window');
+        function keepAlive() {
+          store.get(1).onsuccess = () => { if (!releaseWindowUpgrade) keepAlive(); };
+        }
+        keepAlive();
+        worker.postMessage('open-window');
+      };
+      next.onsuccess = () => next.result.close();
+    };
+    worker.postMessage('release');
+  } else if (event.data === 'queued-window') {
+    releaseWindowUpgrade = true;
+  } else if (String(event.data).startsWith('worker:')) {
+    connectionResult = windowConnection + '|' + event.data;
+    worker.terminate();
+    URL.revokeObjectURL(url);
+  }
+};
+"#).expect("window and worker queue workflow should schedule");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(connectionResult !== 'pending')",
+        "true",
+        "window and worker connection queues should wake their accepting event loops",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("connectionResult").unwrap(),
+        "window:3:from-worker|worker:5:from-window"
+    );
+}
+
+#[test]
+fn indexed_db_connection_queue_waits_for_close_during_upgrade_completion_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-connection-close.test/");
+    vm.eval(
+        r#"
+globalThis.connectionEvents = [];
+const first = indexedDB.open('connection-close', 4);
+first.onupgradeneeded = () => {
+  first.result.createObjectStore('records');
+  first.transaction.oncomplete = () => {
+    connectionEvents.push('complete');
+    queueMicrotask(() => { connectionEvents.push('close-microtask'); first.result.close(); });
+  };
+};
+first.onsuccess = () => connectionEvents.push('unexpected-success');
+first.onerror = () => connectionEvents.push(`error:${first.error.name}`);
+const second = indexedDB.open('connection-close');
+second.onsuccess = () => {
+  connectionEvents.push(`success:${second.result.version}:${second.result.objectStoreNames[0]}`);
+  second.result.close();
+};
+"#,
+    )
+    .expect("close during upgrade completion should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("JSON.stringify(connectionEvents)")
+            .unwrap(),
+        r#"["complete","close-microtask","error:AbortError","success:4:records"]"#
+    );
+}

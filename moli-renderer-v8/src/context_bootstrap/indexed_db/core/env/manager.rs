@@ -1,7 +1,7 @@
 //! IndexedDB manager access bound to the current V8 context.
 
 use super::{IndexedDbError, IndexedDbManager};
-use crate::context_bootstrap::indexed_db::WeakIndexedDbManager;
+use crate::context_bootstrap::indexed_db::{SharedIndexedDbManager, WeakIndexedDbManager};
 
 #[derive(Clone, Debug)]
 pub(crate) struct IndexedDbManagerSlot(pub(crate) Option<WeakIndexedDbManager>);
@@ -17,7 +17,15 @@ pub(in crate::context_bootstrap::indexed_db) fn with_indexed_db_manager<R>(
     scope: &mut v8::PinScope<'_, '_>,
     f: impl FnOnce(&mut IndexedDbManager) -> std::result::Result<R, IndexedDbError>,
 ) -> std::result::Result<R, IndexedDbError> {
-    let manager = scope
+    let manager = indexed_db_shared_manager(scope)?;
+    let mut manager = manager.lock();
+    f(&mut manager)
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn indexed_db_shared_manager(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> std::result::Result<SharedIndexedDbManager, IndexedDbError> {
+    scope
         .get_current_context()
         .get_slot::<IndexedDbManagerSlot>()
         .as_deref()
@@ -25,9 +33,7 @@ pub(in crate::context_bootstrap::indexed_db) fn with_indexed_db_manager<R>(
         .and_then(WeakIndexedDbManager::upgrade)
         .ok_or_else(|| {
             IndexedDbError::InvalidState("IndexedDB browser context is closed".to_owned())
-        })?;
-    let mut manager = manager.lock();
-    f(&mut manager)
+        })
 }
 
 pub(in crate::context_bootstrap) fn indexed_db_usage_bytes_for_storage_key(
