@@ -69,6 +69,19 @@ impl JsContextHost {
         v8::Local<'s, v8::Context>,
         v8::Local<'s, v8::Object>,
     )> {
+        if self.retire_message_port_if_owner_is_stale(port_id) {
+            return None;
+        }
+        let entry = self.message_port_wrappers.get(&port_id)?;
+        Some((
+            entry.identity.dispatch_scope(),
+            entry.identity.realm_token(),
+            v8::Local::new(scope, &entry.context),
+            v8::Local::new(scope, &entry.wrapper),
+        ))
+    }
+
+    pub(crate) fn retire_message_port_if_owner_is_stale(&mut self, port_id: MessagePortId) -> bool {
         let stale_owner = self
             .message_port_wrappers
             .get(&port_id)
@@ -81,15 +94,9 @@ impl JsContextHost {
                 ?identity,
                 "closed MessagePort for retired execution context"
             );
-            return None;
+            return true;
         }
-        let entry = self.message_port_wrappers.get(&port_id)?;
-        Some((
-            entry.identity.dispatch_scope(),
-            entry.identity.realm_token(),
-            v8::Local::new(scope, &entry.context),
-            v8::Local::new(scope, &entry.wrapper),
-        ))
+        false
     }
 
     pub(crate) fn message_port_execution_context_identity(

@@ -25,6 +25,24 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
     }
 
     let Some(realm) = MessagePortRealmBinding::current(scope) else {
+        let global = scope.get_current_context().global(scope);
+        if !crate::context_bootstrap::event_target_dispatch::target_execution_context_is_live(
+            scope, global,
+        ) {
+            // A retained constructor still creates branded objects after its
+            // document is destroyed, but those ports have no live endpoint.
+            let Some(port1) = new_detached_message_port_object(scope) else {
+                return;
+            };
+            let Some(port2) = new_detached_message_port_object(scope) else {
+                return;
+            };
+            MessageChannelObjectDeclaration::new(port1, port2)
+                .initialize(scope, args.this())
+                .expect("MessageChannel declaration should initialize detached ports");
+            rv.set(args.this().into());
+            return;
+        }
         throw_type_error(
             scope,
             "Failed to construct 'MessageChannel': Execution context is unavailable.",

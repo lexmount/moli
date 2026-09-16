@@ -97,7 +97,7 @@ pub(crate) fn abort_signal_dispatch_event_callback<'s>(
         return;
     };
     let Some((event, event_type)) =
-        event_target_dispatch::prepare_script_dispatch(scope, parsed.event)
+        event_target_dispatch::prepare_script_dispatch(scope, signal, parsed.event)
     else {
         rv.set_bool(false);
         return;
