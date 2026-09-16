@@ -47,7 +47,6 @@ pub(super) fn install_factory_and_request_template_bindings<'s>(
         }
         "IDBRequest" => {
             IdbRequestPrototypeDeclaration::initialize_prototype_template(scope, prototype);
-            install_idb_event_target_methods(scope, prototype);
         }
         _ => {}
     }
