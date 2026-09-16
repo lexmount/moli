@@ -346,7 +346,7 @@ fn indexed_db_internal_slots_are_not_object_own_properties() {
 }
 
 #[test]
-fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
+fn indexed_db_request_state_attributes_are_inherited_while_handlers_remain_own() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-request-enumerable.test/");
 
