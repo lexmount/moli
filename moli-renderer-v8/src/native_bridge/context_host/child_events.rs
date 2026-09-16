@@ -1,6 +1,4 @@
-use super::{
-    JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
-};
+use super::{JsContextHost, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES};
 use crate::{
     context_bootstrap::{
         EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
@@ -9,19 +7,19 @@ use crate::{
     },
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
-    exception_reporting::invoke_event_handler,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
-        ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_before_unload_event_handler, invoke_prepared_event_callback,
+        ChildWindowEventTarget, DispatchStatus, EventHandlerPropertyState, create_host_event,
+        event_dispatch_status, invoke_prepared_before_unload_event_handler,
+        invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
-        element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
+        element::compile_body_window_event_attribute,
     },
-    util::{get_private_value, set_private_value, v8_string, v8str},
+    util::{get_private_value, set_private_value, v8str},
 };
-use std::{collections::HashSet, convert::TryFrom};
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChildWindowEventRegistrationKind {
@@ -34,7 +32,7 @@ struct ChildWindowEventRegistrationId(u64);
 
 pub(super) struct ChildWindowEventListenerEntry {
     registration_id: ChildWindowEventRegistrationId,
-    callback_id: EventCallbackId,
+    callback_state: EventHandlerPropertyState,
     registration_kind: ChildWindowEventRegistrationKind,
     local_window_id: Option<LocalWindowId>,
     capture: bool,
@@ -42,7 +40,7 @@ pub(super) struct ChildWindowEventListenerEntry {
 }
 
 struct ChildWindowEventListenerSnapshot {
-    callback_id: EventCallbackId,
+    callback_state: EventHandlerPropertyState,
     registration_kind: ChildWindowEventRegistrationKind,
     local_window_id: Option<LocalWindowId>,
     once: bool,
@@ -67,31 +65,12 @@ impl JsContextHost {
         handle: DomHandle,
         event_type: &str,
     ) -> bool {
-        if self.child_window_proxy_records.has_live_window(handle)
+        self.child_window_proxy_records.has_live_window(handle)
             || self
                 .child_window_event_listeners
                 .get(&handle)
                 .and_then(|listeners| listeners.get(event_type))
                 .is_some_and(|listeners| !listeners.is_empty())
-        {
-            return true;
-        }
-        let body_attribute = match event_type {
-            "load" => "onload",
-            "storage" => "onstorage",
-            _ => return false,
-        };
-        self.child_browsing_context_document_handle(handle)
-            .into_iter()
-            .flat_map(|document| {
-                self.dom_host()
-                    .elements_by_tag_name(document, "body", false)
-            })
-            .any(|body| {
-                self.dom_host()
-                    .get_attribute(body, body_attribute)
-                    .is_some_and(|source| !source.trim().is_empty())
-            })
     }
 
     fn allocate_child_window_event_registration_id(&mut self) -> ChildWindowEventRegistrationId {
@@ -131,7 +110,7 @@ impl JsContextHost {
                 entry.registration_kind == ChildWindowEventRegistrationKind::EventListener
                     && entry.capture == capture
             })
-            .map(|entry| entry.callback_id)
+            .filter_map(|entry| entry.callback_state.callback_id())
             .collect()
     }
 
@@ -150,13 +129,15 @@ impl JsContextHost {
                 entries
                     .iter()
                     .filter(|entry| entry.local_window_id == Some(target.owner().local_window_id))
-                    .map(|entry| crate::host::EventListenerInspectorSnapshot {
-                        registration_id: entry.registration_id.0,
-                        event_type: event_type.clone(),
-                        callback_id: entry.callback_id,
-                        capture: entry.capture,
-                        once: entry.once,
-                        passive: false,
+                    .filter_map(|entry| {
+                        Some(crate::host::EventListenerInspectorSnapshot {
+                            registration_id: entry.registration_id.0,
+                            event_type: event_type.clone(),
+                            callback_id: entry.callback_state.callback_id()?,
+                            capture: entry.capture,
+                            once: entry.once,
+                            passive: false,
+                        })
                     })
             })
             .collect()
@@ -178,7 +159,7 @@ impl JsContextHost {
             .or_default()
             .push(ChildWindowEventListenerEntry {
                 registration_id,
-                callback_id,
+                callback_state: EventHandlerPropertyState::Callback(callback_id),
                 registration_kind: ChildWindowEventRegistrationKind::EventListener,
                 local_window_id: Some(target.owner().local_window_id),
                 capture,
@@ -205,8 +186,6 @@ impl JsContextHost {
             }
             return;
         };
-        let owner = self.frame_owner_current_child_snapshot(handle);
-        let local_window_id = owner.as_ref().map(|owner| owner.local_window_id);
         let incumbent_context = scope
             .get_incumbent_context()
             .unwrap_or_else(|| scope.get_current_context());
@@ -217,7 +196,41 @@ impl JsContextHost {
             callback_relevant_context,
             incumbent_context,
         );
-        let previous_callback_id = self
+        if let Some(previous) = self.set_child_window_event_handler_state(
+            handle,
+            event_type,
+            EventHandlerPropertyState::Callback(callback_id),
+        ) {
+            self.release_event_callback(previous);
+        }
+    }
+
+    pub(crate) fn set_child_window_event_handler_content_attribute(
+        &mut self,
+        handle: DomHandle,
+        event_type: &str,
+        owner: Option<DomHandle>,
+    ) -> Option<EventCallbackId> {
+        match owner {
+            Some(owner) => self.set_child_window_event_handler_state(
+                handle,
+                event_type,
+                EventHandlerPropertyState::Uncompiled(owner),
+            ),
+            None => self.remove_child_window_event_handler_property(handle, event_type),
+        }
+    }
+
+    fn set_child_window_event_handler_state(
+        &mut self,
+        handle: DomHandle,
+        event_type: &str,
+        state: EventHandlerPropertyState,
+    ) -> Option<EventCallbackId> {
+        let local_window_id = self
+            .frame_owner_current_child_snapshot(handle)
+            .map(|owner| owner.local_window_id);
+        if let Some(entry) = self
             .child_window_event_listeners
             .get_mut(&handle)
             .and_then(|target_map| target_map.get_mut(event_type))
@@ -227,15 +240,11 @@ impl JsContextHost {
                         == ChildWindowEventRegistrationKind::EventHandlerProperty
                 })
             })
-            .map(|entry| {
-                let previous_callback_id = entry.callback_id;
-                entry.callback_id = callback_id;
-                entry.local_window_id = local_window_id;
-                previous_callback_id
-            });
-        if let Some(previous_callback_id) = previous_callback_id {
-            self.release_event_callback(previous_callback_id);
-            return;
+        {
+            let previous = entry.callback_state.callback_id();
+            entry.callback_state = state;
+            entry.local_window_id = local_window_id;
+            return previous;
         }
         let registration_id = self.allocate_child_window_event_registration_id();
         self.child_window_event_listeners
@@ -245,32 +254,90 @@ impl JsContextHost {
             .or_default()
             .push(ChildWindowEventListenerEntry {
                 registration_id,
-                callback_id,
+                callback_state: state,
                 registration_kind: ChildWindowEventRegistrationKind::EventHandlerProperty,
                 local_window_id,
                 capture: false,
                 once: false,
             });
+        None
     }
 
     pub(crate) fn child_window_event_handler_property_value<'s>(
-        &self,
+        &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
         handler_name: &str,
     ) -> Option<v8::Local<'s, v8::Value>> {
         let event_type = child_window_event_type_from_handler_name(handler_name)?;
-        self.child_window_event_listeners
+        let entry = self
+            .child_window_event_listeners
             .get(&handle)
             .and_then(|target_map| target_map.get(event_type))
             .and_then(|entries| {
-                entries.iter().find_map(|entry| {
-                    (entry.registration_kind
-                        == ChildWindowEventRegistrationKind::EventHandlerProperty)
-                        .then(|| self.event_callback_value(scope, entry.callback_id))
-                        .flatten()
+                entries.iter().find(|entry| {
+                    entry.registration_kind
+                        == ChildWindowEventRegistrationKind::EventHandlerProperty
                 })
-            })
+            })?;
+        let state = entry.callback_state;
+        let registration_id = entry.registration_id;
+        let target = self.current_child_window_event_target(handle)?;
+        if entry.local_window_id != Some(target.owner().local_window_id) {
+            return None;
+        }
+        match state {
+            EventHandlerPropertyState::Callback(callback_id) => {
+                self.event_callback_value(scope, callback_id)
+            }
+            EventHandlerPropertyState::Null => Some(v8::null(scope).into()),
+            EventHandlerPropertyState::Uncompiled(owner) => {
+                let context = self
+                    .ensure_prebootstrapped_child_default_context(scope, handle)
+                    .ok()?;
+                let scope = &mut v8::ContextScope::new(scope, context);
+                // Compilation can report a syntax error and re-enter this getter.
+                // Keep the listener's position while exposing null during that report.
+                self.child_window_event_listeners
+                    .get_mut(&handle)?
+                    .get_mut(event_type)?
+                    .iter_mut()
+                    .find(|entry| entry.registration_id == registration_id)?
+                    .callback_state = EventHandlerPropertyState::Null;
+                let host_ptr = self as *mut JsContextHost;
+                let handler =
+                    compile_body_window_event_attribute(scope, host_ptr, owner, event_type);
+                if !self.child_window_event_target_is_current(target) {
+                    return Some(v8::null(scope).into());
+                }
+                // An error listener can replace, remove or reactivate this handler.
+                // Do not overwrite the replacement after returning from the report.
+                let unchanged = self
+                    .child_window_event_listeners
+                    .get(&handle)
+                    .and_then(|map| map.get(event_type))
+                    .is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry.registration_id == registration_id
+                                && matches!(entry.callback_state, EventHandlerPropertyState::Null)
+                        })
+                    });
+                if unchanged && let Some(handler) = handler {
+                    let callback_id =
+                        self.register_event_callback(scope, handler.into(), context, context);
+                    let _ = self.set_child_window_event_handler_state(
+                        handle,
+                        event_type,
+                        EventHandlerPropertyState::Callback(callback_id),
+                    );
+                }
+                Some(
+                    handler
+                        .map(Into::into)
+                        .unwrap_or_else(|| v8::null(scope).into()),
+                )
+            }
+        }
     }
 
     fn remove_child_window_event_handler_property(
@@ -285,7 +352,7 @@ impl JsContextHost {
             .find(|entry| {
                 entry.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
             })
-            .map(|entry| entry.callback_id);
+            .and_then(|entry| entry.callback_state.callback_id());
         entries.retain(|entry| {
             entry.registration_kind != ChildWindowEventRegistrationKind::EventHandlerProperty
         });
@@ -430,14 +497,6 @@ impl JsContextHost {
                 event_type,
                 slot,
             ) else {
-                if let Some(callback_id) = self.remove_child_window_event_registration_by_id(
-                    target.child_handle(),
-                    event_type,
-                    slot.registration_id,
-                ) {
-                    self.unregister_abort_target_listener(callback_id);
-                    self.release_event_callback(callback_id);
-                }
                 continue;
             };
             if ready.once
@@ -523,27 +582,11 @@ impl JsContextHost {
         );
         set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, true);
 
-        if event_type == "load" {
-            install_child_body_load_attribute_handler_if_needed(scope, self, handle);
-        }
-
-        if event_type == "storage" {
-            dispatch_child_body_storage_attribute(scope, window, event);
-        }
-
         let dispatch_slots = self.child_window_event_dispatch_slots(handle, event_type, None, None);
         for slot in dispatch_slots {
             let Some(ready) = self
                 .prepare_child_window_event_listener_invocation(scope, handle, event_type, slot)
             else {
-                if let Some(callback_id) = self.remove_child_window_event_registration_by_id(
-                    handle,
-                    event_type,
-                    slot.registration_id,
-                ) {
-                    self.unregister_abort_target_listener(callback_id);
-                    self.release_event_callback(callback_id);
-                }
                 continue;
             };
             if ready.once
@@ -614,32 +657,79 @@ impl JsContextHost {
             .unwrap_or_default()
     }
 
-    fn prepare_child_window_event_listener_invocation(
+    fn child_window_event_listener_snapshot(
         &self,
+        handle: DomHandle,
+        event_type: &str,
+        slot: ChildWindowEventDispatchSlot,
+    ) -> Option<ChildWindowEventListenerSnapshot> {
+        let entry = self
+            .child_window_event_listeners
+            .get(&handle)?
+            .get(event_type)?
+            .iter()
+            .find(|entry| entry.registration_id == slot.registration_id)?;
+        Some(ChildWindowEventListenerSnapshot {
+            callback_state: entry.callback_state,
+            registration_kind: entry.registration_kind,
+            local_window_id: entry.local_window_id,
+            once: entry.once,
+        })
+    }
+
+    fn retire_child_window_event_registration(
+        &mut self,
+        handle: DomHandle,
+        event_type: &str,
+        slot: ChildWindowEventDispatchSlot,
+    ) {
+        if let Some(callback_id) = self.remove_child_window_event_registration_by_id(
+            handle,
+            event_type,
+            slot.registration_id,
+        ) {
+            self.unregister_abort_target_listener(callback_id);
+            self.release_event_callback(callback_id);
+        }
+    }
+
+    fn prepare_child_window_event_listener_invocation(
+        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         event_type: &str,
         slot: ChildWindowEventDispatchSlot,
     ) -> Option<ReadyChildWindowEventListenerInvocation> {
-        let entry = self
-            .child_window_event_listeners
-            .get(&handle)
-            .and_then(|target_map| target_map.get(event_type))?
-            .iter()
-            .find(|entry| entry.registration_id == slot.registration_id)?;
-        let snapshot = ChildWindowEventListenerSnapshot {
-            callback_id: entry.callback_id,
-            registration_kind: entry.registration_kind,
-            local_window_id: entry.local_window_id,
-            once: entry.once,
+        let mut snapshot = self.child_window_event_listener_snapshot(handle, event_type, slot)?;
+        let Some(target) = self.current_child_window_event_target(handle) else {
+            self.retire_child_window_event_registration(handle, event_type, slot);
+            return None;
         };
-        let target = self.current_child_window_event_target(handle)?;
         if snapshot.local_window_id != Some(target.owner().local_window_id) {
+            self.retire_child_window_event_registration(handle, event_type, slot);
             return None;
         }
-        let callback = self.prepare_event_callback(scope, snapshot.callback_id)?;
+        if matches!(
+            snapshot.callback_state,
+            EventHandlerPropertyState::Uncompiled(_)
+        ) {
+            let value = self.child_window_event_handler_property_value(
+                scope,
+                handle,
+                &format!("on{event_type}"),
+            )?;
+            if value.is_null_or_undefined() {
+                return None;
+            }
+            snapshot = self.child_window_event_listener_snapshot(handle, event_type, slot)?;
+        }
+        let callback_id = snapshot.callback_state.callback_id()?;
+        let Some(callback) = self.prepare_event_callback(scope, callback_id) else {
+            self.retire_child_window_event_registration(handle, event_type, slot);
+            return None;
+        };
         Some(ReadyChildWindowEventListenerInvocation {
-            registration_id: entry.registration_id,
+            registration_id: slot.registration_id,
             registration_kind: snapshot.registration_kind,
             once: snapshot.once,
             target,
@@ -703,14 +793,14 @@ impl JsContextHost {
         let position = entries
             .iter()
             .position(|entry| entry.registration_id == registration_id)?;
-        let callback_id = entries.remove(position).callback_id;
+        let callback_id = entries.remove(position).callback_state.callback_id();
         if entries.is_empty() {
             target_map.shift_remove(event_type);
         }
         if target_map.is_empty() {
             self.child_window_event_listeners.remove(&handle);
         }
-        Some(callback_id)
+        callback_id
     }
 
     pub(crate) fn remove_child_window_event_listener_by_id(
@@ -727,7 +817,7 @@ impl JsContextHost {
             .and_then(|entries| {
                 entries.iter().find_map(|entry| {
                     (entry.registration_kind == ChildWindowEventRegistrationKind::EventListener
-                        && entry.callback_id == callback_id
+                        && entry.callback_state.callback_id() == Some(callback_id)
                         && entry.capture == capture)
                         .then_some(entry.registration_id)
                 })
@@ -748,7 +838,7 @@ impl JsContextHost {
         for callback_id in target_map
             .into_values()
             .flatten()
-            .map(|entry| entry.callback_id)
+            .filter_map(|entry| entry.callback_state.callback_id())
         {
             self.unregister_abort_target_listener(callback_id);
             self.release_event_callback(callback_id);
@@ -761,7 +851,12 @@ impl JsContextHost {
     ) {
         for target_map in self.child_window_event_listeners.values_mut() {
             target_map.retain(|_, entries| {
-                entries.retain(|entry| !retired.contains(&entry.callback_id));
+                entries.retain(|entry| {
+                    entry
+                        .callback_state
+                        .callback_id()
+                        .is_none_or(|id| !retired.contains(&id))
+                });
                 !entries.is_empty()
             });
         }
@@ -783,7 +878,8 @@ impl JsContextHost {
             .and_then(|target_map| target_map.get(event_type))
             .into_iter()
             .flatten()
-            .filter_map(|entry| self.event_callback_identities_for_test(entry.callback_id))
+            .filter_map(|entry| entry.callback_state.callback_id())
+            .filter_map(|id| self.event_callback_identities_for_test(id))
             .collect()
     }
 }
@@ -843,50 +939,6 @@ fn apply_child_window_event_handler_return<'s>(
     apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
-fn install_child_body_load_attribute_handler_if_needed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
-    handle: DomHandle,
-) {
-    let Some(source) = host
-        .child_browsing_context_document_handle(handle)
-        .and_then(|document| {
-            host.dom_host()
-                .elements_by_tag_name(document, "body", false)
-                .into_iter()
-                .next()
-        })
-        .and_then(|body| host.dom_host().get_attribute(body, "onload"))
-        .filter(|source| !source.trim().is_empty())
-    else {
-        return;
-    };
-    let Ok(context) = host.ensure_prebootstrapped_child_default_context(scope, handle) else {
-        return;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(window) = host.child_window_proxy_records.live_window(scope, handle) else {
-        return;
-    };
-    if let Some(current) = window.get(scope, v8str(scope, "onload").into())
-        && !current.is_null_or_undefined()
-    {
-        return;
-    }
-    let host_ptr: *mut JsContextHost = host;
-    let Some(handler) = compile_event_attribute_handler_for_owner(
-        scope,
-        host_ptr,
-        OwnerDispatchScope::Child(handle),
-        source.as_ref(),
-        EventAttributeHandlerScope::ChildWindow,
-    ) else {
-        let _ = window.set(scope, v8str(scope, "onload").into(), v8::null(scope).into());
-        return;
-    };
-    let _ = window.set(scope, v8str(scope, "onload").into(), handler.into());
-}
-
 fn enter_child_window_event_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     handle: DomHandle,
@@ -910,67 +962,4 @@ fn restore_child_window_event_dispatch<'s>(
 ) {
     let global = scope.get_current_context().global(scope);
     set_private_value(scope, global, ACTIVE_CHILD_WINDOW_HANDLE_SLOT, previous);
-}
-
-fn dispatch_child_body_storage_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-) {
-    let Some(document) = window
-        .get(scope, v8str(scope, "document").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(body) = document
-        .get(scope, v8str(scope, "body").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(get_attribute) = body
-        .get(scope, v8str(scope, "getAttribute").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(source_value) =
-        get_attribute.call(scope, body.into(), &[v8str(scope, "onstorage").into()])
-    else {
-        return;
-    };
-    if source_value.is_null_or_undefined() {
-        return;
-    }
-    let Some(source) = source_value.to_string(scope) else {
-        return;
-    };
-    let source = source.to_rust_string_lossy(scope);
-    if source.trim().is_empty() {
-        return;
-    }
-    let wrapped = format!("(function(window){{with(window){{{source}}}}})");
-    let Some(script_source) = v8_string(scope, &wrapped) else {
-        return;
-    };
-    let Some(handler) = v8::Script::compile(scope, script_source, None)
-        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-    let event_key = v8str(scope, "event");
-    let previous_event = window
-        .get(scope, event_key.into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = window.set(scope, event_key.into(), event.into());
-    let _ = invoke_event_handler(
-        scope,
-        "child body onstorage",
-        handler,
-        body.into(),
-        &[window.into()],
-    );
-    let _ = window.set(scope, event_key.into(), previous_event);
 }
