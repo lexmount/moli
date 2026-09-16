@@ -17,6 +17,54 @@ struct TestDir {
 }
 
 #[test]
+fn closing_connection_defers_release_until_commit_or_forced_abort() {
+    for force in [false, true] {
+        let mut manager = IndexedDbManager::new_in_memory();
+        let open = manager
+            .open(OpenOptions {
+                origin: "origin".into(),
+                name: "close".into(),
+                version: Some(1),
+            })
+            .unwrap();
+        let upgrade = open.upgrade_transaction.unwrap();
+        manager
+            .create_object_store(upgrade, "records", ObjectStoreOptions::default())
+            .unwrap();
+        manager.commit_transaction(upgrade).unwrap();
+        let coordinator = manager.connection_notifications();
+        coordinator.register(open.database, "key".into(), std::sync::Arc::new(|| {}));
+        let transaction = manager
+            .begin_transaction(
+                open.database,
+                &["records".into()],
+                TransactionMode::ReadWrite,
+            )
+            .unwrap();
+        manager.close_database(open.database).unwrap();
+        assert!(coordinator.has_connections("key"));
+        assert!(
+            manager
+                .begin_transaction(
+                    open.database,
+                    &["records".into()],
+                    TransactionMode::ReadOnly
+                )
+                .is_err()
+        );
+        assert!(manager.delete_database("origin", "close").is_err());
+        if force {
+            manager.force_close_database(open.database).unwrap();
+            assert!(manager.commit_transaction(transaction).is_err());
+        } else {
+            manager.commit_transaction(transaction).unwrap();
+        }
+        assert!(!coordinator.has_connections("key"));
+        manager.delete_database("origin", "close").unwrap();
+    }
+}
+
+#[test]
 fn cursor_direction_labels_and_flags_follow_spec_tokens() {
     let cases = [
         ("next", CursorDirection::Next, false, false),

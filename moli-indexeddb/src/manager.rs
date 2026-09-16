@@ -27,6 +27,7 @@ impl IndexedDbManager {
     pub fn new_in_memory() -> Self {
         Self {
             connection_requests: Default::default(),
+            connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::InMemory,
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -42,6 +43,7 @@ impl IndexedDbManager {
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
             connection_requests: Default::default(),
+            connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -71,6 +73,7 @@ impl IndexedDbManager {
             }
             let database = self.allocate_database_handle(origin.clone(), db_name.clone());
             let tx = self.allocate_upgrade_transaction(
+                database,
                 &origin,
                 &db_name,
                 DatabaseData {
@@ -111,7 +114,7 @@ impl IndexedDbManager {
 
         let mut upgraded = existing;
         upgraded.version = requested_version;
-        let tx = self.allocate_upgrade_transaction(&origin, &db_name, upgraded);
+        let tx = self.allocate_upgrade_transaction(database, &origin, &db_name, upgraded);
         Ok(OpenResult {
             database,
             disposition: OpenDisposition::UpgradeNeeded {
@@ -132,7 +135,7 @@ impl IndexedDbManager {
         if self
             .databases
             .values()
-            .any(|db| !db.closed && db.origin == origin && db.name == name)
+            .any(|db| db.origin == origin && db.name == name)
         {
             return Err(IndexedDbError::InvalidState(format!(
                 "database `{name}` for origin `{origin}` is still open"
@@ -146,7 +149,14 @@ impl IndexedDbManager {
 
     pub fn clear_origin(&mut self, origin: &str) -> Result<(), IndexedDbError> {
         self.ensure_origin_loaded(origin)?;
-        self.databases.retain(|_, db| db.origin != origin);
+        let handles: Vec<_> = self
+            .databases
+            .iter()
+            .filter_map(|(handle, db)| (db.origin == origin).then_some(*handle))
+            .collect();
+        for handle in handles {
+            self.force_close_database(handle)?;
+        }
         self.transactions.retain(|_, tx| tx.origin != origin);
         self.origins.remove(origin);
         self.remove_persisted_origin(origin)
@@ -265,9 +275,44 @@ impl IndexedDbManager {
     }
 
     pub fn close_database(&mut self, handle: DatabaseHandle) -> Result<(), IndexedDbError> {
-        self.databases.remove(&handle).map(|_| ()).ok_or_else(|| {
+        let database = self.databases.get_mut(&handle).ok_or_else(|| {
             IndexedDbError::InvalidState(format!("database handle {:?} is invalid", handle))
-        })
+        })?;
+        database.closed = true;
+        self.connection_notifications.mark_close_pending(handle);
+        self.finish_pending_database_close(handle);
+        Ok(())
+    }
+
+    /// Realm teardown aborts every transaction owned by this connection before
+    /// releasing it and waking requests in other event loops.
+    pub fn force_close_database(&mut self, handle: DatabaseHandle) -> Result<(), IndexedDbError> {
+        self.transactions
+            .retain(|_, transaction| transaction.database != handle);
+        self.databases.remove(&handle).ok_or_else(|| {
+            IndexedDbError::InvalidState(format!("database handle {:?} is invalid", handle))
+        })?;
+        self.connection_notifications.unregister(handle);
+        Ok(())
+    }
+
+    pub fn connection_notifications(&self) -> std::sync::Arc<crate::ConnectionNotifications> {
+        self.connection_notifications.clone()
+    }
+
+    fn finish_pending_database_close(&mut self, handle: DatabaseHandle) {
+        if self
+            .databases
+            .get(&handle)
+            .is_some_and(|database| database.closed)
+            && !self
+                .transactions
+                .values()
+                .any(|transaction| transaction.database == handle)
+        {
+            self.databases.remove(&handle);
+            self.connection_notifications.unregister(handle);
+        }
     }
 
     pub fn database_version(
@@ -384,6 +429,7 @@ impl IndexedDbManager {
         self.transactions.insert(
             handle,
             TransactionState {
+                database,
                 origin: db.origin,
                 db_name: db.name,
                 mode,
@@ -761,10 +807,11 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
-        let (origin, db_name, working_copy) = {
+        let (database, origin, db_name, working_copy) = {
             let tx = self.active_transaction_mut(transaction)?;
             tx.state = TransactionLifecycle::Committed;
             (
+                tx.database,
                 tx.origin.clone(),
                 tx.db_name.clone(),
                 tx.working_copy.clone(),
@@ -775,7 +822,9 @@ impl IndexedDbManager {
         })?;
         origin_state.databases.insert(db_name, working_copy);
         self.transactions.remove(&transaction);
-        self.persist_origin(&origin)
+        let result = self.persist_origin(&origin);
+        self.finish_pending_database_close(database);
+        result
     }
 
     pub fn commit_transaction_with_quota(
@@ -783,9 +832,10 @@ impl IndexedDbManager {
         transaction: TransactionHandle,
         quota: IndexedDbQuotaCheck,
     ) -> Result<(), IndexedDbError> {
-        let (origin, db_name, working_copy_usage) = {
+        let (database, origin, db_name, working_copy_usage) = {
             let tx = self.active_transaction_mut(transaction)?;
             (
+                tx.database,
                 tx.origin.clone(),
                 tx.db_name.clone(),
                 database_usage_bytes(&tx.db_name, &tx.working_copy),
@@ -797,6 +847,7 @@ impl IndexedDbManager {
             .saturating_add(working_copy_usage);
         if requested > quota.quota {
             self.transactions.remove(&transaction);
+            self.finish_pending_database_close(database);
             return Err(IndexedDbError::QuotaExceeded {
                 quota: quota.quota,
                 requested,
@@ -811,7 +862,9 @@ impl IndexedDbManager {
     ) -> Result<(), IndexedDbError> {
         let tx = self.active_transaction_mut(transaction)?;
         tx.state = TransactionLifecycle::Aborted;
+        let database = tx.database;
         self.transactions.remove(&transaction);
+        self.finish_pending_database_close(database);
         Ok(())
     }
 
@@ -831,6 +884,7 @@ impl IndexedDbManager {
 
     fn allocate_upgrade_transaction(
         &mut self,
+        database: DatabaseHandle,
         origin: &str,
         db_name: &str,
         working_copy: DatabaseData,
@@ -840,6 +894,7 @@ impl IndexedDbManager {
         self.transactions.insert(
             handle,
             TransactionState {
+                database,
                 origin: origin.to_owned(),
                 db_name: db_name.to_owned(),
                 mode: TransactionMode::VersionChange,
