@@ -1,4 +1,8 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    enqueue_blocked_recheck_task, enqueue_version_change_task,
+    set_indexed_db_blocked_notifications_pending,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn database_registry_key(
     origin: &str,
@@ -33,28 +37,25 @@ pub(in crate::context_bootstrap::indexed_db) fn open_database_connection_version
         .max()
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_to_open_connections(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_connections<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: &str,
     old_version: u64,
     new_version: Option<u64>,
+    blocked_task: v8::Local<'s, v8::Object>,
 ) {
+    set_indexed_db_blocked_notifications_pending(scope, blocked_task, true);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         for database in local_open_database_connections_for_key(scope, key) {
-            let _ = dispatch_version_change_event(
-                scope,
-                database,
-                "versionchange",
-                old_version,
-                new_version,
-            );
+            enqueue_version_change_task(scope, database, old_version, new_version);
         }
+        enqueue_blocked_recheck_task(scope, blocked_task);
         return;
     };
 
     // Connections share backend coordination but retain the V8 realm that
-    // created each IDBDatabase wrapper. Snapshot roots before invoking script
-    // so close()/navigation can mutate the coordinator during dispatch.
+    // created each IDBDatabase wrapper. Each connection gets its own task and
+    // checkpoint; its callback may close other connections before their turn.
     let connections = unsafe { &*host_ptr }.indexed_db_open_connection_snapshots(scope, key);
     for connection in connections {
         if !unsafe { &*host_ptr }
@@ -70,14 +71,9 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_to_open_
             continue;
         }
         let database = v8::Local::new(target_scope, &connection.database);
-        let _ = dispatch_version_change_event(
-            target_scope,
-            database,
-            "versionchange",
-            old_version,
-            new_version,
-        );
+        enqueue_version_change_task(target_scope, database, old_version, new_version);
     }
+    enqueue_blocked_recheck_task(scope, blocked_task);
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connection(
