@@ -111,32 +111,17 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 .iter()
                 .filter(|listener| listener.capture == capture_phase)
             {
-                if !simple_object_event_listener_is_registered(
-                    scope,
-                    target,
-                    slot_name,
-                    event_type,
-                    listener.original,
-                    listener.capture,
-                ) {
+                let Some(listener) =
+                    listener.prepare_for_invocation(scope, target, slot_name, event_type)
+                else {
                     continue;
-                }
-                if listener.once {
-                    simple_object_event_remove_listener_value_for_type(
-                        scope,
-                        target,
-                        slot_name,
-                        event_type,
-                        listener.original,
-                        listener.capture,
-                    );
-                }
+                };
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
                 let returned = invoke_simple_event_listener(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
-                    listener,
+                    &listener,
                     target.into(),
                     &[event.into()],
                     event,

@@ -83,7 +83,9 @@ struct SimpleObjectEventHandlerEntryDeclaration<'scope> {
     callable: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct SimpleObjectEventListenerSnapshot<'s> {
+    entry: v8::Local<'s, v8::Object>,
     pub(crate) original: v8::Local<'s, v8::Value>,
     callback: v8::Local<'s, v8::Object>,
     relevant_context: v8::Local<'s, v8::Context>,
@@ -117,6 +119,40 @@ struct SimpleObjectResolvedEventListener<'s> {
 }
 
 impl<'s> SimpleObjectEventListenerSnapshot<'s> {
+    pub(crate) fn prepare_for_invocation(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: v8::Local<'s, v8::Object>,
+        slot_name: &str,
+        event_type: &str,
+    ) -> Option<Self> {
+        // Removing and re-adding the same callback creates a different entry.
+        // The removed entry must stay inactive in an existing dispatch snapshot.
+        if !simple_object_event_listener_entry_registered(
+            scope, target, slot_name, event_type, self.entry,
+        ) {
+            return None;
+        }
+        let listener = if self.handler_slot.is_some() {
+            // An active handler keeps its registration position, but its value
+            // and callback contexts can change before dispatch reaches it.
+            simple_object_event_listener_snapshot_entry(scope, self.entry.into())?
+        } else {
+            self.clone()
+        };
+        if listener.once {
+            simple_object_event_remove_listener_value_for_type(
+                scope,
+                target,
+                slot_name,
+                event_type,
+                listener.original,
+                listener.capture,
+            );
+        }
+        Some(listener)
+    }
+
     pub(crate) fn invocation<'a>(
         &self,
         callback_this: v8::Local<'s, v8::Value>,
@@ -1085,22 +1121,6 @@ fn simple_object_event_listener_entry_registered<'s>(
     simple_object_event_listener_array_contains_entry(scope, listeners, entry)
 }
 
-pub(crate) fn simple_object_event_listener_is_registered<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    slot_name: &str,
-    event_type: &str,
-    original: v8::Local<'s, v8::Value>,
-    capture: bool,
-) -> bool {
-    let Some(listeners) =
-        simple_object_event_listener_array(scope, target, slot_name, event_type, false)
-    else {
-        return false;
-    };
-    simple_object_event_listener_array_contains_original(scope, listeners, original, capture)
-}
-
 fn simple_object_event_listener_original<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     candidate: v8::Local<'s, v8::Value>,
@@ -1155,6 +1175,7 @@ fn simple_object_event_listener_snapshot_entry<'s>(
         simple_object_private_bool_slot(scope, entry, SIMPLE_EVENT_TARGET_LISTENER_PASSIVE_SLOT)
             .unwrap_or(false);
     Some(SimpleObjectEventListenerSnapshot {
+        entry,
         original,
         callback,
         relevant_context,
