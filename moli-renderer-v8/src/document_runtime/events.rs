@@ -429,6 +429,7 @@ impl DocumentRuntime {
 
     pub(crate) fn sync_event_handler_content_attribute(
         &mut self,
+        host_ptr: *mut JsContextHost,
         handle: DomHandle,
         name: &str,
         namespace: Option<&str>,
@@ -450,13 +451,20 @@ impl DocumentRuntime {
             is_body_or_frameset,
             crate::native_bridge::element::body_or_frameset_reflects_window_event_type(event_type),
         ) {
-            (true, true)
-                if self.dom_host().owner_document_handle(handle)
-                    == Some(self.document_handle()) =>
-            {
-                EventTargetHandle::Window
-            }
-            (true, true) => return None,
+            (true, true) => match unsafe { &*host_ptr }.owner_dispatch_scope_for_node(handle) {
+                Some(crate::native_bridge::OwnerDispatchScope::Top) => EventTargetHandle::Window,
+                Some(crate::native_bridge::OwnerDispatchScope::Child(child_handle)) => {
+                    return unsafe { &mut *host_ptr }
+                        .set_child_window_event_handler_content_attribute(
+                            child_handle,
+                            event_type,
+                            present.then_some(handle),
+                        );
+                }
+                Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)) | None => {
+                    return None;
+                }
+            },
             _ => EventTargetHandle::Node(handle),
         };
         self.set_event_handler_content_attribute(target, event_type, present.then_some(handle))
