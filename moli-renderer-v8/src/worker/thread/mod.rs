@@ -2742,14 +2742,7 @@ async fn worker_main(
                         callback_context: None,
                         exception: None,
                     };
-                    if !dispatch_worker_error_event(
-                        scope,
-                        global,
-                        &report,
-                        None,
-                        &parent_tx,
-                        &script_url,
-                    ) {
+                    if !dispatch_worker_error_event(scope, global, &report, None, &script_url) {
                         report_exception_to_parent(
                             &report,
                             &script_url,

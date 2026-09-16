@@ -859,6 +859,22 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'
     ErrorEventInitDeclaration::new(message_value, filename_value, lineno, colno, error)
         .initialize(scope, event)
         .expect("ErrorEvent init declaration should initialize");
+    // Event handler arguments come from the event's data, without invoking
+    // author-defined getters that shadow its public attributes.
+    let arguments = [
+        message_value.into(),
+        filename_value.into(),
+        v8::Number::new(scope, lineno).into(),
+        v8::Number::new(scope, colno).into(),
+        error.unwrap_or_else(|| v8::null(scope).into()),
+    ];
+    let arguments = v8::Array::new_with_elements(scope, &arguments);
+    set_private_value(
+        scope,
+        event,
+        ERROR_EVENT_HANDLER_ARGUMENTS_SLOT,
+        arguments.into(),
+    );
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejection_event<'s>(

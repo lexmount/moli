@@ -29,7 +29,6 @@ pub(super) struct V8ExceptionReport {
 #[derive(Clone, Copy)]
 pub(super) enum CallbackExceptionLogLevel {
     Debug,
-    Error,
 }
 
 impl V8ExceptionReport {
@@ -276,19 +275,6 @@ pub(super) fn log_callback_exception(
                 "{log_label}"
             );
             log_stack(DiagnosticLogLevel::Debug, report);
-        }
-        CallbackExceptionLogLevel::Error => {
-            error!(
-                callback = callback_name,
-                message = &*fields.message,
-                source = &*fields.source,
-                line = report.line.unwrap_or(0),
-                column = report.column.unwrap_or(0),
-                source_line = &*fields.source_line,
-                callback_context = &*fields.callback_context,
-                "{log_label}"
-            );
-            log_stack(DiagnosticLogLevel::Error, report);
         }
     }
 }
