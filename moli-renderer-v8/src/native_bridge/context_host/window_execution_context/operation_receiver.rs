@@ -29,10 +29,30 @@ pub(crate) struct WindowOperationReceiver {
 }
 
 impl WindowOperationReceiver {
+    /// Freeze the exact receiver after the generated binding's access policy.
+    pub(crate) fn capture_after_access_check<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Object>,
+        host: &PageScriptHost,
+    ) -> Self {
+        Self::capture(scope, receiver, host, false).unwrap_or(Self {
+            binding_at_capture: None,
+        })
+    }
+
     pub(crate) fn capture_and_authorize<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         receiver: v8::Local<'s, v8::Object>,
         host: &PageScriptHost,
+    ) -> Result<Self, WindowOperationReceiverCaptureError> {
+        Self::capture(scope, receiver, host, true)
+    }
+
+    fn capture<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Object>,
+        host: &PageScriptHost,
+        check_access: bool,
     ) -> Result<Self, WindowOperationReceiverCaptureError> {
         let marked_scope = marked_window_dispatch_scope(scope, receiver);
         if marked_scope.is_none() && !is_window_receiver(scope, receiver) {
@@ -75,8 +95,11 @@ impl WindowOperationReceiver {
                 binding_at_capture: None,
             });
         };
-        if !host
-            .window_execution_context_can_access_dispatch_scope(accessing_identity, target_scope)
+        if check_access
+            && !host.window_execution_context_can_access_dispatch_scope(
+                accessing_identity,
+                target_scope,
+            )
         {
             return Err(WindowOperationReceiverCaptureError::CrossOrigin);
         }
