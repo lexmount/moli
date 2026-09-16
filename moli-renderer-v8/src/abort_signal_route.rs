@@ -8,7 +8,7 @@
 //! registration back to the owning store.
 
 use crate::context_bootstrap::context_host_ptr_from_global_bridge;
-use crate::util::{throw_type_error, v8str};
+use crate::webidl;
 
 #[derive(Clone, Copy)]
 enum AbortSignalOwner {
@@ -136,39 +136,30 @@ impl<'s> ResolvedAbortSignal<'s> {
     }
 }
 
-/// Parses the `signal` member of `AddEventListenerOptions`.
-///
-/// The outer `Option` distinguishes abrupt conversion from an absent member;
-/// the inner `Option` distinguishes no signal from a validated Window/worker
-/// signal capability.
+/// Converts the final AddEventListenerOptions member after capture/once/passive.
+/// A dictionary uses Get, not HasProperty: Proxy traps and inherited getters
+/// must run exactly once, and their original exceptions must escape unchanged.
 pub(crate) fn event_listener_signal_from_options_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<Option<ResolvedAbortSignal<'s>>> {
-    if value.is_null_or_undefined() || !value.is_object() {
-        return Some(None);
-    }
+) -> Result<Option<ResolvedAbortSignal<'s>>, webidl::WebIdlError> {
     let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Some(None);
+        return Ok(None);
     };
-    let signal_key = v8str(scope, "signal");
-    let signal_value = options.get(scope, signal_key.into())?;
+    let context = webidl::Context::member("AddEventListenerOptions", "signal");
+    let Some(signal_value) = webidl::property_result(scope, options, "signal", context)? else {
+        return Ok(None);
+    };
     if signal_value.is_undefined() {
-        return Some(None);
+        return Ok(None);
     }
-    let Ok(signal) = v8::Local::<v8::Object>::try_from(signal_value) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'addEventListener': options.signal must be an AbortSignal.",
-        );
-        return None;
-    };
-    let Some(signal) = ResolvedAbortSignal::resolve(scope, signal) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'addEventListener': options.signal must be an AbortSignal.",
-        );
-        return None;
-    };
-    Some(Some(signal))
+    let signal = v8::Local::<v8::Object>::try_from(signal_value)
+        .ok()
+        .and_then(|signal| ResolvedAbortSignal::resolve(scope, signal))
+        .ok_or_else(|| {
+            webidl::WebIdlError::custom_message(
+                "Failed to execute 'addEventListener': options.signal must be an AbortSignal.",
+            )
+        })?;
+    Ok(Some(signal))
 }
