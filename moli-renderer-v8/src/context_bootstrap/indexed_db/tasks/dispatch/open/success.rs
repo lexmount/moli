@@ -8,13 +8,6 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn enqueue_committ
     request: v8::Local<'s, v8::Object>,
     database: v8::Local<'s, v8::Object>,
 ) {
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
-        v8::null(scope).into(),
-    );
     define_non_enumerable_value_property(
         scope,
         request,

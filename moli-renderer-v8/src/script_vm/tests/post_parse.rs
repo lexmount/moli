@@ -4071,7 +4071,7 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBFactory.prototype, "databases", 0],
                 [IDBDatabase.prototype, "createObjectStore", 2],
                 [IDBDatabase.prototype, "deleteObjectStore", 1],
-                [IDBDatabase.prototype, "transaction", 2],
+                [IDBDatabase.prototype, "transaction", 1],
                 [IDBDatabase.prototype, "close", 0],
                 [IDBDatabase.prototype, "addEventListener", 2],
                 [IDBDatabase.prototype, "removeEventListener", 2],
