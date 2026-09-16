@@ -268,7 +268,7 @@ fn set_event_handler_property_for_target<'s>(
     let Some(event_type) = event_handler_event_type(&handler_name) else {
         return;
     };
-    let handler = v8::Local::<v8::Function>::try_from(value).ok();
+    let handler = v8::Local::<v8::Object>::try_from(value).ok();
     unsafe { &mut *runtime_ptr }
         .set_registered_event_handler_property(scope, target, event_type, handler);
 }
@@ -515,7 +515,7 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         return;
     }
     if let Some(event_type) = event_handler_event_type(&handler_name) {
-        let handler = v8::Local::<v8::Function>::try_from(value).ok();
+        let handler = v8::Local::<v8::Object>::try_from(value).ok();
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             unsafe { &mut *host_ptr }.set_registered_event_handler_property(
                 scope,
