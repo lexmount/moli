@@ -209,11 +209,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "native_bridge/context_host/child_events.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "native_bridge/document/attributes/named_node_map/handlers.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,

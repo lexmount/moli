@@ -225,8 +225,41 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         node_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) {
+        // Detached fragments bypass live parser insertion follow-ups. Register
+        // new body/frameset Window attributes when they are added, even if the
+        // fragment is never connected. Existing attributes must not reactivate
+        // an event handler that script has cleared through its IDL property.
+        let window_handlers = if !self.targets_live_document()
+            && self.runtime.dom_host().node(node_id).is_some_and(|node| {
+                node.is_html_element_named("body") || node.is_html_element_named("frameset")
+            }) {
+            attrs
+                .iter()
+                .filter(|attr| {
+                    attr.namespace().is_empty()
+                    && attr.local_name().strip_prefix("on").is_some_and(
+                        crate::native_bridge::element::body_or_frameset_reflects_window_event_type,
+                    )
+                    && self.runtime.dom_host().get_attribute(node_id, attr.local_name()).is_none()
+                })
+                .map(|attr| attr.local_name().to_owned())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         self.runtime
             .add_attrs_if_missing_for_parser_in_live_dom_host(node_id, attrs);
+        for name in window_handlers {
+            if let Some(previous) = self.runtime.sync_event_handler_content_attribute(
+                self.host_ptr,
+                node_id,
+                &name,
+                None,
+                true,
+            ) {
+                unsafe { &mut *self.host_ptr }.release_event_callback(previous);
+            }
+        }
     }
 
     fn create_text_node(&mut self, document_handle: DomHandle, text: String) -> DomHandle {
