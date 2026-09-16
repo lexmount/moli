@@ -92,7 +92,7 @@ fn finish_loading_with_runtime_service(
                             clients,
                             message,
                             params.key.script_url(),
-                            WorkerParentErrorEventKind::ErrorEvent,
+                            WorkerParentErrorEventKind::Event,
                         );
                     }
                 }
@@ -335,6 +335,7 @@ mod tests {
             SharedWorkerClientEvent::Error(error)
                 if error.endpoint_disposition()
                     == SharedWorkerClientEndpointDisposition::Retire
+                    && error.event_kind() == WorkerParentErrorEventKind::Event
         ));
         assert!(
             message_port_owner
@@ -665,6 +666,7 @@ mod tests {
             SharedWorkerClientEvent::Error(error)
                 if error.endpoint_disposition()
                     == SharedWorkerClientEndpointDisposition::Retire
+                    && error.event_kind() == WorkerParentErrorEventKind::Event
         ));
         assert!(
             message_port_owner

@@ -35,9 +35,8 @@ pub(in crate::context_bootstrap) use constructor::{
 
 pub(super) use constructor::worker_constructor_callback;
 pub(crate) use dispatch::{
-    dispatch_worker_error_event_with_error, dispatch_worker_error_event_with_kind,
-    dispatch_worker_event, flush_pending_worker_messages_for_listener,
-    worker_has_message_delivery_listener,
+    dispatch_worker_error_event_with_kind, dispatch_worker_event,
+    flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
 

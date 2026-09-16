@@ -3087,12 +3087,16 @@ pub(super) fn dispatch_nested_worker_event(
             lineno,
             colno,
             event_kind,
+            phase,
             ..
         } => {
             let unhandled = crate::context_bootstrap::dispatch_worker_event(scope, worker, message);
+            // Bootstrap failures only fire an Event at the child Worker. Only
+            // uncanceled runtime errors propagate to its owner's global scope.
+            let propagate = unhandled && *phase == super::handle::WorkerErrorPhase::Runtime;
             NestedWorkerDispatchResult {
                 dispatched: true,
-                unhandled_error: unhandled.then(|| NestedWorkerUnhandledError {
+                unhandled_error: propagate.then(|| NestedWorkerUnhandledError {
                     message: error_message.clone(),
                     filename: filename.clone(),
                     lineno: *lineno,
