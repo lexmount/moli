@@ -16,8 +16,7 @@ use crate::context_bootstrap::{
     dispatch_message_port_events_for_port_collecting_errors,
     dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
     event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
-    set_event_internal_flag, simple_object_event_listener_is_registered,
-    simple_object_event_listeners_snapshot, simple_object_event_remove_listener_value_for_type,
+    set_event_internal_flag, simple_object_event_listeners_snapshot,
     structured_deserialize_value_for_message_event,
 };
 use crate::exception_reporting::{
@@ -1011,28 +1010,14 @@ fn invoke_worker_listener<'s>(
     event_type: &str,
     callback_name: &str,
 ) -> Result<(), WorkerExceptionError> {
-    if event_stop_immediate_propagation(scope, event)
-        || !simple_object_event_listener_is_registered(
-            scope,
-            target,
-            WORKER_GLOBAL_LISTENERS_SLOT,
-            event_type,
-            listener.original,
-            listener.capture,
-        )
-    {
+    if event_stop_immediate_propagation(scope, event) {
         return Ok(());
     }
-    if listener.once {
-        simple_object_event_remove_listener_value_for_type(
-            scope,
-            target,
-            WORKER_GLOBAL_LISTENERS_SLOT,
-            event_type,
-            listener.original,
-            listener.capture,
-        );
-    }
+    let Some(listener) =
+        listener.prepare_for_invocation(scope, target, WORKER_GLOBAL_LISTENERS_SLOT, event_type)
+    else {
+        return Ok(());
+    };
     let arguments = [event.into()];
     let invocation = listener.invocation(target.into(), &arguments, Some(event));
     match CallbackInvoker::invoke(
