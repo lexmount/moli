@@ -49,5 +49,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         );
         return Err(error);
     }
+    crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target(scope, database, None);
     Ok(database)
 }

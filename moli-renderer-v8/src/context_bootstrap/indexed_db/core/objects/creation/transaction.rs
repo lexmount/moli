@@ -46,5 +46,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         storage_scope,
     );
     register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, handle.is_some());
+    crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target(scope, tx, Some(db));
     Some(tx)
 }
