@@ -59,5 +59,6 @@ mod user_activation;
 mod web_audio;
 mod webrtc;
 mod webrtc_events;
+mod window_event_target;
 mod window_onerror;
 mod worker_listener_invocation;
