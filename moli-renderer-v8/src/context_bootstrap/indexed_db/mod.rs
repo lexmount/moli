@@ -49,8 +49,10 @@ pub(crate) use self::runtime::{
     materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
     set_worker_indexed_db_task_wake_for_context,
 };
+pub(crate) use self::state::ConnectionRequestHandle;
 pub(crate) use self::tasks::{
-    discard_indexed_db_task_by_id, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
+    complete_indexed_db_version_change_notifications, discard_indexed_db_task_by_id,
+    flush_indexed_db_task_by_id, flush_next_indexed_db_task,
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
