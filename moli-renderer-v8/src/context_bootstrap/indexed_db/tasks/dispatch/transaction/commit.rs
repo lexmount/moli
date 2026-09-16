@@ -62,6 +62,7 @@ fn finish_committed_transaction<'s>(
     finish_transaction(scope, transaction);
     if let Some(db) = indexed_db_transaction_database(scope, transaction) {
         let _ = refresh_database_surface(scope, db);
+        crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, db);
     }
     let upgrade_open = take_indexed_db_upgrade_open(scope, transaction);
     if let Some((_, database)) = upgrade_open {
