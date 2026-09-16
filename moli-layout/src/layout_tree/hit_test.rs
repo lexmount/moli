@@ -454,6 +454,9 @@ where
             .local_to_viewport
             .inverse()?;
         let local_point = inverse.map_point(viewport_point);
+        if !entry.local_rect.contains(local_point) {
+            return None;
+        }
         let local_content_box = self
             .fragment(entry.fragment)
             .and_then(|fragment| fragment.box_model.map(|model| model.content))
@@ -462,7 +465,7 @@ where
                 let geometry = self.box_geometry(box_id)?;
                 Some(geometry.content_box)
             });
-        entry.local_rect.contains(local_point).then_some(LayoutHit {
+        Some(LayoutHit {
             source: entry.source,
             fragment: Some(entry.fragment),
             paint_order: Some(entry.paint_order),
