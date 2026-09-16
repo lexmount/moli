@@ -777,10 +777,8 @@ mod tests {
         let target = {
             let scope = &mut v8::ContextScope::new(scope, target_context);
             let code = super::v8str(scope, "(function Target() { throw 'called'; })");
-            v8::Script::compile(scope, code, None)
-                .unwrap()
-                .run(scope)
-                .unwrap()
+            let script = v8::Script::compile(scope, code, None).unwrap();
+            crate::script_execution::execute_compiled_script(scope, script).unwrap()
         };
         let wrapper_context = v8::Context::new(scope, Default::default());
         let scope = &mut v8::ContextScope::new(scope, wrapper_context);
@@ -815,10 +813,8 @@ mod tests {
 })()
 "#,
         );
-        let values = v8::Script::compile(scope, code, None)
-            .unwrap()
-            .run(scope)
-            .unwrap();
+        let script = v8::Script::compile(scope, code, None).unwrap();
+        let values = crate::script_execution::execute_compiled_script(scope, script).unwrap();
         let values = v8::Local::<v8::Array>::try_from(values).unwrap();
         for index in 0..5 {
             let value = values.get_index(scope, index).unwrap();
