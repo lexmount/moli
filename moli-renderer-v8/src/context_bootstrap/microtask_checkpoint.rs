@@ -10,6 +10,11 @@ enum AgentMicrotaskCheckpointTask {
         context: v8::Global<v8::Context>,
         transaction: v8::Global<v8::Object>,
     },
+    CompleteIndexedDbVersionChangeNotifications {
+        context: v8::Global<v8::Context>,
+        blocked_task: v8::Global<v8::Object>,
+        notifications: Vec<v8::Global<v8::Object>>,
+    },
 }
 
 pub(crate) fn install_agent_microtask_checkpoint_tasks(isolate: &mut v8::Isolate) {
@@ -23,17 +28,37 @@ pub(in crate::context_bootstrap) fn enqueue_indexed_db_transaction_deactivation(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
 ) {
+    let context = scope.get_current_context();
+    let task = AgentMicrotaskCheckpointTask::DeactivateIndexedDbTransaction {
+        context: v8::Global::new(scope, context),
+        transaction: v8::Global::new(scope, transaction),
+    };
+    enqueue_checkpoint_task(scope, task);
+}
+
+pub(in crate::context_bootstrap) fn enqueue_indexed_db_version_change_completion(
+    scope: &mut v8::PinScope<'_, '_>,
+    blocked_task: v8::Local<'_, v8::Object>,
+    notifications: Vec<v8::Global<v8::Object>>,
+) {
+    let context = blocked_task
+        .get_creation_context(scope)
+        .expect("blocked connection request realm");
+    let task = AgentMicrotaskCheckpointTask::CompleteIndexedDbVersionChangeNotifications {
+        context: v8::Global::new(scope, context),
+        blocked_task: v8::Global::new(scope, blocked_task),
+        notifications,
+    };
+    enqueue_checkpoint_task(scope, task);
+}
+
+fn enqueue_checkpoint_task(scope: &mut v8::PinScope<'_, '_>, task: AgentMicrotaskCheckpointTask) {
     if scope.get_slot::<AgentMicrotaskCheckpointTasks>().is_none() {
         assert!(
             scope.set_slot(AgentMicrotaskCheckpointTasks::default()),
             "agent checkpoint state should be installed once on first use"
         );
     }
-    let context = scope.get_current_context();
-    let task = AgentMicrotaskCheckpointTask::DeactivateIndexedDbTransaction {
-        context: v8::Global::new(scope, context),
-        transaction: v8::Global::new(scope, transaction),
-    };
     scope
         .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
         .expect("agent checkpoint state should exist after installation")
@@ -56,6 +81,20 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
                 context,
                 transaction,
             } => run_indexed_db_transaction_deactivation(scope, context, transaction),
+            AgentMicrotaskCheckpointTask::CompleteIndexedDbVersionChangeNotifications {
+                ref context,
+                ref blocked_task,
+                ref notifications,
+            } => {
+                let context = v8::Local::new(scope, context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let blocked_task = v8::Local::new(scope, blocked_task);
+                if !crate::context_bootstrap::indexed_db::complete_indexed_db_version_change_notifications(
+                    scope, blocked_task, notifications,
+                ) {
+                    enqueue_checkpoint_task(scope, task);
+                }
+            }
         }
     }
 }
