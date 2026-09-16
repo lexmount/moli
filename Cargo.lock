@@ -2784,6 +2784,7 @@ name = "moli-indexeddb"
 version = "0.1.0"
 dependencies = [
  "moli-crypto",
+ "parking_lot",
  "serde",
  "serde_json",
  "strum",

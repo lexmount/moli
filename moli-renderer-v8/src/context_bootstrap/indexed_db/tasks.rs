@@ -42,6 +42,12 @@ use super::{
     unregister_readwrite_transaction, v8str, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };
+use super::{
+    context_host_ptr_from_global_bridge, finish_indexed_db_connection_request,
+    indexed_db_connection_request_is_head, indexed_db_connection_request_wake,
+    indexed_db_shared_manager, set_indexed_db_connection_request,
+    start_indexed_db_connection_notifications, take_indexed_db_connection_request_wake,
+};
 use crate::util::enqueue_host_microtask;
 use moli_indexeddb::OpenDisposition;
 
@@ -62,6 +68,7 @@ pub(super) use self::dispatch::*;
 pub(crate) use self::dispatch::{
     discard_indexed_db_task_by_id, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
 };
+pub(crate) use self::open_delete::complete_indexed_db_version_change_notifications;
 pub(super) use self::open_delete::*;
 pub(super) use self::operations::*;
 pub(super) use self::queue::*;
