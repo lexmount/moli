@@ -1,4 +1,7 @@
 use super::IndexedDbManager;
+pub(crate) use moli_indexeddb::{
+    ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestWake,
+};
 use parking_lot::Mutex;
 use std::{
     fmt,

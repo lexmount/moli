@@ -40,5 +40,8 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn flush_open_succ
         finish_aborted_upgrade_open(scope, request, database);
         return;
     }
+    // The complete event's microtasks may close the upgrade connection. Keep
+    // its queue position until that final success-versus-AbortError decision.
+    finish_indexed_db_connection_request(scope, request);
     flush_request_success_task(scope, task);
 }

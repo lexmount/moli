@@ -19,8 +19,14 @@ use crate::{
 };
 
 impl IndexedDbManager {
+    /// Shared across every renderer and worker using this storage partition.
+    pub fn connection_request_queues(&self) -> std::sync::Arc<crate::ConnectionRequestQueues> {
+        self.connection_requests.clone()
+    }
+
     pub fn new_in_memory() -> Self {
         Self {
+            connection_requests: Default::default(),
             backend: IndexedDbPersistenceBackend::InMemory,
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -35,6 +41,7 @@ impl IndexedDbManager {
         fs::create_dir_all(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
+            connection_requests: Default::default(),
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
