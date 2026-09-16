@@ -23,16 +23,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_delete_blocked_task<'s>(
         );
         return;
     }
-    dispatch_version_change_to_open_connections(scope, &key, payload.old_version, None);
-    if !has_open_database_connections_for_key(scope, &key) {
-        delete::execute_delete_database_request(
-            scope,
-            payload.request,
-            storage_scope,
-            payload.name,
-        );
-        return;
-    }
     push_unique_object_to_indexed_db_runtime_array(
         scope,
         IndexedDbRuntimeArray::BlockedOpenQueue,
@@ -40,6 +30,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_delete_blocked_task<'s>(
     );
     let owner = indexed_db_typed_task_execution_owner(scope, task)
         .expect("blocked delete task must retain its IndexedDB execution owner");
-    register_blocked_database_context(scope, key, owner);
-    event::dispatch_blocked_once(scope, payload.request, payload.old_version, None);
+    register_blocked_database_context(scope, key.clone(), owner);
+    enqueue_version_change_to_open_connections(scope, &key, payload.old_version, None, task);
 }

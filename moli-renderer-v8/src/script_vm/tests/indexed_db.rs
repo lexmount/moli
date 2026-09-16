@@ -2059,10 +2059,12 @@ async fn indexed_db_blocked_upgrade_result_database_keeps_opener_owner() {
   request.onsuccess = () => {
     globalThis.__blockedUpgradeOwnerTopDb = request.result;
     globalThis.__blockedUpgradeOwnerTopDb.onversionchange = () => {
-      const sender = new BroadcastChannel("blocked-upgrade-top-versionchange-owner");
-      sender.postMessage("top-versionchange");
-      globalThis.__blockedUpgradeOwnerTopVersionChange = "closed";
-      globalThis.__blockedUpgradeOwnerTopDb.close();
+      Promise.resolve().then(() => {
+        const sender = new BroadcastChannel("blocked-upgrade-top-versionchange-owner");
+        sender.postMessage("top-versionchange");
+        globalThis.__blockedUpgradeOwnerTopVersionChange = "closed";
+        globalThis.__blockedUpgradeOwnerTopDb.close();
+      });
     };
     globalThis.__blockedUpgradeOwnerTopReady = "ok";
   };
@@ -6476,4 +6478,105 @@ navigator.storageBuckets.open('limited', {quota: 16}).then(bucket => {
         result,
         r#"["abort:QuotaExceededError:0:0:true","open-error:AbortError:true","deleted"]"#
     );
+}
+
+#[test]
+fn indexed_db_versionchange_waits_for_connection_microtasks_before_blocked() {
+    for operation in ["upgrade", "delete"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-notification-tasks.test/");
+        vm.eval(&format!("globalThis.operation = {operation:?};"))
+            .expect("connection operation should be set");
+        vm.eval(r#"
+globalThis.notificationEvents = [];
+const first = indexedDB.open(`notifications-${operation}`, 1);
+first.onupgradeneeded = () => first.result.createObjectStore('records');
+first.onsuccess = () => {
+  const db1 = first.result;
+  const second = indexedDB.open(db1.name);
+  second.onsuccess = () => {
+    const db2 = second.result;
+    const request = operation === 'upgrade' ? indexedDB.open(db1.name, 2) : indexedDB.deleteDatabase(db1.name);
+    db1.onversionchange = event => {
+      notificationEvents.push(`first:${event.oldVersion}:${event.newVersion}`);
+      Promise.resolve().then(() => {
+        notificationEvents.push('first-microtask');
+        request.onblocked = () => {
+          notificationEvents.push('blocked');
+          db1.close();
+          db2.close();
+        };
+      });
+    };
+    db2.onversionchange = () => {
+      notificationEvents.push('second');
+      queueMicrotask(() => notificationEvents.push('second-microtask'));
+    };
+    request.onupgradeneeded = () => notificationEvents.push('upgrade');
+    request.onerror = () => notificationEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      notificationEvents.push('success');
+      if (operation === 'upgrade') request.result.close();
+    };
+  };
+};
+"#).expect("connection notifications should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(notificationEvents)")
+            .expect("connection notification tasks should finish");
+        let expected = if operation == "upgrade" {
+            r#"["first:1:2","first-microtask","second","second-microtask","blocked","upgrade","success"]"#
+        } else {
+            r#"["first:1:null","first-microtask","second","second-microtask","blocked","success"]"#
+        };
+        assert_eq!(result, expected, "{operation} notification order");
+    }
+}
+
+#[test]
+fn indexed_db_versionchange_skips_connections_closed_by_an_earlier_microtask() {
+    for operation in ["upgrade", "delete"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-notification-close.test/");
+        vm.eval(&format!("globalThis.operation = {operation:?};"))
+            .expect("connection operation should be set");
+        vm.eval(r#"
+globalThis.notificationEvents = [];
+const first = indexedDB.open(`notifications-close-${operation}`, 1);
+first.onupgradeneeded = () => first.result.createObjectStore('records');
+first.onsuccess = () => {
+  const db1 = first.result;
+  const second = indexedDB.open(db1.name);
+  second.onsuccess = () => {
+    const db2 = second.result;
+    db1.onversionchange = () => {
+      notificationEvents.push('first');
+      Promise.resolve().then(() => {
+        notificationEvents.push('close-microtask');
+        db1.close();
+        db2.close();
+      });
+    };
+    db2.onversionchange = () => notificationEvents.push('unexpected-second');
+    const request = operation === 'upgrade' ? indexedDB.open(db1.name, 2) : indexedDB.deleteDatabase(db1.name);
+    request.onblocked = () => notificationEvents.push('unexpected-blocked');
+    request.onupgradeneeded = () => notificationEvents.push('upgrade');
+    request.onerror = () => notificationEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      notificationEvents.push('success');
+      if (operation === 'upgrade') request.result.close();
+    };
+  };
+};
+"#).expect("closing notification should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(notificationEvents)")
+            .expect("closing notification tasks should finish");
+        let expected = if operation == "upgrade" {
+            r#"["first","close-microtask","upgrade","success"]"#
+        } else {
+            r#"["first","close-microtask","success"]"#
+        };
+        assert_eq!(result, expected, "{operation} must skip closed connections");
+    }
 }
