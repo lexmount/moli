@@ -1550,6 +1550,8 @@ pub(crate) struct WorkerGlobalState {
     pub(crate) termination_requested: Arc<AtomicBool>,
     /// Whether `close()` has been called.
     pub(super) closed: bool,
+    /// HTML's per-global guard against recursively reporting an error event.
+    pub(super) in_error_reporting_mode: bool,
     /// Timer id counter.
     pub(super) next_timer_id: u32,
     /// Inside-settings resource authority for every request owned by this

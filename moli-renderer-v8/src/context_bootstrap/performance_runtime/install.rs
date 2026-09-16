@@ -385,6 +385,7 @@ pub(in crate::context_bootstrap) fn install_worker_performance_runtime_state<'s>
         PERFORMANCE_EVENT_LISTENERS_SLOT,
         false,
     );
+    install_simple_event_target_ordered_handlers(scope, performance);
     define_global_value(scope, global, WINDOW_PERFORMANCE_SLOT, performance.into())
 }
 
