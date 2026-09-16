@@ -72,7 +72,7 @@ fn body_window_event_handler_getter_function<'s>(
         Some(OwnerDispatchScope::Top) => {
             resolve_window_event_handler_content_attribute(scope, runtime_ptr, event_type)
         }
-        Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &*runtime_ptr }
+        Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &mut *runtime_ptr }
             .child_window_event_handler_property_value(scope, child_handle, &handler_name),
         Some(OwnerDispatchScope::LightweightPopup(_)) | None => None,
     };
@@ -173,7 +173,7 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
     })
 }
 
-fn compile_body_window_event_attribute<'s>(
+pub(crate) fn compile_body_window_event_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     owner: DomHandle,
@@ -181,9 +181,6 @@ fn compile_body_window_event_attribute<'s>(
 ) -> Option<v8::Local<'s, v8::Function>> {
     let handler_name = format!("on{event_type}");
     let source = element_attribute(unsafe { &*runtime_ptr }, owner, &handler_name)?;
-    if source.is_empty() {
-        return None;
-    }
     let argument_names: &[&str] = if event_type == "error" {
         &["event", "source", "lineno", "colno", "error"]
     } else {
@@ -210,21 +207,20 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
     handle: DomHandle,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
-    if !super::body_or_frameset_uses_runtime_window(runtime, handle) {
+    if super::body_or_frameset_window_owner(runtime, handle).is_none() {
         return;
     }
     for handler_name in body_or_frameset_window_event_handler_properties() {
-        let event_type = handler_name
-            .strip_prefix("on")
-            .expect("body Window event handler name must start with on");
         if runtime
             .dom_host()
             .get_attribute(handle, handler_name)
             .is_some()
-            && let Some(previous) = runtime.set_event_handler_content_attribute(
-                EventTargetHandle::Window,
-                event_type,
-                Some(handle),
+            && let Some(previous) = runtime.sync_event_handler_content_attribute(
+                runtime_ptr,
+                handle,
+                handler_name,
+                None,
+                true,
             )
         {
             runtime.release_event_callback(previous);
