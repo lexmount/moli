@@ -1,7 +1,7 @@
 use super::{
     MEDIA_QUERY_LIST_LISTENERS_SLOT, SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT,
     SIMPLE_EVENT_TARGET_SLOT, object_bool_property, object_property_as_array,
-    object_string_property_defined, throw_type_error, v8_string, v8str,
+    object_string_property_defined, v8_string, v8str,
 };
 const SIMPLE_EVENT_TARGET_HANDLER_SLOT_FIELD: &str = "handlerSlot";
 
@@ -9,9 +9,8 @@ mod media_query_list;
 mod simple_event_target;
 
 pub(in crate::context_bootstrap) use media_query_list::{
-    dispatch_media_query_list_event, media_query_list_add_event_listener_callback,
-    media_query_list_add_listener_callback, media_query_list_dispatch_event_callback,
-    media_query_list_remove_event_listener_callback, media_query_list_remove_listener_callback,
+    dispatch_media_query_list_event, media_query_list_add_listener_callback,
+    media_query_list_remove_listener_callback,
 };
 pub(crate) use simple_event_target::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,

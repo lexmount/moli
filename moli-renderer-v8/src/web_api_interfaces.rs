@@ -283,7 +283,7 @@ interfaces! {
     MediaDevices: EventTarget;
     MediaError;
     MediaList;
-    MediaQueryList;
+    MediaQueryList: EventTarget;
     MediaQueryListEvent: Event;
     MediaSource: EventTarget;
     MemoryInfo;
