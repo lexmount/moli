@@ -133,7 +133,13 @@ pub(in crate::native_bridge) fn node_query_selector_callback<'s>(
         None => unsafe { &*runtime_ptr }.query_selector(Some(handle), &parsed.selectors),
     };
     match result {
-        Ok(handle) => set_wrapped_handle_or_null_for_receiver(scope, &mut rv, runtime_ptr, args.this(), handle),
+        Ok(handle) => set_wrapped_handle_or_null_for_receiver(
+            scope,
+            &mut rv,
+            runtime_ptr,
+            args.this(),
+            handle,
+        ),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
 }
