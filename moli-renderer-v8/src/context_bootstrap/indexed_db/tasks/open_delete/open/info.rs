@@ -6,7 +6,12 @@ pub(super) fn opened_database_info(
     opened: &moli_indexeddb::OpenResult,
 ) -> Result<DatabaseInfo, moli_indexeddb::IndexedDbError> {
     match with_indexed_db_manager(scope, |manager| manager.database_info(opened.database)) {
-        Ok(info) => Ok(info),
+        Ok(mut info) => {
+            if let OpenDisposition::UpgradeNeeded { new_version, .. } = opened.disposition {
+                info.version = new_version;
+            }
+            Ok(info)
+        }
         Err(error) => match &opened.disposition {
             OpenDisposition::UpgradeNeeded {
                 old_version: 0,

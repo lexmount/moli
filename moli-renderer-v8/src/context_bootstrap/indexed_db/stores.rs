@@ -16,8 +16,8 @@ use super::{
     remove_database_index_metadata, request_error_object, scan_index_entries,
     scan_object_store_entries, serialize_js_value, set_database_index_metadata,
     storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,
-    submit_cursor_open_operation, sync_store_surface_from_metadata, throw_type_error,
-    transaction_handle_from_value, with_indexed_db_manager,
+    submit_cursor_open_operation, throw_type_error, transaction_handle_from_value,
+    with_indexed_db_manager,
 };
 use crate::webidl;
 
