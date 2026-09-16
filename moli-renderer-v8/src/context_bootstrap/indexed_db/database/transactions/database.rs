@@ -1,14 +1,23 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 use crate::webidl;
-use moli_indexeddb::{DatabaseHandle, IndexedDbError, parse_regular_transaction_mode};
+use moli_indexeddb::{DatabaseHandle, IndexedDbError};
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "IDBTransactionMode")]
+enum TransactionModeWebIdl {
+    Readonly,
+    Readwrite,
+    Versionchange,
+}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.transaction")]
-struct IdbDatabaseTransactionArgs<'s> {
-    #[webidl(required, name = "storeNames")]
-    store_names: v8::Local<'s, v8::Value>,
-    mode: Option<String>,
+struct IdbDatabaseTransactionArgs {
+    #[webidl(required, name = "storeNames", converter = "raw")]
+    store_names: names::TransactionStoreNames,
+    #[webidl(converter = "enum", default = TransactionModeWebIdl::Readonly)]
+    mode: TransactionModeWebIdl,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callback<'s>(
@@ -24,13 +33,24 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
         rv.set_undefined();
         return;
     };
-    let store_names = match names::parse_transaction_store_names(scope, parsed.store_names) {
-        Ok(store_names) => store_names,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
+    // A live upgrade includes its inactive and committing states. Checking the
+    // connection's own transaction also works when this method is borrowed
+    // from another realm.
+    if let Some(upgrade) = object_property_as_object(
+        scope,
+        database,
+        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
+    ) && !object_bool_property(scope, upgrade, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+        .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The database is running a version change transaction.",
+            "InvalidStateError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
     if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
         let error = dom_exception_value(
             scope,
@@ -40,9 +60,38 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
         scope.throw_exception(error);
         return;
     }
-    let mode = match parse_regular_transaction_mode(parsed.mode.as_deref()) {
-        Ok(mode) => mode,
-        Err(_) => {
+    let mut store_names = parsed.store_names.0;
+    store_names.sort_unstable();
+    store_names.dedup();
+    // Validate before queuing a readwrite transaction as well: its backend
+    // handle may only be allocated after an earlier transaction finishes.
+    if store_names
+        .iter()
+        .any(|name| object_store_info_from_database_metadata(scope, database, name).is_none())
+    {
+        let error = dom_exception_value(
+            scope,
+            "An object store in the transaction scope was not found.",
+            "NotFoundError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
+    if store_names.is_empty() {
+        let error = dom_exception_value(
+            scope,
+            "The transaction scope is empty.",
+            "InvalidAccessError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
+    let mode = match parsed.mode {
+        TransactionModeWebIdl::Readonly => TransactionMode::ReadOnly,
+        TransactionModeWebIdl::Readwrite => TransactionMode::ReadWrite,
+        // This is a valid IDL enum value, so its rejection comes after the
+        // connection and scope checks, unlike an unrecognized enum string.
+        TransactionModeWebIdl::Versionchange => {
             throw_type_error(scope, "Failed to execute 'transaction': unsupported mode.");
             return;
         }
