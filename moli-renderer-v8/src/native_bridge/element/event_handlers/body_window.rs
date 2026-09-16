@@ -158,19 +158,21 @@ pub(crate) fn resolve_window_event_handler_content_attribute<'s>(
         None,
         target_context,
     );
-    let handler = compile_body_window_event_attribute(scope, runtime_ptr, owner, event_type);
+    let Some(handler) = compile_body_window_event_attribute(scope, runtime_ptr, owner, event_type)
+    else {
+        // Error reporting can replace or deactivate the handler, even through
+        // document.open(). Keep those changes and return null for this read.
+        return Some(v8::null(scope).into());
+    };
     let target_context = scope.get_current_context();
     unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
         scope,
         EventTargetHandle::Window,
         event_type,
-        handler,
+        Some(handler),
         target_context,
     );
-    Some(match handler {
-        Some(handler) => handler.into(),
-        None => v8::null(scope).into(),
-    })
+    Some(handler.into())
 }
 
 pub(crate) fn compile_body_window_event_attribute<'s>(
