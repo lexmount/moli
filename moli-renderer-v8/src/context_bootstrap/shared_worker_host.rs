@@ -177,7 +177,7 @@ fn shared_worker_onerror_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -189,7 +189,7 @@ fn shared_worker_onerror_setter<'s>(
         SHARED_WORKER_LISTENERS_SLOT,
         "error",
         SHARED_WORKER_ONERROR_SLOT,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 

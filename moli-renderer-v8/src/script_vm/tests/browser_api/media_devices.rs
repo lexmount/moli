@@ -26,7 +26,10 @@ fn media_devices_enumeration_and_devicechange_live_on_a_branded_event_target_pro
         devices.ondevicechange = event => events.push(event.target === devices ? 'handler' : 'bad target');
         devices.dispatchEvent(new Event('devicechange'));
         checks.push(events.join(',') === 'first,handler,last');
-        devices.ondevicechange = {};
+        const handlerObject = {};
+        devices.ondevicechange = handlerObject;
+        checks.push(devices.ondevicechange === handlerObject);
+        devices.ondevicechange = 42;
         checks.push(devices.ondevicechange === null);
         for (const fake of [{}, prototype, Object.create(devices)]) {
           for (const callback of [() => handler.get.call(fake), () => handler.set.call(fake, null)]) {

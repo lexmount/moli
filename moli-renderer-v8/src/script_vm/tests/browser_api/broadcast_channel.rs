@@ -779,7 +779,7 @@ fn broadcast_channel_ordered_handler_slot_ignores_reflection_and_spoofing() {
 }
 
 #[test]
-fn broadcast_channel_event_handler_non_callable_assignment_clears_handler() {
+fn broadcast_channel_event_handler_preserves_objects_and_clears_primitives() {
     let mut vm = new_broadcast_channel_test_vm("https://example.com/broadcast-wpt-handler-object");
 
     let result = vm
@@ -789,16 +789,20 @@ fn broadcast_channel_event_handler_non_callable_assignment_clears_handler() {
               const channel = new BroadcastChannel("wpt-handler-object");
               const handlerObject = { handleEvent() {} };
               channel.onmessage = handlerObject;
-              const messageCleared = channel.onmessage === null;
+              const messagePreserved = channel.onmessage === handlerObject;
               channel.onmessageerror = handlerObject;
-              const messageErrorCleared = channel.onmessageerror === null;
-              return `${messageCleared}:${messageErrorCleared}`;
+              const messageErrorPreserved = channel.onmessageerror === handlerObject;
+              channel.onmessage = 42;
+              channel.onmessageerror = false;
+              const primitivesCleared = channel.onmessage === null && channel.onmessageerror === null;
+              channel.close();
+              return `${messagePreserved}:${messageErrorPreserved}:${primitivesCleared}`;
             })()
             "#,
         )
         .expect("BroadcastChannel non-callable handler probe should evaluate");
 
-    assert_eq!(result, "true:true");
+    assert_eq!(result, "true:true:true");
 }
 #[test]
 fn broadcast_channel_postmessage_uncloneable_data_throws_data_clone_error() {

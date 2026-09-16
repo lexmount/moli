@@ -3440,7 +3440,7 @@ fn service_worker_registration_onupdatefound_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let active = value.is_function();
+    let active = value.is_object();
     let value = if active {
         value
     } else {
@@ -5364,14 +5364,13 @@ fn set_worker_global_event_handler<'s>(
     value: v8::Local<'s, v8::Value>,
     slot_name: &'static str,
     event_type: Option<&str>,
-    store_non_callable_objects: bool,
 ) {
-    let stored = if value.is_function() || (store_non_callable_objects && value.is_object()) {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
     };
-    let active = stored.is_function();
+    let active = stored.is_object();
     set_private_value(scope, global, slot_name, stored);
     if let Some(event_type) = event_type {
         simple_object_event_set_ordered_handler(
@@ -5408,7 +5407,6 @@ fn worker_global_onmessage_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONMESSAGE_SLOT,
         Some("message"),
-        true,
     );
 }
 
@@ -5435,7 +5433,6 @@ fn worker_global_onmessageerror_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONMESSAGEERROR_SLOT,
         Some("messageerror"),
-        true,
     );
 }
 
@@ -5462,7 +5459,6 @@ fn worker_global_oninstall_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONINSTALL_SLOT,
         Some("install"),
-        true,
     );
 }
 
@@ -5489,7 +5485,6 @@ fn worker_global_onactivate_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONACTIVATE_SLOT,
         Some("activate"),
-        true,
     );
 }
 
@@ -5516,7 +5511,6 @@ fn worker_global_onfetch_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONFETCH_SLOT,
         Some("fetch"),
-        true,
     );
 }
 
@@ -5543,7 +5537,6 @@ fn worker_global_onpush_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONPUSH_SLOT,
         Some("push"),
-        true,
     );
 }
 
@@ -5570,7 +5563,6 @@ fn worker_global_onsync_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONSYNC_SLOT,
         Some("sync"),
-        true,
     );
 }
 
@@ -5597,7 +5589,6 @@ fn worker_global_onperiodicsync_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONPERIODICSYNC_SLOT,
         Some("periodicsync"),
-        true,
     );
 }
 
@@ -5624,7 +5615,6 @@ fn worker_global_onnotificationclick_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLICK_SLOT,
         Some("notificationclick"),
-        true,
     );
 }
 
@@ -5651,7 +5641,6 @@ fn worker_global_onnotificationclose_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLOSE_SLOT,
         Some("notificationclose"),
-        true,
     );
 }
 
@@ -5678,7 +5667,6 @@ fn worker_global_onerror_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONERROR_SLOT,
         None,
-        true,
     );
 }
 
@@ -5705,7 +5693,6 @@ fn worker_global_onconnect_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONCONNECT_SLOT,
         Some("connect"),
-        false,
     );
 }
 
@@ -5732,7 +5719,6 @@ fn worker_global_onoffline_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONOFFLINE_SLOT,
         Some("offline"),
-        true,
     );
 }
 
@@ -5759,7 +5745,6 @@ fn worker_global_ononline_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONONLINE_SLOT,
         Some("online"),
-        true,
     );
 }
 
@@ -5786,7 +5771,6 @@ fn worker_global_onunhandledrejection_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONUNHANDLEDREJECTION_SLOT,
         Some("unhandledrejection"),
-        false,
     );
 }
 
@@ -5813,7 +5797,6 @@ fn worker_global_onrejectionhandled_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONREJECTIONHANDLED_SLOT,
         Some("rejectionhandled"),
-        false,
     );
 }
 
