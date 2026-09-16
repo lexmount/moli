@@ -6,8 +6,11 @@ try {
   results.push(''+e);
 }
 try {
-  self.onconnect = {handleEvent:function(){}};
-  results.push(String(onconnect));
+  // Local correction: EventHandler uses LegacyTreatNonObjectAsNull.
+  // Non-callable objects retain their identity; only primitives become null.
+  var object = {handleEvent:function(){}};
+  self.onconnect = object;
+  results.push(onconnect === object);
 } catch(e) {
   results.push(''+e);
 }

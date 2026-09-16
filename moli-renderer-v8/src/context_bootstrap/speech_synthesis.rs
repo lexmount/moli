@@ -768,9 +768,7 @@ fn set_event_handler<'s>(
     event_type: &'static str,
     handler_slot: &'static str,
 ) {
-    let active = v8::Local::<v8::Object>::try_from(value)
-        .ok()
-        .is_some_and(|callback| callback.is_callable());
+    let active = value.is_object();
     let stored = if active {
         value
     } else {

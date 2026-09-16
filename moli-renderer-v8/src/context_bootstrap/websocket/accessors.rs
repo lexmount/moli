@@ -273,7 +273,7 @@ fn websocket_event_handler_setter_function<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() || value.is_object() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -285,6 +285,6 @@ fn websocket_event_handler_setter_function<'s>(
         WEBSOCKET_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_function(),
+        stored.is_object(),
     );
 }

@@ -159,7 +159,7 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
         arguments: &'a [v8::Local<'s, v8::Value>],
         current_event: Option<v8::Local<'s, v8::Object>>,
     ) -> CallbackInvocation<'s, 'a> {
-        CallbackInvocation::new(
+        let invocation = CallbackInvocation::new(
             self.callback,
             callback_this,
             self.relevant_context,
@@ -168,7 +168,12 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
             "handleEvent",
             arguments,
             current_event,
-        )
+        );
+        if self.handler_slot.is_some() {
+            invocation.with_legacy_event_handler()
+        } else {
+            invocation
+        }
     }
 
     pub(crate) fn relevant_context(&self) -> v8::Local<'s, v8::Context> {
@@ -694,7 +699,6 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
                 target.get(scope, key.into())
             })
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .filter(|callback| callback.is_callable())
         else {
             return;
         };
@@ -713,6 +717,13 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
                         entry,
                         SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT,
                         callback.into(),
+                    );
+                    let callable = v8::Boolean::new(scope, callback.is_callable());
+                    set_private_value(
+                        scope,
+                        entry,
+                        SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT,
+                        callable.into(),
                     );
                     set_private_value(
                         scope,
@@ -1043,7 +1054,7 @@ fn simple_object_event_handler_entry_object<'s>(
         callback,
         relevant_context_anchor,
         incumbent_context_anchor,
-        true,
+        callback.is_callable(),
     )
     .bind(scope)
     .expect("SimpleObject event handler entry declaration should bind");
