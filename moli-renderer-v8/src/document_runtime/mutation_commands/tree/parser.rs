@@ -30,21 +30,6 @@ impl DocumentRuntime {
         );
     }
 
-    pub(crate) fn apply_child_parser_dom_mutation_to_live_dom_host(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        mutation: ParserDomMutation,
-    ) {
-        self.apply_parser_dom_mutation_to_live_dom_host_with_options(
-            scope,
-            host_ptr,
-            mutation,
-            RuntimeMutationOptions::child_parser_tree_sink(),
-            TreeMutationSourceProfile::child_parser_tree_sink(),
-        );
-    }
-
     fn apply_parser_dom_mutation_to_live_dom_host_with_options(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

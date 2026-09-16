@@ -25,10 +25,6 @@ impl ElementQueue {
         Some(handle)
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.index >= self.handles.len()
-    }
-
     pub(super) fn clear(&mut self) {
         self.handles.clear();
         self.index = 0;

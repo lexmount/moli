@@ -198,6 +198,11 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
         if !self.targets_current_document() {
             return;
         }
+        for &root in effects.tree().connected_roots() {
+            crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
+                self.scope, self.host, root,
+            );
+        }
         apply_parser_mutation_effects(self.scope, self.host, &mut self.mutation_effects, &effects);
     }
 
