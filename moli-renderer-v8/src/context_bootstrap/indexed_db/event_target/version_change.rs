@@ -80,6 +80,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     let Some(event) = events::new_event_wrapper(scope, state) else {
         return true;
     };
+    events::mark_event_trusted(scope, event);
     dispatch_idb_event_object(scope, target, event)
 }
 
