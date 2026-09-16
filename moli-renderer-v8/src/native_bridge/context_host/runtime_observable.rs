@@ -400,14 +400,10 @@ impl JsContextHost {
                 OwnerDispatchScope::LightweightPopup(_)
             ) {
                 let retirement = self.retire_indexed_db_owner(owner);
-                if let Some(manager) = self.indexed_db_manager.as_ref() {
-                    let _ = manager.close_database_handles(retirement.retired_connections);
-                }
+                retirement.finish(self.indexed_db_manager.as_ref());
             } else {
                 let retirement = self.retire_indexed_db_context(binding.realm_token());
-                if let Some(manager) = self.indexed_db_manager.as_ref() {
-                    let _ = manager.close_database_handles(retirement.retired_connections);
-                }
+                retirement.finish(self.indexed_db_manager.as_ref());
                 self.bridge
                     .retire_default_world_wrappers_for_realm(binding.realm_token());
             }
@@ -429,9 +425,7 @@ impl JsContextHost {
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
-        if let Some(manager) = self.indexed_db_manager.as_ref() {
-            let _ = manager.close_database_handles(indexed_db_retirement.retired_connections);
-        }
+        indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
         let owners = self
             .window_execution_contexts
             .iter()

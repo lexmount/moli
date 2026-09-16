@@ -22,6 +22,7 @@ struct IndexedDbFactoryRuntimeDeclaration {
 
 struct IndexedDbWorkerTaskWake {
     tx: tokio::sync::mpsc::UnboundedSender<()>,
+    connection_requests_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +100,16 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_runtime_array_contain
 }
 
 pub(crate) fn indexed_db_has_pending_tasks(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    if scope
+        .get_current_context()
+        .get_slot::<IndexedDbWorkerTaskWake>()
+        .is_some_and(|wake| {
+            wake.connection_requests_ready
+                .load(std::sync::atomic::Ordering::Acquire)
+        })
+    {
+        return true;
+    }
     let global = scope.get_current_context().global(scope);
     let Some(state) = get_private_object(scope, global, INDEXED_DB_RUNTIME_STATE_SLOT) else {
         return false;
@@ -112,7 +123,52 @@ pub(crate) fn set_worker_indexed_db_task_wake_for_context(
     context: v8::Local<'_, v8::Context>,
     tx: tokio::sync::mpsc::UnboundedSender<()>,
 ) {
-    let _previous = context.set_slot(Rc::new(IndexedDbWorkerTaskWake { tx }));
+    let _previous = context.set_slot(Rc::new(IndexedDbWorkerTaskWake {
+        tx,
+        connection_requests_ready: Default::default(),
+    }));
+}
+
+pub(super) fn indexed_db_connection_request_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+) -> state::ConnectionRequestWake {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let sender = unsafe { &*host_ptr }.page_indexed_db_task_sender().clone();
+        let execution_context = owner
+            .execution_context()
+            .expect("Page connection request owner");
+        return std::sync::Arc::new(move || {
+            let _ = sender.send(
+                execution_context,
+                crate::page_task_queue::RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests,
+            );
+        });
+    }
+    if let Some(wake) = scope
+        .get_current_context()
+        .get_slot::<IndexedDbWorkerTaskWake>()
+    {
+        let tx = wake.tx.clone();
+        let ready = wake.connection_requests_ready.clone();
+        return std::sync::Arc::new(move || {
+            ready.store(true, std::sync::atomic::Ordering::Release);
+            let _ = tx.send(());
+        });
+    }
+    // Standalone contexts have no external event loop; completion schedules a
+    // local drain through the same microtask fallback as other IDB work.
+    std::sync::Arc::new(|| {})
+}
+
+pub(super) fn take_indexed_db_connection_request_wake(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    scope
+        .get_current_context()
+        .get_slot::<IndexedDbWorkerTaskWake>()
+        .is_some_and(|wake| {
+            wake.connection_requests_ready
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        })
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn signal_worker_indexed_db_task_wake(

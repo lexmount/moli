@@ -282,6 +282,9 @@ struct IndexedDbBlockedTaskPayload {
     old_version: u64,
     new_version: Option<u64>,
     notifications_pending: bool,
+    notifications_started: bool,
+    blocked_event_required: Option<bool>,
+    recheck_after_checkpoint: bool,
 }
 
 impl IndexedDbBlockedTaskPayload {
@@ -303,6 +306,9 @@ impl IndexedDbBlockedTaskPayload {
             old_version,
             new_version,
             notifications_pending: false,
+            notifications_started: false,
+            blocked_event_required: None,
+            recheck_after_checkpoint: false,
         }
     }
 }
@@ -315,6 +321,8 @@ pub(super) struct IndexedDbBlockedTaskPayloadLocals<'s> {
     pub(super) old_version: u64,
     pub(super) new_version: Option<u64>,
     pub(super) notifications_pending: bool,
+    pub(super) notifications_started: bool,
+    pub(super) blocked_event_required: Option<bool>,
 }
 
 struct IndexedDbVersionChangeTaskPayload {
@@ -337,6 +345,7 @@ impl IndexedDbTransactionTaskPayload {
 }
 
 struct IndexedDbRequestLifecycleState {
+    connection_request: Option<super::state::ConnectionRequestLease>,
     source: v8::Global<v8::Value>,
     transaction: v8::Global<v8::Value>,
     ready_state: String,
@@ -359,6 +368,7 @@ impl IndexedDbRequestLifecycleState {
         let result: v8::Local<'_, v8::Value> = v8::undefined(scope).into();
         let error: v8::Local<'_, v8::Value> = v8::null(scope).into();
         Self {
+            connection_request: None,
             source: v8::Global::new(scope, source),
             transaction: v8::Global::new(scope, transaction),
             ready_state: "pending".to_owned(),
@@ -1255,7 +1265,84 @@ pub(super) fn indexed_db_blocked_task_payload<'s>(
         old_version: payload.old_version,
         new_version: payload.new_version,
         notifications_pending: payload.notifications_pending,
+        notifications_started: payload.notifications_started,
+        blocked_event_required: payload.blocked_event_required,
     })
+}
+
+pub(super) fn start_indexed_db_connection_notifications(
+    scope: &mut v8::PinScope<'_, '_>,
+    task: v8::Local<'_, v8::Object>,
+    old_version: u64,
+    new_version: Option<u64>,
+) {
+    let id = indexed_db_typed_task_id(scope, task).expect("connection request task id");
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    let mut table = table.borrow_mut();
+    let payload = table
+        .blocked_tasks
+        .get_mut(&id)
+        .expect("connection request payload");
+    payload.old_version = old_version;
+    payload.new_version = new_version;
+    payload.notifications_started = true;
+}
+
+pub(super) fn set_indexed_db_connection_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+    lease: super::state::ConnectionRequestLease,
+) {
+    let id = indexed_db_typed_state_id(scope, request).expect("connection request id");
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    table
+        .borrow_mut()
+        .requests
+        .get_mut(&id)
+        .expect("request lifecycle")
+        .connection_request = Some(lease);
+}
+
+pub(super) fn indexed_db_connection_request_is_head(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, request) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    table
+        .borrow()
+        .requests
+        .get(&id)
+        .and_then(|state| state.connection_request.as_ref())
+        .is_some_and(|lease| lease.handle().is_head())
+}
+
+pub(super) fn finish_indexed_db_connection_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, request) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    let lease = table
+        .borrow_mut()
+        .requests
+        .get_mut(&id)
+        .and_then(|state| state.connection_request.take());
+    let Some(lease) = lease else { return };
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let owner = indexed_db_typed_execution_owner(scope, request)
+            .and_then(IndexedDbExecutionOwner::execution_context)
+            .expect("Page connection request owner");
+        unsafe { &*host_ptr }.unregister_indexed_db_connection_request(owner, lease.handle().id());
+    }
+    drop(lease);
+    if context_host_ptr_from_global_bridge(scope).is_none() {
+        enqueue_drain_blocked_open_requests_task(scope);
+    }
 }
 
 pub(super) fn set_indexed_db_blocked_notifications_pending<'s>(
@@ -1270,6 +1357,36 @@ pub(super) fn set_indexed_db_blocked_notifications_pending<'s>(
     if let Some(payload) = table.borrow_mut().blocked_tasks.get_mut(&id) {
         payload.notifications_pending = pending;
     }
+}
+
+pub(super) fn defer_indexed_db_blocked_recheck_to_checkpoint(
+    scope: &mut v8::PinScope<'_, '_>,
+    blocked_task: v8::Local<'_, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_task_id(scope, blocked_task) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, blocked_task);
+    if let Some(payload) = table.borrow_mut().blocked_tasks.get_mut(&id) {
+        payload.recheck_after_checkpoint = true;
+    }
+}
+
+/// Records the decision and returns whether an early recheck needs another task.
+pub(super) fn set_indexed_db_blocked_event_required(
+    scope: &mut v8::PinScope<'_, '_>,
+    blocked_task: v8::Local<'_, v8::Object>,
+    required: bool,
+) -> bool {
+    let Some(id) = indexed_db_typed_task_id(scope, blocked_task) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, blocked_task);
+    if let Some(payload) = table.borrow_mut().blocked_tasks.get_mut(&id) {
+        payload.blocked_event_required = Some(required);
+        return std::mem::take(&mut payload.recheck_after_checkpoint);
+    }
+    false
 }
 
 pub(super) fn register_indexed_db_version_change_task<'s>(
