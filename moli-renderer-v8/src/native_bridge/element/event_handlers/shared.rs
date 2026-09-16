@@ -6,12 +6,6 @@ use crate::{
     util::{create_script_origin_with_base_url, v8_string},
 };
 
-#[derive(Clone, Copy)]
-pub(crate) enum EventAttributeHandlerScope {
-    Element,
-    ChildWindow,
-}
-
 pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
@@ -30,39 +24,8 @@ pub(super) fn compile_event_attribute_handler<'s>(
         owner,
         &base_url,
         source,
-        EventAttributeHandlerScope::Element,
         arguments,
         context_extensions,
-    )
-}
-
-pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    owner: OwnerDispatchScope,
-    source: &str,
-    handler_scope: EventAttributeHandlerScope,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let host = unsafe { &*host_ptr };
-    let base_url = match owner {
-        OwnerDispatchScope::Top => host.document_base_url_for_handle(host.document_handle()),
-        OwnerDispatchScope::Child(handle) => host
-            .child_browsing_context_base_url(handle)
-            .unwrap_or_else(|| host.document_url().clone()),
-        OwnerDispatchScope::LightweightPopup(popup_id) => host
-            .lightweight_popup_request_base_url(scope, popup_id)
-            .unwrap_or_else(|| host.document_url().clone()),
-    };
-    let event_argument = v8_string(scope, "event")?;
-    compile_event_attribute_handler_for_owner_with_context(
-        scope,
-        host_ptr,
-        owner,
-        &base_url,
-        source,
-        handler_scope,
-        &[event_argument],
-        &[],
     )
 }
 
@@ -72,7 +35,6 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
     owner: OwnerDispatchScope,
     base_url: &url::Url,
     source: &str,
-    handler_scope: EventAttributeHandlerScope,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -83,15 +45,11 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
     if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(scope, owner, source) {
         return None;
     }
-    let body = match handler_scope {
-        EventAttributeHandlerScope::Element => source.to_owned(),
-        EventAttributeHandlerScope::ChildWindow => format!("with (this) {{\n{source}\n}}"),
-    };
     compile_event_attribute_function(
         scope,
         host_ptr,
         base_url,
-        &body,
+        source,
         arguments,
         context_extensions,
     )

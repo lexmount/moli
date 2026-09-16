@@ -37,7 +37,7 @@ fn window_event_handler_value<'s>(
     let host_ptr = context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))?;
     match window_child_context_handle(scope, receiver) {
-        Some(handle) => unsafe { &*host_ptr }.child_window_event_handler_property_value(
+        Some(handle) => unsafe { &mut *host_ptr }.child_window_event_handler_property_value(
             scope,
             handle,
             property_name,

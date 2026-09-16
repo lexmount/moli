@@ -103,10 +103,19 @@ impl EventListenerRegistration {
 }
 
 #[derive(Clone, Copy)]
-enum EventHandlerPropertyState {
+pub(crate) enum EventHandlerPropertyState {
     Uncompiled(DomHandle),
     Callback(crate::native_bridge::EventCallbackId),
     Null,
+}
+
+impl EventHandlerPropertyState {
+    pub(crate) fn callback_id(self) -> Option<crate::native_bridge::EventCallbackId> {
+        match self {
+            Self::Callback(callback_id) => Some(callback_id),
+            Self::Uncompiled(_) | Self::Null => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -118,10 +127,7 @@ struct EventHandlerPropertyEntry {
 fn event_handler_callback_id(
     entry: EventHandlerPropertyEntry,
 ) -> Option<crate::native_bridge::EventCallbackId> {
-    match entry.state {
-        EventHandlerPropertyState::Callback(callback_id) => Some(callback_id),
-        EventHandlerPropertyState::Uncompiled(_) | EventHandlerPropertyState::Null => None,
-    }
+    entry.state.callback_id()
 }
 
 enum EventHandlerPropertyValue {

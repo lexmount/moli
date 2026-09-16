@@ -1431,8 +1431,13 @@ impl DocumentRuntime {
         new_value: Option<&str>,
         policy: AttributeChangedReactionPolicy,
     ) {
-        let retired_event_callback =
-            self.sync_event_handler_content_attribute(handle, name, namespace, new_value.is_some());
+        let retired_event_callback = self.sync_event_handler_content_attribute(
+            host_ptr,
+            handle,
+            name,
+            namespace,
+            new_value.is_some(),
+        );
         if let Some(callback_id) = retired_event_callback {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
         }
