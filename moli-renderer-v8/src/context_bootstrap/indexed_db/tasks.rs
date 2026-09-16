@@ -43,10 +43,11 @@ use super::{
     with_indexed_db_manager,
 };
 use super::{
-    context_host_ptr_from_global_bridge, finish_indexed_db_connection_request,
-    indexed_db_connection_request_is_head, indexed_db_connection_request_wake,
-    indexed_db_shared_manager, set_indexed_db_connection_request,
-    start_indexed_db_connection_notifications, take_indexed_db_connection_request_wake,
+    IndexedDbTaskSourceEntry, context_host_ptr_from_global_bridge,
+    finish_indexed_db_connection_request, indexed_db_connection_request_is_head,
+    indexed_db_connection_request_wake, indexed_db_shared_manager,
+    set_indexed_db_connection_request, start_indexed_db_connection_notifications,
+    take_worker_indexed_db_source_entry,
 };
 use crate::util::enqueue_host_microtask;
 use moli_indexeddb::OpenDisposition;

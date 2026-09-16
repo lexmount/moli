@@ -1,7 +1,6 @@
 use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource};
 
 use crate::{
-    context_bootstrap::IndexedDbTaskId,
     native_bridge::WindowExecutionContextIdentity,
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
@@ -14,11 +13,7 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskRe
 /// Runtime tasks retain the exact id allocated by the relevant realm's IDB
 /// state table. A blocked-open drain has no V8 task object of its own; it is a
 /// coalesced coordinator action for one exact Window realm.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RendererPageIndexedDbTaskKind {
-    RuntimeQueue(IndexedDbTaskId),
-    DrainBlockedOpenRequests,
-}
+pub(crate) use crate::context_bootstrap::IndexedDbTaskSourceEntry as RendererPageIndexedDbTaskKind;
 
 /// Exact Window/realm owner of a Page-side IndexedDB task.
 ///

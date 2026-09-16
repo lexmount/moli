@@ -45,9 +45,9 @@ use self::types::*;
 pub(in crate::context_bootstrap) use self::event_target::idb_version_change_event_constructor_callback;
 
 pub(crate) use self::runtime::{
-    bind_indexed_db_factory_to_window_execution_context, indexed_db_has_pending_tasks,
-    materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
-    set_worker_indexed_db_task_wake_for_context,
+    IndexedDbTaskSourceEntry, bind_indexed_db_factory_to_window_execution_context,
+    indexed_db_has_pending_tasks, materialized_indexed_db_factory_for_window,
+    scoped_indexed_db_factory, set_worker_indexed_db_task_wake_for_context,
 };
 pub(crate) use self::state::ConnectionRequestHandle;
 pub(crate) use self::tasks::{
@@ -56,10 +56,40 @@ pub(crate) use self::tasks::{
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
+pub(crate) use self::typed_state::retire_indexed_db_context;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
 pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>) {
     flush_drain_blocked_open_requests_task(scope);
+}
+
+pub(crate) fn flush_indexed_db_connection_notification(
+    scope: &mut v8::PinScope<'_, '_>,
+    handle: moli_indexeddb::DatabaseHandle,
+) -> bool {
+    let Ok(manager) = indexed_db_shared_manager(scope) else {
+        return false;
+    };
+    let coordinator = manager.lock().connection_notifications();
+    let Some(notification) = coordinator.take_notification(handle) else {
+        return false;
+    };
+    if let Some(database) = database_connection_for_handle(scope, handle)
+        && !object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false)
+    {
+        let _ = dispatch_version_change_event(
+            scope,
+            database,
+            "versionchange",
+            notification.old_version,
+            notification.new_version,
+        );
+    }
+    crate::context_bootstrap::microtask_checkpoint::enqueue_indexed_db_notification_acknowledgement(
+        scope,
+        notification.completion,
+    );
+    true
 }
 
 pub(in crate::context_bootstrap) fn new_dom_string_list<'s>(

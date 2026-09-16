@@ -6,6 +6,7 @@ pub(crate) struct AgentMicrotaskCheckpointTasks {
 }
 
 enum AgentMicrotaskCheckpointTask {
+    AcknowledgeIndexedDbVersionChange(moli_indexeddb::VersionChangeCompletion),
     DeactivateIndexedDbTransaction {
         context: v8::Global<v8::Context>,
         transaction: v8::Global<v8::Object>,
@@ -66,6 +67,16 @@ fn enqueue_checkpoint_task(scope: &mut v8::PinScope<'_, '_>, task: AgentMicrotas
         .push(task);
 }
 
+pub(in crate::context_bootstrap) fn enqueue_indexed_db_notification_acknowledgement(
+    scope: &mut v8::PinScope<'_, '_>,
+    completion: moli_indexeddb::VersionChangeCompletion,
+) {
+    enqueue_checkpoint_task(
+        scope,
+        AgentMicrotaskCheckpointTask::AcknowledgeIndexedDbVersionChange(completion),
+    );
+}
+
 pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>) {
     // Tasks enqueued while this batch runs belong to the next checkpoint.
     let Some(tasks) = scope
@@ -77,6 +88,9 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
 
     for task in tasks {
         match task {
+            AgentMicrotaskCheckpointTask::AcknowledgeIndexedDbVersionChange(completion) => {
+                drop(completion)
+            }
             AgentMicrotaskCheckpointTask::DeactivateIndexedDbTransaction {
                 context,
                 transaction,

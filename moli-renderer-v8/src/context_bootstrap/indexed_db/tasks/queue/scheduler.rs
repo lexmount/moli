@@ -27,7 +27,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_indexed_db_task<'s>(
         }
         return;
     }
-    if signal_worker_indexed_db_task_wake(scope) {
+    if signal_worker_indexed_db_task_wake(scope, task_id) {
         return;
     }
     let Some(callback) = v8::Function::builder(flush_indexed_db_task_callback).build(scope) else {

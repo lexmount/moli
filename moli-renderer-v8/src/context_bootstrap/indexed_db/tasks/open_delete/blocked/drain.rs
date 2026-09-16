@@ -90,9 +90,21 @@ fn try_execute_in_owner_scope<'s>(
     let Some(payload) = indexed_db_blocked_task_payload(scope, task) else {
         return true;
     };
-    if !indexed_db_connection_request_is_head(scope, payload.request)
-        || payload.notifications_pending
-    {
+    if !indexed_db_connection_request_is_head(scope, payload.request) {
+        return false;
+    }
+    if payload.notifications_pending {
+        if payload.blocked_event_required.is_none()
+            && let Some(required) = payload
+                .version_change_batch
+                .as_ref()
+                .and_then(|batch| batch.blocked_event_required())
+        {
+            crate::context_bootstrap::indexed_db::set_indexed_db_blocked_event_required(
+                scope, task, required,
+            );
+            enqueue_blocked_recheck_task(scope, task);
+        }
         return false;
     }
     let Some(storage_scope) = indexed_db_typed_task_storage_scope(scope, task) else {
