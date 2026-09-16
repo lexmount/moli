@@ -2,6 +2,7 @@ use super::*;
 
 mod computed_style;
 mod cssom;
+mod data_response;
 mod dom;
 mod forms;
 mod misc;
