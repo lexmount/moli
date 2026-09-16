@@ -94,9 +94,9 @@ fn dispatch_node_event<'s>(
     else {
         return true;
     };
-    // Host dispatch must not call the author-visible dispatchEvent method.
-    // An override could intercept the event, and that script-call boundary is
-    // not part of native event dispatch or its selected-task completion.
+    // Host dispatch must not enter JavaScript through the public dispatchEvent
+    // method. Its extra execution boundary would defer listener cleanup until
+    // after dispatch, and an author override could intercept a browser event.
     crate::native_bridge::element::dispatch_public_event(scope, runtime_ptr, handle, event)
         .allows_default()
 }
