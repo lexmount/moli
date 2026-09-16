@@ -3,6 +3,7 @@ use super::*;
 mod blob_mime;
 mod computed_style;
 mod cssom;
+mod data_response;
 mod dom;
 mod file_input;
 mod forms;
