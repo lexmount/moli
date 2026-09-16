@@ -36,6 +36,8 @@ IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
 IndexedDB/idbfactory-open-error-properties.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory-open-error-properties.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-open-opaque-origin.html
+IndexedDB/idbfactory-open-request-error.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbfactory-open-request-error.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-open-request-success.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory-open-request-success.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-origin-isolation.html
@@ -49,6 +51,8 @@ IndexedDB/idbrequest_error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_result.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbrequest_result.any.js?moli-wpt-any=window
+IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=window
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=window
 IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
