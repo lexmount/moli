@@ -382,8 +382,7 @@ fn set_handler<'s>(
 ) {
     let watcher = args.this();
     let value = args.get(0);
-    let active = value.is_object()
-        && v8::Local::<v8::Object>::try_from(value).is_ok_and(|value| value.is_callable());
+    let active = value.is_object();
     set_private_value(
         scope,
         watcher,
