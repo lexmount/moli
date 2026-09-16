@@ -63,6 +63,7 @@ mod web_audio;
 mod webrtc;
 mod webrtc_events;
 mod window_legacy_objects;
+mod window_onerror;
 mod worker_listener_invocation;
 
 mod document_domain_lifetime;

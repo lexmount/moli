@@ -803,9 +803,6 @@ fn new_worker_error_event<'s>(
     let event = constructor
         .new_instance(scope, &[event_type.into(), init.into()])
         .expect("worker ErrorEvent should construct from native init values");
-    // Reporting a thrown `undefined` must retain that value, while the JS
-    // ErrorEventInit dictionary defaults an undefined `error` member to null.
-    crate::context_bootstrap::set_error_event_error_value(scope, event, error);
     mark_event_trusted(scope, event);
     event
 }
