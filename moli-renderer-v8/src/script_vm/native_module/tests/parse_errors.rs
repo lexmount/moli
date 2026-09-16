@@ -84,7 +84,7 @@ fn json_module_parse_errors_do_not_override_a_later_javascript_throw_location() 
             "throw __original;\n//# sourceURL=https://json-errors.test/thrower.js",
         );
         let script = v8::Script::compile(&scope, source, None).unwrap();
-        assert!(script.run(&scope).is_none());
+        assert!(crate::script_execution::execute_compiled_script(&mut scope, script).is_none());
         let exception = scope.exception();
         let message = scope.message();
         let report = crate::exception_reporting::build_event_handler_exception_report(
