@@ -9367,4 +9367,3 @@ xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with no timeout
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeout set twice
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
 xhr/xmlhttprequest-unsent.htm
-xml/xml-prolog-accepted-versions.html
