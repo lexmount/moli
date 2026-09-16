@@ -480,8 +480,7 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
     )
     .expect("worker geometry test source");
     let script = v8::Script::compile(scope, source, None).expect("worker geometry test compile");
-    let result = script
-        .run(scope)
+    let result = crate::script_execution::execute_compiled_script(scope, script)
         .expect("worker geometry test evaluation")
         .to_rust_string_lossy(scope);
 
