@@ -3413,7 +3413,7 @@ fn service_worker_registration_onupdatefound_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let active = value.is_function();
+    let active = value.is_object();
     let value = if active {
         value
     } else {

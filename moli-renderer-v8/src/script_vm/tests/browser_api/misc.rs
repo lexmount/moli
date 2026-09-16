@@ -1420,8 +1420,9 @@ fn file_reader_backing_state_is_not_own_property_surface() {
   const handler = () => {};
   reader.onload = handler;
   const handlerRoundTrips = reader.onload === handler;
-  reader.onload = {};
-  const nonCallableHandlerBecomesNull = reader.onload === null;
+  const handlerObject = {};
+  reader.onload = handlerObject;
+  const nonCallableHandlerRoundTrips = reader.onload === handlerObject;
   const before = leaked();
   reader.addEventListener("load", () => {});
   reader.readAsText(new Blob(["abc"]));
@@ -1449,7 +1450,7 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     during,
     resultIsNull: reader.result === null,
     handlerRoundTrips,
-    nonCallableHandlerBecomesNull,
+    nonCallableHandlerRoundTrips,
     fakeReadyStateThrows: throwsTypeError(() => readyStateDescriptor.get.call(fake)),
     fakeResultThrows: throwsTypeError(() => resultDescriptor.get.call(fake)),
     fakeErrorThrows: throwsTypeError(() => errorDescriptor.get.call(fake)),
@@ -1462,7 +1463,7 @@ fn file_reader_backing_state_is_not_own_property_surface() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true","onloadstart:function:get onloadstart:0:function:true:true","onprogress:function:get onprogress:0:function:true:true","onload:function:get onload:0:function:true:true","onabort:function:get onabort:0:function:true:true","onerror:function:get onerror:0:function:true:true","onloadend:function:get onloadend:0:function:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"readerOwnHandlers":[],"before":[],"during":[],"resultIsNull":true,"handlerRoundTrips":true,"nonCallableHandlerBecomesNull":true,"fakeReadyStateThrows":true,"fakeResultThrows":true,"fakeErrorThrows":true,"fakeAbortThrows":true}"#
+        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true","onloadstart:function:get onloadstart:0:function:true:true","onprogress:function:get onprogress:0:function:true:true","onload:function:get onload:0:function:true:true","onabort:function:get onabort:0:function:true:true","onerror:function:get onerror:0:function:true:true","onloadend:function:get onloadend:0:function:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"readerOwnHandlers":[],"before":[],"during":[],"resultIsNull":true,"handlerRoundTrips":true,"nonCallableHandlerRoundTrips":true,"fakeReadyStateThrows":true,"fakeResultThrows":true,"fakeErrorThrows":true,"fakeAbortThrows":true}"#
     );
 }
 

@@ -4920,7 +4920,7 @@ fn lightweight_popup_event_handler_getter<'s>(
     };
     rv.set(
         get_private_value(scope, args.this(), property_name)
-            .filter(|value| value.is_function())
+            .filter(|value| value.is_object())
             .unwrap_or_else(|| v8::null(scope).into()),
     );
 }
@@ -4939,7 +4939,7 @@ fn lightweight_popup_event_handler_setter<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -4951,7 +4951,7 @@ fn lightweight_popup_event_handler_setter<'s>(
         LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
         property_name.strip_prefix("on").unwrap_or(property_name),
         property_name,
-        stored.is_function(),
+        stored.is_object(),
     );
     rv.set_undefined();
 }

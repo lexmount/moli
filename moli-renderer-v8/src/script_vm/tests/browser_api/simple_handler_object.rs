@@ -96,6 +96,7 @@ __EXERCISE__
   let target, holder, type, cleanup = () => {};
   const kind = settings.kind.replace(/^child-/, '');
   switch (kind) {
+    case 'reader': target = new w.FileReader(); type = 'load'; break;
     case 'xhr': target = new w.XMLHttpRequest(); type = 'load'; break;
     case 'xhr-upload': target = new w.XMLHttpRequest().upload; type = 'load'; break;
     case 'performance': target = w.performance; type = 'resourcetimingbufferfull'; break;
@@ -104,6 +105,7 @@ __EXERCISE__
     case 'speech': target = new w.SpeechSynthesisUtterance(''); type = 'end'; break;
     case 'synthesis': target = w.speechSynthesis; type = 'voiceschanged'; break;
     case 'devices': target = w.navigator.mediaDevices; type = 'devicechange'; break;
+    case 'close-watcher': target = new w.CloseWatcher(); type = 'cancel'; cleanup = () => target.destroy(); break;
     case 'service-container': target = w.navigator.serviceWorker; type = 'message'; break;
     case 'event-source': target = new w.EventSource('/event-source'); type = 'open'; cleanup = () => target.close(); break;
     case 'websocket': target = new w.WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/socket'); type = 'open'; cleanup = () => target.close(); break;
@@ -115,9 +117,10 @@ __EXERCISE__
       const url = w.URL.createObjectURL(new w.Blob(['onconnect = e => e.ports[0].start();'], {type:'text/javascript'}));
       target = new w.SharedWorker(url); type = 'error'; cleanup = () => { target.port.close(); w.URL.revokeObjectURL(url); }; break;
     }
+    case 'popup': target = w.open('about:blank'); type = 'resize'; cleanup = () => target.close(); break;
     default: throw new Error('unknown target ' + kind);
   }
-  const value = exerciseHandler(target, type, w, settings.checkException);
+  const value = exerciseHandler(target, type, w, true);
   cleanup();
   if (frame) frame.remove();
   return value;
@@ -158,7 +161,7 @@ const WORKER_PARENT_PROBE: &str = r#"
 })()
 "#;
 
-fn expected_handler_value(check_exception: bool) -> serde_json::Value {
+fn expected_handler_value(check_exception: bool, child: bool) -> serde_json::Value {
     let mut expected = serde_json::json!({
         "objectIdentity": vec![true; 7],
         "primitiveNull": vec![true; 7],
@@ -178,7 +181,11 @@ fn expected_handler_value(check_exception: bool) -> serde_json::Value {
     if check_exception {
         expected["revokedFunctionIdentity"] = true.into();
         expected["revokedFunctionResult"] = true.into();
-        expected["errors"] = serde_json::json!([true]);
+        expected["errors"] = if child {
+            serde_json::json!([])
+        } else {
+            serde_json::json!([true])
+        };
     }
     expected
 }
@@ -186,6 +193,7 @@ fn expected_handler_value(check_exception: bool) -> serde_json::Value {
 #[tokio::test]
 async fn simple_handler_object_values_preserve_identity_and_listener_position() {
     for kind in [
+        "reader",
         "xhr",
         "xhr-upload",
         "performance",
@@ -194,11 +202,14 @@ async fn simple_handler_object_values_preserve_identity_and_listener_position() 
         "speech",
         "synthesis",
         "devices",
+        "close-watcher",
         "service-container",
         "event-source",
         "websocket",
         "worker-host",
         "shared-worker-host",
+        "popup",
+        "child-reader",
         "child-xhr",
         "child-xhr-upload",
         "child-performance",
@@ -206,8 +217,6 @@ async fn simple_handler_object_values_preserve_identity_and_listener_position() 
         "child-broadcast",
         "child-speech",
     ] {
-        // Child/error callback exception routing is independent of handler conversion.
-        let check_exception = !kind.starts_with("child-") && kind != "shared-worker-host";
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         let (mut vm, _runtime) =
             new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
@@ -215,16 +224,19 @@ async fn simple_handler_object_values_preserve_identity_and_listener_position() 
                 &loader,
             );
         vm.eval("if (!document.body) document.documentElement.appendChild(document.createElement('body'))").unwrap();
-        let source = PAGE_PROBE.replace("__EXERCISE__", HANDLER_PROBE).replace(
-            "__CASE__",
-            &serde_json::json!({"kind": kind, "checkException": check_exception}).to_string(),
-        );
+        let source = PAGE_PROBE
+            .replace("__EXERCISE__", HANDLER_PROBE)
+            .replace("__CASE__", &serde_json::json!({"kind": kind}).to_string());
         let source = source.replacen("\n(() => {", "\nreturn (() => {", 1);
         let value = vm
             .eval(&format!("JSON.stringify((() => {{ {source} }})())"))
             .unwrap_or_else(|error| panic!("{kind}: {error:?}"));
         let value: serde_json::Value = serde_json::from_str(&value).unwrap();
-        assert_eq!(value, expected_handler_value(check_exception), "{kind}");
+        assert_eq!(
+            value,
+            expected_handler_value(true, kind.starts_with("child-")),
+            "{kind}"
+        );
     }
 }
 
@@ -253,16 +265,20 @@ async fn simple_handler_object_worker_globals_preserve_objects_and_order() {
             )
             .replace("__SOURCE__", &serde_json::to_string(&source).unwrap());
         let value = run_async_handler_probe("https://simple-handler-object.test/", &probe).await;
-        assert_eq!(value, expected_handler_value(false), "{mode}/{event}");
+        assert_eq!(
+            value,
+            expected_handler_value(false, false),
+            "{mode}/{event}"
+        );
     }
 }
 
 #[tokio::test]
-async fn simple_handler_object_service_worker_fetch() {
+async fn simple_handler_object_service_worker_fetch_and_registration() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let source = format!(
-        "{HANDLER_PROBE} addEventListener('message', event => {{ event.source.postMessage(exerciseHandler(self, 'fetch', self, false)); }}, {{once:true}});"
+        "{HANDLER_PROBE} addEventListener('message', event => {{ event.source.postMessage({{fetch: exerciseHandler(self, 'fetch', self, false), registration: exerciseHandler(self.registration, 'updatefound', self, false)}}); }}, {{once:true}});"
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -292,8 +308,11 @@ async fn simple_handler_object_service_worker_fetch() {
         )
         .replace("__SOURCE__", "''");
     let value = run_async_handler_probe(&format!("http://{address}/"), &probe).await;
-    let expected = expected_handler_value(false);
-    assert_eq!(value, expected);
+    let expected = expected_handler_value(false, false);
+    assert_eq!(
+        value,
+        serde_json::json!({"fetch": expected, "registration": expected})
+    );
     server.await.unwrap();
 }
 
@@ -304,13 +323,21 @@ const NATIVE_PROBE: &str = r#"
   let reads = 0;
   const object = new frame.contentWindow.Object();
   Object.defineProperty(object, 'handleEvent', {get() { reads++; throw new Error('must not read handleEvent'); }});
-  const channel = new BroadcastChannel('retired-handler-values');
-  channel.onmessage = object;
-  const identity = channel.onmessage === object;
+  const reader = new FileReader();
+  reader.onload = object;
+  const identity = reader.onload === object;
   frame.remove();
-  const retiredIdentity = channel.onmessage === object;
-  const retiredResult = channel.dispatchEvent(new Event('message', {cancelable:true}));
-  channel.close();
+  const retiredIdentity = reader.onload === object;
+  const retiredResult = reader.dispatchEvent(new Event('load', {cancelable:true}));
+  const readerOrder = [];
+  reader.addEventListener('load', () => readerOrder.push('after'));
+  reader.onload = () => readerOrder.push('handler');
+  await new Promise((resolve, reject) => {
+    reader.onloadend = resolve;
+    reader.onerror = reject;
+    reader.readAsText(new Blob(['native load']));
+  });
+  const readerText = reader.result;
   const source = `
     const trace = [];
     onmessage = {get handleEvent() { throw new Error('must not read'); }};
@@ -330,7 +357,7 @@ const NATIVE_PROBE: &str = r#"
     worker.onerror = reject;
     worker.postMessage('go');
   }).finally(() => { clearTimeout(timer); worker.terminate(); URL.revokeObjectURL(url); });
-  return {identity, retiredIdentity, retiredResult, reads, workerOrder, hostOrder};
+  return {identity, retiredIdentity, retiredResult, reads, readerOrder, readerText, workerOrder, hostOrder};
 })()
 "#;
 
@@ -341,6 +368,7 @@ async fn simple_handler_object_retired_realm_and_native_dispatch() {
         value,
         serde_json::json!({
             "identity": true, "retiredIdentity": true, "retiredResult": true, "reads": 0,
+            "readerOrder": ["handler", "after"], "readerText": "native load",
             "workerOrder": ["handler", "after"], "hostOrder": ["handler", "after"],
         })
     );
