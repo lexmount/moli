@@ -267,7 +267,14 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
             )
         })
     } else {
-        None
+        // A retired callback realm can no longer be resolved through the host's
+        // live realm table. Preserve its registration identity for currentness.
+        listener.relevant_identity().filter(|_| {
+            v8::Local::<v8::Object>::try_from(callback_this)
+                .ok()
+                .and_then(|target| lightweight_popup_id_from_window(scope, target))
+                .is_none()
+        })
     };
     invoke_simple_event_callback_with_invocation(
         scope,
