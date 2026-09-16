@@ -1,5 +1,8 @@
 use super::*;
 
+mod child_window;
+mod popup;
+
 #[test]
 fn document_visibility_handler_is_native_and_can_be_cleared() {
     let mut vm = new_storage_html_test_vm("https://visibility-handler.test/");
@@ -26,8 +29,6 @@ fn document_visibility_handler_is_native_and_can_be_cleared() {
         .unwrap();
     assert_eq!(result, r#"[true,true,[true],2,true]"#);
 }
-
-mod popup;
 
 #[test]
 fn native_mouse_event_coordinate_accessors() {
