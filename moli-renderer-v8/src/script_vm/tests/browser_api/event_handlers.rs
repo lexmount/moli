@@ -2,6 +2,7 @@ use super::*;
 
 mod child_window;
 mod compilation;
+mod object_values;
 mod popup;
 
 #[test]
