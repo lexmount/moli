@@ -40,6 +40,7 @@ pub(super) enum IndexedDbTaskKind {
     RequestSuccess,
     RequestError,
     Open,
+    OpenSuccess,
     OpenBlocked,
     DeleteBlocked,
     DrainBlockedOpens,
@@ -192,6 +193,7 @@ impl IndexedDbTaskState {
             IndexedDbTaskKind::RequestSuccess
             | IndexedDbTaskKind::RequestError
             | IndexedDbTaskKind::Open
+            | IndexedDbTaskKind::OpenSuccess
             | IndexedDbTaskKind::OpenBlocked
             | IndexedDbTaskKind::DeleteBlocked
             | IndexedDbTaskKind::DrainBlockedOpens
@@ -360,7 +362,7 @@ impl IndexedDbRequestLifecycleState {
 
 struct IndexedDbTransactionLifecycleState {
     database: Option<v8::Global<v8::Object>>,
-    aborted_open_request: Option<v8::Global<v8::Object>>,
+    upgrade_open_request: Option<v8::Global<v8::Object>>,
     handle: Option<TransactionHandle>,
     active: bool,
     finished: bool,
@@ -384,7 +386,7 @@ impl IndexedDbTransactionLifecycleState {
     ) -> Self {
         Self {
             database: Some(database),
-            aborted_open_request: None,
+            upgrade_open_request: None,
             handle,
             active: true,
             finished: false,
@@ -803,7 +805,21 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
         return;
     };
     transaction.database = None;
+    transaction.upgrade_open_request = None;
     transaction.operations_waiting_for_start.clear();
+}
+
+pub(super) fn indexed_db_transaction_database<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let table = table.borrow();
+    Some(v8::Local::new(
+        scope,
+        table.transactions.get(&id)?.database.as_ref()?,
+    ))
 }
 
 pub(super) fn push_indexed_db_operation_waiting_for_start<'s>(
@@ -1044,7 +1060,9 @@ pub(super) fn register_indexed_db_request_dispatch_task<'s>(
 ) {
     debug_assert!(matches!(
         kind,
-        IndexedDbTaskKind::RequestSuccess | IndexedDbTaskKind::RequestError
+        IndexedDbTaskKind::RequestSuccess
+            | IndexedDbTaskKind::RequestError
+            | IndexedDbTaskKind::OpenSuccess
     ));
     let owner = indexed_db_typed_execution_owner(scope, request)
         .expect("IDB request task wrapper should have typed owner state");
