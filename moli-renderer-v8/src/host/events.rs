@@ -257,35 +257,6 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     )
 }
 
-/// Invokes an EventListener whose EventTarget has an API-specific object
-/// residence rather than a DOM `EventTargetHandle`.
-///
-/// AbortSignal uses this path so its listener ordering remains with AbortStore
-/// while callback Realm/currentness, `window.event`, dynamic `handleEvent`
-/// lookup, and exception reporting stay identical to other EventListeners.
-pub(crate) fn invoke_prepared_event_callback_on_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    event_type: &str,
-    callback_name: &str,
-    callback: crate::native_bridge::PreparedEventCallback,
-    receiver: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-) -> Option<v8::Global<v8::Value>> {
-    let _dom_debugger_pause = unsafe { &*host_ptr }
-        .schedule_dom_debugger_event_listener_pause_for_interface(event_type, "AbortSignal");
-    invoke_prepared_event_callback_with_receiver(
-        scope,
-        host_ptr,
-        event_type,
-        callback_name,
-        callback,
-        receiver.into(),
-        Some(event),
-        &[event.into()],
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn invoke_prepared_event_callback_with_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,

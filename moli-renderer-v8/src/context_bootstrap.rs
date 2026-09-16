@@ -1,3 +1,4 @@
+pub(crate) mod abort_signal_events;
 mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
@@ -737,11 +738,11 @@ pub(crate) fn install_worker_base64_runtime_state<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable, receiver)]
 struct WorkerAbortSignalTemplateDeclaration {
     #[webapi(
         static_method = "abort",
-        length = 1,
+        length = 0,
         callback = crate::worker::abort::worker_abort_signal_static_abort_callback
     )]
     abort_static: (),
@@ -761,27 +762,6 @@ struct WorkerAbortSignalTemplateDeclaration {
     any: (),
 
     #[webapi(
-        method = "addEventListener",
-        length = 2,
-        callback = crate::worker::abort::worker_abort_signal_add_event_listener_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method = "removeEventListener",
-        length = 2,
-        callback = crate::worker::abort::worker_abort_signal_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method = "dispatchEvent",
-        length = 1,
-        callback = crate::worker::abort::worker_abort_signal_dispatch_event_callback
-    )]
-    dispatch_event: (),
-
-    #[webapi(
         method = "throwIfAborted",
         length = 0,
         callback = crate::worker::abort::worker_abort_signal_throw_if_aborted_callback
@@ -796,8 +776,8 @@ struct WorkerAbortSignalTemplateDeclaration {
 
     #[webapi(
         accessor_property,
-        getter = crate::worker::abort::worker_abort_signal_onabort_getter_function,
-        setter = crate::worker::abort::worker_abort_signal_onabort_setter_function
+        getter = abort_signal_events::onabort_getter,
+        setter = abort_signal_events::onabort_setter
     )]
     onabort: (),
 }

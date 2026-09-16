@@ -1,3 +1,4 @@
+use crate::context_bootstrap::abort_signal_events;
 use crate::native_bridge::abort;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
@@ -7,7 +8,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 struct AbortSignalConstructorDeclaration {
     #[webapi(
         static_method = "abort",
-        length = 1,
+        length = 0,
         callback = abort::abort_signal_static_abort_callback,
         enumerable
     )]
@@ -29,26 +30,8 @@ struct AbortSignalConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable, receiver)]
 struct AbortSignalPrototypeDeclaration {
-    #[webapi(
-        method,
-        length = 2,
-        callback = abort::abort_signal_add_event_listener_callback
-    )]
-    add_event_listener: (),
-    #[webapi(
-        method,
-        length = 2,
-        callback = abort::abort_signal_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-    #[webapi(
-        method,
-        length = 1,
-        callback = abort::abort_signal_dispatch_event_callback
-    )]
-    dispatch_event: (),
     #[webapi(
         method,
         length = 0,
@@ -69,8 +52,8 @@ struct AbortSignalPrototypeDeclaration {
     reason: (),
     #[webapi(
         accessor_property,
-        getter = abort::abort_signal_onabort_getter_callback,
-        setter = abort::abort_signal_onabort_setter_callback,
+        getter = abort_signal_events::onabort_getter,
+        setter = abort_signal_events::onabort_setter,
         enumerable
     )]
     onabort: (),

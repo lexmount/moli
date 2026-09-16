@@ -11,16 +11,14 @@ mod event;
 mod signal;
 mod statics;
 
+use crate::context_bootstrap::abort_signal_events;
 pub(crate) use controller::{
     abort_controller_abort_callback, abort_controller_constructor_callback,
     abort_controller_signal_getter_callback,
 };
-use event::dispatch_abort;
 pub(crate) use signal::{
-    abort_signal_aborted_getter_callback, abort_signal_add_event_listener_callback,
-    abort_signal_dispatch_event_callback, abort_signal_onabort_getter_callback,
-    abort_signal_onabort_setter_callback, abort_signal_reason_getter_callback,
-    abort_signal_remove_event_listener_callback, abort_signal_throw_if_aborted_callback,
+    abort_signal_aborted_getter_callback, abort_signal_reason_getter_callback,
+    abort_signal_throw_if_aborted_callback,
 };
 pub(crate) use statics::{
     abort_signal_any_callback, abort_signal_static_abort_callback, abort_signal_timeout_callback,
@@ -43,44 +41,11 @@ struct AbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    onabort: Option<v8::Global<v8::Function>>,
-    listeners: HashMap<String, Vec<AbortListener>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct AbortListener {
-    pub(super) callback_id: super::EventCallbackId,
-    pub(super) capture: bool,
-    pub(super) once: bool,
-    pub(super) passive: bool,
-}
-
-pub(super) struct PreparedAbortListener {
-    pub(super) callback: super::PreparedEventCallback,
-    pub(super) passive: bool,
-}
-
-#[derive(Default)]
-pub(super) struct AbortDispatchSnapshot {
-    listeners: Vec<AbortListener>,
-    onabort: Option<v8::Global<v8::Function>>,
-}
-
-impl AbortSignalState {
-    fn take_dispatch_snapshot(&mut self, event_type: &str) -> AbortDispatchSnapshot {
-        let listeners = self.listeners.get(event_type).cloned().unwrap_or_default();
-        let onabort = if event_type == "abort" {
-            self.onabort.clone()
-        } else {
-            None
-        };
-        AbortDispatchSnapshot { listeners, onabort }
-    }
 }
 
 struct AbortLinkedTargetListener {
@@ -144,10 +109,10 @@ impl AbortStore {
             .map(|value| value as u32)
     }
 
-    fn init_signal(
+    fn init_signal<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        signal: v8::Local<'_, v8::Object>,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
         aborted: bool,
         reason: Option<v8::Local<'_, v8::Value>>,
     ) -> u32 {
@@ -167,14 +132,15 @@ impl AbortStore {
             ABORT_SIGNAL_ID_SLOT,
             v8::Number::new(scope, signal_id as f64).into(),
         );
+        abort_signal_events::initialize(scope, signal);
         signal_id
     }
 
-    fn init_controller(
+    fn init_controller<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         controller: v8::Local<'_, v8::Object>,
-        signal: v8::Local<'_, v8::Object>,
+        signal: v8::Local<'s, v8::Object>,
     ) {
         let signal_id = self.init_signal(scope, signal, false, None);
         let controller_id = self.alloc_controller_id();
@@ -230,108 +196,6 @@ impl AbortStore {
             .and_then(|id| self.signal_state(id))
             .and_then(|state| state.reason.as_ref())
             .map(|reason| v8::Local::new(scope, reason))
-    }
-
-    pub(super) fn listener_callback_ids(
-        &self,
-        signal_id: u32,
-        event_type: &str,
-        capture: bool,
-    ) -> Vec<super::EventCallbackId> {
-        self.signal_state(signal_id)
-            .and_then(|state| state.listeners.get(event_type))
-            .into_iter()
-            .flatten()
-            .filter(|listener| listener.capture == capture)
-            .map(|listener| listener.callback_id)
-            .collect()
-    }
-
-    pub(super) fn register_listener(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-        capture: bool,
-        once: bool,
-        passive: bool,
-    ) -> bool {
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        state
-            .listeners
-            .entry(event_type.to_owned())
-            .or_default()
-            .push(AbortListener {
-                callback_id,
-                capture,
-                once,
-                passive,
-            });
-        true
-    }
-
-    pub(super) fn unregister_listener_by_id(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-        capture: bool,
-    ) -> bool {
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        let mut remove_entry = false;
-        let mut removed = false;
-        if let Some(listeners) = state.listeners.get_mut(event_type) {
-            listeners.retain(|candidate| {
-                let matches = candidate.callback_id == callback_id && candidate.capture == capture;
-                removed |= matches;
-                !matches
-            });
-            remove_entry = listeners.is_empty();
-        }
-        if remove_entry {
-            state.listeners.remove(event_type);
-        }
-        removed
-    }
-
-    pub(super) fn claim_listener_for_dispatch(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-    ) -> Option<AbortListener> {
-        let state = self.signal_state_mut(signal_id)?;
-        let listener = state
-            .listeners
-            .get(event_type)?
-            .iter()
-            .find(|listener| listener.callback_id == callback_id)
-            .copied()?;
-        if listener.once {
-            let _ = self.unregister_listener_by_id(
-                signal_id,
-                event_type,
-                callback_id,
-                listener.capture,
-            );
-        }
-        Some(listener)
-    }
-
-    pub(super) fn unregister_signal_event_callbacks(
-        &mut self,
-        callback_ids: &HashSet<super::EventCallbackId>,
-    ) {
-        for state in self.signals.values_mut() {
-            state.listeners.retain(|_, listeners| {
-                listeners.retain(|listener| !callback_ids.contains(&listener.callback_id));
-                !listeners.is_empty()
-            });
-        }
     }
 
     pub(crate) fn register_abort_algorithm<'s>(
@@ -467,18 +331,8 @@ impl AbortStore {
                 linked.capture,
             );
         }
-        // Earlier abort steps can change the listeners of a later signal.
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return;
-        };
-        let dispatch_snapshot = state.take_dispatch_snapshot("abort");
-        dispatch_abort(
-            scope,
-            host as *mut super::JsContextHost,
-            signal,
-            signal_id,
-            dispatch_snapshot,
-        );
+        // Dispatch reads the shared listener registry after all abort algorithms.
+        abort_signal_events::dispatch_abort(scope, signal);
     }
 
     fn set_signal_sources(

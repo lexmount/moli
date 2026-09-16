@@ -415,9 +415,6 @@ impl JsContextHost {
     }
 
     fn release_retired_event_callbacks(&mut self, retired: HashSet<EventCallbackId>) {
-        self.bridge
-            .abort
-            .unregister_signal_event_callbacks(&retired);
         for callback_id in retired {
             self.unregister_abort_target_listener(callback_id);
             self.release_event_callback(callback_id);
@@ -501,9 +498,6 @@ impl JsContextHost {
         }
         self.remove_event_callback_registrations(&retired);
         self.retire_child_window_event_callbacks(&retired);
-        self.bridge
-            .abort
-            .unregister_signal_event_callbacks(&retired);
         for callback_id in retired {
             self.unregister_abort_target_listener(callback_id);
         }

@@ -1994,9 +1994,9 @@ fn abort_signal_internal_id_is_not_page_visible_or_forgeable() {
     hasVisibleSlot: "__lmAbortSignalId" in signal,
     ownNames: Object.getOwnPropertyNames(signal),
     signalMethods: [
-      methodDescriptor(AbortSignal.prototype, "addEventListener"),
-      methodDescriptor(AbortSignal.prototype, "removeEventListener"),
-      methodDescriptor(AbortSignal.prototype, "dispatchEvent"),
+      methodDescriptor(Object.getPrototypeOf(AbortSignal.prototype), "addEventListener"),
+      methodDescriptor(Object.getPrototypeOf(AbortSignal.prototype), "removeEventListener"),
+      methodDescriptor(Object.getPrototypeOf(AbortSignal.prototype), "dispatchEvent"),
       methodDescriptor(AbortSignal.prototype, "throwIfAborted")
     ],
     signalAccessors: [
@@ -2018,7 +2018,7 @@ fn abort_signal_internal_id_is_not_page_visible_or_forgeable() {
     staticAbortAborted: staticAbortSignal.aborted,
     staticAbortReason: staticAbortSignal.reason,
     anyForged: probe(() => AbortSignal.any([forged])),
-    getterForged: abortedGetter.call(forged)
+    getterForged: probe(() => abortedGetter.call(forged))
   });
 })()
 "#,
@@ -2027,7 +2027,7 @@ fn abort_signal_internal_id_is_not_page_visible_or_forgeable() {
 
     assert_eq!(
         result,
-        r#"{"hasVisibleSlot":false,"ownNames":[],"signalMethods":["addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true","dispatchEvent:function:dispatchEvent:1:true:true:true","throwIfAborted:function:throwIfAborted:0:true:true:true"],"signalAccessors":["aborted:function:get aborted:0:true:undefined:true","reason:function:get reason:0:true:undefined:true","onabort:function:get onabort:0:true:function:true"],"controllerMethods":["abort:function:abort:0:true:true:true"],"controllerAccessors":["signal:function:get signal:0:true:undefined:true"],"constructorMethods":["abort:function:abort:1:true:true:true","timeout:function:timeout:1:true:true:true","any:function:any:1:true:true:true"],"staticAbortAborted":true,"staticAbortReason":"static-reason","anyForged":"TypeError","getterForged":false}"#
+        r#"{"hasVisibleSlot":false,"ownNames":[],"signalMethods":["addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true","dispatchEvent:function:dispatchEvent:1:true:true:true","throwIfAborted:function:throwIfAborted:0:true:true:true"],"signalAccessors":["aborted:function:get aborted:0:true:undefined:true","reason:function:get reason:0:true:undefined:true","onabort:function:get onabort:0:true:function:true"],"controllerMethods":["abort:function:abort:0:true:true:true"],"controllerAccessors":["signal:function:get signal:0:true:undefined:true"],"constructorMethods":["abort:function:abort:0:true:true:true","timeout:function:timeout:1:true:true:true","any:function:any:1:true:true:true"],"staticAbortAborted":true,"staticAbortReason":"static-reason","anyForged":"TypeError","getterForged":"TypeError"}"#
     );
 }
 
