@@ -9958,7 +9958,6 @@ xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeo
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
 xhr/xmlhttprequest-unsent.htm
 xml/xml-doc-innerHTML-crash.html
-xml/xml-prolog-accepted-versions.html
 xml/xslt/invalid-output-encoding-crash.html
 xml/xslt/svg/crashtests/xslt-in-img-001.html
 xml/xslt/svg/crashtests/xslt-in-img-002.html

@@ -2860,7 +2860,6 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ances
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/already-loaded-image-sync-width.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
@@ -3270,5 +3269,4 @@ xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/status-async.htm
 xhr/status-basic.htm
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xml/xml-prolog-accepted-versions.html
