@@ -1535,6 +1535,7 @@ mod modules;
 mod strict_script_mime;
 
 mod network;
+mod onerror;
 mod postmessage;
 mod synthetic_exceptions;
 mod tls;
