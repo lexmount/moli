@@ -7418,6 +7418,69 @@ worker.onmessage = event => {
     );
 }
 
+#[tokio::test]
+async fn indexed_db_retiring_a_blocked_worker_request_releases_the_next_request() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for shutdown in ["close", "terminate"] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("https://indexeddb-retired-requester-{shutdown}.test/"),
+            &loader,
+        );
+        vm.eval(&format!("globalThis.requesterShutdown = {shutdown:?};"))
+            .unwrap();
+        vm.eval(r#"
+globalThis.requesterResult = 'pending';
+globalThis.requesterEvents = [];
+const initial = indexedDB.open('retiring-requester', 1);
+initial.onerror = () => { requesterResult = initial.error.name; };
+initial.onsuccess = () => {
+  const database = initial.result;
+  database.onversionchange = event => {
+    requesterEvents.push(event.newVersion);
+  };
+  const source = [
+    'const shutdown = ' + JSON.stringify(requesterShutdown) + ';',
+    "const request = indexedDB.open('retiring-requester', 2);",
+    "request.onblocked = () => { postMessage('blocked'); if (shutdown === 'close') self.close(); };",
+    "request.onsuccess = () => postMessage('unexpected-success');",
+    "request.onerror = () => postMessage('error:' + request.error.name);"
+  ].join('\n');
+  const url = URL.createObjectURL(new Blob([source]));
+  const worker = new Worker(url);
+  worker.onmessage = event => {
+    if (event.data !== 'blocked') { requesterResult = event.data; worker.terminate(); return; }
+    requesterEvents.push('blocked');
+    if (requesterShutdown === 'terminate') worker.terminate();
+    database.close();
+    const next = indexedDB.open('retiring-requester', 3);
+    next.onupgradeneeded = event => requesterEvents.push('upgrade:' + event.oldVersion);
+    next.onerror = () => { requesterResult = next.error.name; };
+    next.onsuccess = () => {
+      requesterEvents.push('success');
+      requesterResult = next.result.version === 3 ? 'pass' : 'wrong-version';
+      next.result.close();
+      worker.terminate();
+      URL.revokeObjectURL(url);
+    };
+  };
+};
+"#).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(requesterResult !== 'pending')",
+            "true",
+            "retiring a blocked requester must release its queue position",
+        )
+        .await;
+        assert_eq!(vm.eval("requesterResult").unwrap(), "pass", "{shutdown}");
+        assert_eq!(
+            vm.eval("JSON.stringify(requesterEvents)").unwrap(),
+            r#"[2,"blocked","upgrade:1","success"]"#
+        );
+    }
+}
+
 #[test]
 fn indexed_db_connection_queue_waits_for_close_during_upgrade_completion_microtasks() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-connection-close.test/");
