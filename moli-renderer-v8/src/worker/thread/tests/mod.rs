@@ -1572,16 +1572,14 @@ mod message_port_transfer;
 mod modules;
 mod strict_script_mime;
 
+mod canvas_fill_rect;
+mod canvas_transform_snapshots;
+mod geometry_point_transform;
 mod network;
 mod onerror;
 mod postmessage;
 mod stream_clone_failures;
-
 mod canvas_transfer_to_image_bitmap;
-mod canvas_transform_snapshots;
-mod geometry_point_transform;
-
-mod canvas_fill_rect;
 mod tls;
 mod trusted_types_reporting;
 mod xhr_failure;
