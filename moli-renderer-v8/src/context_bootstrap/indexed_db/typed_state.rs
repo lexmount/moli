@@ -43,6 +43,8 @@ pub(super) enum IndexedDbTaskKind {
     OpenSuccess,
     OpenBlocked,
     DeleteBlocked,
+    VersionChange,
+    BlockedRecheck,
     DrainBlockedOpens,
     DatabasesSettle,
     TransactionStart,
@@ -196,6 +198,8 @@ impl IndexedDbTaskState {
             | IndexedDbTaskKind::OpenSuccess
             | IndexedDbTaskKind::OpenBlocked
             | IndexedDbTaskKind::DeleteBlocked
+            | IndexedDbTaskKind::VersionChange
+            | IndexedDbTaskKind::BlockedRecheck
             | IndexedDbTaskKind::DrainBlockedOpens
             | IndexedDbTaskKind::DatabasesSettle
             | IndexedDbTaskKind::TransactionStart
@@ -277,6 +281,7 @@ struct IndexedDbBlockedTaskPayload {
     version: Option<u64>,
     old_version: u64,
     new_version: Option<u64>,
+    notifications_pending: bool,
 }
 
 impl IndexedDbBlockedTaskPayload {
@@ -297,6 +302,7 @@ impl IndexedDbBlockedTaskPayload {
             version,
             old_version,
             new_version,
+            notifications_pending: false,
         }
     }
 }
@@ -308,6 +314,13 @@ pub(super) struct IndexedDbBlockedTaskPayloadLocals<'s> {
     pub(super) version: Option<u64>,
     pub(super) old_version: u64,
     pub(super) new_version: Option<u64>,
+    pub(super) notifications_pending: bool,
+}
+
+struct IndexedDbVersionChangeTaskPayload {
+    database: v8::Global<v8::Object>,
+    old_version: u64,
+    new_version: Option<u64>,
 }
 
 struct IndexedDbTransactionTaskPayload {
@@ -579,6 +592,8 @@ pub(super) struct IndexedDbRuntimeStateTable {
     request_dispatch_tasks: BTreeMap<IndexedDbTaskId, IndexedDbRequestDispatchTaskPayload>,
     open_tasks: BTreeMap<IndexedDbTaskId, IndexedDbOpenTaskPayload>,
     blocked_tasks: BTreeMap<IndexedDbTaskId, IndexedDbBlockedTaskPayload>,
+    version_change_tasks: BTreeMap<IndexedDbTaskId, IndexedDbVersionChangeTaskPayload>,
+    blocked_recheck_tasks: BTreeMap<IndexedDbTaskId, v8::Global<v8::Object>>,
     transaction_tasks: BTreeMap<IndexedDbTaskId, IndexedDbTransactionTaskPayload>,
     requests: BTreeMap<IndexedDbObjectId, IndexedDbRequestLifecycleState>,
     transactions: BTreeMap<IndexedDbObjectId, IndexedDbTransactionLifecycleState>,
@@ -1253,7 +1268,97 @@ pub(super) fn indexed_db_blocked_task_payload<'s>(
         version: payload.version,
         old_version: payload.old_version,
         new_version: payload.new_version,
+        notifications_pending: payload.notifications_pending,
     })
+}
+
+pub(super) fn set_indexed_db_blocked_notifications_pending<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    blocked_task: v8::Local<'s, v8::Object>,
+    pending: bool,
+) {
+    let Some(id) = indexed_db_typed_task_id(scope, blocked_task) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, blocked_task);
+    if let Some(payload) = table.borrow_mut().blocked_tasks.get_mut(&id) {
+        payload.notifications_pending = pending;
+    }
+}
+
+pub(super) fn register_indexed_db_version_change_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+    database: v8::Local<'s, v8::Object>,
+    old_version: u64,
+    new_version: Option<u64>,
+) {
+    let owner = indexed_db_typed_execution_owner(scope, database)
+        .expect("versionchange task retains its database owner");
+    let storage_scope = indexed_db_typed_storage_scope(scope, database);
+    let id = register_indexed_db_task_with_owner(
+        scope,
+        task,
+        IndexedDbTaskKind::VersionChange,
+        owner,
+        storage_scope,
+    );
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table.borrow_mut().version_change_tasks.insert(
+        id,
+        IndexedDbVersionChangeTaskPayload {
+            database: v8::Global::new(scope, database),
+            old_version,
+            new_version,
+        },
+    );
+}
+
+pub(super) fn indexed_db_version_change_task_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+) -> Option<(v8::Local<'s, v8::Object>, u64, Option<u64>)> {
+    let id = indexed_db_typed_task_id(scope, task)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    let table = table.borrow();
+    let payload = table.version_change_tasks.get(&id)?;
+    Some((
+        v8::Local::new(scope, &payload.database),
+        payload.old_version,
+        payload.new_version,
+    ))
+}
+
+pub(super) fn register_indexed_db_blocked_recheck_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+    blocked_task: v8::Local<'s, v8::Object>,
+) {
+    let owner = indexed_db_typed_task_execution_owner(scope, blocked_task)
+        .expect("blocked recheck retains the requesting task owner");
+    let storage_scope = indexed_db_typed_task_storage_scope(scope, blocked_task);
+    let id = register_indexed_db_task_with_owner(
+        scope,
+        task,
+        IndexedDbTaskKind::BlockedRecheck,
+        owner,
+        storage_scope,
+    );
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .blocked_recheck_tasks
+        .insert(id, v8::Global::new(scope, blocked_task));
+}
+
+pub(super) fn indexed_db_blocked_recheck_task_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let id = indexed_db_typed_task_id(scope, task)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    let table = table.borrow();
+    Some(v8::Local::new(scope, table.blocked_recheck_tasks.get(&id)?))
 }
 
 pub(super) fn register_indexed_db_transaction_task<'s>(
@@ -1311,6 +1416,8 @@ pub(super) fn unregister_indexed_db_task<'s>(
     table.open_tasks.remove(&id);
     table.blocked_tasks.remove(&id);
     table.transaction_tasks.remove(&id);
+    table.blocked_recheck_tasks.remove(&id);
+    table.version_change_tasks.remove(&id);
 }
 
 pub(super) fn replace_indexed_db_database_metadata<'s>(

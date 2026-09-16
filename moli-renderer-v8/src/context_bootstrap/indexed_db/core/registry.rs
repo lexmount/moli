@@ -4,7 +4,7 @@ mod connections;
 mod readwrite;
 
 pub(in crate::context_bootstrap::indexed_db) use self::connections::{
-    database_registry_key, dispatch_version_change_to_open_connections,
+    database_registry_key, enqueue_version_change_to_open_connections,
     has_open_database_connections_for_key, open_database_connection_version_for_key,
     register_blocked_database_context, register_open_database_connection,
     unregister_blocked_database_context, unregister_open_database_connection,
