@@ -278,7 +278,7 @@ fn file_reader_event_handler_setter_callback<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -290,7 +290,7 @@ fn file_reader_event_handler_setter_callback<'s>(
         FILE_READER_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 
