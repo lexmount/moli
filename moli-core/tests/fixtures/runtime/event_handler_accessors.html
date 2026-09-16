@@ -30,11 +30,14 @@ const reflectsWindow = document.body.onload === window.onload;
 const bodyHandler = function() {};
 document.body.onload = bodyHandler;
 const propertyReflects = document.body.onload === bodyHandler && window.onload === bodyHandler;
-document.body.onload = {};
+const bodyHandlerObject = {};
+document.body.onload = bodyHandlerObject;
+const objectReflects = document.body.onload === bodyHandlerObject && window.onload === bodyHandlerObject;
+document.body.onload = false;
 const cleared = document.body.onload === null && window.onload === null;
 document.body.setAttribute(
   "data-body-onload-reflection",
-  `${bodyAttrType}:${reflectsWindow}:${propertyReflects}:${cleared}`
+  `${bodyAttrType}:${reflectsWindow}:${propertyReflects}:${objectReflects}:${cleared}`
 );
 </script>
 </body>
