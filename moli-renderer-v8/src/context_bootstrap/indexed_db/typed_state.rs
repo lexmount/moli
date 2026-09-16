@@ -1,6 +1,13 @@
 use super::*;
 use moli_storage_service::StorageBucketIdentity;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
+
+mod upgrade;
+pub(super) use upgrade::*;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct IndexedDbObjectId(u64);
@@ -352,6 +359,8 @@ impl IndexedDbRequestLifecycleState {
 }
 
 struct IndexedDbTransactionLifecycleState {
+    database: Option<v8::Global<v8::Object>>,
+    aborted_open_request: Option<v8::Global<v8::Object>>,
     handle: Option<TransactionHandle>,
     active: bool,
     finished: bool,
@@ -367,8 +376,15 @@ struct IndexedDbTransactionLifecycleState {
 }
 
 impl IndexedDbTransactionLifecycleState {
-    fn new(handle: Option<TransactionHandle>, started: bool, db_key: Option<String>) -> Self {
+    fn new(
+        database: v8::Global<v8::Object>,
+        handle: Option<TransactionHandle>,
+        started: bool,
+        db_key: Option<String>,
+    ) -> Self {
         Self {
+            database: Some(database),
+            aborted_open_request: None,
             handle,
             active: true,
             finished: false,
@@ -389,6 +405,8 @@ impl IndexedDbTransactionLifecycleState {
 pub(super) struct IndexedDbObjectStoreMetadata {
     info: ObjectStoreInfo,
     indexes: BTreeMap<String, IndexInfo>,
+    created_in_upgrade: bool,
+    created_indexes: BTreeSet<String>,
 }
 
 impl IndexedDbObjectStoreMetadata {
@@ -397,7 +415,12 @@ impl IndexedDbObjectStoreMetadata {
             .into_iter()
             .map(|index| (index.name.clone(), index))
             .collect();
-        Self { info, indexes }
+        Self {
+            info,
+            indexes,
+            created_in_upgrade: false,
+            created_indexes: BTreeSet::new(),
+        }
     }
 
     pub(super) fn info(&self) -> &ObjectStoreInfo {
@@ -417,6 +440,7 @@ impl IndexedDbObjectStoreMetadata {
     }
 
     fn set_index(&mut self, info: IndexInfo) {
+        self.created_indexes.insert(info.name.clone());
         if !self.info.index_names.iter().any(|name| name == &info.name) {
             self.info.index_names.push(info.name.clone());
         }
@@ -436,6 +460,7 @@ struct IndexedDbDatabaseLifecycleState {
     closed: bool,
     metadata: BTreeMap<String, IndexedDbObjectStoreMetadata>,
     upgrade_transaction: Option<v8::Global<v8::Value>>,
+    upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
 }
 
 impl IndexedDbDatabaseLifecycleState {
@@ -451,6 +476,7 @@ impl IndexedDbDatabaseLifecycleState {
             closed: false,
             metadata: BTreeMap::new(),
             upgrade_transaction: None,
+            upgrade_metadata: None,
         }
     }
 }
@@ -482,25 +508,30 @@ impl IndexedDbCursorLifecycleState {
 }
 
 struct IndexedDbObjectStoreLifecycleState {
+    wrapper: v8::Weak<v8::Object>,
     transaction: v8::Global<v8::Value>,
     database: v8::Global<v8::Value>,
     name: String,
     metadata: IndexedDbObjectStoreMetadata,
+    deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
+        wrapper: v8::Local<'_, v8::Object>,
         transaction: v8::Local<'_, v8::Object>,
         database: v8::Local<'_, v8::Object>,
         metadata: IndexedDbObjectStoreMetadata,
     ) -> Self {
         let name = metadata.info.name.clone();
         Self {
+            wrapper: v8::Weak::new(scope, wrapper),
             transaction: v8::Global::new(scope, v8::Local::<v8::Value>::from(transaction)),
             database: v8::Global::new(scope, v8::Local::<v8::Value>::from(database)),
             name,
             metadata,
+            deleted: false,
         }
     }
 }
@@ -509,6 +540,8 @@ struct IndexedDbIndexLifecycleState {
     object_store: v8::Global<v8::Value>,
     info: IndexInfo,
     marker: bool,
+    deleted: bool,
+    created_in_upgrade: bool,
 }
 
 impl IndexedDbIndexLifecycleState {
@@ -516,11 +549,14 @@ impl IndexedDbIndexLifecycleState {
         scope: &mut v8::PinScope<'_, '_>,
         object_store: v8::Local<'_, v8::Object>,
         info: IndexInfo,
+        created_in_upgrade: bool,
     ) -> Self {
         Self {
             object_store: v8::Global::new(scope, v8::Local::<v8::Value>::from(object_store)),
             info,
             marker: true,
+            deleted: false,
+            created_in_upgrade,
         }
     }
 }
@@ -685,6 +721,7 @@ pub(super) fn release_indexed_db_request_dispatch_refs<'s>(
 pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
+    database: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     started: bool,
     db_key: Option<String>,
@@ -692,7 +729,12 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
         return;
     };
-    let state = IndexedDbTransactionLifecycleState::new(handle, started, db_key);
+    let state = IndexedDbTransactionLifecycleState::new(
+        v8::Global::new(scope, database),
+        handle,
+        started,
+        db_key,
+    );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
 }
@@ -760,6 +802,7 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
     let Some(transaction) = table.transactions.get_mut(&id) else {
         return;
     };
+    transaction.database = None;
     transaction.operations_waiting_for_start.clear();
 }
 
@@ -838,7 +881,8 @@ pub(super) fn register_indexed_db_object_store_lifecycle<'s>(
     let Some(id) = indexed_db_typed_state_id(scope, store) else {
         return;
     };
-    let state = IndexedDbObjectStoreLifecycleState::new(scope, transaction, database, metadata);
+    let state =
+        IndexedDbObjectStoreLifecycleState::new(scope, store, transaction, database, metadata);
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     table.borrow_mut().object_stores.insert(id, state);
 }
@@ -852,10 +896,14 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     let Some(id) = indexed_db_typed_state_id(scope, index) else {
         return;
     };
+    let created_in_upgrade =
+        indexed_db_object_store_metadata(scope, object_store).is_some_and(|metadata| {
+            metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
+        });
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     table.borrow_mut().indexes.insert(
         id,
-        IndexedDbIndexLifecycleState::new(scope, object_store, info),
+        IndexedDbIndexLifecycleState::new(scope, object_store, info, created_in_upgrade),
     );
 }
 
@@ -1268,12 +1316,13 @@ pub(super) fn indexed_db_database_store_metadata<'s>(
 pub(super) fn set_indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    metadata: IndexedDbObjectStoreMetadata,
+    mut metadata: IndexedDbObjectStoreMetadata,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
+    metadata.created_in_upgrade = database.upgrade_metadata.is_some();
     database
         .metadata
         .insert(metadata.info.name.clone(), metadata);
@@ -1826,6 +1875,7 @@ fn set_indexed_db_typed_database_slot_value(
         INDEXED_DB_DATABASE_METADATA_SLOT => true,
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => {
             database.upgrade_transaction = if value.is_null_or_undefined() {
+                database.upgrade_metadata = None;
                 None
             } else {
                 Some(v8::Global::new(scope, value))

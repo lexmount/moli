@@ -34,10 +34,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
     }) {
         Ok(()) => {
             let _ = remove_database_index_metadata(scope, database, &store_name, &index_name);
-            if let Some(metadata) = indexed_db_database_store_metadata(scope, database, &store_name)
-            {
-                let _ = sync_store_surface_from_metadata(scope, store, metadata);
-            }
             rv.set_undefined();
         }
         Err(error) => {

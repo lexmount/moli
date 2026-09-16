@@ -7,7 +7,7 @@ mod origin;
 
 pub(in crate::context_bootstrap::indexed_db) use self::dom_string_list::{
     idb_dom_string_list_backing_values, install_dom_string_list_template_bindings,
-    new_idb_dom_string_list,
+    new_idb_dom_string_list, new_idb_name_list,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::errors::{
     dom_exception_value, request_error_object,

@@ -7,9 +7,8 @@ use super::{
     create_index_object, create_key_range_object, create_request_object, cursor_direction_to_value,
     deserialize_js_value, dom_exception_value, enforce_object_store_unique_constraints,
     enqueue_transaction_operation, execute_object_store_clear_request,
-    execute_object_store_delete_request, index_info_from_store_metadata,
-    indexed_db_database_store_metadata, indexed_db_index_info, indexed_db_index_object_store,
-    indexed_db_object_store_database, indexed_db_object_store_name,
+    execute_object_store_delete_request, index_info_from_store_metadata, indexed_db_index_info,
+    indexed_db_index_object_store, indexed_db_object_store_database, indexed_db_object_store_name,
     indexed_db_object_store_transaction, key_in_range, key_to_js_value, object_bool_property,
     object_string_property, optional_count_to_value, parse_cursor_direction,
     parse_cursor_direction_with_context, parse_idb_key, parse_idb_key_path, parse_key_or_range,
@@ -17,8 +16,8 @@ use super::{
     queue_transaction_request, remove_database_index_metadata, request_error_object,
     scan_index_entries, scan_object_store_entries, serialize_js_value, set_database_index_metadata,
     storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,
-    submit_cursor_open_operation, sync_store_surface_from_metadata, throw_type_error,
-    transaction_handle_from_value, with_indexed_db_manager,
+    submit_cursor_open_operation, throw_type_error, transaction_handle_from_value,
+    with_indexed_db_manager,
 };
 use crate::webidl;
 

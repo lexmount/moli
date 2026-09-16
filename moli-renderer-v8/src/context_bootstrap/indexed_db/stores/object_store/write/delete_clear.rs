@@ -17,12 +17,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
     };
     let store = args.this();
     let Some((request, transaction)) = create_store_request(scope, store) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {
@@ -70,12 +64,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
 ) {
     let store = args.this();
     let Some((request, transaction)) = create_store_request(scope, store) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {
