@@ -5501,7 +5501,7 @@ mod tests {
         let mut scope = try_catch.init();
         let source = v8str(&scope, "null.missing");
         let script = v8::Script::compile(&scope, source, None).expect("valid script");
-        assert!(script.run(&scope).is_none());
+        assert!(crate::script_execution::execute_compiled_script(&mut scope, script).is_none());
         let exception = scope.exception().expect("V8 should throw a TypeError");
         let caught_constructor =
             super::script_error_constructor_kind_from_value(&mut scope, exception);

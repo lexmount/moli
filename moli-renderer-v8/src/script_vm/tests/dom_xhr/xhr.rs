@@ -1885,7 +1885,7 @@ fn xml_http_request_serializes_document_bodies_and_limits_charset_rewriting_to_t
             )
             .expect("body fixture source");
             let script = v8::Script::compile(scope, source, None).expect("compile body fixtures");
-            let fixtures = script.run(scope).expect("create body fixtures");
+            let fixtures = crate::script_execution::execute_compiled_script(scope, script).expect("create body fixtures");
             let fixtures = v8::Local::<v8::Array>::try_from(fixtures).expect("body fixture array");
             let xhr_value = fixtures.get_index(scope, 0).expect("xhr fixture");
             let xhr = v8::Local::<v8::Object>::try_from(xhr_value).expect("xhr object");

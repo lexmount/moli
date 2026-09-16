@@ -347,8 +347,7 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         );
         let script = v8::Script::compile(scope, source, None).expect("worker URL factory script");
         assert!(
-            script
-                .run(scope)
+            crate::script_execution::execute_compiled_script(scope, script)
                 .expect("worker URL factory evaluation")
                 .is_true(),
             "worker URL factories must not follow the public constructor binding"
@@ -481,8 +480,7 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
     )
     .expect("worker geometry test source");
     let script = v8::Script::compile(scope, source, None).expect("worker geometry test compile");
-    let result = script
-        .run(scope)
+    let result = crate::script_execution::execute_compiled_script(scope, script)
         .expect("worker geometry test evaluation")
         .to_rust_string_lossy(scope);
 
