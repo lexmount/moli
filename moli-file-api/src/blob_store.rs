@@ -181,7 +181,13 @@ where
         blob_id: BlobId,
         origin: &str,
     ) -> Option<String> {
-        self.create_object_url_with_lifetime_and_access_key(owner_id, lifetime_id, blob_id, origin, None)
+        self.create_object_url_with_lifetime_and_access_key(
+            owner_id,
+            lifetime_id,
+            blob_id,
+            origin,
+            None,
+        )
     }
 
     /// Create an object URL with its creator environment's access key.
@@ -192,7 +198,9 @@ where
         origin: &str,
         access_key: Option<AccessKey>,
     ) -> Option<String> {
-        self.create_object_url_with_lifetime_and_access_key(owner_id, None, blob_id, origin, access_key)
+        self.create_object_url_with_lifetime_and_access_key(
+            owner_id, None, blob_id, origin, access_key,
+        )
     }
 
     /// Associate the URL's independent creator key and execution-context lifetime.
