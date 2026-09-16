@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::events;
 use crate::context_bootstrap::events::{clear_event_dispatch_fields, set_event_dispatch_fields};
 use crate::exception_reporting::invoke_event_handler;
 
@@ -8,19 +9,17 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event<'s>(
     event_type: &str,
     extras: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some(event) = events::construct_original_event(scope, event_type) else {
         return true;
     };
-    let Some(event_type) = v8_string(scope, event_type) else {
-        return true;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
-        return true;
-    };
+    events::initialize_event_object(
+        scope,
+        event,
+        event_type,
+        matches!(event_type, "error" | "abort"),
+        event_type == "error",
+    );
+    events::mark_event_trusted(scope, event);
     extras(scope, event);
     dispatch_idb_event_object(scope, target, event)
 }

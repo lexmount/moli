@@ -80,11 +80,10 @@ fn finish_committed_transaction<'s>(
     let _ = dispatch_idb_named_event(scope, transaction, "complete", |_, _| {});
     release_indexed_db_transaction_dispatch_refs(scope, transaction);
     if let Some((request, _)) = upgrade_open {
-        set_indexed_db_request_surface_value(
+        set_indexed_db_slot_value(
             scope,
             request,
             INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-            "transaction",
             v8::null(scope).into(),
         );
     }
