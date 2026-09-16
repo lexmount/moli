@@ -447,9 +447,14 @@ fn invoke_event_handler_property<'s>(
             let Some(key) = v8_string(scope, &handler_name) else {
                 return;
             };
-            let handler = target_object
+            let Some(handler) = target_object
                 .get(scope, key.into())
-                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
+                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+            else {
+                // A failed compilation returns null for this invocation even
+                // if error reporting installs a replacement in the registry.
+                return;
+            };
             if let Some(value) = registry.event_handler_property_value(target, event_type) {
                 match value {
                     EventHandlerPropertyValue::Callback(callback_id) => {
@@ -467,10 +472,6 @@ fn invoke_event_handler_property<'s>(
                     EventHandlerPropertyValue::Null => return,
                 }
             }
-            let handler = match handler {
-                Some(handler) => handler,
-                None => return,
-            };
             let callback = v8::Local::<v8::Object>::from(handler);
             let relevant_context = callback
                 .get_creation_context(scope)
