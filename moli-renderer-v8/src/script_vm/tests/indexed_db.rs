@@ -6289,3 +6289,191 @@ fn indexed_db_put_rejects_non_serializable_platform_objects() {
 
     assert_eq!(result, "DataCloneError|DataCloneError|DataCloneError");
 }
+
+#[test]
+fn indexed_db_upgrade_waits_for_requests_and_callback_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-lifetime.test/");
+    vm.eval(
+        r#"
+globalThis.upgradeEvents = [];
+globalThis.authorGetterReads = 0;
+const open = indexedDB.open('upgrade-lifetime', 1);
+open.onerror = () => upgradeEvents.push(`open-error:${open.error.name}`);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  Object.defineProperty(tx, 'db', {get() { authorGetterReads++; throw new Error('author db getter'); }});
+  upgradeEvents.push('upgrade');
+  store.add('one', 1).onsuccess = () => {
+    upgradeEvents.push('one');
+    Promise.resolve().then(() => {
+      upgradeEvents.push('one-microtask');
+      store.add('three', 3).onsuccess = () => upgradeEvents.push('three');
+    });
+  };
+  Promise.resolve().then(() => {
+    upgradeEvents.push('upgrade-microtask');
+    store.add('two', 2).onsuccess = () => upgradeEvents.push('two');
+  });
+  tx.oncomplete = () => {
+    upgradeEvents.push(`complete:${open.transaction === tx}`);
+    Promise.resolve().then(() => upgradeEvents.push('complete-microtask'));
+  };
+};
+open.onsuccess = () => {
+  upgradeEvents.push(`open-success:${open.transaction === null}`);
+  const db = open.result;
+  const count = db.transaction('records').objectStore('records').count();
+  count.onsuccess = () => {
+    upgradeEvents.push(`count:${count.result}`);
+    db.close();
+  };
+};
+"#,
+    )
+    .expect("upgrade requests should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("upgrade tasks should finish");
+    assert_eq!(vm.eval("String(authorGetterReads)").unwrap(), "0");
+    assert_eq!(
+        result,
+        r#"["upgrade","upgrade-microtask","one","one-microtask","two","three","complete:true","complete-microtask","open-success:true","count:3"]"#
+    );
+}
+
+#[test]
+fn indexed_db_upgrade_can_abort_from_a_request_callback() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-callback-abort.test/");
+    vm.eval(r#"
+globalThis.upgradeEvents = [];
+globalThis.authorGetterReads = 0;
+const open = indexedDB.open('upgrade-callback-abort', 1);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  store.add('one', 1).onsuccess = () => {
+    upgradeEvents.push('one');
+    tx.abort();
+    upgradeEvents.push(`restored:${db.version}:${db.objectStoreNames.length}`);
+  };
+  const second = store.add('two', 2);
+  second.onsuccess = () => upgradeEvents.push('unexpected-second-success');
+  second.onerror = event => {
+    event.preventDefault();
+    upgradeEvents.push(`two:${second.error.name}`);
+  };
+  tx.onabort = () => upgradeEvents.push(`abort:${open.transaction === tx}`);
+  tx.oncomplete = () => upgradeEvents.push('unexpected-complete');
+  Object.defineProperty(open, 'result', {get() { authorGetterReads++; throw new Error('author result getter'); }});
+};
+open.onsuccess = () => upgradeEvents.push('unexpected-open-success');
+open.onerror = event => {
+  event.preventDefault();
+  upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+  const retry = indexedDB.open('upgrade-callback-abort', 1);
+  retry.onupgradeneeded = event => upgradeEvents.push(`retry:${event.oldVersion}:${retry.result.objectStoreNames.length}`);
+  retry.onsuccess = () => retry.result.close();
+};
+"#).expect("upgrade abort should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("upgrade abort tasks should finish");
+    assert_eq!(vm.eval("String(authorGetterReads)").unwrap(), "0");
+    assert_eq!(
+        result,
+        r#"["one","restored:0:0","two:AbortError","abort:true","open-error:AbortError:true","retry:0:0"]"#
+    );
+}
+
+#[test]
+fn indexed_db_closed_upgrade_commits_before_open_error() {
+    for close_at in ["upgrade", "request", "complete-microtask"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-close.test/");
+        vm.eval(&format!("globalThis.closeAt = {close_at:?};"))
+            .expect("close phase should be set");
+        vm.eval(
+            r#"
+globalThis.upgradeEvents = [];
+const open = indexedDB.open(`upgrade-close-${closeAt}`, 1);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  store.add('saved', 1).onsuccess = () => {
+    upgradeEvents.push('request');
+    if (closeAt === 'request') db.close();
+  };
+  if (closeAt === 'upgrade') db.close();
+  tx.oncomplete = () => {
+    upgradeEvents.push('complete');
+    if (closeAt === 'complete-microtask') Promise.resolve().then(() => db.close());
+  };
+  tx.onabort = () => upgradeEvents.push('unexpected-abort');
+};
+open.onsuccess = () => upgradeEvents.push('unexpected-open-success');
+open.onerror = event => {
+  event.preventDefault();
+  upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+  const retry = indexedDB.open(`upgrade-close-${closeAt}`);
+  retry.onupgradeneeded = () => upgradeEvents.push('unexpected-upgrade');
+  retry.onsuccess = () => {
+    const db = retry.result;
+    const request = db.transaction('records').objectStore('records').get(1);
+    request.onsuccess = () => {
+      upgradeEvents.push(`reopen:${db.version}:${request.result}`);
+      db.close();
+    };
+  };
+};
+"#,
+        )
+        .expect("closing upgrade should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+            .expect("closing upgrade tasks should finish");
+        assert_eq!(
+            result, r#"["request","complete","open-error:AbortError:true","reopen:1:saved"]"#,
+            "close during {close_at}"
+        );
+    }
+}
+
+#[test]
+fn indexed_db_upgrade_commit_failure_aborts_and_restores_metadata() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-quota.test/");
+    vm.eval(r#"
+globalThis.upgradeEvents = [];
+navigator.storageBuckets.open('limited', {quota: 16}).then(bucket => {
+  const open = bucket.indexedDB.open('commit-failure', 1);
+  open.onupgradeneeded = () => {
+    const db = open.result;
+    const tx = open.transaction;
+    db.createObjectStore('large-schema-name'.repeat(64));
+    tx.oncomplete = () => upgradeEvents.push('unexpected-complete');
+    tx.onerror = () => upgradeEvents.push('unexpected-transaction-error');
+    tx.onabort = () => upgradeEvents.push(
+      `abort:${tx.error.name}:${db.version}:${db.objectStoreNames.length}:${open.transaction === tx}`);
+  };
+  open.onsuccess = () => upgradeEvents.push('unexpected-success');
+  open.onerror = event => {
+    event.preventDefault();
+    upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+    const deletion = bucket.indexedDB.deleteDatabase('commit-failure');
+    deletion.onblocked = () => upgradeEvents.push('unexpected-blocked');
+    deletion.onsuccess = () => upgradeEvents.push('deleted');
+  };
+});
+"#).expect("upgrade commit failure should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("failed upgrade should finish aborting");
+    assert_eq!(
+        result,
+        r#"["abort:QuotaExceededError:0:0:true","open-error:AbortError:true","deleted"]"#
+    );
+}

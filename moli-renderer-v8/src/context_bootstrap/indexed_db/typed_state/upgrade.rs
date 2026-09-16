@@ -5,7 +5,7 @@ pub(super) struct IndexedDbUpgradeMetadata {
     stores: BTreeMap<String, IndexedDbObjectStoreMetadata>,
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn defer_indexed_db_aborted_open<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn associate_indexed_db_upgrade_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
@@ -15,11 +15,11 @@ pub(in crate::context_bootstrap::indexed_db) fn defer_indexed_db_aborted_open<'s
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
-        state.aborted_open_request = Some(v8::Global::new(scope, request));
+        state.upgrade_open_request = Some(v8::Global::new(scope, request));
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_aborted_open<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_upgrade_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
@@ -27,7 +27,7 @@ pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_aborted_open<'s>
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let mut table = table.borrow_mut();
     let state = table.transactions.get_mut(&id)?;
-    let request = state.aborted_open_request.take()?;
+    let request = state.upgrade_open_request.take()?;
     Some((
         v8::Local::new(scope, &request),
         v8::Local::new(scope, state.database.as_ref()?),
