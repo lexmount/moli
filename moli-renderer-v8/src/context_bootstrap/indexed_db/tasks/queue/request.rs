@@ -44,6 +44,7 @@ fn enqueue_request_task_in_current_context<'s>(
     let typed_kind = match kind {
         "request-success" => IndexedDbTaskKind::RequestSuccess,
         "request-error" => IndexedDbTaskKind::RequestError,
+        "open-success" => IndexedDbTaskKind::OpenSuccess,
         _ => return,
     };
     let task = v8::Object::new(scope);
