@@ -4,7 +4,11 @@
 //! It does not expose JS objects or DOM events. The renderer is expected to
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
+mod connection_queue;
 mod cursor;
+pub use connection_queue::{
+    ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
+};
 mod error;
 mod key;
 mod manager;
