@@ -132,7 +132,7 @@ async fn window_onerror_uses_original_event_data_across_native_window_brands() {
             "borrowed",
             "body",
         ] {
-            if (kind == "popup" && mode == "body") || (kind != "popup" && mode == "borrowed") {
+            if kind == "popup" && mode == "body" {
                 continue;
             }
             let source = SYNTHETIC_PROBE.replace(
