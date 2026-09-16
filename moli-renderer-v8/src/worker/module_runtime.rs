@@ -22,7 +22,9 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use super::global_scope::worker_current_script_url;
-use super::handle::{WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind};
+use super::handle::{
+    WorkerErrorPhase, WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind,
+};
 use crate::content_security_policy::ContentSecurityPolicyUrlViolation;
 
 pub(super) type WorkerBootstrapError = (
@@ -81,7 +83,7 @@ pub(super) enum WorkerModuleSource {
 
 pub(super) struct WorkerModuleEvaluationCompletion {
     evaluation_id: WorkerModuleEvaluationId,
-    result: Result<(), String>,
+    result: Result<(), ()>,
 }
 
 pub(super) enum WorkerDynamicModuleImportAdvance {
@@ -345,7 +347,7 @@ impl WorkerModuleSource {
 }
 
 impl WorkerModuleEvaluationCompletion {
-    fn new(evaluation_id: WorkerModuleEvaluationId, result: Result<(), String>) -> Self {
+    fn new(evaluation_id: WorkerModuleEvaluationId, result: Result<(), ()>) -> Self {
         Self {
             evaluation_id,
             result,
@@ -356,8 +358,8 @@ impl WorkerModuleEvaluationCompletion {
         self.evaluation_id
     }
 
-    pub(super) fn result(&self) -> Result<(), &str> {
-        self.result.as_ref().map(|_| ()).map_err(String::as_str)
+    pub(super) fn result(&self) -> Result<(), ()> {
+        self.result
     }
 }
 
@@ -375,12 +377,15 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
     let root_url = match Url::parse(script_url) {
         Ok(url) => url,
         Err(_) => {
-            return WorkerModuleBootstrapStart::Failed(Box::new(worker_bootstrap_error(
-                &mut scope,
-                script_url,
-                "Module worker script URL is invalid",
-                WorkerParentErrorEventKind::Event,
-            )));
+            return WorkerModuleBootstrapStart::Failed(
+                Box::new(worker_bootstrap_error(
+                    &mut scope,
+                    script_url,
+                    "Module worker script URL is invalid",
+                    WorkerParentErrorEventKind::Event,
+                ))
+                .into(),
+            );
         }
     };
     let static_import_initiator_url =
@@ -398,11 +403,12 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
                 script_url,
             ) {
                 Ok(WorkerModuleFinish::Complete) => WorkerModuleBootstrapStart::Complete,
-                Ok(WorkerModuleFinish::PendingEvaluation { evaluation_id }) => {
-                    WorkerModuleBootstrapStart::Pending(Box::new(
-                        WorkerModulePendingBootstrap::new_evaluation(bootstrap, evaluation_id),
-                    ))
-                }
+                Ok(WorkerModuleFinish::PendingEvaluation {
+                    evaluation_id,
+                    promise,
+                }) => WorkerModuleBootstrapStart::Pending(Box::new(
+                    WorkerModulePendingBootstrap::new_evaluation(bootstrap, evaluation_id, promise),
+                )),
                 Err(error) => WorkerModuleBootstrapStart::Failed(error),
             }
         }
@@ -411,14 +417,14 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
                 WorkerModulePendingBootstrap::new_fetches(bootstrap, requests),
             ))
         }
-        WorkerModuleAdvance::Failed(error) => WorkerModuleBootstrapStart::Failed(error),
+        WorkerModuleAdvance::Failed(error) => WorkerModuleBootstrapStart::Failed(error.into()),
     }
 }
 
 pub(super) enum WorkerModuleBootstrapStart {
     Complete,
     Pending(Box<WorkerModulePendingBootstrap>),
-    Failed(Box<WorkerBootstrapError>),
+    Failed(WorkerModuleBootstrapFailure),
 }
 
 pub(super) enum WorkerModuleBootstrapResume {
@@ -426,7 +432,30 @@ pub(super) enum WorkerModuleBootstrapResume {
     NeedFetches(WorkerModuleGraphFetchBatch),
     WaitingFetches,
     WaitingEvaluation,
-    Failed(Box<WorkerBootstrapError>),
+    Failed(WorkerModuleBootstrapFailure),
+}
+
+pub(super) struct WorkerModuleBootstrapFailure {
+    pub(super) error: Box<WorkerBootstrapError>,
+    pub(super) phase: WorkerErrorPhase,
+}
+
+impl From<Box<WorkerBootstrapError>> for WorkerModuleBootstrapFailure {
+    fn from(error: Box<WorkerBootstrapError>) -> Self {
+        Self {
+            error,
+            phase: WorkerErrorPhase::Bootstrap,
+        }
+    }
+}
+
+impl WorkerModuleBootstrapFailure {
+    fn evaluation(error: WorkerBootstrapError) -> Self {
+        Self {
+            error: Box::new(error),
+            phase: WorkerErrorPhase::Runtime,
+        }
+    }
 }
 
 pub(super) struct WorkerModulePendingBootstrap {
@@ -438,6 +467,7 @@ enum WorkerModulePendingBootstrapState {
     Fetch(WorkerModuleGraphFetchBatch),
     Evaluation {
         evaluation_id: WorkerModuleEvaluationId,
+        promise: v8::Global<v8::Promise>,
     },
 }
 
@@ -455,10 +485,14 @@ impl WorkerModulePendingBootstrap {
     fn new_evaluation(
         job: WorkerModuleBootstrapJob,
         evaluation_id: WorkerModuleEvaluationId,
+        promise: v8::Global<v8::Promise>,
     ) -> Self {
         Self {
             job,
-            state: WorkerModulePendingBootstrapState::Evaluation { evaluation_id },
+            state: WorkerModulePendingBootstrapState::Evaluation {
+                evaluation_id,
+                promise,
+            },
         }
     }
 
@@ -476,12 +510,15 @@ impl WorkerModulePendingBootstrap {
     ) -> WorkerModuleBootstrapResume {
         let fetch_id = completion.fetch_id();
         let WorkerModulePendingBootstrapState::Fetch(pending_requests) = &mut self.state else {
-            return WorkerModuleBootstrapResume::Failed(Box::new(worker_bootstrap_error(
-                scope,
-                self.job.script_url(),
-                "Module worker graph fetch completion arrived while waiting for evaluation",
-                WorkerParentErrorEventKind::Event,
-            )));
+            return WorkerModuleBootstrapResume::Failed(
+                Box::new(worker_bootstrap_error(
+                    scope,
+                    self.job.script_url(),
+                    "Module worker graph fetch completion arrived while waiting for evaluation",
+                    WorkerParentErrorEventKind::Event,
+                ))
+                .into(),
+            );
         };
         let Some(pending_request) = pending_requests.remove_by_fetch_id(fetch_id) else {
             return WorkerModuleBootstrapResume::Failed(Box::new(worker_bootstrap_error(
@@ -491,7 +528,7 @@ impl WorkerModulePendingBootstrap {
                     "Module worker graph fetch completion id {fetch_id} did not match any pending id"
                 ),
                 WorkerParentErrorEventKind::Event,
-            )));
+            )).into());
         };
         let pending_keys = pending_requests.pending_keys();
         match self.job.resume_fetch_with_pending_keys(
@@ -511,9 +548,14 @@ impl WorkerModulePendingBootstrap {
                     self.job.script_url(),
                 ) {
                     Ok(WorkerModuleFinish::Complete) => WorkerModuleBootstrapResume::Complete,
-                    Ok(WorkerModuleFinish::PendingEvaluation { evaluation_id }) => {
-                        self.state =
-                            WorkerModulePendingBootstrapState::Evaluation { evaluation_id };
+                    Ok(WorkerModuleFinish::PendingEvaluation {
+                        evaluation_id,
+                        promise,
+                    }) => {
+                        self.state = WorkerModulePendingBootstrapState::Evaluation {
+                            evaluation_id,
+                            promise,
+                        };
                         WorkerModuleBootstrapResume::WaitingEvaluation
                     }
                     Err(error) => WorkerModuleBootstrapResume::Failed(error),
@@ -524,7 +566,7 @@ impl WorkerModulePendingBootstrap {
                 pending_requests.extend(requests);
                 WorkerModuleBootstrapResume::NeedFetches(new_requests)
             }
-            WorkerModuleAdvance::Failed(error) => WorkerModuleBootstrapResume::Failed(error),
+            WorkerModuleAdvance::Failed(error) => WorkerModuleBootstrapResume::Failed(error.into()),
         }
     }
 
@@ -533,15 +575,22 @@ impl WorkerModulePendingBootstrap {
         scope: &mut v8::PinScope<'_, '_>,
         completion: WorkerModuleEvaluationCompletion,
     ) -> WorkerModuleBootstrapResume {
-        let WorkerModulePendingBootstrapState::Evaluation { evaluation_id } = self.state else {
-            return WorkerModuleBootstrapResume::Failed(Box::new(worker_bootstrap_error(
-                scope,
-                self.job.script_url(),
-                "Module worker evaluation completion arrived while waiting for graph fetch",
-                WorkerParentErrorEventKind::Event,
-            )));
+        let WorkerModulePendingBootstrapState::Evaluation {
+            evaluation_id,
+            promise,
+        } = &self.state
+        else {
+            return WorkerModuleBootstrapResume::Failed(
+                Box::new(worker_bootstrap_error(
+                    scope,
+                    self.job.script_url(),
+                    "Module worker evaluation completion arrived while waiting for graph fetch",
+                    WorkerParentErrorEventKind::Event,
+                ))
+                .into(),
+            );
         };
-        if completion.evaluation_id != evaluation_id {
+        if completion.evaluation_id != *evaluation_id {
             return WorkerModuleBootstrapResume::Failed(Box::new(worker_bootstrap_error(
                 scope,
                 self.job.script_url(),
@@ -550,16 +599,22 @@ impl WorkerModulePendingBootstrap {
                     completion.evaluation_id
                 ),
                 WorkerParentErrorEventKind::Event,
-            )));
+            )).into());
         }
         match completion.result {
             Ok(()) => WorkerModuleBootstrapResume::Complete,
-            Err(message) => WorkerModuleBootstrapResume::Failed(Box::new(worker_bootstrap_error(
-                scope,
-                self.job.script_url(),
-                &message,
-                WorkerParentErrorEventKind::ErrorEvent,
-            ))),
+            Err(()) => {
+                let promise = v8::Local::new(scope, promise);
+                let reason = promise.result(scope);
+                WorkerModuleBootstrapResume::Failed(WorkerModuleBootstrapFailure::evaluation(
+                    worker_bootstrap_value_error(
+                        scope,
+                        self.job.script_url(),
+                        reason,
+                        WorkerParentErrorEventKind::ErrorEvent,
+                    ),
+                ))
+            }
         }
     }
 }
@@ -568,6 +623,7 @@ enum WorkerModuleFinish {
     Complete,
     PendingEvaluation {
         evaluation_id: WorkerModuleEvaluationId,
+        promise: v8::Global<v8::Promise>,
     },
 }
 
@@ -576,7 +632,7 @@ fn finish_worker_module_bootstrap(
     runtime: &WorkerModuleRuntime,
     root_entry: usize,
     script_url: &str,
-) -> WorkerModuleBootstrapResult<WorkerModuleFinish> {
+) -> Result<WorkerModuleFinish, WorkerModuleBootstrapFailure> {
     let try_catch = pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let scope = &mut scope;
@@ -603,7 +659,8 @@ fn finish_worker_module_bootstrap(
             script_url,
             exception,
             WorkerParentErrorEventKind::Event,
-        )));
+        ))
+        .into());
     }
 
     match root_module.instantiate_module2(
@@ -618,7 +675,8 @@ fn finish_worker_module_bootstrap(
                 script_url,
                 "v8 reported module worker instantiate failure",
                 WorkerParentErrorEventKind::Event,
-            )));
+            ))
+            .into());
         }
         None => {
             let exception = scope.exception();
@@ -630,7 +688,8 @@ fn finish_worker_module_bootstrap(
                 report,
                 exception.map(|value| v8::Global::new(scope, value)),
                 WorkerParentErrorEventKind::Event,
-            )));
+            ))
+            .into());
         }
     }
 
@@ -639,39 +698,51 @@ fn finish_worker_module_bootstrap(
         let message = scope.message();
         let stack_trace = scope.stack_trace();
         let report = build_event_handler_exception_report(scope, exception, message, stack_trace);
-        return Err(Box::new((
+        return Err(WorkerModuleBootstrapFailure::evaluation((
             report,
             exception.map(|value| v8::Global::new(scope, value)),
             WorkerParentErrorEventKind::ErrorEvent,
         )));
     };
+    let evaluation_promise = v8::Local::<v8::Promise>::try_from(value).ok();
+    if let Some(promise) = evaluation_promise {
+        // The host reports evaluation failures as errors, not unhandled rejections.
+        promise.mark_as_handled();
+    }
     scope.perform_microtask_checkpoint();
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
     if root_module.get_status() == v8::ModuleStatus::Errored {
-        return Err(Box::new(worker_bootstrap_value_error(
-            scope,
-            script_url,
-            root_module.get_exception(),
-            WorkerParentErrorEventKind::ErrorEvent,
-        )));
+        return Err(WorkerModuleBootstrapFailure::evaluation(
+            worker_bootstrap_value_error(
+                scope,
+                script_url,
+                root_module.get_exception(),
+                WorkerParentErrorEventKind::ErrorEvent,
+            ),
+        ));
     }
-    if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+    if let Some(promise) = evaluation_promise {
         match promise.state() {
             v8::PromiseState::Fulfilled => return Ok(WorkerModuleFinish::Complete),
             v8::PromiseState::Rejected => {
                 let reason = promise.result(scope);
-                return Err(Box::new(worker_bootstrap_value_error(
-                    scope,
-                    script_url,
-                    reason,
-                    WorkerParentErrorEventKind::ErrorEvent,
-                )));
+                return Err(WorkerModuleBootstrapFailure::evaluation(
+                    worker_bootstrap_value_error(
+                        scope,
+                        script_url,
+                        reason,
+                        WorkerParentErrorEventKind::ErrorEvent,
+                    ),
+                ));
             }
             v8::PromiseState::Pending => {
                 let evaluation_id = runtime.reserve_evaluation_id();
                 let promise = v8::Global::new(scope, promise);
-                attach_worker_module_evaluation_reactions(scope, evaluation_id, promise)?;
-                return Ok(WorkerModuleFinish::PendingEvaluation { evaluation_id });
+                attach_worker_module_evaluation_reactions(scope, evaluation_id, &promise)?;
+                return Ok(WorkerModuleFinish::PendingEvaluation {
+                    evaluation_id,
+                    promise,
+                });
             }
         }
     }
@@ -925,16 +996,21 @@ pub(super) fn resume_worker_dynamic_module_evaluation(
     drop(imports);
     match completion.result() {
         Ok(()) => resolve_worker_dynamic_module_import(scope, job),
-        Err(message) => finish_failed_worker_dynamic_module_import(
-            scope,
-            job,
-            WorkerDynamicModuleImportError {
-                message: message.to_owned(),
-                kind: WorkerDynamicModuleImportErrorKind::Type,
-                rejection: None,
-                stage: WorkerDynamicModuleImportErrorStage::Evaluate,
-            },
-        ),
+        Err(()) => {
+            // The notification crosses the worker channel; the original rejection
+            // remains in the isolate's module record and must not be stringified.
+            let exception = job.resolved_entry.and_then(|entry| {
+                let graph = context.get_slot::<RefCell<WorkerModuleGraph>>()?;
+                let module = v8::Local::new(scope, graph.borrow().module(entry));
+                (module.get_status() == v8::ModuleStatus::Errored).then(|| module.get_exception())
+            });
+            let error = WorkerDynamicModuleImportError::caught_evaluation_exception(
+                scope,
+                exception,
+                "dynamic import module evaluation rejected",
+            );
+            finish_failed_worker_dynamic_module_import(scope, job, error);
+        }
     }
     true
 }
@@ -1332,6 +1408,10 @@ fn finish_worker_dynamic_module_import_evaluation(
             "dynamic import evaluation threw an exception",
         ));
     };
+    let evaluation_promise = v8::Local::<v8::Promise>::try_from(value).ok();
+    if let Some(promise) = evaluation_promise {
+        promise.mark_as_handled();
+    }
     scope.perform_microtask_checkpoint();
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
     if root_module.get_status() == v8::ModuleStatus::Errored {
@@ -1341,7 +1421,7 @@ fn finish_worker_dynamic_module_import_evaluation(
             "dynamic import module evaluation failed",
         ));
     }
-    if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
+    if let Some(promise) = evaluation_promise {
         match promise.state() {
             v8::PromiseState::Fulfilled => Ok(WorkerDynamicModuleImportAdvance::Complete),
             v8::PromiseState::Rejected => {
@@ -1355,7 +1435,7 @@ fn finish_worker_dynamic_module_import_evaluation(
             v8::PromiseState::Pending => {
                 let evaluation_id = reserve_worker_module_evaluation_id(scope)?;
                 let promise = v8::Global::new(scope, promise);
-                attach_worker_module_evaluation_reactions(scope, evaluation_id, promise)?;
+                attach_worker_module_evaluation_reactions(scope, evaluation_id, &promise)?;
                 Ok(WorkerDynamicModuleImportAdvance::WaitingEvaluation { evaluation_id })
             }
         }
@@ -2431,7 +2511,7 @@ fn reserve_worker_module_evaluation_id(
 fn attach_worker_module_evaluation_reactions(
     scope: &mut v8::PinScope<'_, '_>,
     evaluation_id: WorkerModuleEvaluationId,
-    promise: v8::Global<v8::Promise>,
+    promise: &v8::Global<v8::Promise>,
 ) -> WorkerModuleBootstrapResult<()> {
     let data = WorkerModuleEvaluationReactionDataDeclaration {
         evaluation_id: evaluation_id as f64,
@@ -2460,7 +2540,7 @@ fn attach_worker_module_evaluation_reactions(
                 WorkerParentErrorEventKind::Event,
             ))
         })?;
-    let promise = v8::Local::new(scope, &promise);
+    let promise = v8::Local::new(scope, promise);
     promise
         .then2(scope, on_fulfilled, on_rejected)
         .map(|_| ())
@@ -2824,31 +2904,16 @@ fn worker_bootstrap_error(
     )
 }
 
-fn worker_bootstrap_value_error(
-    scope: &mut v8::PinScope<'_, '_>,
+fn worker_bootstrap_value_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     script_url: &str,
-    value: v8::Local<'_, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
     event_kind: WorkerParentErrorEventKind,
 ) -> WorkerBootstrapError {
-    let summary = value
-        .to_string(scope)
-        .map(|message| message.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "module worker evaluation failed".to_owned());
-    (
-        V8ExceptionReport {
-            muted_errors: false,
-            summary,
-            source: Some(script_url.to_owned()),
-            line: Some(1),
-            column: Some(1),
-            source_line: None,
-            stack: None,
-            callback_context: None,
-            exception: None,
-        },
-        Some(v8::Global::new(scope, value)),
-        event_kind,
-    )
+    let message = v8::Exception::create_message(scope, value);
+    let mut report = build_exception_report_without_stack(scope, Some(value), Some(message));
+    report.source.get_or_insert_with(|| script_url.to_owned());
+    (report, Some(v8::Global::new(scope, value)), event_kind)
 }
 
 fn worker_resolve_static_module_callback<'s>(
@@ -2934,11 +2999,6 @@ fn worker_module_evaluation_rejected_callback<'s>(
     let Some(evaluation_id) = worker_module_evaluation_reaction_id(scope, args.data()) else {
         return;
     };
-    let reason = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown module worker top-level await rejection".to_owned());
     let context = scope.get_current_context();
     let Some(slot) = context.get_slot::<WorkerModuleRuntimeEvaluationSlot>() else {
         return;
@@ -2947,7 +3007,7 @@ fn worker_module_evaluation_rejected_callback<'s>(
         .evaluation_completion_tx
         .send(WorkerModuleEvaluationCompletion::new(
             evaluation_id,
-            Err(reason),
+            Err(()),
         ));
 }
 
