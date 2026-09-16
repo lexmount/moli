@@ -6696,6 +6696,326 @@ other.onsuccess = () => { globalThis.independentFinished = true; other.result.cl
 }
 
 #[tokio::test]
+async fn indexed_db_close_waits_for_accepted_transactions_before_a_remote_upgrade() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for borrowed in [false, true] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("https://indexeddb-close-pending-transactions-{borrowed}.test/"),
+            &loader,
+        );
+        vm.eval(&format!("globalThis.borrowedMethods = {borrowed};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.closeResult = 'pending';
+globalThis.closeEvents = [];
+let releaseFirst = false;
+const first = indexedDB.open('pending-transactions', 1);
+first.onerror = () => { closeResult = first.error.name; };
+first.onupgradeneeded = () => first.result.createObjectStore('records');
+first.onsuccess = () => {
+  const database = first.result;
+  let transaction = database.transaction;
+  let closeDatabase = database.close;
+  let exceptionConstructor = DOMException;
+  let typeErrorConstructor = TypeError;
+  if (globalThis.borrowedMethods) {
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    transaction = frame.contentWindow.IDBDatabase.prototype.transaction;
+    closeDatabase = frame.contentWindow.IDBDatabase.prototype.close;
+    exceptionConstructor = frame.contentWindow.DOMException;
+    typeErrorConstructor = frame.contentWindow.TypeError;
+    frame.remove();
+  }
+  try { transaction.call(database); closeResult = 'missing-argument-accepted'; return; }
+  catch (error) {
+    if (!(error instanceof typeErrorConstructor)) { closeResult = 'wrong-typeerror-realm'; return; }
+  }
+  database.onversionchange = () => closeEvents.push('unexpected-versionchange');
+  const active = transaction.call(database, 'records', 'readwrite');
+  const store = active.objectStore('records');
+  store.put(1, 1);
+  function keepAlive() {
+    store.get(0).onsuccess = () => { if (!releaseFirst) keepAlive(); };
+  }
+  keepAlive();
+  const waiting = transaction.call(database, 'records', 'readwrite');
+  if (!(waiting instanceof IDBTransaction)) { closeResult = 'wrong-transaction-realm'; return; }
+  waiting.objectStore('records').put(2, 2);
+  active.oncomplete = () => closeEvents.push('first-complete');
+  waiting.oncomplete = () => closeEvents.push('second-complete');
+  waiting.onabort = () => { closeResult = `aborted:${waiting.error.name}`; };
+  closeDatabase.call(database);
+  for (const mode of ['readonly', 'readwrite']) {
+    try {
+      transaction.call(database, 'records', mode);
+      closeResult = `accepted-after-close:${mode}`;
+      return;
+    } catch (error) {
+      if (error.name !== 'InvalidStateError' || !(error instanceof exceptionConstructor)) {
+        closeResult = 'wrong-close-error:' + error.name;
+        return;
+      }
+    }
+  }
+  const source = `
+    const request = indexedDB.open('pending-transactions', 2);
+    request.onblocked = () => postMessage('blocked');
+    request.onerror = () => postMessage({error:request.error.name});
+    request.onsuccess = () => {
+      const database = request.result;
+      const read = database.transaction('records').objectStore('records').getAll();
+      read.onsuccess = () => postMessage({values:read.result});
+      database.close();
+    };
+  `;
+  const url = URL.createObjectURL(new Blob([source]));
+  const worker = new Worker(url);
+  worker.onmessage = event => {
+    if (event.data === 'blocked') { releaseFirst = true; closeEvents.push('blocked'); return; }
+    closeResult = JSON.stringify(event.data);
+    worker.terminate();
+    URL.revokeObjectURL(url);
+  };
+};
+"#,
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(closeResult !== 'pending')",
+            "true",
+            "closing connections must finish accepted transactions before a remote upgrade",
+        )
+        .await;
+        assert_eq!(vm.eval("closeResult").unwrap(), r#"{"values":[1,2]}"#);
+        assert_eq!(
+            vm.eval("JSON.stringify(closeEvents)").unwrap(),
+            r#"["blocked","first-complete","second-complete"]"#
+        );
+    }
+}
+
+#[tokio::test]
+async fn indexed_db_retiring_worker_connections_unblocks_remote_requests_and_aborts_writes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for shutdown in ["close", "terminate", "before-notification"] {
+        for operation in ["upgrade", "delete"] {
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://indexeddb-retired-worker-connections.test/",
+                &loader,
+            );
+            let config = serde_json::json!({"shutdown":shutdown,"operation":operation});
+            vm.eval(&format!("globalThis.retirementConfig = {config};"))
+                .unwrap();
+            vm.eval(r#"
+globalThis.retirementResult = 'pending';
+globalThis.retirementEvents = [];
+const config = retirementConfig;
+const name = `retired-${config.shutdown}-${config.operation}`;
+const source = `
+  const name = ${JSON.stringify(name)};
+  const shutdown = ${JSON.stringify(config.shutdown)};
+  const request = indexedDB.open(name, 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('records');
+  request.onsuccess = () => {
+    const database = request.result;
+    const transaction = database.transaction('records', 'readwrite');
+    const store = transaction.objectStore('records');
+    const write = store.put('uncommitted', 1);
+    function keepAlive() { store.get(0).onsuccess = keepAlive; }
+    keepAlive();
+    database.onversionchange = () => {
+      postMessage('notified');
+      if (shutdown === 'close') self.close();
+    };
+    write.onsuccess = () => {
+      postMessage('ready');
+      if (shutdown === 'before-notification') while (true) {}
+    };
+  };
+`;
+const url = URL.createObjectURL(new Blob([source]));
+const worker = new Worker(url);
+let notified = false;
+let workerStopped = false;
+let operationResult;
+function finish(result) {
+  if (result === 'pass' && config.shutdown !== 'before-notification' && !notified) {
+    operationResult = result;
+    return;
+  }
+  retirementResult = result;
+  worker.terminate();
+  URL.revokeObjectURL(url);
+}
+worker.onmessage = event => {
+  retirementEvents.push(event.data);
+  if (event.data === 'notified') {
+    notified = true;
+    if (config.shutdown === 'terminate') worker.terminate();
+    if (operationResult) finish(operationResult);
+    return;
+  }
+  if (event.data !== 'ready') return;
+  const request = config.operation === 'upgrade' ? indexedDB.open(name, 2) : indexedDB.deleteDatabase(name);
+  request.onblocked = () => retirementEvents.push('blocked');
+  request.onerror = () => finish(`error:${request.error.name}`);
+  request.onsuccess = () => {
+    if (config.shutdown === 'before-notification' && !workerStopped) { finish('early-success'); return; }
+    if (config.operation === 'delete') { finish('pass'); return; }
+    const database = request.result;
+    const read = database.transaction('records').objectStore('records').get(1);
+    read.onsuccess = () => { database.close(); finish(read.result === undefined ? 'pass' : 'leaked-write'); };
+  };
+  if (config.shutdown === 'before-notification') setTimeout(() => {
+    workerStopped = true;
+    worker.terminate();
+  }, 20);
+};
+"#).unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(retirementResult !== 'pending')",
+                "true",
+                "retiring the worker connection must wake the remote request",
+            )
+            .await;
+            assert_eq!(vm.eval("retirementResult").unwrap(), "pass", "{config}");
+            assert_eq!(
+                vm.eval(
+                    "String(retirementEvents.filter(event => event === 'blocked').length <= 1)"
+                )
+                .unwrap(),
+                "true",
+                "{config}"
+            );
+            if shutdown == "before-notification" {
+                assert_eq!(
+                    vm.eval("String(retirementEvents.includes('notified'))")
+                        .unwrap(),
+                    "false"
+                );
+            } else {
+                assert_eq!(
+                    vm.eval(
+                        "String(retirementEvents.filter(event => event === 'notified').length)"
+                    )
+                    .unwrap(),
+                    "1"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn indexed_db_retiring_a_blocked_worker_request_releases_the_next_request() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for shutdown in ["close", "terminate"] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("https://indexeddb-retired-requester-{shutdown}.test/"),
+            &loader,
+        );
+        vm.eval(&format!("globalThis.requesterShutdown = {shutdown:?};"))
+            .unwrap();
+        vm.eval(r#"
+globalThis.requesterResult = 'pending';
+globalThis.requesterEvents = [];
+const initial = indexedDB.open('retiring-requester', 1);
+initial.onerror = () => { requesterResult = initial.error.name; };
+initial.onsuccess = () => {
+  const database = initial.result;
+  database.onversionchange = event => {
+    requesterEvents.push(event.newVersion);
+  };
+  const source = [
+    'const shutdown = ' + JSON.stringify(requesterShutdown) + ';',
+    "const request = indexedDB.open('retiring-requester', 2);",
+    "request.onblocked = () => { postMessage('blocked'); if (shutdown === 'close') self.close(); };",
+    "request.onsuccess = () => postMessage('unexpected-success');",
+    "request.onerror = () => postMessage('error:' + request.error.name);"
+  ].join('\n');
+  const url = URL.createObjectURL(new Blob([source]));
+  const worker = new Worker(url);
+  worker.onmessage = event => {
+    if (event.data !== 'blocked') { requesterResult = event.data; worker.terminate(); return; }
+    requesterEvents.push('blocked');
+    if (requesterShutdown === 'terminate') worker.terminate();
+    database.close();
+    const next = indexedDB.open('retiring-requester', 3);
+    next.onupgradeneeded = event => requesterEvents.push('upgrade:' + event.oldVersion);
+    next.onerror = () => { requesterResult = next.error.name; };
+    next.onsuccess = () => {
+      requesterEvents.push('success');
+      requesterResult = next.result.version === 3 ? 'pass' : 'wrong-version';
+      next.result.close();
+      worker.terminate();
+      URL.revokeObjectURL(url);
+    };
+  };
+};
+"#).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(requesterResult !== 'pending')",
+            "true",
+            "retiring a blocked requester must release its queue position",
+        )
+        .await;
+        assert_eq!(vm.eval("requesterResult").unwrap(), "pass", "{shutdown}");
+        assert_eq!(
+            vm.eval("JSON.stringify(requesterEvents)").unwrap(),
+            r#"[2,"blocked","upgrade:1","success"]"#
+        );
+    }
+}
+
+#[tokio::test]
+async fn indexed_db_versionchange_coordinates_window_worker_and_two_worker_connections() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (holder, requester) in [
+        ("worker", "window"),
+        ("window", "worker"),
+        ("worker", "worker"),
+    ] {
+        for operation in ["upgrade", "delete"] {
+            for close_mode in ["microtask", "timer", "blocked"] {
+                let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                    "https://indexeddb-cross-agent-connections.test/",
+                    &loader,
+                );
+                let config = serde_json::json!({"holder":holder,"requester":requester,"operation":operation,"closeMode":close_mode});
+                vm.eval(&format!("globalThis.connectionConfig = {config};"))
+                    .unwrap();
+                vm.eval(include_str!(
+                    "../../../tests/fixtures/indexeddb-cross-agent-connections.js"
+                ))
+                .unwrap();
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(connectionProbe.state !== 'pending')",
+                    "true",
+                    "cross-agent connection notification should finish",
+                )
+                .await;
+                assert_eq!(
+                    vm.eval("connectionProbe.state").unwrap(),
+                    "pass",
+                    "{config}: {}",
+                    vm.eval("JSON.stringify(connectionProbe)").unwrap()
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn indexed_db_connection_queue_preserves_blocked_when_a_timer_closes_the_connection() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     for close_in_timer in [true, false] {

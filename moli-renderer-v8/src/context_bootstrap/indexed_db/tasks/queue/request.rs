@@ -47,6 +47,7 @@ fn enqueue_request_task_in_current_context<'s>(
         "open-success" => IndexedDbTaskKind::OpenSuccess,
         _ => return,
     };
+    crate::context_bootstrap::indexed_db::queue_transaction_request_result(scope, request);
     let task = v8::Object::new(scope);
     register_indexed_db_request_dispatch_task(scope, task, typed_kind, request);
     enqueue_indexed_db_task(scope, task);

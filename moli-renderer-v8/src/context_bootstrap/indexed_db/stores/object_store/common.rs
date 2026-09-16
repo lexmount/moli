@@ -27,7 +27,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_store_request<'s>(
         return None;
     }
     let request = create_request_object(scope, source.into(), transaction)?;
-    queue_transaction_request(scope, transaction, request);
     Some((request, transaction))
 }
 

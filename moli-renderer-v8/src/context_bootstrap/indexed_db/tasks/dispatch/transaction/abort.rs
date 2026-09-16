@@ -10,6 +10,11 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>
         return;
     };
     let aborted_open = take_indexed_db_upgrade_open(scope, transaction);
+    if let Some(database) =
+        crate::context_bootstrap::indexed_db::indexed_db_transaction_database(scope, transaction)
+    {
+        crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, database);
+    }
     if let Some((_, database)) = aborted_open {
         set_indexed_db_slot_value(
             scope,

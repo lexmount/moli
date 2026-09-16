@@ -44,6 +44,7 @@ pub(crate) struct DatabaseHandleState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransactionState {
+    pub(crate) database: DatabaseHandle,
     pub(crate) origin: String,
     pub(crate) db_name: String,
     pub(crate) mode: TransactionMode,
@@ -60,6 +61,7 @@ pub(crate) enum TransactionLifecycle {
 }
 
 pub struct IndexedDbManager {
+    pub(crate) connection_notifications: std::sync::Arc<crate::ConnectionNotifications>,
     pub(crate) connection_requests: std::sync::Arc<crate::ConnectionRequestQueues>,
     pub(crate) backend: IndexedDbPersistenceBackend,
     pub(crate) origins: BTreeMap<String, OriginState>,

@@ -291,10 +291,16 @@ pub(crate) use self::image_data::{
     image_data_clone_payload_from_object,
 };
 pub(crate) use self::indexed_db::{
-    ConnectionRequestHandle, IndexedDbTaskId, discard_indexed_db_task_by_id,
-    flush_blocked_indexed_db_requests, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
-    indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
+    ConnectionRequestHandle, IndexedDbTaskSourceEntry, discard_indexed_db_task_by_id,
+    flush_blocked_indexed_db_requests, flush_indexed_db_connection_notification,
+    flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
+    install_worker_indexed_db_runtime_state, retire_indexed_db_context,
     set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
+};
+#[cfg(test)]
+pub(crate) use self::indexed_db::{
+    IndexedDbTaskId, indexed_db_manager_context_slot_present_for_test,
+    indexed_db_manager_isolate_slot_present_for_test,
 };
 pub use self::indexed_db::{
     Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,
@@ -307,11 +313,6 @@ pub use self::indexed_db::{
 pub(crate) use self::indexed_db::{
     bind_indexed_db_factory_to_window_execution_context,
     materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
-};
-#[cfg(test)]
-pub(crate) use self::indexed_db::{
-    indexed_db_manager_context_slot_present_for_test,
-    indexed_db_manager_isolate_slot_present_for_test,
 };
 pub(in crate::context_bootstrap) use self::indexed_db::{
     indexed_db_usage_bytes_for_storage_key, scoped_storage_bucket_indexed_db_factory,
