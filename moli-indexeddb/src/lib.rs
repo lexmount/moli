@@ -4,8 +4,13 @@
 //! It does not expose JS objects or DOM events. The renderer is expected to
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
+mod connection_notifications;
 mod cursor;
 mod error;
+pub use connection_notifications::{
+    ConnectionNotifications, VersionChangeBatch, VersionChangeCompletion,
+    VersionChangeNotification, VersionChangeWake,
+};
 mod key;
 mod manager;
 mod options;
