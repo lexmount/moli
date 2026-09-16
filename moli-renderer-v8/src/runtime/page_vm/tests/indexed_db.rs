@@ -22,13 +22,13 @@ fn schedule_open(page_vm: &mut PageVm, database_name: &str, marker: &str) {
   const request = indexedDB.open({database_name:?}, 1);
   request.onupgradeneeded = () => {{
     globalThis[{marker:?}].push("upgrade");
+    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
   }};
   request.onerror = () => {{
     globalThis[{marker:?}].push(`error:${{request.error && request.error.name}}`);
   }};
   request.onsuccess = () => {{
     globalThis[{marker:?}].push("success");
-    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
     request.result.close();
   }};
   return "scheduled";
@@ -53,13 +53,15 @@ fn schedule_child_open(
 (() => {{
   globalThis[{marker:?}] = [];
   const request = indexedDB.open({database_name:?}, 1);
-  request.onupgradeneeded = () => globalThis[{marker:?}].push("upgrade");
+  request.onupgradeneeded = () => {{
+    globalThis[{marker:?}].push("upgrade");
+    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
+  }};
   request.onerror = () => {{
     globalThis[{marker:?}].push(`error:${{request.error && request.error.name}}`);
   }};
   request.onsuccess = () => {{
     globalThis[{marker:?}].push("success");
-    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
     request.result.close();
   }};
   return "scheduled";
@@ -149,6 +151,13 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
 })()
 "#,
         )?;
+        // Advance upgrade, put success, and commit as separate selected tasks.
+        // The next exact task is open.success, whose body must leave reactions
+        // and the newly created transaction's deactivation to completion.
+        for _ in 0..3 {
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some());
+        }
         page_vm
             .vm_mut()
             .enqueue_test_ready_runtime_script_followup();
@@ -298,6 +307,11 @@ async fn indexed_db_selected_callback_completion_reconciles_a_created_child() {
 "#,
         )?;
 
+        for _ in 0..2 {
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some());
+            assert!(!page_vm.vm().has_pending_child_navigation_commit_for_test());
+        }
         assert!(
             run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
                 .await?
@@ -338,7 +352,7 @@ async fn indexed_db_task_applies_real_producer_work_and_one_microtask_checkpoint
             page_vm
                 .vm_mut()
                 .eval("globalThis.__indexedDbOwnerTurn.join('|')")?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "one authorized IDB turn must include its host-task microtask checkpoint"
         );
         Ok::<_, anyhow::Error>(())
@@ -368,7 +382,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             page_vm
                 .vm_mut()
                 .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","success","microtask"],[]]"#
+            r#"[["upgrade","microtask"],[]]"#
         );
 
         let second = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
@@ -381,7 +395,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             page_vm
                 .vm_mut()
                 .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","success","microtask"],["upgrade","success","microtask"]]"#
+            r#"[["upgrade","microtask"],["upgrade","microtask"]]"#
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -413,7 +427,7 @@ async fn indexed_db_task_survives_document_open_in_the_same_window_realm() {
             page_vm
                 .vm_mut()
                 .eval("globalThis.__documentOpenIndexedDbTurn.join('|')")?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "document.open() must not retire work owned by its preserved Window realm"
         );
         Ok::<_, anyhow::Error>(())
@@ -523,7 +537,7 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
                 current_execution_context_id,
                 "globalThis.__replacementRealmIndexedDbTurn.join('|')",
             )?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "the central Agent checkpoint must drain reactions queued by the exact child realm"
         );
         Ok::<_, anyhow::Error>(())
@@ -620,7 +634,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         page_vm
                             .vm_mut()
                             .eval("globalThis.__replacementIndexedDbTurn.join('|')")?,
-                        "upgrade|success|microtask"
+                        "upgrade|microtask"
                     );
                     Ok::<_, anyhow::Error>(())
                 })
