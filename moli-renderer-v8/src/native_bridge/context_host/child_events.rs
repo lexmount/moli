@@ -172,7 +172,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
         handler_name: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
         callback_relevant_context: v8::Local<'s, v8::Context>,
     ) {
         let Some(event_type) = child_window_event_type_from_handler_name(handler_name) else {
@@ -189,10 +189,9 @@ impl JsContextHost {
         let incumbent_context = scope
             .get_incumbent_context()
             .unwrap_or_else(|| scope.get_current_context());
-        let callback = v8::Local::<v8::Object>::from(handler);
-        let callback_id = self.register_event_callback(
+        let callback_id = self.register_event_handler_callback(
             scope,
-            callback,
+            handler,
             callback_relevant_context,
             incumbent_context,
         );
@@ -323,8 +322,12 @@ impl JsContextHost {
                         })
                     });
                 if unchanged && let Some(handler) = handler {
-                    let callback_id =
-                        self.register_event_callback(scope, handler.into(), context, context);
+                    let callback_id = self.register_event_handler_callback(
+                        scope,
+                        handler.into(),
+                        context,
+                        context,
+                    );
                     let _ = self.set_child_window_event_handler_state(
                         handle,
                         event_type,
