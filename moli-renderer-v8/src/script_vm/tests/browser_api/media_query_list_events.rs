@@ -20,3 +20,21 @@ fn media_query_list_event_constructor_preserves_webidl_and_receiver_semantics() 
     let result = run_probe("mediaQueryListEventConstructorProbe");
     assert!(result["checks"].as_u64().unwrap() >= 35);
 }
+
+#[test]
+fn media_query_list_inherits_event_target_and_shares_ordered_listeners() {
+    let result = run_probe("mediaQueryListEventTargetProbe");
+    assert_eq!(result["rows"], serde_json::json!(["main", "child"]));
+}
+
+#[test]
+fn media_query_list_generated_receiver_checks_precede_conversion() {
+    let result = run_probe("mediaQueryListReceiverProbe");
+    assert_eq!(result["checks"], 90);
+}
+
+#[test]
+fn media_query_list_borrowed_members_preserve_target_realm_and_lifetime() {
+    let result = run_probe("mediaQueryListLifetimeProbe");
+    assert_eq!(result["calls"], 0);
+}
