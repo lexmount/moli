@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::restore_indexed_db_upgrade_metadata;
 
 pub(super) fn commit_upgrade_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -58,6 +59,7 @@ fn finish_failed_upgrade_commit<'s>(
     transaction: v8::Local<'s, v8::Object>,
     error: IndexedDbError,
 ) -> bool {
+    restore_indexed_db_upgrade_metadata(scope, transaction);
     let error_value = request_error_object(scope, &error);
     let _ = transaction.set(scope, v8str(scope, "error").into(), error_value);
     set_indexed_db_request_surface_value(

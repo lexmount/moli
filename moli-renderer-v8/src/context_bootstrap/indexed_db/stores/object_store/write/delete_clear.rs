@@ -18,6 +18,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         return;
     };
     let store = args.this();
+    if crate::context_bootstrap::indexed_db::indexed_db_object_store_is_deleted(scope, store) {
+        let error = dom_exception_value(scope, "The object store has been deleted.", "InvalidStateError");
+        scope.throw_exception(error);
+        return;
+    }
     let Some(transaction) =
         indexed_db_object_store_transaction(scope, store).filter(|transaction| {
             object_bool_property(scope, *transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
@@ -95,12 +100,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
 ) {
     let store = args.this();
     let Some((request, transaction)) = create_store_request(scope, store) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {

@@ -58,7 +58,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
     } else {
         indexes.iter().map(|index| index.name.clone()).collect()
     };
-    let index_names_list = new_idb_dom_string_list(scope, &index_names);
+    let index_names_list = new_idb_name_list(scope, &index_names);
     set_indexed_db_internal_object_property(
         scope,
         descriptor,
