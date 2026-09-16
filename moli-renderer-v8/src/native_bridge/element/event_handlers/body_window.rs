@@ -101,7 +101,7 @@ fn body_window_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let handler = v8::Local::<v8::Function>::try_from(args.get(0)).ok();
+    let handler = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
     match super::body_or_frameset_window_owner(unsafe { &*runtime_ptr }, handle) {
         Some(OwnerDispatchScope::Top) => unsafe { &mut *runtime_ptr }
             .set_registered_event_handler_property(
