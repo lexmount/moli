@@ -485,6 +485,9 @@ impl JsContextHost {
                 LayoutQuery::HitTestAll { point, .. } if !viewport.contains(*point) => {
                     LayoutQueryAnswer::HitTestAll(Vec::new())
                 }
+                LayoutQuery::CaretPosition { point } if !viewport.contains(*point) => {
+                    LayoutQueryAnswer::CaretPosition(None)
+                }
                 _ => tree.answer_query(query),
             })
             .collect();

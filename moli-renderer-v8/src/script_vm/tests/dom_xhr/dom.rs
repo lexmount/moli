@@ -2379,6 +2379,12 @@ fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
             point: LayoutPoint::new(150.0, 20.0),
             ignore_pointer_events_none: false,
         },
+        LayoutQuery::CaretPosition {
+            point: LayoutPoint::new(-1.0, -1.0),
+        },
+        LayoutQuery::CaretPosition {
+            point: LayoutPoint::new(150.0, 20.0),
+        },
     ]);
     for (width, expect_hit) in [(320, true), (100, false), (320, true)] {
         let answers = GeometryProvider::answer(
@@ -2401,6 +2407,11 @@ fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
             panic!("expected hit list")
         };
         assert_eq!(!hits.is_empty(), expect_hit);
+        assert_eq!(answers.answers[4], LayoutQueryAnswer::CaretPosition(None));
+        let LayoutQueryAnswer::CaretPosition(position) = &answers.answers[5] else {
+            panic!("expected caret position")
+        };
+        assert_eq!(position.is_some(), expect_hit);
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
             before + 1,
