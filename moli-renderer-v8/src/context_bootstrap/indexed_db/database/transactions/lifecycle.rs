@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::restore_indexed_db_upgrade_metadata;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
 pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
@@ -6,6 +7,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     transaction: v8::Local<'s, v8::Object>,
     error: v8::Local<'s, v8::Value>,
 ) {
+    restore_indexed_db_upgrade_metadata(scope, transaction);
     let _ = transaction.set(scope, v8str(scope, "error").into(), error);
     set_indexed_db_slot_value(
         scope,
