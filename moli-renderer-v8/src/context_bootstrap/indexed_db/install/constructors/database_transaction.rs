@@ -9,7 +9,12 @@ struct IdbDatabasePrototypeDeclaration {
     create_object_store: (),
     #[webapi(method, length = 1, callback = idb_database_delete_object_store_callback)]
     delete_object_store: (),
-    #[webapi(method, length = 2, callback = idb_database_transaction_callback)]
+    #[webapi(
+        method,
+        length = 1,
+        callback = idb_database_transaction_callback,
+        receiver = web_api_interfaces::IDBDatabase::is_instance
+    )]
     transaction: (),
     #[webapi(method, length = 0, callback = idb_database_close_callback)]
     close: (),
