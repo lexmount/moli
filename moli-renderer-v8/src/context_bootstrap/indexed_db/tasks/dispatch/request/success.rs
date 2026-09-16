@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::abort_indexed_db_transaction_after_dispatch;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 use crate::context_bootstrap::indexed_db::take_indexed_db_deleted_database_version;
 
@@ -28,7 +29,14 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
     if let Some(old_version) = take_indexed_db_deleted_database_version(scope, request) {
         let _ = dispatch_version_change_event(scope, request, "success", old_version, None);
     } else {
-        let _ = dispatch_idb_named_event(scope, request, "success", |_, _| {});
+        let result = dispatch_idb_named_event(scope, request, "success", |_, _| {});
+        if result.did_throw
+            && let Some(transaction) = transaction
+        {
+            let error =
+                dom_exception_value(scope, "An IndexedDB event listener threw.", "AbortError");
+            abort_indexed_db_transaction_after_dispatch(scope, transaction, error);
+        }
     }
     finish::finish_request_dispatch(scope, request);
     if let Some(transaction) = transaction {
@@ -49,21 +57,4 @@ fn refresh_pending_cursor_surface<'s>(
         .unwrap_or(-1.0);
     let position = (position >= 0.0).then_some(position as usize);
     let _ = refresh_cursor_surface(scope, cursor, position);
-}
-
-fn set_transaction_active_for_request_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
 }

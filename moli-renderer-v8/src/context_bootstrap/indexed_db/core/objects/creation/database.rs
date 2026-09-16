@@ -1,8 +1,5 @@
 use super::*;
-use crate::context_bootstrap::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
-};
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -15,52 +12,12 @@ use moli_webapi_declare::WebApiObject;
     enumerable
 )]
 struct IdbDatabaseObjectDeclaration<'scope, 'value> {
-    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
     name: &'value str,
     version: f64,
     object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(
-        accessor_property = "onabort",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onabort"),
-        setter_data = v8str(scope, "onabort"),
-        enumerable,
-        receiver = web_api_interfaces::IDBDatabase::is_instance
-    )]
-    onabort: (),
-    #[webapi(
-        accessor_property = "onclose",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onclose"),
-        setter_data = v8str(scope, "onclose"),
-        enumerable,
-        receiver = web_api_interfaces::IDBDatabase::is_instance
-    )]
-    onclose: (),
-    #[webapi(
-        accessor_property = "onerror",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onerror"),
-        setter_data = v8str(scope, "onerror"),
-        enumerable,
-        receiver = web_api_interfaces::IDBDatabase::is_instance
-    )]
-    onerror: (),
-    #[webapi(
-        accessor_property = "onversionchange",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onversionchange"),
-        setter_data = v8str(scope, "onversionchange"),
-        enumerable,
-        receiver = web_api_interfaces::IDBDatabase::is_instance
-    )]
-    onversionchange: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
@@ -92,6 +49,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         storage_scope,
     );
     let _ = refresh_database_metadata(scope, database, info);
+    initialize_indexed_db_event_target(scope, database, None);
     register_open_database_connection(scope, owner, handle, database_key, database);
     Some(database)
 }

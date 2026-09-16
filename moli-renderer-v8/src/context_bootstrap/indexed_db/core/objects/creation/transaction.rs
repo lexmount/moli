@@ -1,8 +1,5 @@
 use super::*;
-use crate::context_bootstrap::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
-};
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -14,7 +11,7 @@ use moli_webapi_declare::WebApiObject;
     enumerable
 )]
 struct IdbTransactionObjectDeclaration<'scope> {
-    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
     db: v8::Local<'scope, v8::Object>,
@@ -22,36 +19,6 @@ struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(init = "null")]
     error: (),
     object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(
-        accessor_property = "onabort",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onabort"),
-        setter_data = v8str(scope, "onabort"),
-        enumerable,
-        receiver = web_api_interfaces::IDBTransaction::is_instance
-    )]
-    onabort: (),
-    #[webapi(
-        accessor_property = "oncomplete",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "oncomplete"),
-        setter_data = v8str(scope, "oncomplete"),
-        enumerable,
-        receiver = web_api_interfaces::IDBTransaction::is_instance
-    )]
-    oncomplete: (),
-    #[webapi(
-        accessor_property = "onerror",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onerror"),
-        setter_data = v8str(scope, "onerror"),
-        enumerable,
-        receiver = web_api_interfaces::IDBTransaction::is_instance
-    )]
-    onerror: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
@@ -87,5 +54,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         handle_raw.is_some(),
         db_key,
     );
+    initialize_indexed_db_event_target(scope, tx, Some(db));
     Some(tx)
 }
