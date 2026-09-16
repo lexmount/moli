@@ -2033,24 +2033,17 @@ async fn worker_main(
                 pending_module_bootstrap = Some(bootstrap);
             }
             WorkerBootstrapStart::Failed { error, phase } => {
-                let parent_event_kind = error.event_kind;
-                let error_source = if script_kind == WorkerScriptKind::Classic {
-                    WorkerErrorSource::InitialScriptEvaluation
-                } else {
-                    WorkerErrorSource::Runtime
-                };
-                let handled = bootstrap_completion.report_failure(
+                bootstrap_completion.report_failure(
                     scope,
                     global,
                     *error,
                     &script_url,
                     phase,
-                    error_source,
+                    WorkerErrorSource::InitialScriptEvaluation,
                     &parent_tx,
                 );
                 bootstrap_failed = phase == WorkerErrorPhase::Bootstrap
-                    && !handled
-                    && parent_event_kind == WorkerParentErrorEventKind::Event;
+                    || matches!(state.borrow().global_kind, WorkerGlobalKind::Service { .. });
             }
         }
 
@@ -3202,17 +3195,35 @@ async fn worker_main(
                             }
                             WorkerModuleBootstrapResume::WaitingEvaluation => {}
                             WorkerModuleBootstrapResume::Failed(error) => {
+                                pending_module_bootstrap = None;
+                                let phase =
+                                    super::module_runtime::worker_module_bootstrap_error_phase(
+                                        &error,
+                                    );
                                 bootstrap_completion.report_failure(
                                     scope,
                                     global,
                                     *error,
                                     &script_url,
-                                    WorkerErrorPhase::Bootstrap,
-                                    WorkerErrorSource::Runtime,
+                                    phase,
+                                    WorkerErrorSource::InitialScriptEvaluation,
                                     &parent_tx,
                                 );
                                 forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                                break;
+                                if phase == WorkerErrorPhase::Bootstrap
+                                    || matches!(
+                                        state.borrow().global_kind,
+                                        WorkerGlobalKind::Service { .. }
+                                    )
+                                {
+                                    break;
+                                }
+                                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                                drain_worker_dynamic_module_imports(
+                                    scope,
+                                    &state,
+                                    &module_graph_fetch_tx,
+                                );
                             }
                         }
                     }
@@ -3269,17 +3280,33 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
                         WorkerModuleBootstrapResume::Failed(error) => {
+                            pending_module_bootstrap = None;
+                            let phase =
+                                super::module_runtime::worker_module_bootstrap_error_phase(&error);
                             bootstrap_completion.report_failure(
                                 scope,
                                 global,
                                 *error,
                                 &script_url,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                                 &parent_tx,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
+                            if phase == WorkerErrorPhase::Bootstrap
+                                || matches!(
+                                    state.borrow().global_kind,
+                                    WorkerGlobalKind::Service { .. }
+                                )
+                            {
+                                break;
+                            }
+                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                            drain_worker_dynamic_module_imports(
+                                scope,
+                                &state,
+                                &module_graph_fetch_tx,
+                            );
                         }
                     }
                 } else {
@@ -3621,8 +3648,8 @@ impl From<WorkerModuleBootstrapStart> for WorkerBootstrapStart {
             WorkerModuleBootstrapStart::Complete => Self::Complete,
             WorkerModuleBootstrapStart::Pending(bootstrap) => Self::Pending(bootstrap),
             WorkerModuleBootstrapStart::Failed(error) => Self::Failed {
+                phase: super::module_runtime::worker_module_bootstrap_error_phase(&error),
                 error,
-                phase: WorkerErrorPhase::Bootstrap,
             },
         }
     }
