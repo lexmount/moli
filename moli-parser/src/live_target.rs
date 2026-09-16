@@ -3942,8 +3942,7 @@ fn parser_stream_marks_only_eof_unclosed_form_controls_as_submission_blocking() 
 
     for (tag_name, html, expected) in cases {
         let url = Url::parse("https://dangling-markup.test/").expect("test url");
-        let mut stream =
-            crate::DocumentStream::new_scripting_enabled_parser_stream_for_testing(url);
+        let stream = crate::DocumentStream::new_scripting_enabled_parser_stream_for_testing(url);
         stream.feed(html);
         let document = stream.finish();
         let control = document
