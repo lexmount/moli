@@ -15,8 +15,12 @@ IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=window
 IndexedDB/database-names-by-origin.html
 IndexedDB/idb_webworkers.htm
+IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=window
+IndexedDB/idbdatabase_transaction.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase_transaction.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-databases-opaque-origin.html
 IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
 IndexedDB/idbfactory-open-opaque-origin.html
@@ -34,6 +38,8 @@ IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=dedicat
 IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=window
+IndexedDB/transaction-create_in_versionchange.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/transaction-create_in_versionchange.any.js?moli-wpt-any=window
 IndexedDB/transaction-lifetime.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-lifetime.any.js?moli-wpt-any=window
 IndexedDB/upgrade-transaction-lifecycle-committed.any.js?moli-wpt-any=dedicatedworker
