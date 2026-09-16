@@ -65,7 +65,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
     let Some(request) = create_request_object(scope, store.into(), transaction) else {
         return;
     };
-    queue_transaction_request(scope, transaction, request);
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
     {

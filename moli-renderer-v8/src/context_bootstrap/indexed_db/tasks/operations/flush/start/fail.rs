@@ -21,5 +21,10 @@ pub(super) fn fail_readwrite_transaction_start<'s>(
         v8::Boolean::new(scope, true).into(),
     );
     unregister_readwrite_transaction(scope, transaction);
+    if let Some(database) =
+        crate::context_bootstrap::indexed_db::indexed_db_transaction_database(scope, transaction)
+    {
+        crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, database);
+    }
     let _ = dispatch_idb_named_event(scope, transaction, "error", |_, _| {});
 }

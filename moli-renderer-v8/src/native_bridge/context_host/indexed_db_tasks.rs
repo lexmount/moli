@@ -10,15 +10,8 @@ use std::{
 
 struct IndexedDbOpenConnection {
     execution_context: WindowExecutionContextIdentity,
-    context: v8::Global<v8::Context>,
     database: v8::Global<v8::Object>,
     database_key: String,
-}
-
-pub(crate) struct IndexedDbOpenConnectionSnapshot {
-    pub(crate) execution_context: WindowExecutionContextIdentity,
-    pub(crate) context: v8::Global<v8::Context>,
-    pub(crate) database: v8::Global<v8::Object>,
 }
 
 #[derive(Default)]
@@ -67,7 +60,6 @@ impl IndexedDbContextState {
             handle,
             IndexedDbOpenConnection {
                 execution_context,
-                context: v8::Global::new(scope, scope.get_current_context()),
                 database: v8::Global::new(scope, database),
                 database_key,
             },
@@ -78,21 +70,15 @@ impl IndexedDbContextState {
         );
     }
 
-    fn open_connection_snapshots(
+    fn open_connection_for_handle<'s>(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        database_key: &str,
-    ) -> Vec<IndexedDbOpenConnectionSnapshot> {
-        self.open_connections
-            .borrow()
-            .values()
-            .filter(|connection| connection.database_key == database_key)
-            .map(|connection| IndexedDbOpenConnectionSnapshot {
-                execution_context: connection.execution_context,
-                context: v8::Global::new(scope, v8::Local::new(scope, &connection.context)),
-                database: v8::Global::new(scope, v8::Local::new(scope, &connection.database)),
-            })
-            .collect()
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DatabaseHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        Some(v8::Local::new(
+            scope,
+            &self.open_connections.borrow().get(&handle)?.database,
+        ))
     }
 
     fn register_blocked_context(
@@ -298,13 +284,13 @@ impl JsContextHost {
         );
     }
 
-    pub(crate) fn indexed_db_open_connection_snapshots(
+    pub(crate) fn indexed_db_open_connection_for_handle<'s>(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        database_key: &str,
-    ) -> Vec<IndexedDbOpenConnectionSnapshot> {
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DatabaseHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         self.indexed_db_context_tasks
-            .open_connection_snapshots(scope, database_key)
+            .open_connection_for_handle(scope, handle)
     }
 
     pub(crate) fn unregister_indexed_db_open_connection(&self, handle: DatabaseHandle) -> bool {
