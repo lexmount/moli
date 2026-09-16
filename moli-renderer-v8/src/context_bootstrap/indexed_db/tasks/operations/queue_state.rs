@@ -85,10 +85,10 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation<'s
 pub(in crate::context_bootstrap::indexed_db) fn abort_queued_transaction_requests<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
-    error: v8::Local<'s, v8::Value>,
 ) {
     for operation in take_indexed_db_operations_waiting_for_start(scope, transaction) {
         let request = operation.request(scope);
+        let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
         store_request_error(scope, request, error);
     }
 }

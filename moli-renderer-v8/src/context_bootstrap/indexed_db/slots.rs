@@ -21,6 +21,8 @@ pub(super) const INDEXED_DB_DATABASE_STORAGE_KEY_SLOT: &str = "moli.IndexedDb.da
 pub(super) const INDEXED_DB_DATABASE_CLOSED_SLOT: &str = "moli.IndexedDb.databaseClosed";
 pub(super) const INDEXED_DB_TRANSACTION_HANDLE_SLOT: &str = "moli.IndexedDb.transactionHandle";
 pub(super) const INDEXED_DB_TRANSACTION_ACTIVE_SLOT: &str = "moli.IndexedDb.transactionActive";
+pub(super) const INDEXED_DB_TRANSACTION_COMMITTING_SLOT: &str =
+    "moli.IndexedDb.transactionCommitting";
 pub(super) const INDEXED_DB_TRANSACTION_FINISHED_SLOT: &str = "moli.IndexedDb.transactionFinished";
 pub(super) const INDEXED_DB_TRANSACTION_ABORTED_SLOT: &str = "moli.IndexedDb.transactionAborted";
 pub(super) const INDEXED_DB_TRANSACTION_STARTED_SLOT: &str = "moli.IndexedDb.transactionStarted";

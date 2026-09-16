@@ -16,6 +16,7 @@ pub(in crate::context_bootstrap) fn install_indexed_db_template_bindings<'s>(
         prototype,
         interface_name,
     );
+    install_idb_event_handlers(scope, prototype, interface_name);
     install_dom_string_list_template_bindings(scope, prototype, interface_name);
     factory::install_factory_template_bindings(scope, prototype, interface_name);
     database_transaction::install_database_and_transaction_template_bindings(

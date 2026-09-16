@@ -3,18 +3,13 @@ use super::*;
 pub(crate) fn dispatch_indexed_db_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     if !require_idb_event_target(scope, args.this()) {
         return;
     }
-    let Some((event, _)) = crate::context_bootstrap::event_target_dispatch::prepare_script_dispatch(
-        scope,
-        args.get(0),
-    ) else {
-        return;
-    };
-    rv.set_bool(dispatch_idb_event_object(scope, args.this(), event));
+    let target = args.this();
+    super::dispatch::dispatch_indexed_db_script_event(scope, args, target, rv);
 }
 
 fn require_idb_event_target<'s>(

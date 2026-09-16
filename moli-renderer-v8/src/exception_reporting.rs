@@ -802,25 +802,6 @@ fn invoke_callback_with_reporting<'s>(
     .map_err(|report| report.formatted_error(callback_kind, callback_name))
 }
 
-pub(super) fn invoke_event_handler<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    handler_name: &str,
-    handler: v8::Local<'s, v8::Function>,
-    receiver: v8::Local<'s, v8::Value>,
-    args: &[v8::Local<'s, v8::Value>],
-) -> std::result::Result<v8::Global<v8::Value>, String> {
-    invoke_callback_with_reporting(
-        scope,
-        "event handler",
-        "host event handler threw",
-        CallbackExceptionLogLevel::Debug,
-        handler_name,
-        handler,
-        receiver,
-        args,
-    )
-}
-
 pub(super) fn invoke_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     callback_name: &str,
