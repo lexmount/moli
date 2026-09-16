@@ -445,6 +445,18 @@ fn compile_node_event_attribute_handler<'s>(
     handler_name: &str,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
+    let event_type = event_handler_event_type(handler_name)?;
+    let target_context = scope.get_current_context();
+    // A parse error reports to author code. Re-entrant getters must see null
+    // without removing the listener's position, and any changes made while
+    // reporting the error must survive this compilation attempt.
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        None,
+        target_context,
+    );
     let event_argument = v8_string(scope, "event")?;
     let global = scope.get_current_context().global(scope);
     let mut context_extensions = Vec::with_capacity(3);
@@ -468,39 +480,18 @@ fn compile_node_event_attribute_handler<'s>(
         source,
         &[event_argument],
         &context_extensions,
-    );
-    if let Some(handler) = handler {
-        if let Some(name) = v8_string(scope, handler_name) {
-            handler.set_name(name);
-        }
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                Some(handler),
-                target_context,
-            );
-        }
-        Some(handler)
-    } else {
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                None,
-                target_context,
-            );
-        }
-        None
+    )?;
+    if let Some(name) = v8_string(scope, handler_name) {
+        handler.set_name(name);
     }
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        Some(handler),
+        target_context,
+    );
+    Some(handler)
 }
 
 pub(crate) fn node_event_handler_setter_function<'s>(
