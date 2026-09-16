@@ -3,7 +3,7 @@ use super::*;
 use crate::page_task_queue::PageMessagePortDeliveryTargetEffect;
 
 #[tokio::test(flavor = "current_thread")]
-async fn message_port_delivery_body_leaves_reactions_for_selected_callback_completion() {
+async fn message_port_callback_cleanup_runs_before_dispatch_and_selected_task_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -14,12 +14,19 @@ async fn message_port_delivery_body_leaves_reactions_for_selected_callback_compl
             r#"
 globalThis.__messagePortBodyBoundary = [];
 globalThis.__messagePortBodyBoundaryChannel = new MessageChannel();
-__messagePortBodyBoundaryChannel.port1.onmessage = event => {
+const port = __messagePortBodyBoundaryChannel.port1;
+const later = () => __messagePortBodyBoundary.push("unexpected later listener");
+port.onmessage = event => {
   __messagePortBodyBoundary.push("message:" + event.data);
   Promise.resolve().then(() => {
     __messagePortBodyBoundary.push("microtask:" + event.data);
+    if (event.currentTarget !== port || event.eventPhase !== Event.AT_TARGET) {
+      __messagePortBodyBoundary.push("callback state cleared before cleanup");
+    }
+    port.removeEventListener("message", later);
   });
 };
+port.addEventListener("message", later);
 __messagePortBodyBoundaryChannel.port2.postMessage("one");
 "queued"
 "#,
@@ -41,8 +48,8 @@ __messagePortBodyBoundaryChannel.port2.postMessage("one");
             page_vm
                 .vm_mut()
                 .eval("__messagePortBodyBoundary.join('|')")?,
-            "message:one",
-            "the body-only executor must leave Promise reactions pending"
+            "message:one|microtask:one",
+            "Web IDL callback cleanup precedes later event listeners"
         );
 
         page_vm.finish_selected_page_callback_task(&loader).await?;
@@ -51,7 +58,7 @@ __messagePortBodyBoundaryChannel.port2.postMessage("one");
                 .vm_mut()
                 .eval("__messagePortBodyBoundary.join('|')")?,
             "message:one|microtask:one",
-            "the selected callback completion must own the single task checkpoint"
+            "the task checkpoint must not repeat the callback cleanup microtask"
         );
         Ok::<_, anyhow::Error>(())
     })

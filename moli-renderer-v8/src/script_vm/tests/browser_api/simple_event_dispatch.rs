@@ -195,14 +195,14 @@ fn simple_event_dispatch_observes_registration_identity_and_current_handler() {
         ),
         (
             "capture-add",
-            &["before", "after"][..],
+            &["before", "after", "original", "replacement"][..],
             &["after", "original", "replacement"][..],
-            true,
+            false,
             false,
         ),
         (
             "capture-readd",
-            &["before", "after"][..],
+            &["before", "after", "original"][..],
             &["after", "original"][..],
             true,
             true,
