@@ -96,6 +96,7 @@ mod web_audio;
 mod web_mcp;
 mod webrtc;
 mod webrtc_events;
+mod window_event_target;
 mod window_legacy_objects;
 mod window_onerror;
 mod worker_listener_invocation;
