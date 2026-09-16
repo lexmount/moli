@@ -52,6 +52,7 @@ mod security_policy;
 mod security_policy_event_init;
 mod service_worker_drain;
 mod session_description;
+mod simple_event_dispatch;
 mod simple_handler_object;
 mod speech_synthesis;
 mod storage_access;
