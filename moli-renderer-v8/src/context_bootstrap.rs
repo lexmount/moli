@@ -403,7 +403,6 @@ pub(crate) use self::shared::{
     runtime_message_allowed_for_current_target, structured_clone_value,
     structured_clone_value_with_options, structured_deserialize_value_for_message_event,
     structured_serialize_value_for_post_message,
-    structured_serialize_value_for_post_message_with_source_port,
     structured_serialize_value_for_window_post_message,
     structured_serialize_value_for_window_post_message_options,
     wasm_module_message_allowed_for_target, wasm_module_message_allowed_for_target_origin,
