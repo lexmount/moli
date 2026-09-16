@@ -9577,7 +9577,7 @@ async fn nested_worker_unhandled_error_routes_through_parent_worker_onerror() {
             postMessage({
                 messageIncludesBoom: String(message).includes("child-boom"),
                 filenameIncludesDataUrl: String(filename).includes("data:text/javascript"),
-                errorIsUndefined: error === undefined
+                errorIsNull: error === null
             });
             close();
             return true;
@@ -9594,7 +9594,7 @@ async fn nested_worker_unhandled_error_routes_through_parent_worker_onerror() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"messageIncludesBoom":true,"filenameIncludesDataUrl":true,"errorIsUndefined":true}"#
+        r#"{"messageIncludesBoom":true,"filenameIncludesDataUrl":true,"errorIsNull":true}"#
     );
 }
 

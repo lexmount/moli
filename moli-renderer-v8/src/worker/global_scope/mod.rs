@@ -5662,7 +5662,7 @@ fn worker_global_onerror_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONERROR_SLOT,
-        None,
+        Some("error"),
     );
 }
 

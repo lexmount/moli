@@ -1528,6 +1528,7 @@ mod lazy_storage;
 mod lifecycle;
 mod modules;
 mod network;
+mod onerror;
 mod postmessage;
 mod synthetic_exceptions;
 mod tls;

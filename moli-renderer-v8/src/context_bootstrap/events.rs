@@ -26,6 +26,7 @@ const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboard
 const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
 const CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT: &str = "__moliClipboardChangeEventChangeId";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
+const ERROR_EVENT_HANDLER_ARGUMENTS_SLOT: &str = "__moliErrorEventHandlerArguments";
 const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -362,6 +363,40 @@ pub(crate) fn event_is_error_event<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     event_subclass_kind(scope, event) == Some(EventSubclassKind::ErrorEvent)
+}
+
+pub(crate) fn error_event_handler_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<[v8::Local<'s, v8::Value>; 5]> {
+    if !event_is_error_event(scope, event) {
+        return None;
+    }
+    let values = get_private_value(scope, event, ERROR_EVENT_HANDLER_ARGUMENTS_SLOT)?;
+    let values = v8::Local::<v8::Array>::try_from(values).ok()?;
+    Some([
+        values.get_index(scope, 0)?,
+        values.get_index(scope, 1)?,
+        values.get_index(scope, 2)?,
+        values.get_index(scope, 3)?,
+        values.get_index(scope, 4)?,
+    ])
+}
+
+pub(crate) fn set_error_event_error_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    error: v8::Local<'s, v8::Value>,
+) {
+    let values = get_private_value(scope, event, ERROR_EVENT_HANDLER_ARGUMENTS_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .expect("ErrorEvent data should be initialized");
+    let _ = values.set_index(scope, 4, error);
+    let key = v8str(scope, "error");
+    let attributes = event
+        .get_property_attributes(scope, key.into())
+        .unwrap_or_default();
+    let _ = event.define_own_property(scope, key.into(), error, attributes);
 }
 
 pub(crate) fn set_event_source_value<'s>(
