@@ -3,7 +3,7 @@ mod generic;
 mod shared;
 
 pub(crate) use body_window::{
-    body_or_frameset_reflects_window_event_type,
+    body_or_frameset_reflects_window_event_type, compile_body_window_event_attribute,
     initialize_parser_inserted_body_window_event_handlers,
     install_body_or_frameset_window_event_handler_accessors,
     resolve_window_event_handler_content_attribute,
@@ -17,7 +17,6 @@ pub(crate) use generic::{
     install_node_event_handler_template_bindings, node_event_handler_getter_function,
     node_event_handler_setter_function,
 };
-pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 
 fn is_body_or_frameset_element(
     runtime: &super::super::JsContextHost,
