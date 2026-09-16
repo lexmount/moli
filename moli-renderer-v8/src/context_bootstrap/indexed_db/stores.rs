@@ -12,7 +12,7 @@ use super::{
     indexed_db_object_store_transaction, key_in_range, key_to_js_value, object_bool_property,
     object_string_property, parse_cursor_direction, parse_cursor_direction_with_context,
     parse_idb_key, parse_idb_key_path, parse_key_or_range, parse_key_range_from_value,
-    parse_optional_count, prepare_object_store_write, queue_transaction_request,
+    parse_optional_count, prepare_object_store_write,
     remove_database_index_metadata, request_error_object, scan_index_entries,
     scan_object_store_entries, serialize_js_value, set_database_index_metadata,
     storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,

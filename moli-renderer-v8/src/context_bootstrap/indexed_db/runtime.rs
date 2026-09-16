@@ -22,7 +22,17 @@ struct IndexedDbFactoryRuntimeDeclaration {
 
 struct IndexedDbWorkerTaskWake {
     tx: tokio::sync::mpsc::UnboundedSender<()>,
-    connection_requests_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    entries:
+        std::sync::Arc<parking_lot::Mutex<std::collections::VecDeque<IndexedDbTaskSourceEntry>>>,
+}
+
+/// Native source entries preserve ordering between local callback tasks and
+/// notifications arriving from another event loop. They contain no V8 values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IndexedDbTaskSourceEntry {
+    RuntimeQueue(IndexedDbTaskId),
+    DrainBlockedOpenRequests,
+    VersionChange(DatabaseHandle),
 }
 
 #[derive(Clone, Copy)]
@@ -103,10 +113,7 @@ pub(crate) fn indexed_db_has_pending_tasks(scope: &mut v8::PinScope<'_, '_>) -> 
     if scope
         .get_current_context()
         .get_slot::<IndexedDbWorkerTaskWake>()
-        .is_some_and(|wake| {
-            wake.connection_requests_ready
-                .load(std::sync::atomic::Ordering::Acquire)
-        })
+        .is_some_and(|wake| !wake.entries.lock().is_empty())
     {
         return true;
     }
@@ -125,7 +132,7 @@ pub(crate) fn set_worker_indexed_db_task_wake_for_context(
 ) {
     let _previous = context.set_slot(Rc::new(IndexedDbWorkerTaskWake {
         tx,
-        connection_requests_ready: Default::default(),
+        entries: Default::default(),
     }));
 }
 
@@ -133,16 +140,54 @@ pub(super) fn indexed_db_connection_request_wake(
     scope: &mut v8::PinScope<'_, '_>,
     owner: IndexedDbExecutionOwner,
 ) -> state::ConnectionRequestWake {
+    indexed_db_task_wake(
+        scope,
+        owner,
+        IndexedDbTaskSourceEntry::DrainBlockedOpenRequests,
+    )
+}
+
+pub(super) fn indexed_db_connection_notification_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+    handle: DatabaseHandle,
+) -> state::ConnectionRequestWake {
+    indexed_db_task_wake(
+        scope,
+        owner,
+        IndexedDbTaskSourceEntry::VersionChange(handle),
+    )
+}
+
+pub(super) fn indexed_db_has_external_task_source(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    context_host_ptr_from_global_bridge(scope).is_some()
+        || scope
+            .get_current_context()
+            .get_slot::<IndexedDbWorkerTaskWake>()
+            .is_some()
+}
+
+fn indexed_db_task_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+    entry: IndexedDbTaskSourceEntry,
+) -> state::ConnectionRequestWake {
+    let manager = if matches!(entry, IndexedDbTaskSourceEntry::VersionChange(_)) {
+        indexed_db_shared_manager(scope)
+            .ok()
+            .map(|manager| downgrade_indexed_db_manager(&manager))
+    } else {
+        None
+    };
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let sender = unsafe { &*host_ptr }.page_indexed_db_task_sender().clone();
         let execution_context = owner
             .execution_context()
             .expect("Page connection request owner");
         return std::sync::Arc::new(move || {
-            let _ = sender.send(
-                execution_context,
-                crate::page_task_queue::RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests,
-            );
+            if sender.send(execution_context, entry).is_err() {
+                retire_undeliverable_connection(&manager, entry);
+            }
         });
     }
     if let Some(wake) = scope
@@ -150,10 +195,12 @@ pub(super) fn indexed_db_connection_request_wake(
         .get_slot::<IndexedDbWorkerTaskWake>()
     {
         let tx = wake.tx.clone();
-        let ready = wake.connection_requests_ready.clone();
+        let entries = wake.entries.clone();
         return std::sync::Arc::new(move || {
-            ready.store(true, std::sync::atomic::Ordering::Release);
-            let _ = tx.send(());
+            entries.lock().push_back(entry);
+            if tx.send(()).is_err() {
+                retire_undeliverable_connection(&manager, entry);
+            }
         });
     }
     // Standalone contexts have no external event loop; completion schedules a
@@ -161,23 +208,35 @@ pub(super) fn indexed_db_connection_request_wake(
     std::sync::Arc::new(|| {})
 }
 
-pub(super) fn take_indexed_db_connection_request_wake(scope: &mut v8::PinScope<'_, '_>) -> bool {
+fn retire_undeliverable_connection(
+    manager: &Option<WeakIndexedDbManager>,
+    entry: IndexedDbTaskSourceEntry,
+) {
+    if let (Some(manager), IndexedDbTaskSourceEntry::VersionChange(handle)) = (manager, entry) {
+        manager.close_database_handles([handle]);
+    }
+}
+
+pub(super) fn take_worker_indexed_db_source_entry(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<IndexedDbTaskSourceEntry> {
     scope
         .get_current_context()
         .get_slot::<IndexedDbWorkerTaskWake>()
-        .is_some_and(|wake| {
-            wake.connection_requests_ready
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-        })
+        .and_then(|wake| wake.entries.lock().pop_front())
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn signal_worker_indexed_db_task_wake(
     scope: &mut v8::PinScope<'_, '_>,
+    task_id: IndexedDbTaskId,
 ) -> bool {
     let context = scope.get_current_context();
     let Some(wake) = context.get_slot::<IndexedDbWorkerTaskWake>() else {
         return false;
     };
+    wake.entries
+        .lock()
+        .push_back(IndexedDbTaskSourceEntry::RuntimeQueue(task_id));
     wake.tx.send(()).is_ok()
 }
 
