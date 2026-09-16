@@ -62,21 +62,10 @@ pub(super) fn dispatch_idb_event_object_with_result<'s>(
         };
     };
     let mut parents = Vec::new();
-    let transaction = if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Request) {
-        indexed_db_request_transaction_object(scope, target)
-    } else if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Transaction) {
-        Some(target)
-    } else {
-        // Open requests always have a null event parent, even during upgrade.
-        None
-    };
-    if let Some(transaction) = transaction {
-        if transaction != target {
-            parents.push(transaction);
-        }
-        if let Some(database) = indexed_db_transaction_database(scope, transaction) {
-            parents.push(database);
-        }
+    let mut current = target;
+    while let Some(parent) = crate::util::get_private_object(scope, current, super::EVENT_PARENT_SLOT) {
+        parents.push(parent);
+        current = parent;
     }
     let owner_scope = idb_event_target_owner_scope(scope, target);
     let previous_owner = owner_scope.enter(scope);
