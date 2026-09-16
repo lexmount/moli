@@ -26,6 +26,22 @@ fn message_channel_retained_constructor_creates_detached_ports_without_endpoints
 }
 
 #[test]
+fn simple_event_targets_validate_events_before_rejecting_retired_receiver_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://retired-event-target.test/",
+        "<!doctype html><body>",
+    );
+    let value = vm
+        .eval(&format!(
+            "{LIFECYCLE_PROBE}\nJSON.stringify(retiredTargetProbe())"
+        ))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 21, "{result}");
+}
+
+#[test]
 fn message_port_transfer_disentangles_retired_owners_before_rebinding_endpoints() {
     for (mode, remaining) in [("before", 2), ("after", 0), ("getter", 0)] {
         let mut vm = new_parsed_test_vm(
