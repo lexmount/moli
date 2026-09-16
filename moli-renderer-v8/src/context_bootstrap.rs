@@ -263,7 +263,7 @@ pub(crate) use self::events::{
     EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_before_unload_event_handler_return_value, apply_event_handler_return_value, clear_event_composed_path, event_attribute, event_backing,
     event_bool_attribute, event_initialized, event_internal_bool_flag, event_is_dispatching,
     event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
-    initialize_event_wrapper, mark_event_trusted, new_event_state, new_event_wrapper,
+    initialize_event_wrapper, mark_event_trusted, set_error_event_error_value, new_event_state, new_event_wrapper,
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_source_value, set_event_trusted,
     submit_event_submitter_value,
 };

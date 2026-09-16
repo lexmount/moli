@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
-        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
+        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, error_event_handler_arguments, event_internal_bool_flag,
         set_event_internal_flag,
     },
     context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
@@ -10,6 +10,7 @@ use crate::{
     host::report_event_callback_exception,
     native_bridge::lightweight_popup_id_from_window,
     util::context_host_ptr_from_global_bridge,
+    web_api_interfaces,
 };
 
 fn event_stop_immediate_propagation<'s>(
@@ -73,6 +74,24 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     let can_invoke =
         crate::context_bootstrap::event_target_dispatch::begin_dispatch(scope, target, event);
 
+    let error_arguments = if event_type == "error"
+        && (web_api_interfaces::WorkerGlobalScope::is_instance(scope, target)
+            || web_api_interfaces::Window::is_instance(scope, target))
+    {
+        error_event_handler_arguments(scope, event)
+    } else {
+        None
+    };
+    let ordinary_arguments = [event.into()];
+    let handler_arguments = error_arguments
+        .as_ref()
+        .map_or(ordinary_arguments.as_slice(), |values| values.as_slice());
+    let handler_type = if error_arguments.is_some() {
+        EventHandlerType::OnErrorEventHandler
+    } else {
+        EventHandlerType::EventHandler
+    };
+
     if can_invoke && !simple_event_target_uses_ordered_handlers(scope, target) {
         let handler_name = format!("on{event_type}");
         if let Some(handler_key) = v8_string(scope, &handler_name)
@@ -94,13 +113,13 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                 incumbent_context,
                 true,
                 target.into(),
-                &[event.into()],
+                handler_arguments,
                 event,
                 callback_errors.as_deref_mut(),
             );
             dispatched |= outcome.invoked;
             if let Some(returned) = outcome.value {
-                apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+                apply_event_handler_return_value(scope, event, v8::Local::new(scope, &returned), handler_type);
             }
         }
     }
@@ -141,13 +160,22 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                 else {
                     continue;
                 };
+                let callback_ordinary_arguments = [callback_event.into()];
+                let callback_handler_arguments = error_arguments.as_ref().map_or(
+                    callback_ordinary_arguments.as_slice(),
+                    |values| values.as_slice(),
+                );
                 let outcome = invoke_simple_event_listener_collecting_errors(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
                     &listener,
                     callback_target.into(),
-                    &[callback_event.into()],
+                    if listener.handler_slot.is_some() {
+                        callback_handler_arguments
+                    } else {
+                        &callback_ordinary_arguments
+                    },
                     callback_event,
                     callback_errors.as_deref_mut(),
                 );
@@ -155,7 +183,7 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
                 if listener.handler_slot.is_some()
                     && let Some(returned) = outcome.value
                 {
-                    apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+                    apply_event_handler_return_value(scope, event, v8::Local::new(scope, &returned), handler_type);
                 }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 if event_stop_immediate_propagation(scope, event) {
@@ -372,12 +400,4 @@ fn invoke_simple_event_callback_with_invocation<'s>(
             },
         },
     )
-}
-
-fn apply_handler_return_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    returned: v8::Local<'s, v8::Value>,
-) {
-    apply_event_handler_return_value(scope, event, returned, EventHandlerType::EventHandler);
 }

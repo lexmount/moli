@@ -9,15 +9,14 @@ use tokio::sync::mpsc;
 
 use moli_webapi_declare::WebApiObject;
 
-use crate::callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker};
+use crate::callback_invocation::{CallbackInvocationOutcome, CallbackInvoker};
 use crate::context_bootstrap::{
     EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
-    EventHandlerType, SimpleObjectEventListenerSnapshot, apply_event_handler_return_value,
-    dispatch_message_port_events_for_port_collecting_errors,
-    dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
-    event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
-    set_event_internal_flag, simple_object_event_listeners_snapshot,
-    structured_deserialize_value_for_message_event,
+    SimpleObjectEventListenerSnapshot, dispatch_message_port_events_for_port_collecting_errors,
+    dispatch_service_worker_controller_change, dispatch_simple_event_target_event,
+    ensure_message_port_wrapper_for_id, event_internal_bool_flag, mark_event_trusted,
+    runtime_message_allowed_for_current_target, set_event_internal_flag,
+    simple_object_event_listeners_snapshot, structured_deserialize_value_for_message_event,
 };
 use crate::exception_reporting::{
     CallbackExceptionLogLevel, V8ExceptionReport, log_unhandled_promise_rejection,
@@ -122,21 +121,6 @@ struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
     promise: v8::Local<'scope, v8::Promise>,
     #[webapi(data_property, enumerable)]
     reason: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ErrorEvent, prototype = "Object")]
-struct WorkerErrorEventFallbackDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    message: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    filename: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    lineno: u32,
-    #[webapi(data_property, enumerable)]
-    colno: u32,
-    #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -795,40 +779,34 @@ fn new_worker_error_event<'s>(
     default_url: &str,
     exception: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    let filename = report.source.as_deref().unwrap_or(default_url);
-    let line = report.line.unwrap_or(0);
-    let col = report.column.unwrap_or(0);
-    if let Some(error_ctor) = global
-        .get(scope, v8str(scope, "ErrorEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let init = WorkerErrorEventInitDeclaration::new(
-            v8::String::new(scope, &report.summary).unwrap(),
-            v8::String::new(scope, filename).unwrap(),
-            line as u32,
-            col as u32,
-            exception.unwrap_or_else(|| v8::undefined(scope).into()),
-        )
-        .bind(scope)
-        .expect("worker ErrorEvent init declaration should bind");
-        if let Some(event) = error_ctor.new_instance(
+    let constructor =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
             scope,
-            &[v8::String::new(scope, "error").unwrap().into(), init.into()],
-        ) {
-            return event;
-        }
-    }
-
-    let event = new_worker_event_object(scope, "error");
-    let _ = WorkerErrorEventFallbackDeclaration::new(
+            "ErrorEvent",
+        )
+        .expect("worker ErrorEvent intrinsic should be available");
+    let error = exception.unwrap_or_else(|| v8::null(scope).into());
+    let init = WorkerErrorEventInitDeclaration::new(
         v8::String::new(scope, &report.summary).unwrap(),
-        v8::String::new(scope, filename).unwrap(),
-        line as u32,
-        col as u32,
-        exception.unwrap_or_else(|| v8::undefined(scope).into()),
+        v8::String::new(scope, report.source.as_deref().unwrap_or(default_url)).unwrap(),
+        report.line.unwrap_or(0) as u32,
+        report.column.unwrap_or(0) as u32,
+        error,
     )
-    .initialize(scope, event);
+    .bind(scope)
+    .expect("worker ErrorEvent init declaration should bind");
+    assert_eq!(
+        init.set_prototype(scope, v8::null(scope).into()),
+        Some(true)
+    );
+    let event_type = v8::String::new(scope, "error").unwrap();
+    let event = constructor
+        .new_instance(scope, &[event_type.into(), init.into()])
+        .expect("worker ErrorEvent should construct from native init values");
+    // Reporting a thrown `undefined` must retain that value, while the JS
+    // ErrorEventInit dictionary defaults an undefined `error` member to null.
+    crate::context_bootstrap::set_error_event_error_value(scope, event, error);
+    mark_event_trusted(scope, event);
     event
 }
 
@@ -1064,7 +1042,6 @@ pub(super) fn dispatch_worker_error_event<'s>(
     global: v8::Local<'s, v8::Object>,
     report: &V8ExceptionReport,
     exception: Option<v8::Local<'s, v8::Value>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
     let _reporting_scope = if let Some(state) = get_worker_state(scope) {
@@ -1079,93 +1056,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
         None
     };
     let event = new_worker_error_event(scope, report, script_url, exception);
-    set_event_dispatch_fields(scope, global, event);
-
-    let message = v8::String::new(scope, &report.summary).unwrap();
-    let filename = v8::String::new(scope, report.source.as_deref().unwrap_or(script_url)).unwrap();
-    let lineno = v8::Integer::new_from_unsigned(scope, report.line.unwrap_or(0) as u32);
-    let colno = v8::Integer::new_from_unsigned(scope, report.column.unwrap_or(0) as u32);
-    let error_value = exception.unwrap_or_else(|| v8::undefined(scope).into());
-
-    if let Some(handler) = global
-        .get(scope, v8str(scope, "onerror").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let arguments = [
-            message.into(),
-            filename.into(),
-            lineno.into(),
-            colno.into(),
-            error_value,
-        ];
-        let context = scope.get_current_context();
-        let invocation = CallbackInvocation::new(
-            handler.into(),
-            global.into(),
-            context,
-            context,
-            true,
-            "handleEvent",
-            &arguments,
-            Some(event),
-        );
-        match CallbackInvoker::invoke(
-            scope,
-            "callback",
-            "worker global onerror threw",
-            crate::exception_reporting::CallbackExceptionLogLevel::Error,
-            "WorkerGlobalScope.onerror",
-            invocation,
-        ) {
-            CallbackInvocationOutcome::Returned(returned) => {
-                apply_event_handler_return_value(
-                    scope,
-                    event,
-                    v8::Local::new(scope, &returned),
-                    EventHandlerType::OnErrorEventHandler,
-                );
-            }
-            CallbackInvocationOutcome::Threw(nested_report) => {
-                report_exception_to_parent(
-                    &nested_report,
-                    script_url,
-                    WorkerParentErrorEventKind::ErrorEvent,
-                    parent_tx,
-                );
-            }
-            CallbackInvocationOutcome::Retired => {}
-        }
-    }
-
-    let listeners = simple_object_event_listeners_snapshot(
-        scope,
-        global,
-        WORKER_GLOBAL_LISTENERS_SLOT,
-        "error",
-    );
-    for listener in &listeners {
-        if let Err(nested_report) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event,
-            "error",
-            "WorkerGlobalScope error listener",
-        ) {
-            let (nested_report, nested_exception) = *nested_report;
-            let _ = nested_exception;
-            report_exception_to_parent(
-                &nested_report,
-                script_url,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-            );
-        }
-    }
-
-    let handled = event_bool_property(scope, event, "defaultPrevented");
-    clear_event_dispatch_fields(scope, event);
-    handled
+    !dispatch_simple_event_target_event(scope, global, WORKER_GLOBAL_LISTENERS_SLOT, "error", event)
 }
 
 pub(super) fn dispatch_service_worker_lifecycle_event(
@@ -4400,8 +4291,7 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
         apply_worker_exception_location_overrides(scope, &mut report, exception);
         exception
     };
-    let handled =
-        dispatch_worker_error_event(scope, global, &report, exception, parent_tx, script_url);
+    let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
     if !handled {
         report_exception_to_parent_with_phase_and_source(
             &report,
