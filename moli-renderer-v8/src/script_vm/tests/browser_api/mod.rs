@@ -53,3 +53,4 @@ mod user_activation;
 mod web_audio;
 mod webrtc;
 mod webrtc_events;
+mod window_onerror;

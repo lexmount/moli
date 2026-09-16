@@ -3,7 +3,7 @@ use crate::{
     context_bootstrap::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType,
         apply_before_unload_event_handler_return_value, apply_event_handler_return_value,
-        clear_event_composed_path, event_is_error_event, mark_event_trusted,
+        clear_event_composed_path, error_event_handler_arguments, mark_event_trusted,
         set_event_composed_path, set_event_source_value,
     },
     document_runtime::DocumentRuntime,
@@ -483,24 +483,8 @@ fn invoke_registered_event_handler<'s>(
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
     if target == EventTargetHandle::Window
         && event_type == "error"
-        && event_is_error_event(scope, event)
+        && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
-        let message = event
-            .get(scope, v8str(scope, "message").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let source = event
-            .get(scope, v8str(scope, "filename").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let lineno = event
-            .get(scope, v8str(scope, "lineno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let colno = event
-            .get(scope, v8str(scope, "colno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let error = event
-            .get(scope, v8str(scope, "error").into())
-            .unwrap_or_else(|| v8::null(scope).into());
-
         let returned = invoke_prepared_event_callback(
             scope,
             host_ptr,
@@ -510,7 +494,7 @@ fn invoke_registered_event_handler<'s>(
             prepared,
             target,
             event,
-            &[message, source, lineno, colno, error],
+            &arguments,
         );
         if let Some(returned) = returned {
             let returned = v8::Local::new(scope, returned);
