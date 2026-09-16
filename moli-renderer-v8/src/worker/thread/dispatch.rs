@@ -1051,6 +1051,14 @@ fn invoke_worker_listener<'s>(
     }
 }
 
+struct WorkerErrorReportingScope(Rc<RefCell<super::WorkerGlobalState>>);
+
+impl Drop for WorkerErrorReportingScope {
+    fn drop(&mut self) {
+        self.0.borrow_mut().in_error_reporting_mode = false;
+    }
+}
+
 pub(super) fn dispatch_worker_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
@@ -1059,6 +1067,17 @@ pub(super) fn dispatch_worker_error_event<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
+    let _reporting_scope = if let Some(state) = get_worker_state(scope) {
+        if state.borrow().in_error_reporting_mode {
+            // A nested exception remains unhandled and propagates to the
+            // parent, without recursively firing another local error event.
+            return false;
+        }
+        state.borrow_mut().in_error_reporting_mode = true;
+        Some(WorkerErrorReportingScope(state))
+    } else {
+        None
+    };
     let event = new_worker_error_event(scope, report, script_url, exception);
     set_event_dispatch_fields(scope, global, event);
 

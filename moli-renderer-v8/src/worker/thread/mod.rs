@@ -1656,6 +1656,7 @@ async fn worker_main(
         worker_wake_tx,
         termination_requested: Arc::clone(&termination_requested),
         closed: false,
+        in_error_reporting_mode: false,
         next_timer_id: 0,
         loader,
         global_kind,
