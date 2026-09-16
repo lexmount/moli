@@ -15,19 +15,29 @@ pub(in crate::context_bootstrap) fn message_port_post_message_callback<'s>(
         return;
     };
     let transfer_arg = (args.length() > 1).then(|| args.get(1));
-    let Some(data) =
-        crate::context_bootstrap::structured_serialize_value_for_post_message_with_source_port(
-            scope,
-            args.get(0),
-            transfer_arg,
-            "MessagePort",
-            Some(port_id),
-        )
+    let Some(transfers) =
+        parse_post_message_transfer_list(scope, transfer_arg, "MessagePort", Some(port_id))
     else {
         return;
     };
-    if let Some(peer_id) = current_message_port_registry(scope)
-        .and_then(|registry| registry.enqueue_message_to_message_port(port_id, data))
+    // Web IDL conversion precedes destination selection. Serialization follows
+    // it, so closing or retiring the source in a data getter does not redirect
+    // or cancel the message already being sent to a live destination.
+    retire_message_port_if_owner_is_stale(scope, port_id);
+    let registry = current_message_port_registry(scope);
+    let peer_id = registry
+        .as_ref()
+        .and_then(|registry| registry.message_port_peer_id(port_id));
+    let data = transfers.serialize(scope, args.get(0));
+    // Serialization can run getters that destroy the source document.
+    retire_message_port_if_owner_is_stale(scope, port_id);
+    let Some(data) = data else {
+        return;
+    };
+    if let Some(peer_id) = peer_id
+        && !data.transferred_message_ports().contains(&peer_id)
+        && let Some(registry) = registry
+        && registry.enqueue_message_to_endpoint(peer_id, data)
     {
         // Publish directly to the peer's stable owner route. The Page scheduler
         // cannot execute the task until the current PageVm turn is restored;

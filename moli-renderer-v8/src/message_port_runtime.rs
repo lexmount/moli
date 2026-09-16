@@ -82,6 +82,18 @@ impl RendererMessagePortRegistry {
         self.inner.enqueue_message_to_message_port(port_id, payload)
     }
 
+    pub(crate) fn message_port_peer_id(&self, port_id: MessagePortId) -> Option<MessagePortId> {
+        self.inner.message_port_peer_id(port_id)
+    }
+
+    pub(crate) fn enqueue_message_to_endpoint(
+        &self,
+        port_id: MessagePortId,
+        payload: V8StructuredClonePayload,
+    ) -> bool {
+        self.inner.enqueue_message_to_endpoint(port_id, payload)
+    }
+
     pub(crate) fn take_pending_message_port_message(
         &self,
         port_id: MessagePortId,

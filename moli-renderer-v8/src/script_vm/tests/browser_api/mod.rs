@@ -34,6 +34,7 @@ mod media_devices;
 mod media_query_list_events;
 mod message_channel;
 mod message_port_events;
+mod message_port_lifecycle;
 mod misc;
 mod navigation;
 mod performance;

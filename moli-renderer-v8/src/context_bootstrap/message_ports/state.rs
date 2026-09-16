@@ -122,7 +122,7 @@ struct MessagePortObjectDeclaration<'scope> {
     prototype: v8::Local<'scope, v8::Object>,
 
     #[webapi(slot = MESSAGE_PORT_ID_SLOT)]
-    port_id: v8::Local<'scope, v8::BigInt>,
+    port_id: v8::Local<'scope, v8::Value>,
 
     #[webapi(slot = MESSAGE_PORT_PEER_SLOT, init = "undefined")]
     peer: (),
@@ -238,6 +238,25 @@ pub(in crate::context_bootstrap::message_ports) fn new_message_port_object<'s>(
     port_id: MessagePortId,
     realm: &MessagePortRealmBinding,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let port = new_message_port_wrapper(scope, Some(port_id))?;
+    if !realm.register_wrapper(scope, port_id, port) {
+        return None;
+    }
+    Some(port)
+}
+
+pub(in crate::context_bootstrap::message_ports) fn new_detached_message_port_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let port = new_message_port_wrapper(scope, None)?;
+    set_message_port_bool_slot(scope, port, MESSAGE_PORT_CLOSED_SLOT, true);
+    Some(port)
+}
+
+fn new_message_port_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port_id: Option<MessagePortId>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let port = message_port_object_declaration(scope, port_id)?
         .bind(scope)
         .ok()?;
@@ -245,22 +264,22 @@ pub(in crate::context_bootstrap::message_ports) fn new_message_port_object<'s>(
     // transferable communication endpoint and its queue attachment.
     mark_simple_event_target_slot(scope, port, MESSAGE_PORT_EVENT_LISTENERS_SLOT);
     install_simple_event_target_ordered_handlers(scope, port);
-    if !realm.register_wrapper(scope, port_id, port) {
-        return None;
-    }
     Some(port)
 }
 
 fn message_port_object_declaration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    port_id: MessagePortId,
+    port_id: Option<MessagePortId>,
 ) -> Option<MessagePortObjectDeclaration<'s>> {
     let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
         scope,
         "MessagePort",
     )
     .ok()?;
-    let port_id = v8::BigInt::new_from_u64(scope, port_id);
+    let port_id = match port_id {
+        Some(port_id) => v8::BigInt::new_from_u64(scope, port_id).into(),
+        None => v8::undefined(scope).into(),
+    };
     Some(MessagePortObjectDeclaration::new(prototype, port_id))
 }
 
@@ -352,8 +371,18 @@ pub(crate) fn detach_message_port_owner_for_transfer(
     scope: &mut v8::PinScope<'_, '_>,
     port_id: MessagePortId,
 ) {
+    retire_message_port_if_owner_is_stale(scope, port_id);
     if let Some(registry) = current_message_port_registry(scope) {
         registry.detach_message_port_owner_for_transfer(port_id);
+    }
+}
+
+pub(in crate::context_bootstrap::message_ports) fn retire_message_port_if_owner_is_stale(
+    scope: &mut v8::PinScope<'_, '_>,
+    port_id: MessagePortId,
+) {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.retire_message_port_if_owner_is_stale(port_id);
     }
 }
 

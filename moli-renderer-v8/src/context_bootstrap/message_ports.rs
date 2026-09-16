@@ -31,7 +31,8 @@ pub(in crate::context_bootstrap) use state::{
 };
 pub(in crate::context_bootstrap::message_ports) use state::{
     forget_message_port_wrapper, message_port_is_closed, message_port_is_started,
-    new_message_port_object, set_message_port_peer, set_message_port_started,
+    new_detached_message_port_object, new_message_port_object,
+    retire_message_port_if_owner_is_stale, set_message_port_peer, set_message_port_started,
 };
 
 const MESSAGE_PORT_EVENT_LISTENERS_SLOT: &str = "__moliMessagePortEventListeners";
