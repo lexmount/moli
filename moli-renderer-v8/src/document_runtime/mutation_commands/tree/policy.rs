@@ -78,13 +78,6 @@ impl TreeMutationSourceProfile {
         }
     }
 
-    pub(super) fn child_parser_tree_sink() -> Self {
-        Self {
-            queue_resource_followups: false,
-            ..Self::parser_tree_sink()
-        }
-    }
-
     pub(super) fn js_dom_api_appending_to_current_reaction_queue() -> Self {
         Self::js_dom_api_with(
             TreeReactionDispatchPolicy::AppendToCurrentQueue,
