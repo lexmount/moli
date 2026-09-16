@@ -115,8 +115,7 @@ async fn run_selected_indexed_db_task_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_selected_completion()
- {
+async fn indexed_db_task_body_runs_callback_cleanup_but_defers_runtime_followup_to_completion() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
@@ -152,8 +151,9 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
 "#,
         )?;
         // Advance upgrade, put success, and commit as separate selected tasks.
-        // The next exact task is open.success, whose body must leave reactions
-        // and the newly created transaction's deactivation to completion.
+        // The next exact task is open.success. Web IDL callback cleanup runs
+        // its microtasks, but selected-task completion still owns publication
+        // of the runtime follow-up.
         for _ in 0..3 {
             assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
                 .await?.is_some());
@@ -177,8 +177,8 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__indexedDbTaskBodyBoundary.join('|')",
                 )?,
-            "upgrade|success",
-            "the IndexedDB body must leave Promise reactions and transaction deactivation for selected-task completion"
+            "upgrade|success|microtask-active",
+            "native event callbacks must run reactions while the newly-created transaction is still active"
         );
         assert!(
             !has_ready_runtime_script_continuation_for_test(&page_vm),
@@ -191,7 +191,7 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
                 .vm_mut()
                 .eval("globalThis.__indexedDbTaskBodyBoundary.join('|')")?,
             "upgrade|success|microtask-active",
-            "the selected task checkpoint must run reactions while the newly-created transaction is still active"
+            "selected-task completion must not repeat callback reactions"
         );
         assert_eq!(
             page_vm.vm_mut().eval(

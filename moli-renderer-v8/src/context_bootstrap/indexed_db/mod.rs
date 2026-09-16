@@ -4,8 +4,7 @@ use super::{
     global_constructor_prototype, object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
-    object_string_property as public_object_string_property, object_string_property_defined,
-    throw_type_error, v8_string, v8str,
+    object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,
 };
 use crate::util::{new_null_prototype_object, private_key, set_private_value};
 
@@ -29,9 +28,11 @@ use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+pub(crate) use self::event_target::dispatch_indexed_db_script_event;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
+pub(crate) use self::slots::INDEXED_DB_EVENT_LISTENERS_SLOT;
 use self::slots::*;
 use self::storage_bucket::{
     storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
@@ -198,27 +199,6 @@ fn set_indexed_db_internal_object_property(
         return;
     };
     let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
-}
-
-fn object_own_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let key = v8_string(scope, key)?;
-    if !object.has_own_property(scope, key.into()).unwrap_or(false) {
-        return None;
-    }
-    object.get(scope, key.into())
-}
-
-fn object_own_property_as_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Array>> {
-    object_own_value(scope, object, key)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
 }
 
 fn indexed_db_private_value<'s>(

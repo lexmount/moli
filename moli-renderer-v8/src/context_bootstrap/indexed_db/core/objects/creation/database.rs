@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -17,14 +18,6 @@ struct IdbDatabaseObjectDeclaration<'scope, 'value> {
     name: &'value str,
     version: f64,
     object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(init = "null")]
-    onabort: (),
-    #[webapi(init = "null")]
-    onclose: (),
-    #[webapi(init = "null")]
-    onerror: (),
-    #[webapi(init = "null")]
-    onversionchange: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
@@ -56,6 +49,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         storage_scope,
     );
     let _ = refresh_database_metadata(scope, database, info);
+    initialize_indexed_db_event_target(scope, database, None);
     register_open_database_connection(scope, owner, handle, database_key, database);
     Some(database)
 }

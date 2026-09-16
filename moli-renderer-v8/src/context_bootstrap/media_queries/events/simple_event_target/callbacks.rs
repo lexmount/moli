@@ -37,5 +37,9 @@ pub(crate) fn simple_event_target_dispatch_event_callback<'s>(
         rv.set(v8::Boolean::new(scope, true).into());
         return;
     };
+    if slot_name == crate::context_bootstrap::indexed_db::INDEXED_DB_EVENT_LISTENERS_SLOT {
+        crate::context_bootstrap::indexed_db::dispatch_indexed_db_script_event(scope, args, rv);
+        return;
+    }
     simple_object_event_target_dispatch(scope, &args, slot_name, &mut rv);
 }

@@ -13,7 +13,7 @@ pub(crate) use callbacks::{
 pub(in crate::context_bootstrap::media_queries::events::simple_event_target) use dispatch::simple_object_event_target_dispatch;
 pub(crate) use dispatch::{
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
-    invoke_simple_event_listener,
+    invoke_simple_event_listener, invoke_simple_event_target_listeners,
 };
 pub(crate) use install::{
     install_simple_event_target_methods, install_simple_event_target_ordered_handlers,

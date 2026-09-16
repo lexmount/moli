@@ -4073,18 +4073,12 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBDatabase.prototype, "deleteObjectStore", 1],
                 [IDBDatabase.prototype, "transaction", 1],
                 [IDBDatabase.prototype, "close", 0],
-                [IDBDatabase.prototype, "addEventListener", 2],
-                [IDBDatabase.prototype, "removeEventListener", 2],
-                [IDBDatabase.prototype, "dispatchEvent", 1],
                 [IDBTransaction.prototype, "objectStore", 1],
                 [IDBTransaction.prototype, "abort", 0],
                 [IDBTransaction.prototype, "commit", 0],
-                [IDBTransaction.prototype, "addEventListener", 2],
-                [IDBTransaction.prototype, "removeEventListener", 2],
-                [IDBTransaction.prototype, "dispatchEvent", 1],
-                [IDBRequest.prototype, "addEventListener", 2],
-                [IDBRequest.prototype, "removeEventListener", 2],
-                [IDBRequest.prototype, "dispatchEvent", 1],
+                [EventTarget.prototype, "addEventListener", 2],
+                [EventTarget.prototype, "removeEventListener", 2],
+                [EventTarget.prototype, "dispatchEvent", 1],
                 [IDBObjectStore.prototype, "get", 1],
                 [IDBObjectStore.prototype, "getAll", 2],
                 [IDBObjectStore.prototype, "getKey", 1],
@@ -4117,6 +4111,13 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBKeyRange, "lowerBound", 2],
                 [IDBKeyRange, "upperBound", 2],
               ];
+              for (const prototype of [IDBDatabase.prototype, IDBTransaction.prototype, IDBRequest.prototype]) {
+                for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+                  if (Object.hasOwn(prototype, name) || prototype[name] !== EventTarget.prototype[name]) {
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                  }
+                }
+              }
               for (const [target, name, length] of methods) {
                 const descriptor = Object.getOwnPropertyDescriptor(target, name);
                 if (!descriptor || typeof descriptor.value !== "function") {

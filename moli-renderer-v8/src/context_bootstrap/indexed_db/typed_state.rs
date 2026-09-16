@@ -396,6 +396,7 @@ struct IndexedDbTransactionLifecycleState {
     upgrade_open_request: Option<v8::Global<v8::Object>>,
     handle: Option<TransactionHandle>,
     active: bool,
+    committing: bool,
     finished: bool,
     aborted: bool,
     started: bool,
@@ -422,6 +423,7 @@ impl IndexedDbTransactionLifecycleState {
             upgrade_open_request: None,
             handle,
             active: true,
+            committing: false,
             finished: false,
             aborted: false,
             started,
@@ -918,7 +920,12 @@ pub(crate) fn deactivate_indexed_db_transaction_after_microtask_checkpoint<'s>(
             return;
         }
         state.active = false;
-        state.pending == 0
+        if state.pending == 0 {
+            state.committing = true;
+            true
+        } else {
+            false
+        }
     };
     if should_commit {
         enqueue_transaction_commit_task(scope, transaction);
@@ -2090,6 +2097,9 @@ fn indexed_db_typed_transaction_slot_value<'s>(
         INDEXED_DB_TRANSACTION_ACTIVE_SLOT => {
             Some(v8::Boolean::new(scope, transaction.active).into())
         }
+        INDEXED_DB_TRANSACTION_COMMITTING_SLOT => {
+            Some(v8::Boolean::new(scope, transaction.committing).into())
+        }
         INDEXED_DB_TRANSACTION_FINISHED_SLOT => {
             Some(v8::Boolean::new(scope, transaction.finished).into())
         }
@@ -2135,6 +2145,10 @@ fn set_indexed_db_typed_transaction_slot_value(
         }
         INDEXED_DB_TRANSACTION_ACTIVE_SLOT => {
             transaction.active = value.boolean_value(scope);
+            true
+        }
+        INDEXED_DB_TRANSACTION_COMMITTING_SLOT => {
+            transaction.committing = value.boolean_value(scope);
             true
         }
         INDEXED_DB_TRANSACTION_FINISHED_SLOT => {

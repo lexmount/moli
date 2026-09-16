@@ -1,8 +1,8 @@
 use super::{
     INDEXED_DB_DATABASE_CLOSED_SLOT, INDEXED_DB_DATABASE_KEY_SLOT,
     INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT, INDEXED_DB_TRANSACTION_ABORTED_SLOT,
-    INDEXED_DB_TRANSACTION_ACTIVE_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
-    INDEXED_DB_TRANSACTION_STARTED_SLOT, IndexedDbExecutionOwner, IndexedDbStorageScope,
+    INDEXED_DB_TRANSACTION_ACTIVE_SLOT, INDEXED_DB_TRANSACTION_COMMITTING_SLOT,
+    INDEXED_DB_TRANSACTION_FINISHED_SLOT, IndexedDbExecutionOwner, IndexedDbStorageScope,
     IndexedDbWrapperKind, KeyPath, ObjectStoreInfo, ObjectStoreOptions, TransactionMode,
     abort_queued_transaction_requests, compare_idb_keys, context_host_ptr_from_global_bridge,
     create_object_store_object, create_open_request_object, create_transaction_object,
