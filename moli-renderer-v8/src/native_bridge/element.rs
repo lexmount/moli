@@ -199,10 +199,9 @@ use event_handlers::install_body_or_frameset_window_event_handler_accessors;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
-    EventAttributeHandlerScope, GlobalEventHandlerOwner,
-    body_or_frameset_reflects_window_event_type, canonical_event_handler_event_type,
-    compile_event_attribute_handler_for_owner, event_handler_content_attribute_name,
-    initialize_parser_inserted_body_window_event_handlers,
+    GlobalEventHandlerOwner, body_or_frameset_reflects_window_event_type,
+    canonical_event_handler_event_type, compile_body_window_event_attribute,
+    event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
     resolve_window_event_handler_content_attribute,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
