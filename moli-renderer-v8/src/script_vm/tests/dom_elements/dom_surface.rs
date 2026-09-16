@@ -13339,6 +13339,110 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
     );
 }
 
+#[test]
+fn main_window_indexed_child_deletion_is_live_and_not_cached() {
+    let mut vm = new_storage_test_vm("https://window-indexed-delete.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '';
+  let absentDeletesSucceeded = true;
+  for (let i = 0; i < 1e5; i++) {
+    absentDeletesSucceeded &&= delete window[0];
+  }
+  (document.body || document.documentElement || document).appendChild(frame);
+  const presentAfterAbsent = delete window[0];
+  let presentDeletesFailed = true;
+  for (let i = 0; i < 1e5; i++) {
+    presentDeletesFailed &&= !delete window[0];
+  }
+  frame.remove();
+  return JSON.stringify({
+    absentDeletesSucceeded,
+    presentAfterAbsent,
+    presentDeletesFailed,
+    absentAfterPresent: delete window[0]
+  });
+})()
+"#,
+        )
+        .expect("live Window indexed deletion probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"absentDeletesSucceeded":true,"presentAfterAbsent":false,"presentDeletesFailed":true,"absentAfterPresent":true}"#
+    );
+}
+
+#[test]
+fn main_window_indexed_set_and_define_reject_every_array_index() {
+    let mut vm = new_storage_test_vm("https://window-indexed-write.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const strictSetThrows = index => {
+    'use strict';
+    try {
+      window[index] = 'strict';
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const defineThrows = (index, descriptor) => {
+    try {
+      Object.defineProperty(window, index, descriptor);
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+
+  window[0] = 'sloppy';
+  window[1] = 'sloppy';
+  window[4294967294] = 'sloppy';
+  const result = {
+    existingChildPreserved: window[0] === child,
+    existingStrictSetThrows: strictSetThrows(0),
+    existingReflectSet: Reflect.set(window, 0, 'reflect'),
+    existingReflectDefine: Reflect.defineProperty(window, 0, { value: 'reflect' }),
+    existingDefineThrows: defineThrows(0, { get: () => 'getter' }),
+    missingRemainsAbsent: window[1] === undefined,
+    missingStrictSetThrows: strictSetThrows(1),
+    missingReflectSet: Reflect.set(window, 1, 'reflect'),
+    missingReflectDefine: Reflect.defineProperty(window, 1, { value: 'reflect' }),
+    missingDefineThrows: defineThrows(1, { value: 'defined' }),
+    maxIndexRemainsAbsent: window[4294967294] === undefined,
+    maxIndexStrictSetThrows: strictSetThrows(4294967294),
+    maxIndexReflectSet: Reflect.set(window, 4294967294, 'reflect'),
+    maxIndexReflectDefine: Reflect.defineProperty(window, 4294967294, { value: 'reflect' })
+  };
+  window[4294967295] = 1;
+  result.nonIndexSet = window[4294967295];
+  result.nonIndexReflectSet = Reflect.set(window, 4294967295, 2);
+  result.nonIndexAfterReflectSet = window[4294967295];
+  result.nonIndexReflectDefine = Reflect.defineProperty(window, 4294967295, { value: 3 });
+  result.nonIndexAfterDefine = window[4294967295];
+  return JSON.stringify(result);
+})()
+"#,
+        )
+        .expect("Window indexed write and define probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"existingChildPreserved":true,"existingStrictSetThrows":true,"existingReflectSet":false,"existingReflectDefine":false,"existingDefineThrows":true,"missingRemainsAbsent":true,"missingStrictSetThrows":true,"missingReflectSet":false,"missingReflectDefine":false,"missingDefineThrows":true,"maxIndexRemainsAbsent":true,"maxIndexStrictSetThrows":true,"maxIndexReflectSet":false,"maxIndexReflectDefine":false,"nonIndexSet":1,"nonIndexReflectSet":true,"nonIndexAfterReflectSet":2,"nonIndexReflectDefine":true,"nonIndexAfterDefine":3}"#
+    );
+}
+
 #[tokio::test]
 async fn main_window_indexed_child_descriptor_matches_window_semantics() {
     let mut vm = new_storage_test_vm("https://window-indexed-descriptor.test/");
