@@ -1345,7 +1345,9 @@ fn function_constructor_apply_trap_callback<'s>(
     let Some(arguments) = prepare_function_constructor_arguments(scope, arguments) else {
         return;
     };
-    if let Some(value) = crate::script_execution::call_function(scope, target, args.get(1), &arguments) {
+    if let Some(value) =
+        crate::script_execution::call_function(scope, target, args.get(1), &arguments)
+    {
         rv.set(value);
     }
 }
@@ -1367,7 +1369,12 @@ fn function_constructor_construct_trap_callback<'s>(
     let arguments = v8::Array::new_with_elements(scope, &arguments);
     let receiver = v8::undefined(scope);
     let forwarded = [args.get(0), arguments.into(), args.get(2)];
-    if let Some(value) = crate::script_execution::call_function(scope, reflect_construct, receiver.into(), &forwarded) {
+    if let Some(value) = crate::script_execution::call_function(
+        scope,
+        reflect_construct,
+        receiver.into(),
+        &forwarded,
+    ) {
         rv.set(value);
     }
 }

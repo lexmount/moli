@@ -550,6 +550,8 @@ pub(super) fn evaluate_worker_script(
             });
         return Err(error);
     }
+    scope.perform_microtask_checkpoint();
+    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(&mut scope);
     Ok(())
 }
 
