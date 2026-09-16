@@ -20,6 +20,8 @@ IndexedDB/idbfactory_open.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=window
 IndexedDB/idbindex-cross-realm-methods.html
 IndexedDB/idbobjectstore-cross-realm-methods.html
+IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/open-request-queue.any.js?moli-wpt-any=window
 IndexedDB/ready-state-destroyed-execution-context.html
 IndexedDB/transaction-abort-index-metadata-revert.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-index-metadata-revert.any.js?moli-wpt-any=window
