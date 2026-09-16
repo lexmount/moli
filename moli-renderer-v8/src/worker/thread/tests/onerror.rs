@@ -60,6 +60,14 @@ const SYNTHETIC_PROBE: &str = r#"
     ]);
   }
   self.onerror=null;
+  rows.errorDefaults=[];
+  for (const [init, expected] of [[{},undefined],[{error:undefined},undefined],[{error:null},null],[{error:42},42],[{error:marker},marker]]) {
+    let observed=false;
+    self.onerror=function(...args) { observed=args.length===5&&Object.is(args[4],expected);return true; };
+    const event=new NativeErrorEvent('error',{cancelable:true,...init});
+    rows.errorDefaults.push([Object.is(event.error,expected),self.dispatchEvent(event),observed]);
+  }
+  self.onerror=null;
   // An ErrorEvent on an ordinary EventTarget keeps the one-argument/false-cancels rules.
   const reader=new FileReader();
   let readerArguments;
@@ -191,6 +199,16 @@ fn expected_synthetic_onerror() -> serde_json::Value {
             [true, true],
             [true, true],
             [true, true]
+        ]),
+    );
+    expected.insert(
+        "errorDefaults".into(),
+        serde_json::json!([
+            [true, false, true],
+            [true, false, true],
+            [true, false, true],
+            [true, false, true],
+            [true, false, true]
         ]),
     );
     expected.insert(
