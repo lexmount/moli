@@ -389,23 +389,6 @@ pub(crate) fn error_event_handler_arguments<'s>(
     ])
 }
 
-pub(crate) fn set_error_event_error_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    error: v8::Local<'s, v8::Value>,
-) {
-    let event = event_backing(scope, event);
-    let values = get_private_value(scope, event, ERROR_EVENT_HANDLER_ARGUMENTS_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-        .expect("ErrorEvent data should be initialized");
-    let _ = values.set_index(scope, 4, error);
-    let key = v8str(scope, "error");
-    let attributes = event
-        .get_property_attributes(scope, key.into())
-        .unwrap_or_default();
-    let _ = event.define_own_property(scope, key.into(), error, attributes);
-}
-
 pub(crate) fn set_event_source_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
