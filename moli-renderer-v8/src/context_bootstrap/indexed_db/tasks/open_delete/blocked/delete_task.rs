@@ -11,6 +11,9 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_delete_blocked_task<'s>(
         return;
     };
     let key = database_registry_key(&payload.origin, &payload.name);
+    if queue_behind_earlier_blocked_request(scope, task, &key) {
+        return;
+    }
     if !has_open_database_connections_for_key(scope, &key) {
         delete::execute_delete_database_request(
             scope,

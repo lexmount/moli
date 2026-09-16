@@ -6,7 +6,5 @@ mod finish;
 mod success;
 
 pub(in crate::context_bootstrap::indexed_db) use self::error::flush_request_error_task;
-pub(in crate::context_bootstrap::indexed_db) use self::finish::{
-    discard_unreturned_request, release_request_dispatch_refs,
-};
+pub(in crate::context_bootstrap::indexed_db) use self::finish::discard_unreturned_request;
 pub(in crate::context_bootstrap::indexed_db) use self::success::flush_request_success_task;

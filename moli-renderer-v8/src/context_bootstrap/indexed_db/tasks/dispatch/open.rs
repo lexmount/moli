@@ -1,10 +1,15 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::defer_indexed_db_aborted_open;
+use crate::context_bootstrap::indexed_db::{
+    associate_indexed_db_upgrade_open,
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
+};
 
 mod abort;
-mod commit;
 mod success;
 pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) use abort::finish_aborted_upgrade_open;
+pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) use success::{
+    enqueue_committed_upgrade_open, flush_open_success_task,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -31,6 +36,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         transaction.into(),
     );
 
+    associate_indexed_db_upgrade_open(scope, transaction, request);
     let _ = dispatch_version_change_event(
         scope,
         request,
@@ -39,15 +45,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         Some(new_version),
     );
 
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-        .unwrap_or(false)
-    {
-        defer_indexed_db_aborted_open(scope, transaction, request);
-        return;
-    }
-
-    if !commit::commit_upgrade_transaction(scope, request, database, transaction) {
-        return;
-    }
-    success::finish_open_success(scope, request);
+    // Use the same pending-request and microtask lifetime as ordinary transactions.
+    // Request callbacks (including their microtasks) may enqueue more work or abort.
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
 }
