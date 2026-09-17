@@ -4,53 +4,51 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_request_and_transaction<'
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
 ) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
-    let request = object_hidden_value(scope, cursor, INDEXED_DB_CURSOR_REQUEST_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let request = cursor_request(scope, cursor)?;
     let transaction = indexed_db_request_transaction_object(scope, request)?;
     Some((request, transaction))
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn cursor_position(
+pub(in crate::context_bootstrap::indexed_db) fn cursor_entries_len(
     scope: &mut v8::PinScope<'_, '_>,
     cursor: v8::Local<'_, v8::Object>,
-) -> i32 {
-    object_number_property(scope, cursor, INDEXED_DB_CURSOR_POSITION_SLOT).unwrap_or(-1.0) as i32
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn cursor_entries_len<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
 ) -> usize {
-    object_hidden_value(scope, cursor, INDEXED_DB_CURSOR_ENTRIES_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-        .map(|entries| entries.length() as usize)
-        .unwrap_or(0)
+    indexed_db_cursor_state(scope, cursor).map_or(0, |state| state.entries.len())
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn cursor_key_at<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
+pub(in crate::context_bootstrap::indexed_db) fn cursor_key_at(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
     position: usize,
 ) -> Option<Key> {
-    let entry = cursor_entry_object(scope, cursor, position)?;
-    parse_idb_key(scope, entry.get(scope, v8str(scope, "key").into())?).ok()?
+    Some(
+        indexed_db_cursor_state(scope, cursor)?
+            .entries
+            .get(position)?
+            .key
+            .clone(),
+    )
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn cursor_primary_key_at<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
+pub(in crate::context_bootstrap::indexed_db) fn cursor_primary_key_at(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
     position: usize,
 ) -> Option<Key> {
-    let entry = cursor_entry_object(scope, cursor, position)?;
-    parse_idb_key(scope, entry.get(scope, v8str(scope, "primaryKey").into())?).ok()?
+    Some(
+        indexed_db_cursor_state(scope, cursor)?
+            .entries
+            .get(position)?
+            .primary_key
+            .clone(),
+    )
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn cursor_current_position(
     scope: &mut v8::PinScope<'_, '_>,
     cursor: v8::Local<'_, v8::Object>,
 ) -> Option<usize> {
-    let position = cursor_position(scope, cursor);
-    (position >= 0).then_some(position as usize)
+    indexed_db_cursor_state(scope, cursor)?.position
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn cursor_mutation_state<'s>(
@@ -81,7 +79,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_mutation_state<'s>(
         || (source != store && indexed_db_index_is_deleted(scope, source))
         || object_string_property(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT).as_deref()
             != Some("done")
-        || object_bool_property(scope, cursor, INDEXED_DB_CURSOR_KEY_ONLY_SLOT).unwrap_or(false)
+        || indexed_db_cursor_state(scope, cursor).is_some_and(|state| state.key_only)
     {
         let error = dom_exception_value(
             scope,
@@ -107,7 +105,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
 ) -> bool {
-    object_property_as_object(scope, cursor, "source")
+    cursor_source(scope, cursor)
         .and_then(|source| object_bool_property(scope, source, INDEXED_DB_INDEX_MARKER_SLOT))
         .unwrap_or(false)
 }

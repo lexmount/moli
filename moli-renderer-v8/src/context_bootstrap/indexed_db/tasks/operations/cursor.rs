@@ -68,7 +68,7 @@ fn settle_cursor_open_request<'s>(
                 scope,
                 source,
                 request,
-                &entries,
+                entries,
                 operation.direction,
                 operation.key_only,
             )

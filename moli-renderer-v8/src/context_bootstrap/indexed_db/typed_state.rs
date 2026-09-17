@@ -524,30 +524,12 @@ impl IndexedDbDatabaseLifecycleState {
     }
 }
 
-struct IndexedDbCursorLifecycleState {
-    request: v8::Global<v8::Value>,
-    entries: v8::Global<v8::Value>,
-    key_only: bool,
-    position: f64,
-}
-
-impl IndexedDbCursorLifecycleState {
-    fn new(
-        scope: &mut v8::PinScope<'_, '_>,
-        request: v8::Local<'_, v8::Object>,
-        entries: v8::Local<'_, v8::Array>,
-        key_only: bool,
-        position: f64,
-    ) -> Self {
-        let request: v8::Local<'_, v8::Value> = request.into();
-        let entries: v8::Local<'_, v8::Value> = entries.into();
-        Self {
-            request: v8::Global::new(scope, request),
-            entries: v8::Global::new(scope, entries),
-            key_only,
-            position,
-        }
-    }
+#[derive(Clone)]
+pub(super) struct IndexedDbCursorLifecycleState {
+    pub(super) entries: Rc<[CursorSnapshotEntry]>,
+    pub(super) position: Option<usize>,
+    pub(super) direction: CursorDirection,
+    pub(super) key_only: bool,
 }
 
 struct IndexedDbObjectStoreLifecycleState {
@@ -1079,20 +1061,50 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
     table.borrow_mut().databases.insert(id, state);
 }
 
-pub(super) fn register_indexed_db_cursor_lifecycle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
-    request: v8::Local<'s, v8::Object>,
-    entries: v8::Local<'s, v8::Array>,
+pub(super) fn register_indexed_db_cursor_lifecycle(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
+    entries: Vec<CursorSnapshotEntry>,
+    direction: CursorDirection,
     key_only: bool,
-    position: f64,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, cursor) else {
         return;
     };
-    let state = IndexedDbCursorLifecycleState::new(scope, request, entries, key_only, position);
+    let position = (!entries.is_empty()).then_some(0);
+    let state = IndexedDbCursorLifecycleState {
+        entries: entries.into(),
+        position,
+        direction,
+        key_only,
+    };
     let table = indexed_db_runtime_state_table_for_object(scope, cursor);
     table.borrow_mut().cursors.insert(id, state);
+}
+
+pub(super) fn indexed_db_cursor_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
+) -> Option<IndexedDbCursorLifecycleState> {
+    let id = indexed_db_typed_state_id(scope, cursor)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, cursor);
+    table.borrow().cursors.get(&id).cloned()
+}
+
+pub(super) fn set_indexed_db_cursor_position(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
+    position: Option<usize>,
+) -> Option<()> {
+    let id = indexed_db_typed_state_id(scope, cursor)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, cursor);
+    let mut table = table.borrow_mut();
+    let state = table.cursors.get_mut(&id)?;
+    if let Some(position) = position {
+        state.entries.get(position)?;
+    }
+    state.position = position;
+    Some(())
 }
 
 pub(super) fn register_indexed_db_object_store_lifecycle<'s>(
@@ -2019,9 +2031,6 @@ pub(super) fn indexed_db_typed_slot_value<'s>(
     if let Some(database) = table.databases.get(&id) {
         return indexed_db_typed_database_slot_value(scope, database, key);
     }
-    if let Some(cursor) = table.cursors.get(&id) {
-        return indexed_db_typed_cursor_slot_value(scope, cursor, key);
-    }
     if let Some(store) = table.object_stores.get(&id) {
         return indexed_db_typed_object_store_slot_value(scope, store, key);
     }
@@ -2050,9 +2059,6 @@ pub(super) fn set_indexed_db_typed_slot_value(
     }
     if let Some(database) = table.databases.get_mut(&id) {
         return set_indexed_db_typed_database_slot_value(scope, database, key, value);
-    }
-    if let Some(cursor) = table.cursors.get_mut(&id) {
-        return set_indexed_db_typed_cursor_slot_value(scope, cursor, key, value);
     }
     if let Some(store) = table.object_stores.get_mut(&id) {
         return set_indexed_db_typed_object_store_slot_value(scope, store, key, value);
@@ -2344,47 +2350,6 @@ fn set_indexed_db_typed_database_slot_value(
             } else {
                 Some(v8::Global::new(scope, value))
             };
-            true
-        }
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_cursor_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: &IndexedDbCursorLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_CURSOR_REQUEST_SLOT => Some(v8::Local::new(scope, &cursor.request)),
-        INDEXED_DB_CURSOR_ENTRIES_SLOT => Some(v8::Local::new(scope, &cursor.entries)),
-        INDEXED_DB_CURSOR_KEY_ONLY_SLOT => Some(v8::Boolean::new(scope, cursor.key_only).into()),
-        INDEXED_DB_CURSOR_POSITION_SLOT => Some(v8::Number::new(scope, cursor.position).into()),
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_cursor_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    cursor: &mut IndexedDbCursorLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_CURSOR_REQUEST_SLOT => {
-            cursor.request = v8::Global::new(scope, value);
-            true
-        }
-        INDEXED_DB_CURSOR_ENTRIES_SLOT => {
-            cursor.entries = v8::Global::new(scope, value);
-            true
-        }
-        INDEXED_DB_CURSOR_KEY_ONLY_SLOT => {
-            cursor.key_only = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_CURSOR_POSITION_SLOT => {
-            cursor.position = value.number_value(scope).unwrap_or(-1.0);
             true
         }
         _ => false,

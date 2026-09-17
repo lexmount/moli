@@ -4103,7 +4103,7 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBIndex.prototype, "openCursor", 2],
                 [IDBIndex.prototype, "openKeyCursor", 2],
                 [IDBCursor.prototype, "advance", 1],
-                [IDBCursor.prototype, "continue", 1],
+                [IDBCursor.prototype, "continue", 0],
                 [IDBCursor.prototype, "continuePrimaryKey", 2],
                 [IDBCursor.prototype, "update", 1],
                 [IDBCursor.prototype, "delete", 0],

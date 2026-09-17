@@ -38,7 +38,3 @@ pub(super) const INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT: &str =
 pub(super) const INDEXED_DB_OBJECT_STORE_NAME_SLOT: &str = "moli.IndexedDb.objectStoreName";
 pub(super) const INDEXED_DB_OBJECT_STORE_METADATA_SLOT: &str = "moli.IndexedDb.objectStoreMetadata";
 pub(super) const INDEXED_DB_INDEX_MARKER_SLOT: &str = "moli.IndexedDb.indexMarker";
-pub(super) const INDEXED_DB_CURSOR_REQUEST_SLOT: &str = "moli.IndexedDb.cursorRequest";
-pub(super) const INDEXED_DB_CURSOR_ENTRIES_SLOT: &str = "moli.IndexedDb.cursorEntries";
-pub(super) const INDEXED_DB_CURSOR_POSITION_SLOT: &str = "moli.IndexedDb.cursorPosition";
-pub(super) const INDEXED_DB_CURSOR_KEY_ONLY_SLOT: &str = "moli.IndexedDb.cursorKeyOnly";
