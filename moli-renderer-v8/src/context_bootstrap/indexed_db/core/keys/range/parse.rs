@@ -1,18 +1,25 @@
 use super::*;
+use crate::{util::get_private_value, web_api_interfaces};
 
 pub(in crate::context_bootstrap::indexed_db) fn parse_key_range_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<IdbKeyRangeQuery> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    if !object_bool_property(scope, object, INDEXED_DB_KEY_RANGE_MARKER_SLOT).unwrap_or(false) {
+    if !web_api_interfaces::IDBKeyRange::is_instance(scope, object) {
         return None;
     }
+    // get_private_value maps undefined to None; an undefined bound is valid
+    // and denotes the unbounded end of lowerBound()/upperBound().
+    let lower =
+        get_private_value(scope, object, LOWER).unwrap_or_else(|| v8::undefined(scope).into());
+    let upper =
+        get_private_value(scope, object, UPPER).unwrap_or_else(|| v8::undefined(scope).into());
     Some(IdbKeyRangeQuery {
-        lower: parse_idb_key(scope, object.get(scope, v8str(scope, "lower").into())?).ok()?,
-        upper: parse_idb_key(scope, object.get(scope, v8str(scope, "upper").into())?).ok()?,
-        lower_open: object_bool_property(scope, object, "lowerOpen").unwrap_or(false),
-        upper_open: object_bool_property(scope, object, "upperOpen").unwrap_or(false),
+        lower: parse_idb_key(scope, lower).ok()?,
+        upper: parse_idb_key(scope, upper).ok()?,
+        lower_open: get_private_value(scope, object, LOWER_OPEN)?.is_true(),
+        upper_open: get_private_value(scope, object, UPPER_OPEN)?.is_true(),
     })
 }
 

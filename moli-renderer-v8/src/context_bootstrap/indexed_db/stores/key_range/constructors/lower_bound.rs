@@ -24,7 +24,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_bound_callba
         lower: Some(lower),
         upper: None,
         lower_open: parsed.open,
-        upper_open: false,
+        upper_open: true,
     };
     if let Some(object) = create_key_range_object(scope, &range) {
         rv.set(object.into());
