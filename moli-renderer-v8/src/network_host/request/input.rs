@@ -1,4 +1,4 @@
-use super::super::headers::HeadersGuard;
+use super::super::headers::{HeadersGuard, headers_list};
 use super::*;
 use crate::webidl;
 
@@ -238,9 +238,11 @@ fn request_input_snapshot_from_private_slots<'s>(
             webidl::WebIdlError::custom_message("Failed to materialize request body")
         })?
     };
-    // Inherited headers are an internal list copy, unlike an explicit
-    // RequestInit.headers value, which undergoes WebIDL iterable conversion.
-    let headers = request_headers_entries(scope, object);
+    // A Request copies its internal list, without consulting a script-defined
+    // headers getter or the Headers object's public iterator.
+    let headers = request_slot_object(scope, object, REQUEST_HEADERS_SLOT)
+        .map(|headers| headers_list(scope, headers))
+        .unwrap_or_default();
     let signal = request_slot_value(scope, object, REQUEST_SIGNAL_SLOT)
         .map(|value| request_signal_snapshot_from_value(scope, value))
         .transpose()?

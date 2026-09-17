@@ -10,7 +10,7 @@ async fn headers_preserve_internal_lists_in_window_and_worker() {
         vm.eval("globalThis.headerListResult = null;").unwrap();
         let script = if worker {
             let source = format!(
-                "{fixture}\nheadersListProbe('https://headers-list.test').then(postMessage, error => postMessage({{error: String(error.stack || error)}}));"
+                "{fixture}\nheadersListProbe('https://headers-list.test', false, true).then(postMessage, error => postMessage({{error: String(error.stack || error)}}));"
             );
             format!(
                 r#"
@@ -28,7 +28,7 @@ async fn headers_preserve_internal_lists_in_window_and_worker() {
             )
         } else {
             format!(
-                "{fixture}\nheadersListProbe('https://headers-list.test').then(value => {{ headerListResult = value; }}, error => {{ headerListResult = {{error: String(error.stack || error)}}; }});"
+                "{fixture}\nheadersListProbe('https://headers-list.test', false, true).then(value => {{ headerListResult = value; }}, error => {{ headerListResult = {{error: String(error.stack || error)}}; }});"
             )
         };
         vm.eval(&script).unwrap();
@@ -50,6 +50,6 @@ async fn headers_preserve_internal_lists_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 174, "worker={worker}");
+        assert_eq!(checks.len(), 187, "worker={worker}");
     }
 }

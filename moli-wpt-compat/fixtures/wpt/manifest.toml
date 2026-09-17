@@ -150,7 +150,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fetch", "headers", "request", "response", "exceptions"]
-notes = "Manual regression port for pending V8 exception propagation through Headers iterable initialization, Request(input) headers snapshotting, and Response.json(init) headers processing."
+notes = "Manual regression port for pending V8 exception propagation through Headers initialization and explicit Request/Response init headers, plus Request copies that ignore an overridden public headers getter."
 
 [[test]]
 id = "response-basic"
