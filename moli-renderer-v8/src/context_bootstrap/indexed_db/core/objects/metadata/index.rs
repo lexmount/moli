@@ -6,7 +6,7 @@ use crate::context_bootstrap::indexed_db::{
 pub(in crate::context_bootstrap::indexed_db) fn index_info_from_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
-    index_name: &str,
+    index_name: &IndexedDbName,
 ) -> Option<IndexInfo> {
     indexed_db_object_store_metadata(scope, store)?
         .index(index_name)
@@ -28,7 +28,7 @@ pub(in crate::context_bootstrap::indexed_db) fn remove_database_index_metadata<'
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
-    index_name: &str,
+    index_name: &IndexedDbName,
 ) -> Option<()> {
     remove_indexed_db_database_index_metadata(scope, database, store_name, index_name)?;
     mark_indexed_db_index_handles_deleted(scope, database, store_name, index_name);

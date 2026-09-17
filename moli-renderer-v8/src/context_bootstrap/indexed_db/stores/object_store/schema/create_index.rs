@@ -7,8 +7,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.createIndex")]
 struct IdbObjectStoreCreateIndexArgs {
-    #[webidl(required)]
-    index_name: String,
+    #[webidl(required, with = parse_index_name_arg)]
+    index_name: IndexedDbName,
     #[webidl(required, name = "keyPath", with = parse_create_index_key_path_arg)]
     key_path: KeyPath,
     #[webidl(index = 2, dictionary)]
@@ -100,3 +100,15 @@ fn parse_create_index_key_path_arg<'s>(
     )
 }
 
+fn parse_index_name_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IndexedDbName, webidl::WebIdlError> {
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        args.get(index),
+        webidl::Context::argument("IDBObjectStore.createIndex", (index + 1) as usize),
+    )
+    .map(|name| IndexedDbName::from_utf16(name.0))
+}

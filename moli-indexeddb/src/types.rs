@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Key, KeyPath};
+use crate::{IndexedDbName, Key, KeyPath};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ObjectStoreOptions {
@@ -17,7 +17,7 @@ pub struct IndexOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub key_path: KeyPath,
     pub unique: bool,
     pub multi_entry: bool,
@@ -69,7 +69,7 @@ pub struct ObjectStoreInfo {
     pub name: String,
     pub key_path: Option<KeyPath>,
     pub auto_increment: bool,
-    pub index_names: Vec<String>,
+    pub index_names: Vec<IndexedDbName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

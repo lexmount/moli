@@ -1,6 +1,7 @@
 use crate::util::{get_private_object, throw_type_error};
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_indexeddb::IndexedDbName;
 use moli_webapi_declare::{
     DataPropertyDescriptorDeclaration, WebApiFunctionTemplate, WebApiObject,
 };
@@ -40,8 +41,42 @@ struct DomStringListItemArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMStringList.contains")]
 struct DomStringListContainsArgs {
-    #[webidl(required, name = "string")]
-    expected: String,
+    #[webidl(required, name = "string", with = parse_contains_string)]
+    expected: webidl::DomString16,
+}
+
+fn parse_contains_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<webidl::DomString16, webidl::WebIdlError> {
+    webidl::convert(
+        scope,
+        args.get(index),
+        webidl::Context::argument("DOMStringList.contains", 1),
+    )
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn idb_name_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &IndexedDbName,
+) -> v8::Local<'s, v8::String> {
+    v8::String::new_from_two_byte(scope, name.as_utf16(), v8::NewStringType::Normal)
+        .expect("IndexedDB name string")
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn new_idb_index_name_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    names: &[IndexedDbName],
+) -> v8::Local<'s, v8::Object> {
+    let mut names = names.iter().collect::<Vec<_>>();
+    names.sort();
+    let values = names
+        .into_iter()
+        .map(|name| idb_name_to_v8(scope, name).into())
+        .collect::<Vec<_>>();
+    let values = v8::Array::new_with_elements(scope, &values);
+    new_dom_string_list_with_values(scope, values)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn new_idb_dom_string_list<'s>(
@@ -50,6 +85,13 @@ pub(in crate::context_bootstrap::indexed_db) fn new_idb_dom_string_list<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let values =
         crate::util::serialize_v8_array(scope, values).unwrap_or_else(|| v8::Array::new(scope, 0));
+    new_dom_string_list_with_values(scope, values)
+}
+
+fn new_dom_string_list_with_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: v8::Local<'s, v8::Array>,
+) -> v8::Local<'s, v8::Object> {
     let template = v8::ObjectTemplate::new(scope);
     template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
@@ -132,14 +174,14 @@ fn dom_string_list_contains_callback<'s>(
     let Some(parsed) = webidl::parse_args::<DomStringListContainsArgs>(scope, &args) else {
         return;
     };
+    let expected =
+        v8::String::new_from_two_byte(scope, &parsed.expected.0, v8::NewStringType::Normal)
+            .expect("DOMStringList contains string");
     for index in 0..values.length() {
         let Some(value) = values.get_index(scope, index) else {
             continue;
         };
-        if value
-            .to_string(scope)
-            .is_some_and(|value| value.to_rust_string_lossy(scope) == parsed.expected)
-        {
+        if value.strict_equals(expected.into()) {
             rv.set_bool(true);
             return;
         }

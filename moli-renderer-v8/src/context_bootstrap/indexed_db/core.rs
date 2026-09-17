@@ -6,7 +6,7 @@ use super::{
     INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
     INDEXED_DB_TRANSACTION_COMMITTING_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
     INDEXED_DB_TRANSACTION_HANDLE_SLOT, IdbKeyRangeQuery, IndexEntry, IndexInfo, IndexedDbError,
-    IndexedDbExecutionOwner, IndexedDbExternalObject, IndexedDbManager,
+    IndexedDbExecutionOwner, IndexedDbExternalObject, IndexedDbManager, IndexedDbName,
     IndexedDbObjectStoreMetadata, IndexedDbRuntimeArray, IndexedDbStorageScope, IndexedDbValue,
     IndexedDbWrapperKind, Key, KeyPath, ObjectStoreInfo, PreparedObjectStoreWrite,
     TransactionHandle, TransactionMode, context_host_ptr_from_global_bridge,
