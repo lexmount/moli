@@ -15820,6 +15820,7 @@ mod canvas_webgl;
 mod close_watchers;
 mod dom_elements;
 mod dom_xhr;
+mod fetch_referrer;
 mod fetch_request_guard;
 mod http_fixture;
 mod indexed_db;

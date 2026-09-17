@@ -219,10 +219,9 @@ pub(super) fn spawn_network_fetch(
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_redirect_mode(prepared.redirect_mode)
     .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
-    .with_fetch_priority_hint(prepared.priority);
-    if prepared.referrer.is_empty() {
-        request = request.without_inferred_referrer();
-    }
+    .with_fetch_priority_hint(prepared.priority)
+    .with_fetch_referrer(&prepared.referrer)
+    .map_err(|error| error.to_string())?;
     if let Some(metadata) = window_fetch_script_metadata(&prepared) {
         request = request.with_script_fetch_metadata(metadata);
     }

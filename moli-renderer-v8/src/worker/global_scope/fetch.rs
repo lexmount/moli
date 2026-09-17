@@ -210,7 +210,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 body,
                 headers,
                 moli_url::WebOrigin::from_url(&document_url),
-            ) {
+            )
+            .and_then(|request| request.with_fetch_referrer(&request_metadata.referrer))
+            {
                 Ok(request) => {
                     let mut request = request
                         .with_initiator_url(&document_url)
@@ -221,9 +223,6 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_fetch_priority_hint(priority)
                         .with_network_partition_key(network_partition_key.clone())
                         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-                    if request_metadata.referrer.is_empty() {
-                        request = request.without_inferred_referrer();
-                    }
                     if let Some(metadata) =
                         worker_fetch_script_metadata(referrer_policy, &request_metadata)
                     {
