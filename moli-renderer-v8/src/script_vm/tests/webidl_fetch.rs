@@ -7643,6 +7643,61 @@ fn headers_for_each_uses_webidl_callback_function_semantics() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn headers_for_each_visits_live_entries_in_window_and_worker() {
+    let fixture = include_str!("../../../tests/fixtures/headers-foreach.js");
+    for worker in [false, true] {
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_page_task_executor_test_vm_with_loader("https://headers-foreach.test/", &loader);
+        vm.eval("globalThis.headersForEachResult = null;").unwrap();
+        let script = if worker {
+            let source = format!(
+                "{fixture}\nheadersForEachProbe().then(postMessage, error => postMessage({{error: String(error.stack || error)}}));"
+            );
+            format!(
+                r#"
+                const workerUrl = URL.createObjectURL(new Blob([{}], {{type: 'text/javascript'}}));
+                const worker = new Worker(workerUrl);
+                const finish = value => {{
+                    headersForEachResult = value;
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                }};
+                worker.onmessage = event => finish(event.data);
+                worker.onerror = event => {{ finish({{error: event.message}}); event.preventDefault(); }};
+                "#,
+                serde_json::to_string(&source).unwrap()
+            )
+        } else {
+            format!(
+                "{fixture}\nheadersForEachProbe().then(value => {{ headersForEachResult = value; }}, error => {{ headersForEachResult = {{error: String(error.stack || error)}}; }});"
+            )
+        };
+        vm.eval(&script).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(headersForEachResult !== null)",
+            "true",
+            "Headers.forEach checks should finish",
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(headersForEachResult)").unwrap())
+                .unwrap();
+        let checks = result["checks"]
+            .as_array()
+            .unwrap_or_else(|| panic!("worker={worker}: {result}"));
+        let failures: Vec<_> = checks
+            .iter()
+            .filter(|check| check["pass"] != true)
+            .collect();
+        assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
+        assert_eq!(checks.len(), 36, "worker={worker}");
+    }
+}
+
 #[tokio::test]
 async fn headers_for_each_uses_callback_relevant_realm() {
     let mut vm = new_storage_test_vm("https://headers-callback-realm.test/");
@@ -7688,7 +7743,8 @@ async fn headers_for_each_uses_callback_relevant_realm() {
       name,
       value,
       owner === globalThis.__headersOwner
-    ].join(':'))`
+    ].join(':'));
+    if (name === 'x-realm') owner.append('x-tail', 'tail');`
   );
   headers.forEach(callback, { receiverMarker: 'parent-this' });
   return JSON.stringify({
@@ -7702,7 +7758,7 @@ async fn headers_for_each_uses_callback_relevant_realm() {
 
     assert_eq!(
         result,
-        r#"{"callbackRealm":true,"seen":["child:parent-this:x-realm:ok:true"]}"#
+        r#"{"callbackRealm":true,"seen":["child:parent-this:x-realm:ok:true","child:parent-this:x-tail:tail:true"]}"#
     );
 }
 
