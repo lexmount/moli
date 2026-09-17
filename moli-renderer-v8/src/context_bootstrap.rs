@@ -438,7 +438,7 @@ pub(crate) use self::media_queries::{
     invoke_simple_event_target_listeners, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback,
     simple_object_event_listeners_snapshot, simple_object_event_set_handler,
-    simple_object_has_event_listeners,
+    simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
