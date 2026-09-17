@@ -24,9 +24,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_callback<'s>
         return;
     };
     let cursor = args.this();
-    let Some(current) = cursor_current_position(scope, cursor) else {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
+    if cursor_active_transaction(scope, cursor).is_none()
+        || cursor_effective_object_store(scope, cursor).is_none()
+    {
+        return;
+    }
+    let Some(current) = cursor_iteration_position(scope, cursor) else {
         return;
     };
     let key = parsed.key.unwrap_or_else(|| v8::undefined(scope).into());
@@ -65,11 +68,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_advance_callback<'s>(
         return;
     };
     let cursor = args.this();
-    let Some(current) = cursor_current_position(scope, cursor) else {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
-        return;
-    };
     let count = parsed.count;
     if count == 0 {
         throw_type_error(
@@ -78,6 +76,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_advance_callback<'s>(
         );
         return;
     }
+    if cursor_active_transaction(scope, cursor).is_none()
+        || cursor_effective_object_store(scope, cursor).is_none()
+    {
+        return;
+    }
+    let Some(current) = cursor_iteration_position(scope, cursor) else {
+        return;
+    };
     let next = current + count as usize;
     let next = (next < cursor_entries_len(scope, cursor)).then_some(next);
     let _ = result::enqueue_cursor_result(scope, cursor, next);
