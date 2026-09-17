@@ -85,6 +85,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     OfflineAudioCompletionEvent,
     XmlSerializer,
     AbortController,
+    Observable,
     BroadcastChannel,
     EventSource,
     IdleDetector,

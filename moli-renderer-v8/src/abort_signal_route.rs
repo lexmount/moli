@@ -28,6 +28,36 @@ pub(crate) struct ResolvedAbortSignal<'s> {
 }
 
 impl<'s> ResolvedAbortSignal<'s> {
+    /// Creates a signal in the current realm without consulting author-visible
+    /// constructors or maintaining another store for native algorithms.
+    pub(crate) fn new(scope: &mut v8::PinScope<'s, '_>) -> Option<Self> {
+        let signal = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            crate::native_bridge::abort::create_signal(
+                scope,
+                unsafe { &mut *host_ptr },
+                false,
+                None,
+            )?
+        } else {
+            crate::worker::abort::new_worker_abort_signal(scope)?
+        };
+        Self::resolve(scope, signal)
+    }
+
+    pub(crate) fn reason(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Value> {
+        match self.owner {
+            AbortSignalOwner::Window => {
+                context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+                    unsafe { &mut *host_ptr }.abort_signal_reason(scope, self.signal)
+                })
+            }
+            AbortSignalOwner::Worker => {
+                crate::worker::abort::worker_abort_signal_reason(scope, self.signal)
+            }
+        }
+        .unwrap_or_else(|| v8::undefined(scope).into())
+    }
+
     pub(crate) fn resolve(
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
