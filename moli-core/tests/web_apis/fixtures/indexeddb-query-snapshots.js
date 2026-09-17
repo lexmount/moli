@@ -12,7 +12,8 @@ async function querySnapshotProbe(name = 'query-snapshots-' + Math.random()) {
   });
   const open = indexedDB.open(name, 1);
   const seeds = [
-    ['array', [1]], ['nested', [[1]]], ['date', new Date(1)]
+    ['array', [1]], ['nested', [[1]]], ['date', new Date(1)],
+    ['binary', new Uint8Array([1])]
   ];
   open.onupgradeneeded = () => {
     const store = open.result.createObjectStore('keys');
@@ -26,6 +27,10 @@ async function querySnapshotProbe(name = 'query-snapshots-' + Math.random()) {
     ['array', () => { const key = [1]; return {key, mutate: () => key[0] = 99}; }],
     ['nested', () => { const key = [[1]]; return {key, mutate: () => key[0][0] = 99}; }],
     ['date', () => { const key = new Date(1); return {key, mutate: () => key.setTime(99)}; }],
+    ['binary', () => { const key = new Uint8Array([1]).buffer; return {key, mutate: () => new Uint8Array(key)[0] = 99}; }],
+    ['binary', () => { const bytes = new Uint8Array([8,1,8]); return {key: bytes.subarray(1,2), mutate: () => bytes.fill(99)}; }],
+    ['binary', () => { const bytes = new Uint8Array([8,1,8]); return {key: new DataView(bytes.buffer,1,1), mutate: () => bytes.fill(99)}; }],
+    ['binary', () => { const key = new Uint8Array([1]).buffer; return {key, mutate: () => structuredClone(key,{transfer:[key]})}; }],
     ['array', () => {
       let reads = 0;
       const key = Object.defineProperty([], 0, {get() {
