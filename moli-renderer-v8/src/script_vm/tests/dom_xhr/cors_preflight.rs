@@ -23,6 +23,20 @@ fn permission_cases() -> Vec<PreflightCase> {
     };
     vec![
         PreflightCase {
+            label: "repeated-ranges-require-permission",
+            method: "GET",
+            headers: &[("Range", "bytes=1-3"), ("range", "bytes=5-7")],
+            allowed: false,
+            ..DEFAULT
+        },
+        PreflightCase {
+            label: "repeated-ranges-explicit-permission",
+            method: "GET",
+            headers: &[("Range", "bytes=1-3"), ("range", "bytes=5-7")],
+            permissions: &[("Access-Control-Allow-Headers", "range")],
+            ..DEFAULT
+        },
+        PreflightCase {
             label: "duplicate-fields",
             permissions: &[
                 ("Access-Control-Allow-Methods", "POST"),
@@ -274,6 +288,28 @@ async fn check_preflight_permissions(worker: bool) {
                         "\r\naccess-control-request-method: {}\r\n",
                         server_cases[index].method.to_ascii_lowercase()
                     )));
+                }
+                if server_cases[index].label.starts_with("repeated-ranges-") {
+                    let name = if method == "OPTIONS" {
+                        "access-control-request-headers"
+                    } else {
+                        "range"
+                    };
+                    let values: Vec<_> = head
+                        .lines()
+                        .filter_map(|line| {
+                            let (field, value) = line.split_once(':')?;
+                            field.eq_ignore_ascii_case(name).then_some(value.trim())
+                        })
+                        .collect();
+                    assert_eq!(
+                        values,
+                        [if method == "OPTIONS" {
+                            "range"
+                        } else {
+                            "bytes=1-3, bytes=5-7"
+                        }]
+                    );
                 }
                 observed.push((index, method));
                 response.push_str("\r\nok");

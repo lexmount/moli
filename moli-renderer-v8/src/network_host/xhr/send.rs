@@ -184,6 +184,7 @@ pub(super) fn xhr_send_callback<'s>(
     if let Some(result) = local_url_response_with_blob_entry(
         &prepared.resolved_url,
         &prepared.method,
+        &prepared.request_headers,
         prepared.blob_url_entry.as_ref(),
     ) {
         match result {
@@ -195,10 +196,10 @@ pub(super) fn xhr_send_callback<'s>(
                 apply_xhr_response(scope, xhr, response);
             }
             Err(message) if async_request => {
-                record_url_policy_xhr_failure(scope, host, xhr, prepared, message);
+                record_url_policy_xhr_failure(scope, host, xhr, prepared, message.into_message());
             }
             Err(message) => {
-                record_synchronous_xhr_failure(scope, host, xhr, prepared, message);
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, message.into_message());
             }
         }
         return;

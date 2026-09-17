@@ -73,10 +73,9 @@ pub(super) async fn load_followed_location_navigation(
     browser_navigation_kind: BrowserNavigationRequestKind,
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
-    if let Some(response) = about_blank_navigation_response(&url)
-        .map(Ok)
-        .or_else(|| crate::network_host::local_url_response_result(&url, &request_method))
-    {
+    if let Some(response) = about_blank_navigation_response(&url).map(Ok).or_else(|| {
+        crate::network_host::local_url_response_result(&url, &request_method, &request_headers)
+    }) {
         let response = response.map_err(anyhow::Error::msg)?;
         if matches!(response.status, 204 | 205) {
             return Ok(LoadedFollowedLocationNavigation::NoDocument);

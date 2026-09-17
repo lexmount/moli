@@ -4249,8 +4249,10 @@ impl ScriptVm {
         let local_response = crate::network_host::local_url_response_with_blob_entry(
             &request.url,
             &request.method,
+            &request.request_headers,
             state.pending.blob_url_entry.as_ref(),
-        );
+        )
+        .map(|result| result.map_err(|error| error.into_message()));
         {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
