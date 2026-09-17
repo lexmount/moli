@@ -1564,28 +1564,29 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
         .primary
         .insert(5, nav_item_style(BLUE, 19.0, Overflow::Hidden));
     let fallback = render(&source, &mut styles, 300, 100);
-    let more = rect(&fallback, BLUE);
-    assert_close(more.y, 19.0);
-    assert_close(more.height, 42.0);
-    assert_close(rect(&fallback, RED).y, rect(&fallback, GREEN).y);
-    // A clipped inline-block uses its bottom margin edge as the baseline.
-    // Check the adjacent text's actual baselines: its box top depends on the
-    // platform font's ascent, even with an explicit font size and line height.
-    let baselines = fallback
-        .fragments
-        .iter()
-        .filter_map(|fragment| match fragment {
-            PaintFragment::GlyphRun(run) => run.glyphs_in_surface().first().map(|glyph| glyph.y),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        baselines.len(),
-        3,
-        "each nav item should paint one text run"
+    let fallback_news = rect(&fallback, RED);
+    let fallback_hao = rect(&fallback, GREEN);
+    let fallback_more = rect(&fallback, BLUE);
+    assert_close(fallback_news.y, fallback_hao.y);
+    assert!(fallback_news.y > news.y);
+    assert_close(fallback_more.y, more.y);
+
+    // The scrolling inline-block synthesizes its baseline from its margin-box
+    // edge. Increasing only its block-end padding must therefore move both
+    // text-backed peers by exactly the same amount while its own top remains
+    // fixed. This checks the fallback contract without baking a platform font's
+    // ascent into an absolute y coordinate.
+    styles
+        .primary
+        .insert(5, nav_item_style(BLUE, 29.0, Overflow::Hidden));
+    let deeper_fallback = render(&source, &mut styles, 300, 100);
+    assert_close(rect(&deeper_fallback, RED).y, fallback_news.y + 10.0);
+    assert_close(rect(&deeper_fallback, GREEN).y, fallback_hao.y + 10.0);
+    assert_close(rect(&deeper_fallback, BLUE).y, fallback_more.y);
+    assert_close(
+        rect(&deeper_fallback, BLUE).height,
+        fallback_more.height + 10.0,
     );
-    assert_close(baselines[0], more.y + more.height);
-    assert_close(baselines[1], more.y + more.height);
 }
 
 #[test]

@@ -19,6 +19,7 @@ pub fn init(log_filter: &str) {
         .with_env_filter(filter)
         .with_target(false)
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .try_init();
 }
 
@@ -39,6 +40,9 @@ mod tests {
 
     struct SharedWriterGuard(Arc<Mutex<Vec<u8>>>);
 
+    #[derive(Clone, Copy)]
+    struct BrokenWriter;
+
     impl Write for SharedWriterGuard {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             self.0.lock().extend_from_slice(buffer);
@@ -47,6 +51,30 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    impl Write for BrokenWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "diagnostic sink is gone",
+            ))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "diagnostic sink is gone",
+            ))
+        }
+    }
+
+    impl<'writer> MakeWriter<'writer> for BrokenWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            *self
         }
     }
 
@@ -106,5 +134,21 @@ mod tests {
         let output = writer.output();
         assert!(output.contains("fallback-info"));
         assert!(!output.contains("dependency-warning"));
+    }
+
+    #[test]
+    fn broken_diagnostic_writer_does_not_panic() {
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(BrokenWriter)
+            .with_env_filter(first_party_filter("error"))
+            .log_internal_errors(false)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!("broken diagnostic writer regression");
+        });
     }
 }

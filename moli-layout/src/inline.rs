@@ -36,6 +36,16 @@ pub(crate) fn relative_atomic_inset_offset(
     containing_block_size: Size<f32>,
     container_direction: InlineDirection,
 ) -> Point<f32> {
+    relative_inset_offset(style, containing_block_size.map(Some), container_direction)
+}
+
+/// The block-axis percentage basis may be indefinite even when the final
+/// content height is nonzero (auto height or min-height-only sizing).
+pub(crate) fn relative_inset_offset(
+    style: &taffy::Style<style::Atom>,
+    containing_block_size: Size<Option<f32>>,
+    container_direction: InlineDirection,
+) -> Point<f32> {
     let inset = taffy::Rect {
         left: style.inset.left.maybe_resolve(
             containing_block_size.width,

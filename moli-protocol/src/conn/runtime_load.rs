@@ -4097,6 +4097,47 @@ mod tests {
         assert!(format!("{error:#}").contains("main document body capture task failed"));
     }
 
+    #[tokio::test]
+    async fn response_capture_survives_ordinary_renderer_body_retirement() {
+        let cancellation = moli_fetch::FetchCancelHandle::new();
+        let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (source_completion_tx, source_completion_rx) = tokio::sync::oneshot::channel();
+        let response = moli_fetch::StreamingRawResponse::new(
+            url::Url::parse("https://capture.test/document").unwrap(),
+            200,
+            Vec::new(),
+            None,
+            Vec::new(),
+            false,
+            Vec::new(),
+            source_rx,
+            cancellation.clone(),
+            source_completion_rx,
+        );
+        let (renderer_tx, renderer_rx) = tokio::sync::mpsc::channel(1);
+        let (renderer_completion_tx, renderer_completion_rx) = tokio::sync::oneshot::channel();
+        drop(renderer_rx);
+        drop(renderer_completion_rx);
+        let capture = super::spawn_streaming_body_capture(
+            response,
+            None,
+            renderer_tx,
+            renderer_completion_tx,
+        );
+        source_tx.send(b"prefix".to_vec()).unwrap();
+        source_tx
+            .send(b"captured after parser retirement".to_vec())
+            .unwrap();
+        drop(source_tx);
+        source_completion_tx.send(Ok(())).unwrap();
+        let body = capture.await.unwrap().unwrap();
+        assert_eq!(
+            body.materialize_bytes().unwrap().as_slice(),
+            b"prefixcaptured after parser retirement"
+        );
+        assert!(!cancellation.is_cancelled());
+    }
+
     #[test]
     fn decode_text_html_data_url_uses_data_url_processor() {
         assert_eq!(

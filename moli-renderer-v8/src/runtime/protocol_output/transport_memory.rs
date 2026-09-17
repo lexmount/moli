@@ -261,6 +261,45 @@ fn child_frame_document_network_charge(
     .sum::<usize>()
     .saturating_add(headers_charge(&snapshot.request_headers))
     .saturating_add(headers_charge(&snapshot.response_headers))
+    .saturating_add(network_observation_journal_charge(
+        &snapshot.network_observation_journal,
+    ))
+    .saturating_add(snapshot.redirect_chain.iter().fold(0, |total, redirect| {
+        total
+            .saturating_add(512)
+            .saturating_add(string_charge(redirect.from_url.as_str()))
+            .saturating_add(string_charge(redirect.to_url.as_str()))
+            .saturating_add(headers_charge(&redirect.headers))
+            .saturating_add(
+                redirect
+                    .request_extra_info
+                    .as_ref()
+                    .map(|extra| {
+                        headers_charge(&extra.headers)
+                            .saturating_add(cookie_query_report_charge(&extra.cookie_report))
+                    })
+                    .unwrap_or_default(),
+            )
+            .saturating_add(
+                redirect
+                    .response_extra_info
+                    .as_ref()
+                    .map(|extra| {
+                        headers_charge(&extra.headers).saturating_add(cookie_query_report_charge(
+                            &extra.request_extra_info.cookie_report,
+                        ))
+                    })
+                    .unwrap_or_default(),
+            )
+            .saturating_add(
+                redirect
+                    .request_cookie_report
+                    .as_ref()
+                    .map(cookie_query_report_charge)
+                    .unwrap_or_default(),
+            )
+            .saturating_add(redirect.cookie_set_reports.len().saturating_mul(128))
+    }))
     .saturating_add(
         snapshot
             .response_body
@@ -268,6 +307,66 @@ fn child_frame_document_network_charge(
             .map(|body| body.renderer_transport_retained_memory_bytes())
             .unwrap_or_default(),
     )
+}
+
+fn network_observation_journal_charge(journal: &moli_fetch::NetworkObservationJournal) -> usize {
+    journal.exchanges().iter().fold(0, |total, exchange| {
+        let request = exchange.request();
+        total
+            .saturating_add(512)
+            .saturating_add(request.method().map(string_charge).unwrap_or_default())
+            .saturating_add(headers_charge(request.headers()))
+            .saturating_add(
+                request
+                    .cookie_report()
+                    .map(cookie_query_report_charge)
+                    .unwrap_or_default(),
+            )
+            .saturating_add(
+                exchange
+                    .response()
+                    .map(|response| headers_charge(response.headers()))
+                    .unwrap_or_default(),
+            )
+    })
+}
+
+fn cookie_query_report_charge(report: &moli_cookie_jar::StoredCookieQueryReport) -> usize {
+    report
+        .included_cookies
+        .iter()
+        .chain(&report.excluded_cookies)
+        .fold(0, |total, access| {
+            let cookie = &access.cookie;
+            total
+                .saturating_add(512)
+                .saturating_add(string_charge(&cookie.name))
+                .saturating_add(string_charge(&cookie.value))
+                .saturating_add(string_charge(&cookie.domain))
+                .saturating_add(string_charge(&cookie.path))
+                .saturating_add(
+                    cookie
+                        .partition_key
+                        .as_ref()
+                        .and_then(|key| key.top_level_site())
+                        .map(string_charge)
+                        .unwrap_or_default(),
+                )
+                .saturating_add(
+                    access
+                        .site_for_cookies_url
+                        .as_ref()
+                        .map(|url| string_charge(url.as_str()))
+                        .unwrap_or_default(),
+                )
+                .saturating_add(
+                    access
+                        .top_frame_origin_url
+                        .as_ref()
+                        .map(|url| string_charge(url.as_str()))
+                        .unwrap_or_default(),
+                )
+        })
 }
 
 fn runtime_inspector_message_transport_charge_bytes(
@@ -493,4 +592,38 @@ fn navigation_response_transport_charge_bytes(
                 .map(headers_charge)
                 .unwrap_or(0),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::network_observation_journal_charge;
+
+    #[test]
+    fn network_observation_journal_charge_includes_methods_and_headers() {
+        let journal = moli_fetch::NetworkObservationJournal::from_exchanges(vec![
+            moli_fetch::NetworkExchangeObservation::new(
+                moli_fetch::NetworkRequestObservation::new_with_method(
+                    "POST",
+                    vec![("X-Request".to_owned(), "request-value".to_owned())],
+                ),
+                Some(moli_fetch::NetworkResponseObservation::new(
+                    200,
+                    vec![("X-Response".to_owned(), b"response-value".to_vec())],
+                )),
+            ),
+        ]);
+
+        let empty_exchange = moli_fetch::NetworkObservationJournal::from_exchanges(vec![
+            moli_fetch::NetworkExchangeObservation::new(
+                moli_fetch::NetworkRequestObservation::new(Vec::new()),
+                None,
+            ),
+        ]);
+
+        assert!(
+            network_observation_journal_charge(&journal)
+                > network_observation_journal_charge(&empty_exchange),
+            "transport accounting must charge retained method and header strings"
+        );
+    }
 }

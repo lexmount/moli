@@ -235,6 +235,7 @@ pub(crate) struct ParserResumePermit {
 pub(crate) enum ParserStopReason {
     DocumentReplacement,
     MainResourceLoadFailure,
+    Stopped,
     OwnerDropped,
 }
 
@@ -753,6 +754,14 @@ impl DocumentParserSession {
     pub(crate) fn start_main_xml_document(document_url: Url) -> Self {
         Self::new_xml(
             XmlDocumentStream::new_top_level_document(document_url),
+            DocumentParserLifetime::Finite,
+        )
+    }
+
+    pub(crate) fn start_main_text_document(document_url: Url, content_type: &str) -> Self {
+        Self::new_html(
+            HtmlParser::with_scripting_enabled(false)
+                .start_text_document(document_url, content_type),
             DocumentParserLifetime::Finite,
         )
     }

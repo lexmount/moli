@@ -1464,7 +1464,7 @@ return [
 }
 
 #[test]
-fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
+fn geometry_getters_refresh_after_mutation_and_reuse_clean_layout() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1514,7 +1514,7 @@ yield; // Publish this scene before reading its geometry.
     )
     .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|38|0");
+    assert_eq!(result, "38|8|38|8|38|43|8");
     let passes = vm
         ._context_host
         .borrow()

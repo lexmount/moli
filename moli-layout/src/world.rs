@@ -593,6 +593,14 @@ impl<N> LayoutBox<N> {
     }
 }
 
+/// One source-owned middle continuation, with no numeric containing block.
+#[derive(Debug)]
+pub(crate) struct InlineSplitBlockRun {
+    pub(crate) preceding_inline: LayoutBoxId,
+    pub(crate) first: LayoutBoxId,
+    pub(crate) last: LayoutBoxId,
+}
+
 /// Entire short-lived sidecar used for one construction/layout demand.
 #[derive(Debug)]
 pub struct LayoutWorld<N>
@@ -602,6 +610,9 @@ where
     pub(crate) boxes: Vec<LayoutBox<N>>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
+    pub(crate) inline_split_sources: std::collections::HashSet<N>,
+    pub(crate) inline_split_block_runs: Vec<InlineSplitBlockRun>,
+    pub(crate) inline_split_parent_inputs: HashMap<LayoutBoxId, Option<taffy::LayoutInput>>,
     pub(crate) root: LayoutBoxId,
     /// The root is the document element only for a complete document source.
     /// Subtree and synthetic sources still use the same internal root slot.
@@ -627,6 +638,9 @@ where
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
+            inline_split_sources: std::collections::HashSet::new(),
+            inline_split_block_runs: Vec::new(),
+            inline_split_parent_inputs: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             root_is_document_element,
             viewport_scroll_policy: ViewportScrollPolicy::default(),
@@ -905,6 +919,30 @@ where
             *ids = ids.iter().filter_map(|id| remap[id.index()]).collect();
             !ids.is_empty()
         });
+        self.inline_split_block_runs.retain_mut(|run| {
+            let (Some(preceding), Some(first), Some(last)) = (
+                remap[run.preceding_inline.index()],
+                remap[run.first.index()],
+                remap[run.last.index()],
+            ) else {
+                return false;
+            };
+            run.preceding_inline = preceding;
+            run.first = first;
+            run.last = last;
+            true
+        });
+        self.inline_split_sources
+            .retain(|source| self.source_mapping.contains_key(source));
+        self.inline_split_parent_inputs = self
+            .inline_split_block_runs
+            .iter()
+            .filter_map(|run| {
+                self.boxes[run.first.index()]
+                    .parent
+                    .map(|parent| (parent, None))
+            })
+            .collect();
     }
 
     /// Validates graph ownership invariants without relying on allocator IDs.
