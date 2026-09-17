@@ -13,10 +13,10 @@ pub enum TransactionModeWebIdl {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "IDBObjectStoreParameters")]
 pub struct IdbObjectStoreParameters {
-    #[webidl(with = parse_optional_idb_key_path_member)]
-    pub key_path: Option<KeyPath>,
     #[webidl(default = false)]
     pub auto_increment: bool,
+    #[webidl(with = parse_optional_idb_key_path_member)]
+    pub key_path: Option<KeyPath>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
