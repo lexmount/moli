@@ -366,7 +366,7 @@ mod tests {
             .lock()
             .open(moli_indexeddb::OpenOptions {
                 origin: "origin".to_owned(),
-                name: "db".to_owned(),
+                name: "db".into(),
                 version: None,
             })
             .unwrap();

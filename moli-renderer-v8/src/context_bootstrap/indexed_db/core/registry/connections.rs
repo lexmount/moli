@@ -9,9 +9,17 @@ use crate::context_bootstrap::indexed_db::{
 
 pub(in crate::context_bootstrap::indexed_db) fn database_registry_key(
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
 ) -> String {
-    format!("{origin}\u{0}{name}")
+    // Connection notifications carry opaque strings. Encode code units rather
+    // than formatting a DOMString lossily; four hex digits per unit also keep
+    // names containing NUL distinct from the storage-key separator.
+    use std::fmt::Write;
+    let mut key = format!("{origin}\u{0}");
+    for unit in name.as_utf16() {
+        write!(key, "{unit:04x}").expect("database registry key");
+    }
+    key
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn has_open_database_connections_for_key(

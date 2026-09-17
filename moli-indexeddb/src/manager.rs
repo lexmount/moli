@@ -135,12 +135,17 @@ impl IndexedDbManager {
         })
     }
 
-    pub fn delete_database(&mut self, origin: &str, name: &str) -> Result<(), IndexedDbError> {
+    pub fn delete_database(
+        &mut self,
+        origin: &str,
+        name: impl Into<IndexedDbName>,
+    ) -> Result<(), IndexedDbError> {
+        let name = &name.into();
         self.ensure_origin_loaded(origin)?;
         if self
             .databases
             .values()
-            .any(|db| db.origin == origin && db.name == name)
+            .any(|db| db.origin == origin && &db.name == name)
         {
             return Err(IndexedDbError::InvalidState(format!(
                 "database `{name}` for origin `{origin}` is still open"
@@ -269,7 +274,7 @@ impl IndexedDbManager {
     pub(crate) fn committed_origin_usage_except_database(
         &self,
         origin: &str,
-        db_name: &str,
+        db_name: &IndexedDbName,
     ) -> u64 {
         self.origins
             .get(origin)
@@ -278,7 +283,7 @@ impl IndexedDbManager {
                     state
                         .databases
                         .iter()
-                        .filter(|(name, _)| name.as_str() != db_name)
+                        .filter(|(name, _)| *name != db_name)
                         .map(|(name, database)| database_usage_bytes(name, database)),
                 )
             })
@@ -330,8 +335,9 @@ impl IndexedDbManager {
     pub fn database_version(
         &mut self,
         origin: &str,
-        name: &str,
+        name: impl Into<IndexedDbName>,
     ) -> Result<Option<u64>, IndexedDbError> {
+        let name = &name.into();
         self.ensure_origin_loaded(origin)?;
         Ok(self
             .origins
@@ -1126,7 +1132,7 @@ impl IndexedDbManager {
         Ok(())
     }
 
-    fn allocate_database_handle(&mut self, origin: String, name: String) -> DatabaseHandle {
+    fn allocate_database_handle(&mut self, origin: String, name: IndexedDbName) -> DatabaseHandle {
         let handle =
             DatabaseHandle::from_raw(self.next_database_handle.fetch_add(1, Ordering::Relaxed));
         self.databases.insert(
@@ -1144,7 +1150,7 @@ impl IndexedDbManager {
         &mut self,
         database: DatabaseHandle,
         origin: &str,
-        db_name: &str,
+        db_name: &IndexedDbName,
         working_copy: DatabaseData,
     ) -> TransactionHandle {
         let stores = working_copy.stores.keys().cloned().collect::<BTreeSet<_>>();
@@ -1181,7 +1187,7 @@ impl IndexedDbManager {
     pub(crate) fn database_data(
         &self,
         origin: &str,
-        name: &str,
+        name: &IndexedDbName,
     ) -> Result<&DatabaseData, IndexedDbError> {
         self.origins
             .get(origin)

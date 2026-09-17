@@ -277,7 +277,7 @@ impl IndexedDbOpenTaskPayload {
 struct IndexedDbBlockedTaskPayload {
     request: v8::Global<v8::Value>,
     origin: String,
-    name: String,
+    name: IndexedDbName,
     version: Option<u64>,
     old_version: u64,
     new_version: Option<u64>,
@@ -293,7 +293,7 @@ impl IndexedDbBlockedTaskPayload {
         scope: &mut v8::PinScope<'_, '_>,
         request: v8::Local<'_, v8::Object>,
         origin: impl Into<String>,
-        name: impl Into<String>,
+        name: impl Into<IndexedDbName>,
         version: Option<u64>,
         old_version: u64,
         new_version: Option<u64>,
@@ -318,7 +318,7 @@ impl IndexedDbBlockedTaskPayload {
 pub(super) struct IndexedDbBlockedTaskPayloadLocals<'s> {
     pub(super) request: v8::Local<'s, v8::Object>,
     pub(super) origin: String,
-    pub(super) name: String,
+    pub(super) name: IndexedDbName,
     pub(super) version: Option<u64>,
     pub(super) old_version: u64,
     pub(super) new_version: Option<u64>,
@@ -1456,7 +1456,7 @@ fn register_indexed_db_blocked_task<'s>(
     kind: IndexedDbTaskKind,
     request: v8::Local<'s, v8::Object>,
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
     version: Option<u64>,
     old_version: u64,
     new_version: Option<u64>,
@@ -1487,7 +1487,7 @@ pub(super) fn register_indexed_db_blocked_open_task<'s>(
     task: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
     version: Option<u64>,
     old_version: u64,
     new_version: u64,
@@ -1510,7 +1510,7 @@ pub(super) fn register_indexed_db_blocked_delete_task<'s>(
     task: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
     old_version: u64,
 ) {
     register_indexed_db_blocked_task(
