@@ -4,6 +4,7 @@ use super::super::fetch_surface::{
     response_slot_number,
 };
 use super::*;
+use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
 use moli_fetch::{RequestMode, RequestRedirectMode};
 use moli_url::WebOrigin;
@@ -699,7 +700,7 @@ fn materialize_response_head_for_purpose<'s>(
         response_slot_string(scope, response, RESPONSE_STATUS_TEXT_SLOT).unwrap_or_default();
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)
         .map(|headers| {
-            moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+            moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
                 .expect("Headers contain ByteStrings")
         })
         .unwrap_or_default();
@@ -783,7 +784,7 @@ fn restore_response_internal_head<'s>(
                 .unwrap_or_default();
         head.headers = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
             .map(|headers| {
-                moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+                moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
                     .expect("Headers contain ByteStrings")
             })
             .unwrap_or_default();

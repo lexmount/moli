@@ -1,5 +1,5 @@
 use super::headers::{
-    build_headers_object, headers_entries, mark_headers_immutable, normalized_headers_entries,
+    build_headers_object, headers_entries, headers_list, mark_headers_immutable, normalized_headers_entries,
 };
 use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
 use super::*;
@@ -183,7 +183,7 @@ pub(crate) fn request_headers_entries<'s>(
     request: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
     request_slot_object(scope, request, REQUEST_HEADERS_SLOT)
-        .map(|headers| headers_entries(scope, headers))
+        .map(|headers| headers_list(scope, headers))
         .unwrap_or_default()
 }
 
@@ -836,7 +836,7 @@ fn request_clone_callback<'s>(
             }
         }
         let entries = request_slot_object(scope, this, REQUEST_HEADERS_SLOT)
-            .map(|headers| headers_entries(scope, headers))
+            .map(|headers| headers_list(scope, headers))
             .unwrap_or_default();
         let guard =
             if request_slot_string(scope, this, REQUEST_MODE_SLOT).as_deref() == Some("no-cors") {

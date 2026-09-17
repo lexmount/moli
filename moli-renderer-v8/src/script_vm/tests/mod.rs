@@ -15704,6 +15704,7 @@ mod dom_xhr;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
+mod headers_list;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;
