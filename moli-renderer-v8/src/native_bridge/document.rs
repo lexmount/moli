@@ -1113,6 +1113,18 @@ fn current_script_belongs_to_document(
         .is_some_and(|owner_document| owner_document == document_handle)
 }
 
+fn document_has_browsing_context(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    // Detached iframe compatibility windows can become a document's defaultView
+    // without registering a browsing context. They must not make it visible.
+    runtime.dom_host().document_handle() == handle
+        || runtime
+            .child_browsing_context_host_for_document_handle(handle)
+            .is_some()
+        || runtime
+            .lightweight_popup_id_for_document_handle(handle)
+            .is_some()
+}
+
 fn document_hidden_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1123,8 +1135,8 @@ fn document_hidden_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let visible = document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible);
+    let visible = unsafe { &*runtime_ptr }.document_activity().visible
+        && document_has_browsing_context(unsafe { &*runtime_ptr }, handle);
     rv.set_bool(!visible);
 }
 
@@ -1138,8 +1150,8 @@ fn document_visibility_state_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let state = if document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible)
+    let state = if unsafe { &*runtime_ptr }.document_activity().visible
+        && document_has_browsing_context(unsafe { &*runtime_ptr }, handle)
     {
         "visible"
     } else {
