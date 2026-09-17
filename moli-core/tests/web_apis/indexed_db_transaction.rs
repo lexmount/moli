@@ -702,3 +702,24 @@ async fn indexed_db_writes_clone_before_key_paths_and_snapshot_queued_values() -
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_clear_validates_before_requests_and_preserves_callee_errors() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-clear.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nclearProbe('clear-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: clearChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 94 } else { 282 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
