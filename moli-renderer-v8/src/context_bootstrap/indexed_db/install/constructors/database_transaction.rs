@@ -15,7 +15,7 @@ struct IdbDatabasePrototypeDeclaration {
     version: (),
     #[webapi(accessor_property, getter = idb_database_object_store_names_getter)]
     object_store_names: (),
-    #[webapi(method, length = 2, callback = idb_database_create_object_store_callback)]
+    #[webapi(method, length = 1, callback = idb_database_create_object_store_callback)]
     create_object_store: (),
     #[webapi(method, length = 1, callback = idb_database_delete_object_store_callback)]
     delete_object_store: (),
