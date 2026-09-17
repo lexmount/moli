@@ -1,7 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
-    indexed_db_transaction_start_wake, object_store_info_from_database_metadata,
+    IdbTransactionDurability, indexed_db_transaction_start_wake, object_store_info_from_database_metadata,
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
     set_indexed_db_transaction_start_request,
 };
@@ -23,6 +23,27 @@ struct IdbDatabaseTransactionArgs {
     store_names: names::TransactionStoreNames,
     #[webidl(converter = "enum", default = TransactionModeWebIdl::Readonly)]
     mode: TransactionModeWebIdl,
+    #[webidl(index = 2, with = parse_transaction_options_arg)]
+    options: IdbTransactionOptions,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "IDBTransactionOptions")]
+struct IdbTransactionOptions {
+    #[webidl(converter = "enum", default = IdbTransactionDurability::Default)]
+    durability: IdbTransactionDurability,
+}
+
+fn parse_transaction_options_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IdbTransactionOptions, webidl::WebIdlError> {
+    let context = webidl::Context::argument("IDBDatabase.transaction", (index + 1) as usize);
+    webidl::dictionary_arg(args, index, context)?
+        .map(|object| webidl::parse_dictionary_object(scope, object))
+        .transpose()
+        .map(|options| options.unwrap_or_default())
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callback<'s>(
@@ -106,7 +127,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
     };
     let result = {
         let scope = &mut v8::ContextScope::new(scope, context);
-        create_regular_transaction(scope, database, handle, &store_names, mode)
+        create_regular_transaction(
+            scope,
+            database,
+            handle,
+            &store_names,
+            mode,
+            parsed.options.durability,
+        )
     };
     match result {
         Ok(Some(transaction)) => rv.set(transaction.into()),
@@ -124,6 +152,7 @@ fn create_regular_transaction<'s>(
     handle: DatabaseHandle,
     store_names: &[IndexedDbName],
     mode: TransactionMode,
+    durability: IdbTransactionDurability,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, IndexedDbError> {
     // Objects and task queues belong to the connection's realm even when the
     // operation was borrowed from another Window. Conversion and exceptions
@@ -140,9 +169,14 @@ fn create_regular_transaction<'s>(
     } else {
         None
     };
-    let Some(transaction) =
-        create_transaction_object(scope, database, transaction_handle, mode, store_names)
-    else {
+    let Some(transaction) = create_transaction_object(
+        scope,
+        database,
+        transaction_handle,
+        mode,
+        durability,
+        store_names,
+    ) else {
         if let Some(handle) = transaction_handle {
             let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
         }

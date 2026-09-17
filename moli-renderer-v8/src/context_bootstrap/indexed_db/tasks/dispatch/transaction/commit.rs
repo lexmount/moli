@@ -2,6 +2,7 @@ use super::super::open::enqueue_committed_upgrade_open;
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     finish_transaction_abort, indexed_db_transaction_database, take_indexed_db_upgrade_open,
+    transaction_durability_for_commit,
 };
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s>(
@@ -51,13 +52,28 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
         }
         None => None,
     };
-    match with_indexed_db_manager(scope, |manager| {
-        if let Some(quota) = quota_commit {
-            manager.commit_transaction_with_quota(handle, quota.quota_check)
-        } else {
-            manager.commit_transaction(handle)
+    let durability = match transaction_durability_for_commit(scope, transaction) {
+        Ok(durability) => durability,
+        Err(error) => {
+            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
+            drop(quota_commit);
+            finish_failed_commit(scope, transaction, error);
+            return;
         }
-    }) {
+    };
+    let result = with_indexed_db_manager(scope, |manager| {
+        manager.commit_transaction_with_options(
+            handle,
+            moli_indexeddb::TransactionCommitOptions {
+                durability,
+                quota: quota_commit.as_ref().map(|quota| quota.quota_check),
+            },
+        )
+    });
+    // Completion/abort listeners may immediately write through the same quota
+    // owner. The reservation protects publication, never author callbacks.
+    drop(quota_commit);
+    match result {
         Ok(()) => {
             finish_committed_transaction(scope, transaction);
         }

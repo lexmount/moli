@@ -25,6 +25,7 @@ pub(super) fn enqueue_upgrade_needed_open_task<'s>(
         database,
         Some(upgrade_handle),
         TransactionMode::VersionChange,
+        crate::context_bootstrap::indexed_db::IdbTransactionDurability::Default,
         &store_names,
     ) else {
         return;

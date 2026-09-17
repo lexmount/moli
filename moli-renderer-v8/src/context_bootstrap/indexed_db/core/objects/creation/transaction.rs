@@ -1,5 +1,7 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
+use crate::context_bootstrap::indexed_db::{
+    IdbTransactionDurability, initialize_indexed_db_event_target,
+};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -25,9 +27,9 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     db: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
+    durability: IdbTransactionDurability,
     store_names: &[IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let handle_raw = handle.map(|handle| handle.into_raw() as f64);
     let db_key = object_string_property(scope, db, INDEXED_DB_DATABASE_KEY_SLOT);
     let tx = IdbTransactionObjectDeclaration::new(db, mode.into())
         .bind(scope)
@@ -42,15 +44,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(
-        scope,
-        tx,
-        db,
-        handle,
-        mode,
-        handle_raw.is_some(),
-        db_key,
-    );
+    register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, durability, db_key);
     crate::context_bootstrap::indexed_db::set_indexed_db_transaction_store_names(
         scope,
         tx,
