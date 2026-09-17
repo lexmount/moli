@@ -1,9 +1,12 @@
 use super::*;
 
+mod attributes;
 mod database;
 mod lifecycle;
 mod names;
 mod object_store;
+
+pub(in crate::context_bootstrap::indexed_db) use self::attributes::*;
 
 fn idb_transaction_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,

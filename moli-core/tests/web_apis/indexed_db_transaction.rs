@@ -2,6 +2,28 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_transaction_attributes_preserve_native_state_receivers_and_lifetime()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-transaction-attributes.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ntransactionAttributesProbe('transaction-attributes-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: transactionAttributeChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 198 } else { 668 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_transaction_durability_preserves_options_realms_and_lifecycle() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
