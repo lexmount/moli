@@ -21,8 +21,7 @@ use super::{
     remove_indexed_db_database_index_metadata, remove_indexed_db_database_store_metadata,
     replace_indexed_db_database_metadata, replace_indexed_db_runtime_array,
     set_indexed_db_database_index_metadata, set_indexed_db_database_store_metadata,
-    set_indexed_db_internal_object_property, set_indexed_db_object_store_metadata,
-    set_indexed_db_slot_value, v8_string, v8str,
+    set_indexed_db_internal_object_property, set_indexed_db_slot_value, v8_string, v8str,
 };
 use std::collections::BTreeSet;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
