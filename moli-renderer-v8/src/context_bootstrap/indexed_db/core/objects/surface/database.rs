@@ -1,17 +1,4 @@
 use super::*;
-use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBDatabase,
-    data_properties,
-    enumerable
-)]
-struct IdbDatabaseSurfaceDeclaration {
-    name: String,
-    version: f64,
-}
 
 pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -21,11 +8,9 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
         return Ok(());
     };
     let info = with_indexed_db_manager(scope, |manager| manager.database_info(handle))?;
-    refresh_database_metadata(scope, database, &info)?;
-    IdbDatabaseSurfaceDeclaration::new(info.name.clone(), info.version as f64)
-        .initialize(scope, database)
-        .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
-    Ok(())
+    // Connection attributes are initialized at open and reverted on abort.
+    // Committing only refreshes store metadata, preserving author properties.
+    refresh_database_metadata(scope, database, &info)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
