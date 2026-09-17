@@ -14,6 +14,11 @@ use crate::native_bridge::document::{
     detached_owner_document_object, detached_parent_node_object,
 };
 use crate::native_bridge::node::throw_native_selector_error_for_selector;
+use crate::native_bridge::{
+    collections,
+    identity::{CollectionKind, LiveCollectionQueryKind},
+    node::node_runtime_and_handle_from_object_or_detached,
+};
 use crate::util::context_host_ptr_from_global_bridge;
 use crate::webidl;
 use crate::{
@@ -701,18 +706,49 @@ pub(in crate::native_bridge) fn bridge_detached_get_elements_by_class_name_callb
     else {
         return;
     };
+    if let Some(context) = root.get_creation_context(scope) {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let Ok((runtime_ptr, handle)) =
+            node_runtime_and_handle_from_object_or_detached(scope, root)
+        {
+            let include_root = node_is_document(unsafe { &*runtime_ptr }, handle);
+            let collection = collections::build_live_collection_for_node(
+                scope,
+                runtime_ptr,
+                handle,
+                CollectionKind::HtmlCollection,
+                LiveCollectionQueryKind::ClassName,
+                Some(parsed.class_names),
+                include_root,
+            );
+            rv.set(collection.into());
+            return;
+        }
+    }
     let matches =
         detached_native_element_query_objects(scope, root, |dom_host, root, include_root| {
             dom_host.elements_by_class_name(root, &parsed.class_names, include_root)
         })
         .unwrap_or_else(|| {
+            let insensitive =
+                V8DetachedSelectorHost { scope }.quirks_mode(root) == QuirksMode::Quirks;
             let wanted: Vec<&str> = parsed.class_names.split_ascii_whitespace().collect();
             collect_detached_elements(scope, root, |scope, node| {
                 if detached_selector_node_type(scope, node) == Some(1) {
                     let class_attr =
                         detached_element_attribute_value(scope, node, "class").unwrap_or_default();
                     let present: Vec<&str> = class_attr.split_ascii_whitespace().collect();
-                    if !wanted.is_empty() && wanted.iter().all(|name| present.contains(name)) {
+                    if !wanted.is_empty()
+                        && wanted.iter().all(|name| {
+                            present.iter().any(|actual| {
+                                if insensitive {
+                                    actual.eq_ignore_ascii_case(name)
+                                } else {
+                                    actual == name
+                                }
+                            })
+                        })
+                    {
                         return true;
                     }
                 }
