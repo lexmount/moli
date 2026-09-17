@@ -33,7 +33,7 @@ async function blobResponseHeaderProbe() {
     const blob = await response.blob();
     check(label + '/consumed-blob', [blob.size, Array.from(new Uint8Array(await blob.arrayBuffer()))], [bytes.length, bytes]);
   }
-  async function inspectXhr(label, url, bytes, type, asynchronous) {
+  async function inspectXhr(label, url, bytes, type, asynchronous, revoke) {
     const xhr = new XMLHttpRequest();
     const buffer = asynchronous || typeof document === 'undefined';
     let ended;
@@ -41,6 +41,7 @@ async function blobResponseHeaderProbe() {
     xhr.onloadend = () => ended();
     xhr.open('GET', url, asynchronous);
     if (buffer) xhr.responseType = 'arraybuffer';
+    if (revoke) URL.revokeObjectURL(url);
     xhr.send();
     await done;
     check(label + '/status', [xhr.readyState, xhr.status, xhr.statusText], [4, 200, 'OK']);
@@ -56,17 +57,20 @@ async function blobResponseHeaderProbe() {
     const url = URL.createObjectURL(blob);
     try {
       await inspectFetch(label + '/fetch', url, url, bytes, type);
-      await inspectXhr(label + '/async-xhr', url, bytes, type, true);
-      await inspectXhr(label + '/sync-xhr', url, bytes, type, false);
+      await inspectXhr(label + '/async-xhr', url, bytes, type, true, false);
+      await inspectXhr(label + '/sync-xhr', url, bytes, type, false, false);
       const request = new Request(url);
       const clone = request.clone();
-      await inspectFetch(label + '/request', request, url, bytes, type);
-      await inspectFetch(label + '/cloned-request', clone, url, bytes, type);
       URL.revokeObjectURL(url);
+      await inspectFetch(label + '/captured-request', request, url, bytes, type);
+      await inspectFetch(label + '/cloned-request', clone, url, bytes, type);
       let revoked = false;
       try { await fetch(url); } catch (error) { revoked = error instanceof TypeError; }
       check(label + '/revoked', revoked, true);
     } finally { URL.revokeObjectURL(url); }
+    const xhrUrl = URL.createObjectURL(blob);
+    try { await inspectXhr(label + '/captured-xhr', xhrUrl, bytes, type, true, true); }
+    finally { URL.revokeObjectURL(xhrUrl); }
     const constructed = new Response(blob);
     check(label + '/constructed-length', constructed.headers.get('content-length'), null);
     check(label + '/constructed-type', constructed.headers.get('content-type'), type || null);
