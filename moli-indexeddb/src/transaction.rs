@@ -1,5 +1,5 @@
 use crate::{
-    IndexedDbError, Key, TransactionMode,
+    IndexedDbError, IndexedDbName, Key, TransactionMode,
     state::{ObjectStoreData, TransactionState},
 };
 
@@ -8,7 +8,7 @@ pub(crate) const MAX_AUTO_INCREMENT_KEY: u64 = 1 << 53;
 
 pub(crate) fn transaction_store<'a>(
     tx: &'a TransactionState,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) -> Result<&'a ObjectStoreData, IndexedDbError> {
     if !tx.stores.contains(store_name) {
         return Err(IndexedDbError::InvalidState(format!(
@@ -22,7 +22,7 @@ pub(crate) fn transaction_store<'a>(
 
 pub(crate) fn transaction_store_mut<'a>(
     tx: &'a mut TransactionState,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) -> Result<&'a mut ObjectStoreData, IndexedDbError> {
     if !tx.stores.contains(store_name) {
         return Err(IndexedDbError::InvalidState(format!(

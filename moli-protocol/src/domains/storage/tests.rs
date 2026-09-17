@@ -171,7 +171,7 @@ fn seed_indexed_db_usage(manager: &moli_core::storage::SharedIndexedDbManager, o
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             moli_core::storage::IndexedDbTransactionMode::ReadWrite,
         )
         .expect("IndexedDB seed readwrite transaction should start");

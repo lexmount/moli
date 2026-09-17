@@ -2773,7 +2773,7 @@ mod tests {
         manager.commit_transaction(upgrade)?;
         let tx = manager.begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )?;
         manager.put(tx, "items", Some(Key::from("alpha")), b"record".to_vec())?;

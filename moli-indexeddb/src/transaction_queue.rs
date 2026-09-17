@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use crate::{ConnectionRequestWake, DatabaseHandle, TransactionMode};
+use crate::{ConnectionRequestWake, DatabaseHandle, IndexedDbName, TransactionMode};
 
 #[derive(Default)]
 pub(crate) struct TransactionRequestQueues {
@@ -24,7 +24,7 @@ struct QueueState {
 }
 
 struct TransactionScope {
-    stores: BTreeSet<String>,
+    stores: BTreeSet<IndexedDbName>,
     mode: TransactionMode,
 }
 
@@ -73,7 +73,7 @@ impl TransactionRequestQueues {
         self: &Arc<Self>,
         key: (String, String),
         database: DatabaseHandle,
-        stores: BTreeSet<String>,
+        stores: BTreeSet<IndexedDbName>,
         mode: TransactionMode,
         wake: ConnectionRequestWake,
     ) -> TransactionRequestLease {
@@ -160,7 +160,7 @@ impl TransactionRequestHandle {
         self.database
     }
 
-    pub(crate) fn store_names(&self) -> Vec<String> {
+    pub(crate) fn store_names(&self) -> Vec<IndexedDbName> {
         self.scope.stores.iter().cloned().collect()
     }
 
