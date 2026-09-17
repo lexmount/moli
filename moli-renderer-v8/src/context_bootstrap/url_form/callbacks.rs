@@ -173,14 +173,14 @@ pub(super) fn url_create_object_url_callback<'s>(
     let Ok(object) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         throw_type_error(
             scope,
-            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob'.",
+            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob' or 'MediaSource'.",
         );
         return;
     };
     let Some(url) = blob::create_object_url_for_object(scope, object, storage_key) else {
         throw_type_error(
             scope,
-            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob'.",
+            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob' or 'MediaSource'.",
         );
         return;
     };
