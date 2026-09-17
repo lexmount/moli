@@ -130,7 +130,7 @@ mod tests {
             let opened = manager
                 .open(OpenOptions {
                     origin: origin.to_owned(),
-                    name: "app".to_owned(),
+                    name: "app".into(),
                     version: None,
                 })
                 .expect("open should succeed");

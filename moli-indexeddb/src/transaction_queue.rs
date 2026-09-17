@@ -23,7 +23,7 @@ pub struct TransactionRequestQueues {
 #[derive(Default)]
 struct QueueState {
     next_id: u64,
-    queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
+    queues: BTreeMap<(String, IndexedDbName), VecDeque<QueuedRequest>>,
 }
 
 struct TransactionScope {
@@ -49,7 +49,7 @@ struct QueuedRequest {
 #[derive(Clone)]
 pub struct TransactionRequestHandle {
     queues: Weak<TransactionRequestQueues>,
-    key: (String, String),
+    key: (String, IndexedDbName),
     id: u64,
     database: DatabaseHandle,
     scope: Arc<TransactionScope>,
@@ -74,7 +74,7 @@ impl Drop for TransactionRequestLease {
 impl TransactionRequestQueues {
     pub fn enqueue(
         self: &Arc<Self>,
-        key: (String, String),
+        key: (String, IndexedDbName),
         database: DatabaseHandle,
         stores: BTreeSet<IndexedDbName>,
         mode: TransactionMode,
