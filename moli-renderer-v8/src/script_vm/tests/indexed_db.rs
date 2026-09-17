@@ -3880,6 +3880,41 @@ open.onsuccess = () => {
 }
 
 #[test]
+fn indexed_db_rejects_invalid_explicit_keys() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-invalid-explicit-key.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbInvalidExplicitKeyError = "pending";
+  const dbName = `app-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("outline");
+  open.onsuccess = () => {
+    const store = open.result.transaction("outline", "readwrite").objectStore("outline");
+    const errors = [];
+    for (const key of [NaN, null, {}, 1n]) {
+      try { store.put({ value: 1 }, key); errors.push("no-error"); }
+      catch (error) { errors.push(error.name); }
+    }
+    globalThis.__indexedDbInvalidExplicitKeyError = errors.join("|");
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb invalid-explicit key workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbInvalidExplicitKeyError)")
+        .expect("indexeddb invalid-explicit key result should be readable");
+
+    assert_eq!(result, "DataError|DataError|DataError|DataError");
+}
+
+
+#[test]
 fn indexed_db_explicit_integer_key_advances_auto_increment_generator() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-autoincrement-generator.test/");
@@ -5391,18 +5426,12 @@ fn indexed_db_cursor_update_and_delete_fail_in_readonly_transactions() {
       const req = db.transaction("kv").objectStore("kv").openCursor();
       req.onsuccess = () => {
         const cursor = req.result;
-        const updateReq = cursor.update({ value: 2 });
-        updateReq.onerror = event => {
-          event.preventDefault();
-          const deleteReq = cursor.delete();
-          deleteReq.onerror = event => {
-            event.preventDefault();
-            globalThis.__indexedDbCursorReadonlyError = [
-              updateReq.error && updateReq.error.name,
-              deleteReq.error && deleteReq.error.name
-            ].join("|");
-          };
-        };
+        const errors = [];
+        for (const method of [() => cursor.update({ value: 2 }), () => cursor.delete()]) {
+          try { method(); errors.push("no-error"); }
+          catch (error) { errors.push(error.name); }
+        }
+        globalThis.__indexedDbCursorReadonlyError = errors.join("|");
       };
     };
   };
