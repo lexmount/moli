@@ -17,13 +17,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_all_callbac
             webidl::throw_error(scope, &error);
             return;
         }
-        Err(CollectionRequestArgsError::InvalidQuery) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'getAll': the query is not a valid key or key range.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(CollectionRequestArgsError::Key(error)) => {
+            error.throw(scope);
             return;
         }
     };

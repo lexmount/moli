@@ -23,13 +23,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
     };
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
     let query = match parse_key_or_range(scope, query_value) {
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'count': the query is not a valid key or key range.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
         Ok(query) => query,

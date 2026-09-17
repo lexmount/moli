@@ -21,21 +21,7 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
         return invalid_write_key(scope);
     }
     let mut key = if has_key {
-        // Explicit array key getters can throw before the record is cloned.
-        let parsed = {
-            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-            let mut scope = try_catch.init();
-            let parsed = parse_idb_key(&mut scope, key_value);
-            if scope.has_caught() {
-                scope.rethrow();
-                return None;
-            }
-            parsed
-        };
-        match parsed {
-            Ok(Some(key)) => Some(key),
-            _ => return invalid_write_key(scope),
-        }
+        Some(require_idb_key(scope, key_value)?)
     } else {
         None
     };
@@ -45,6 +31,10 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
         match extract_key_from_value(scope, clone, key_path) {
             ExtractedKey::Key(extracted) => key = Some(extracted),
             ExtractedKey::Invalid => return invalid_write_key(scope),
+            ExtractedKey::Error(error) => {
+                error.throw(scope);
+                return None;
+            }
             ExtractedKey::Missing => {
                 let KeyPath::String(path) = key_path else {
                     return invalid_write_key(scope);

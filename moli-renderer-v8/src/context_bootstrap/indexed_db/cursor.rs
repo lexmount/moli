@@ -11,7 +11,7 @@ use super::{
     indexed_db_object_store_name, indexed_db_request_transaction_object,
     indexed_db_transaction_mode, object_bool_property, object_hidden_value, object_number_property,
     object_property_as_object, object_string_property, parse_idb_key, prepare_cursor_request,
-    queue_transaction_request, request_error_object, set_indexed_db_slot_value,
+    queue_transaction_request, request_error_object, require_idb_key, set_indexed_db_slot_value,
     store_request_error, store_request_success, throw_type_error, transaction_handle_from_value,
     v8str, with_indexed_db_manager,
 };
