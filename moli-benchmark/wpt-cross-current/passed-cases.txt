@@ -103,6 +103,12 @@ IndexedDB/idbfactory_deleteDatabase.any.js?moli-wpt-any=window
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=window
 IndexedDB/idbindex-cross-realm-methods.html
+IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=window
+IndexedDB/idbindex-rename-errors.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbindex-rename-errors.any.js?moli-wpt-any=window
+IndexedDB/idbindex-rename.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbindex-rename.any.js?moli-wpt-any=window
 IndexedDB/idbindex_getAll-options.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbindex_getAll-options.any.js?moli-wpt-any=window
 IndexedDB/idbindex_getAllKeys-options.any.js?moli-wpt-any=dedicatedworker
