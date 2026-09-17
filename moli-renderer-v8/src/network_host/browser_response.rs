@@ -6,6 +6,7 @@ use std::fmt;
 pub(crate) enum LocalUrlError {
     BlobMethod { method: String },
     BlobRange,
+    MediaSource,
     BlobUnavailable { url: url::Url },
     InvalidData { url: url::Url },
 }
@@ -15,6 +16,7 @@ impl fmt::Display for LocalUrlError {
         match self {
             Self::BlobMethod { method } => write!(f, "blob URL fetch requires GET, got `{method}`"),
             Self::BlobRange => f.write_str("blob URL fetch has an invalid or unsatisfiable Range header"),
+            Self::MediaSource => f.write_str("MediaSource object URLs cannot be fetched"),
             Self::BlobUnavailable { url } => write!(f, "blob URL `{url}` is unavailable"),
             Self::InvalidData { url } => write!(f, "data URL `{url}` is invalid"),
         }
