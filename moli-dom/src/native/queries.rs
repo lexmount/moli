@@ -267,9 +267,7 @@ impl NativeDom {
                     .and_then(Node::as_document)
             })
         });
-        let case_sensitivity = if document.is_some_and(|document| {
-            document.quirks_mode() == selectors::matching::QuirksMode::Quirks
-        }) {
+        let case_sensitivity = if document.is_some_and(|document| document.is_quirks_mode()) {
             CaseSensitivity::AsciiCaseInsensitive
         } else {
             CaseSensitivity::CaseSensitive
