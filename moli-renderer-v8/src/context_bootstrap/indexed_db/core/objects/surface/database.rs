@@ -5,14 +5,12 @@ use moli_webapi_declare::WebApiObject;
 #[derive(WebApiObject)]
 #[webapi(
     interface = web_api_interfaces::IDBDatabase,
-    scope_lifetime = 'scope,
     data_properties,
     enumerable
 )]
-struct IdbDatabaseSurfaceDeclaration<'scope, 'value> {
-    name: &'value str,
+struct IdbDatabaseSurfaceDeclaration {
+    name: String,
     version: f64,
-    object_store_names: v8::Local<'scope, v8::Object>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
@@ -24,8 +22,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     };
     let info = with_indexed_db_manager(scope, |manager| manager.database_info(handle))?;
     refresh_database_metadata(scope, database, &info)?;
-    let object_store_names = new_idb_name_list(scope, &info.object_store_names);
-    IdbDatabaseSurfaceDeclaration::new(&info.name, info.version as f64, object_store_names)
+    IdbDatabaseSurfaceDeclaration::new(info.name.clone(), info.version as f64)
         .initialize(scope, database)
         .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
     Ok(())
@@ -59,7 +56,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn object_store_info_from_database_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) -> Option<ObjectStoreInfo> {
     indexed_db_database_store_metadata(scope, database, store_name)
         .map(|metadata| metadata.info().clone())

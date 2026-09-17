@@ -7,7 +7,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_request<'s>(
 ) -> Option<(
     v8::Local<'s, v8::Object>,
     v8::Local<'s, v8::Object>,
-    String,
+    IndexedDbName,
     IndexInfo,
 )> {
     if indexed_db_index_is_deleted(scope, index) {

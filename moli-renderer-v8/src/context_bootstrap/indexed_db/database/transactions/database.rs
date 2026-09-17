@@ -121,7 +121,7 @@ fn create_regular_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     handle: DatabaseHandle,
-    store_names: &[String],
+    store_names: &[IndexedDbName],
     mode: TransactionMode,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, IndexedDbError> {
     // Objects and task queues belong to the connection's realm even when the

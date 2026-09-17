@@ -41,7 +41,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_store_request<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn object_store_operation_common<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>, String)> {
+) -> Option<(
+    v8::Local<'s, v8::Object>,
+    v8::Local<'s, v8::Object>,
+    IndexedDbName,
+)> {
     let (request, transaction) = create_store_request(scope, store)?;
     let name = indexed_db_object_store_name(scope, store)?;
     Some((request, transaction, name))

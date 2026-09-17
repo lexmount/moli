@@ -47,6 +47,7 @@ use super::{
     take_worker_indexed_db_source_entry,
 };
 use crate::util::enqueue_host_microtask;
+use moli_indexeddb::IndexedDbName;
 use moli_indexeddb::OpenDisposition;
 
 use super::{

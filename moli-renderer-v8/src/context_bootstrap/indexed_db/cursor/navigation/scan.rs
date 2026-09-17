@@ -7,7 +7,7 @@ use std::{cmp::Ordering, rc::Rc};
 pub(super) fn select_cursor_result(
     scope: &mut v8::PinScope<'_, '_>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     state: &IndexedDbCursorLifecycleState,
     iteration: CursorIteration,
 ) -> Result<(Rc<IndexedDbCursorSnapshot>, Option<usize>), IndexedDbError> {
