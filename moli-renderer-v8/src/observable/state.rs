@@ -33,6 +33,7 @@ struct WeakSubscribers {
 struct Entry {
     _observable: v8::Weak<v8::Object>,
     subscriber: Option<v8::Weak<v8::Object>>,
+    event_source: Option<super::event_target::EventSource>,
 }
 
 pub(super) fn initialize_observable<'s>(
@@ -41,6 +42,46 @@ pub(super) fn initialize_observable<'s>(
     callback: webidl::WebIdlCallbackFunction,
 ) {
     set_callback(scope, object, INITIALIZER, callback);
+    register_observable(scope, object, None);
+}
+
+#[derive(WebApiObject)]
+#[webapi(prototype = "Object", interface = web_api_interfaces::Observable)]
+struct ObservableInstance<'scope> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'scope, v8::Object>,
+}
+
+pub(super) fn new_event_observable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: super::event_target::EventSource,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = ensure_intrinsic_interface_prototype(scope, "Observable").ok()?;
+    let object = ObservableInstance::new(prototype).bind(scope).ok()?;
+    register_observable(scope, object, Some(source));
+    Some(object)
+}
+
+pub(super) fn event_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observable: v8::Local<'s, v8::Object>,
+) -> Option<super::event_target::PreparedEventSource<'s>> {
+    let id = id(scope, observable)?;
+    scope
+        .get_slot::<Store>()?
+        .borrow()
+        .entries
+        .get(&id)?
+        .event_source
+        .as_ref()?
+        .prepare(scope)
+}
+
+fn register_observable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    event_source: Option<super::event_target::EventSource>,
+) {
     let store = if let Some(store) = scope.get_slot::<Store>() {
         store.clone()
     } else {
@@ -73,6 +114,7 @@ pub(super) fn initialize_observable<'s>(
         Entry {
             _observable: weak,
             subscriber: None,
+            event_source,
         },
     );
 }

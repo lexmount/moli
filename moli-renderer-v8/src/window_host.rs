@@ -147,7 +147,7 @@ struct IdleDeadlinePrototypeDeclaration {
     time_remaining: (),
 }
 
-fn capture_window_event_target_receiver<'s>(
+pub(crate) fn capture_window_event_target_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     host: &JsContextHost,
@@ -205,6 +205,49 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     let Some(call) = parsed else {
         return;
     };
+    register_dom_event_target_listener(scope, args.this(), host_ptr, window_receiver, call);
+}
+
+/// Native algorithms enter after Web IDL conversion, without consulting an
+/// author-visible addEventListener method or converting dictionary members twice.
+pub(crate) fn register_event_target_webidl_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    call: AddEventListenerArgs<'s>,
+) {
+    if let Some(slot_name) = simple_event_target_slot_name(scope, receiver) {
+        if let Some(listener) = call.listener {
+            crate::context_bootstrap::simple_object_event_target_register_webidl_listener(
+                scope,
+                receiver,
+                &slot_name,
+                call.event_type,
+                listener,
+                call.options.options,
+                call.options.signal,
+            );
+        }
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Ok(window_receiver) =
+        capture_window_event_target_receiver(scope, receiver, unsafe { &*host_ptr })
+    else {
+        return;
+    };
+    register_dom_event_target_listener(scope, receiver, host_ptr, window_receiver, call);
+}
+
+fn register_dom_event_target_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    window_receiver: Option<WindowOperationReceiver>,
+    call: AddEventListenerArgs<'s>,
+) {
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -223,7 +266,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         };
         Some(target)
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_object(scope, receiver, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
@@ -254,7 +297,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         define_non_enumerable_static_bool_property(
             scope,
-            args.this(),
+            receiver,
             DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
             true,
         );
@@ -2037,7 +2080,15 @@ fn event_target_handle_from_this<'s>(
     host_ptr: *mut JsContextHost,
     host: &JsContextHost,
 ) -> Option<EventTargetHandle> {
-    let this = args.this();
+    event_target_handle_from_object(scope, args.this(), host_ptr, host)
+}
+
+fn event_target_handle_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    this: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
     let global = scope.get_current_context().global(scope);
     if this.strict_equals(global.into()) {
         return Some(EventTargetHandle::Window);
