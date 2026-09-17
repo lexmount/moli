@@ -396,6 +396,7 @@ async fn worker_storage_surfaces_materialize_in_independent_stages() {
         "IDBCursor",
         "IDBCursorWithValue",
         "IDBKeyRange",
+        "IDBRecord",
         "IDBVersionChangeEvent",
     ] {
         assert_eq!(
