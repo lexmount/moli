@@ -16,7 +16,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_includes_callback<
         return;
     };
     let Some(range) = parse_key_range_from_value(scope, args.this().into()) else {
-        rv.set_bool(false);
         return;
     };
     let Some(key) = require_idb_key(scope, parsed.key) else {
