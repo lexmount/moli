@@ -216,17 +216,31 @@ async fn worker_storage_surfaces_materialize_in_independent_stages() {
               return;
             }
 
+            if (event.data === "indexedDBDescriptor") {
+              const descriptor = Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, "indexedDB");
+              let illegalReceiver;
+              try { descriptor.get.call({}); } catch (error) { illegalReceiver = error.name; }
+              postMessage({
+                phase: "indexedDBDescriptor",
+                own: Object.hasOwn(self, "indexedDB"),
+                accessor: typeof descriptor.get === "function" && descriptor.set === undefined,
+                illegalReceiver
+              });
+              return;
+            }
+
             if (event.data === "indexedDB") {
               const factory = indexedDB;
               const descriptor =
-                Object.getOwnPropertyDescriptor(self, "indexedDB");
+                Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, "indexedDB");
               postMessage({
                 phase: "indexedDB",
                 same: factory === indexedDB,
                 instance: factory instanceof IDBFactory,
-                dataDescriptor:
-                  descriptor.value === factory &&
-                  typeof descriptor.get === "undefined"
+                prototypeAccessor:
+                  !Object.hasOwn(self, "indexedDB") &&
+                  descriptor.get.call(self) === factory &&
+                  descriptor.set === undefined
               });
               return;
             }
@@ -419,10 +433,22 @@ async fn worker_storage_surfaces_materialize_in_independent_stages() {
     assert_eq!(diagnostics.storage_constructor_materializations, 0);
     assert!(!diagnostics.opfs_owner_state_materialized);
 
+    handle.post_message(serialize_test_string("indexedDBDescriptor"));
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"phase":"indexedDBDescriptor","own":false,"accessor":true,"illegalReceiver":"TypeError"}"#
+    );
+    let before_factory = lazy_diagnostics(&handle).await;
+    assert_eq!(
+        before_factory.materialized_interfaces, diagnostics.materialized_interfaces,
+        "inspecting the accessor and rejecting a receiver must not materialize IDBFactory"
+    );
+    assert_eq!(materialization_count(&before_factory, "IDBFactory"), 0);
+
     handle.post_message(serialize_test_string("indexedDB"));
     assert_eq!(
         recv_post_json(&mut handle).await,
-        r#"{"phase":"indexedDB","same":true,"instance":true,"dataDescriptor":true}"#
+        r#"{"phase":"indexedDB","same":true,"instance":true,"prototypeAccessor":true}"#
     );
     let diagnostics = lazy_diagnostics(&handle).await;
     assert_eq!(materialization_count(&diagnostics, "IDBFactory"), 1);
