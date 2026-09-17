@@ -1216,13 +1216,13 @@ fn mixed_keys_sort_in_indexeddb_order() {
         )
         .expect("readwrite transaction should start");
     manager
-        .put(tx, "items", Some(Key::Integer(10)), b"ten".to_vec())
+        .put(tx, "items", Some(Key::from(10)), b"ten".to_vec())
         .expect("integer put should succeed");
     manager
         .put(tx, "items", Some(Key::from("alpha")), b"one".to_vec())
         .expect("string put should succeed");
     manager
-        .put(tx, "items", Some(Key::Integer(2)), b"two".to_vec())
+        .put(tx, "items", Some(Key::from(2)), b"two".to_vec())
         .expect("integer put should succeed");
 
     let keys = manager
@@ -1230,7 +1230,7 @@ fn mixed_keys_sort_in_indexeddb_order() {
         .expect("get_all_keys should succeed");
     assert_eq!(
         keys,
-        RequestOutcome::Keys(vec![Key::Integer(2), Key::Integer(10), Key::from("alpha"),])
+        RequestOutcome::Keys(vec![Key::from(2), Key::from(10), Key::from("alpha"),])
     );
 }
 
@@ -1777,23 +1777,23 @@ fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
         .unwrap();
     assert_eq!(
         manager.next_generated_key(tx, "items").unwrap(),
-        Key::Integer(1)
+        Key::from(1)
     );
     assert_eq!(
         manager.next_generated_key(tx, "items").unwrap(),
-        Key::Integer(1)
+        Key::from(1)
     );
     assert_eq!(
         manager
-            .put(tx, "items", Some(Key::Integer(1)), vec![1])
+            .put(tx, "items", Some(Key::from(1)), vec![1])
             .unwrap(),
-        Key::Integer(1)
+        Key::from(1)
     );
     let error = manager
         .put_with_quota(
             tx,
             "items",
-            Some(Key::Integer(20)),
+            Some(Key::from(20)),
             vec![2],
             IndexedDbQuotaCheck {
                 quota: 0,
@@ -1804,11 +1804,11 @@ fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
     assert!(matches!(error, IndexedDbError::QuotaExceeded { .. }));
     assert_eq!(
         manager.next_generated_key(tx, "items").unwrap(),
-        Key::Integer(2)
+        Key::from(2)
     );
     assert_eq!(
         manager.put(tx, "items", None, vec![3]).unwrap(),
-        Key::Integer(2)
+        Key::from(2)
     );
     manager.commit_transaction(tx).unwrap();
     let tx = manager
@@ -1820,13 +1820,13 @@ fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
         .unwrap();
     assert_eq!(
         manager.next_generated_key(tx, "items").unwrap(),
-        Key::Integer(3)
+        Key::from(3)
     );
     manager.abort_transaction(tx).unwrap();
 }
 
 #[test]
-fn auto_increment_rejects_exhausted_safe_integer_range() {
+fn auto_increment_rejects_exhausted_generator_range() {
     let dir = TestDir::new();
     let mut manager = IndexedDbManager::new(&dir.path).expect("manager should be created");
 
@@ -1875,4 +1875,143 @@ fn auto_increment_rejects_exhausted_safe_integer_range() {
         .generate_key(tx, "items")
         .expect_err("generate_key should fail once the safe integer range is exhausted");
     assert!(matches!(error, IndexedDbError::Constraint(_)));
+}
+
+#[test]
+fn all_key_types_survive_backend_reopen_and_remain_distinct() {
+    let dir = TestDir::new();
+    let options = OpenOptions {
+        origin: "https://keys.test".into(),
+        name: "keys".into(),
+        version: None,
+    };
+    let mut keys = vec![
+        Key::number(f64::NEG_INFINITY).unwrap(),
+        Key::from(0),
+        Key::number(f64::from_bits(1)).unwrap(),
+        Key::number(1.25).unwrap(),
+        Key::number(f64::MAX).unwrap(),
+        Key::number(f64::INFINITY).unwrap(),
+        Key::Date(0),
+        Key::String(vec![0xd800]),
+        Key::String(vec![0xdc00]),
+        Key::from("\u{fffd}"),
+        Key::Binary(vec![0, 255]),
+        Key::Array(vec![Key::Date(42), Key::Binary(vec![7])]),
+    ];
+    let mut deep = Key::from(1);
+    for _ in 0..100 {
+        deep = Key::Array(vec![deep]);
+    }
+    keys.push(deep);
+    {
+        let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+        let opened = manager.open(options.clone()).unwrap();
+        let tx = opened.upgrade_transaction.unwrap();
+        manager
+            .create_object_store(
+                tx,
+                "items",
+                ObjectStoreOptions {
+                    key_path: None,
+                    auto_increment: false,
+                },
+            )
+            .unwrap();
+        for (index, key) in keys.iter().enumerate() {
+            manager
+                .add(tx, "items", Some(key.clone()), vec![index as u8])
+                .unwrap();
+        }
+        manager.commit_transaction(tx).unwrap();
+        manager.close_database(opened.database).unwrap();
+    }
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager.open(options).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".into()],
+            TransactionMode::ReadOnly,
+        )
+        .unwrap();
+    assert_eq!(
+        manager.get_all_keys(tx, "items").unwrap(),
+        RequestOutcome::Keys(keys.clone())
+    );
+    for (index, key) in keys.iter().enumerate() {
+        assert_eq!(
+            manager.get(tx, "items", key).unwrap(),
+            RequestOutcome::Value(Some(vec![index as u8].into()))
+        );
+    }
+    manager.commit_transaction(tx).unwrap();
+}
+
+#[test]
+fn generator_uses_numeric_floor_and_inclusive_2pow53_boundary() {
+    let dir = TestDir::new();
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager
+        .open(OpenOptions {
+            origin: "https://keys.test".into(),
+            name: "generator".into(),
+            version: None,
+        })
+        .unwrap();
+    let tx = opened.upgrade_transaction.unwrap();
+    manager
+        .create_object_store(
+            tx,
+            "items",
+            ObjectStoreOptions {
+                key_path: None,
+                auto_increment: true,
+            },
+        )
+        .unwrap();
+    manager
+        .put(tx, "items", Some(Key::Date(1000)), vec![])
+        .unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(1)
+    );
+    manager.put(tx, "items", Key::number(3.9), vec![]).unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(4)
+    );
+    let last = MAX_AUTO_INCREMENT_KEY as i64;
+    manager
+        .put(tx, "items", Some(Key::from(last - 1)), vec![])
+        .unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(last)
+    );
+    assert!(matches!(
+        manager.put(tx, "items", None, vec![]),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    // Exhaustion limits generated keys, not valid explicit numeric keys.
+    manager
+        .put(tx, "items", Key::number(f64::INFINITY), vec![])
+        .unwrap();
+    manager
+        .put(tx, "items", Key::number(f64::NEG_INFINITY), vec![])
+        .unwrap();
+    manager.commit_transaction(tx).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".into()],
+            TransactionMode::ReadWrite,
+        )
+        .unwrap();
+    assert!(matches!(
+        manager.next_generated_key(tx, "items"),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    manager.abort_transaction(tx).unwrap();
 }

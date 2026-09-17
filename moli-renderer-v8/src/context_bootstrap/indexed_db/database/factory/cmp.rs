@@ -19,19 +19,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_cmp_callback<'s>(
         return;
     };
     let _ = indexed_db_runtime_factory(scope);
-    let left = match parse_idb_key(scope, parsed.first) {
-        Ok(Some(key)) => key,
-        _ => {
-            throw_type_error(scope, "Failed to execute 'cmp': invalid key.");
-            return;
-        }
+    let Some(left) = require_idb_key(scope, parsed.first) else {
+        return;
     };
-    let right = match parse_idb_key(scope, parsed.second) {
-        Ok(Some(key)) => key,
-        _ => {
-            throw_type_error(scope, "Failed to execute 'cmp': invalid key.");
-            return;
-        }
+    let Some(right) = require_idb_key(scope, parsed.second) else {
+        return;
     };
     rv.set_int32(compare_idb_keys(&left, &right));
 }

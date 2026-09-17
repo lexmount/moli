@@ -30,8 +30,6 @@ use super::{
 use std::collections::BTreeSet;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 
-const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-
 mod clone;
 mod cursors;
 mod env;

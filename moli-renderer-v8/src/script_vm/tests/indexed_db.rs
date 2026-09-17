@@ -4200,7 +4200,7 @@ fn indexed_db_object_store_range_count_zero_and_open_bounds_work() {
 }
 
 #[test]
-fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
+fn indexed_db_get_all_boxed_primitives_are_options_and_dates_are_keys() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-getall-wrapper-query.test/");
 
@@ -4216,12 +4216,14 @@ fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
     const store = writeTx.objectStore("kv");
     store.put("five", 5);
     store.put("string", "x");
-    store.put("date", 1000);
+    store.put("date", new Date(1000));
     writeTx.oncomplete = () => {
       const readStore = db.transaction("kv").objectStore("kv");
-      const numberReq = readStore.getAll(new Number(5));
+      const numberOptions = Object.assign(new Number(5), {query: "x"});
+      const numberReq = readStore.getAll(numberOptions);
       numberReq.onsuccess = () => {
-        const stringReq = readStore.getAllKeys(new String("x"));
+        const stringOptions = Object.assign(new String("x"), {query: 5});
+        const stringReq = readStore.getAllKeys(stringOptions);
         stringReq.onsuccess = () => {
           const dateReq = readStore.getAll(new Date(1000));
           dateReq.onsuccess = () => {
@@ -4245,7 +4247,7 @@ fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbGetAllWrapperQueryResult)")
         .expect("indexeddb wrapper query result should be readable");
 
-    assert_eq!(result, "five|x|date");
+    assert_eq!(result, "string|5|date");
 }
 
 #[tokio::test]

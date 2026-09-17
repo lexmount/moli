@@ -56,8 +56,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
             scope.throw_exception(error);
             return;
         }
-        Err(message) => {
-            let error = dom_exception_value(scope, message, "DataError");
+        Err(error) => {
+            let error = error.into_value(scope);
             scope.throw_exception(error);
             return;
         }
