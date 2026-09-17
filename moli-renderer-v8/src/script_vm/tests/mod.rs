@@ -2221,6 +2221,7 @@ mod dom_xhr;
 mod element_click;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+mod fetch_referrer;
 mod fetch_request_guard;
 mod geometry_point_conversion_order;
 mod headers_list;
