@@ -1,6 +1,7 @@
 //! FIFO coordination for IDBFactory open/delete algorithms. Queue ownership
 //! spans event loops; callbacks only wake the accepting loop and carry no JS values.
 
+use crate::IndexedDbName;
 use parking_lot::Mutex;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -17,7 +18,7 @@ pub struct ConnectionRequestQueues {
 #[derive(Default)]
 struct QueueState {
     next_id: u64,
-    queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
+    queues: BTreeMap<(String, IndexedDbName), VecDeque<QueuedRequest>>,
 }
 
 struct QueuedRequest {
@@ -30,7 +31,7 @@ struct QueuedRequest {
 #[derive(Clone)]
 pub struct ConnectionRequestHandle {
     queues: Weak<ConnectionRequestQueues>,
-    key: (String, String),
+    key: (String, IndexedDbName),
     id: u64,
 }
 
@@ -52,10 +53,10 @@ impl ConnectionRequestQueues {
     pub fn enqueue(
         self: &Arc<Self>,
         storage_key: &str,
-        name: &str,
+        name: impl Into<IndexedDbName>,
         wake: ConnectionRequestWake,
     ) -> ConnectionRequestLease {
-        let key = (storage_key.to_owned(), name.to_owned());
+        let key = (storage_key.to_owned(), name.into());
         let mut state = self.state.lock();
         state.next_id = state
             .next_id

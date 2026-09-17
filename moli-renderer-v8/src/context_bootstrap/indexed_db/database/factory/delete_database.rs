@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBFactory.deleteDatabase")]
 struct IdbFactoryDeleteDatabaseArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, with = parse_database_name_arg)]
+    name: IndexedDbName,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_callback<'s>(
@@ -53,4 +53,17 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
     }
     enqueue_blocked_delete_task(scope, request, &origin, &name);
     rv.set(request.into());
+}
+
+fn parse_database_name_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IndexedDbName, webidl::WebIdlError> {
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        args.get(index),
+        webidl::Context::argument("IDBFactory.deleteDatabase", (index + 1) as usize),
+    )
+    .map(|name| IndexedDbName::from_utf16(name.0))
 }

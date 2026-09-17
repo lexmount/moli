@@ -24,6 +24,17 @@ struct PersistentOrigin {
     #[serde(default)]
     origin: Option<String>,
     databases: BTreeMap<String, PersistentDatabase>,
+    // Keep ordinary Unicode names in the legacy JSON map. JSON strings
+    // cannot represent names containing unpaired UTF-16 surrogates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    databases_utf16: Vec<PersistentNamedDatabase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistentNamedDatabase {
+    name: Vec<u16>,
+    #[serde(flatten)]
+    database: PersistentDatabase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,7 +362,17 @@ pub(crate) fn origin_path(storage_root: &Path, origin: &str) -> PathBuf {
 
 fn origin_state_from_persistent(persistent: PersistentOrigin) -> OriginState {
     let mut databases = BTreeMap::new();
-    for (name, database) in persistent.databases {
+    for (name, database) in persistent
+        .databases
+        .into_iter()
+        .map(|(name, database)| (IndexedDbName::from(name), database))
+        .chain(
+            persistent
+                .databases_utf16
+                .into_iter()
+                .map(|named| (IndexedDbName::from_utf16(named.name), named.database)),
+        )
+    {
         let mut stores = BTreeMap::new();
         for (store_name, store) in database
             .stores
@@ -418,6 +439,7 @@ fn origin_state_from_persistent(persistent: PersistentOrigin) -> OriginState {
 
 fn persistent_origin_from_state(origin: &str, state: &OriginState) -> PersistentOrigin {
     let mut databases = BTreeMap::new();
+    let mut databases_utf16 = Vec::new();
     for (name, database) in &state.databases {
         let mut stores = BTreeMap::new();
         let mut stores_utf16 = Vec::new();
@@ -466,17 +488,24 @@ fn persistent_origin_from_state(origin: &str, state: &OriginState) -> Persistent
                 }),
             }
         }
-        databases.insert(
-            name.clone(),
-            PersistentDatabase {
-                version: database.version,
-                stores,
-                stores_utf16,
-            },
-        );
+        let database = PersistentDatabase {
+            version: database.version,
+            stores,
+            stores_utf16,
+        };
+        match String::from_utf16(name.as_utf16()) {
+            Ok(name) => {
+                databases.insert(name, database);
+            }
+            Err(_) => databases_utf16.push(PersistentNamedDatabase {
+                name: name.as_utf16().to_vec(),
+                database,
+            }),
+        }
     }
     PersistentOrigin {
         origin: Some(origin.to_owned()),
         databases,
+        databases_utf16,
     }
 }
