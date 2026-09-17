@@ -47,5 +47,6 @@ pub use types::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions,
     IndexedDbExternalObject, IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind,
     IndexedDbQuotaCheck, IndexedDbValue, ObjectStoreInfo, ObjectStoreOptions, OpenDisposition,
-    OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    OpenOptions, OpenResult, RequestOutcome, TransactionCommitOptions, TransactionDurability,
+    TransactionHandle, TransactionMode,
 };

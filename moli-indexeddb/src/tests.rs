@@ -18,6 +18,7 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod durability;
 mod index_rename;
 mod record_revision;
 mod store_rename;

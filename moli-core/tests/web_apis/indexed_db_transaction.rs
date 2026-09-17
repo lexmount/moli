@@ -22,6 +22,49 @@ async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_transaction_durability_preserves_options_realms_and_lifecycle() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-durability.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ndurabilityProbe('durability-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: durabilityChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 103 } else { 309 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_version_change_events_preserve_native_attributes_and_dictionary_semantics()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-version-change.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nversionChangeProbe('version-change-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: versionChangeChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 144 } else { 432 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_factory_checks_native_receivers_and_rejects_promises_in_callee_realm()
 -> Result<()> {
     let server = FixtureServer::spawn().await?;
@@ -431,28 +474,6 @@ async fn indexed_db_request_getters_preserve_cross_realm_identity() -> Result<()
     let result = run_probe(&browser, &server, "window", &source).await?;
     assert_eq!(result["state"], "pass", "{result}");
     assert_eq!(result["checks"].as_array().unwrap().len(), 26, "{result}");
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn indexed_db_version_change_events_preserve_native_attributes_and_dictionary_semantics()
--> Result<()> {
-    let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
-    let fixture = include_str!("fixtures/indexeddb-version-change.js");
-    for target in ["window", "child", "worker"] {
-        let source = format!(
-            "{fixture}\nversionChangeProbe('version-change-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: versionChangeChecks}}));"
-        );
-        let result = run_probe(&browser, &server, target, &source).await?;
-        assert_eq!(result["state"], "pass", "{target}: {result}");
-        assert_eq!(
-            result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 144 } else { 432 },
-            "{target}: {result}"
-        );
-    }
     server.shutdown().await;
     Ok(())
 }
