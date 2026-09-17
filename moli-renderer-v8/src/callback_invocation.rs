@@ -15,6 +15,8 @@ use moli_webidl_callback::{
     invoke_webidl_callback, with_webidl_callback_contexts,
 };
 
+pub(crate) use moli_webapi::callbacks::invoke_synchronous_webidl_callback_function;
+
 /// The synchronous completion of a callback-interface invocation.
 ///
 /// `Threw` retains the exact JavaScript exception report so the calling Web API
