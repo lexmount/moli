@@ -7,6 +7,10 @@ async function factoryReceiverProbe(prefix = 'factory-receivers') {
     try { action(); } catch (error) { caught = error; }
     check(label, caught !== undefined && Object.getPrototypeOf(caught) === prototype, caught);
   };
+  const result = request => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
   const exercise = async (label, Callee, Receiver) => {
     const prototype = Callee.IDBFactory.prototype;
     const factory = Receiver.indexedDB;
@@ -56,7 +60,7 @@ async function factoryReceiverProbe(prefix = 'factory-receivers') {
       check(label + ': databases rejection is asynchronous for ' + kind, !rejection.synchronous);
     }
     check(label + ': brand checks do not invoke Proxy traps', traps === 0, traps);
-    for (const [method, args] of methods.slice(0, 2)) {
+    for (const [method, args] of methods) {
       reads = 0;
       let caught;
       try { Reflect.apply(prototype[method], factory, args); } catch (error) { caught = error; }
@@ -69,23 +73,44 @@ async function factoryReceiverProbe(prefix = 'factory-receivers') {
     }
     throws(label + ': open rejects zero version in callee realm',
       () => prototype.open.call(factory, prefix, 0), Callee.TypeError.prototype);
+    throws(label + ': cmp rejects invalid keys in callee realm',
+      () => prototype.cmp.call(factory, null, 1), Callee.DOMException.prototype);
     check(label + ': genuine receiver compares keys', prototype.cmp.call(factory, [1], [2]) === -1);
     for (const [method, length] of [['open', 1], ['deleteDatabase', 1], ['databases', 0], ['cmp', 2]]) {
       check(label + ': ' + method + ' length', prototype[method].length === length, prototype[method].length);
     }
 
-    // Native receiver identity survives public prototype mutation. Keep promise
-    // allocation and settlement with the factory when borrowing a foreign method.
+    // Changing an author's prototype cannot remove native identity. Preserve the
+    // genuine receiver's storage ownership while borrowing another realm's API.
     const originalPrototype = Object.getPrototypeOf(factory);
+    let request;
+    const conversionOrder = [];
+    const databaseName = prefix + '-' + label;
     try {
       Object.setPrototypeOf(factory, null);
       check(label + ': native brand survives prototype removal', prototype.cmp.call(factory, 1, 2) === -1);
-      const ignored = new Proxy({}, {get() { throw new Error('databases ignores arguments'); }});
-      const databases = prototype.databases.call(factory, ignored);
-      check(label + ': successful databases Promise belongs to receiver', Object.getPrototypeOf(databases) === Receiver.Promise.prototype);
-      const infos = await databases;
-      check(label + ': genuine databases receiver settles', Array.isArray(infos));
+      request = prototype.open.call(factory,
+        {toString() { conversionOrder.push('name'); return databaseName; }},
+        {valueOf() { conversionOrder.push('version'); return 1; }});
     } finally { Object.setPrototypeOf(factory, originalPrototype); }
+    check(label + ': valid open conversion order', conversionOrder.join(',') === 'name,version', conversionOrder);
+    check(label + ': open request belongs to receiver', Object.getPrototypeOf(request) === Receiver.IDBOpenDBRequest.prototype);
+    check(label + ': open request source is null', request.source === null);
+    check(label + ': open request starts pending', request.readyState === 'pending');
+    const db = await result(request);
+    check(label + ': open preserves database name', db.name === databaseName, db.name);
+    check(label + ': open preserves version', db.version === 1, db.version);
+    const ignored = new Proxy({}, {get() { throw new Error('databases ignores arguments'); }});
+    const databases = prototype.databases.call(factory, ignored);
+    check(label + ': successful databases Promise belongs to receiver', Object.getPrototypeOf(databases) === Receiver.Promise.prototype);
+    const infos = await databases;
+    check(label + ': databases uses receiver storage', infos.some(info => info.name === databaseName && info.version === 1));
+    db.close();
+    const deletion = prototype.deleteDatabase.call(factory, databaseName);
+    check(label + ': delete request belongs to receiver', Object.getPrototypeOf(deletion) === Receiver.IDBOpenDBRequest.prototype);
+    check(label + ': delete request source is null', deletion.source === null);
+    check(label + ': delete succeeds', await result(deletion) === undefined);
+    check(label + ': database was deleted', !(await prototype.databases.call(factory)).some(info => info.name === databaseName));
   };
   await exercise('local', globalThis, globalThis);
   if (typeof document !== 'undefined') {
