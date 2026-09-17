@@ -304,6 +304,7 @@ fn register_pending_window_fetch_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -469,6 +470,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -15785,6 +15787,7 @@ mod close_watchers;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
+mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
 mod headers_list;

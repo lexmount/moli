@@ -636,6 +636,7 @@ pub(crate) struct ServiceWorkerFetchResponse {
     pub(crate) status: u16,
     pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, Vec<u8>)>,
+    pub(crate) body_is_null: bool,
     pub(crate) body: Vec<u8>,
 }
 
