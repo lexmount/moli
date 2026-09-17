@@ -1,4 +1,6 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_transaction_mode;
+use moli_indexeddb::TransactionMode;
 
 mod enqueue;
 mod execute;
@@ -21,6 +23,12 @@ pub(super) fn object_store_write_callback<'s>(
         scope.throw_exception(error);
         return;
     };
+    if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
+        discard_unreturned_request(scope, request);
+        let error = dom_exception_value(scope, "The transaction is readonly.", "ReadOnlyError");
+        scope.throw_exception(error);
+        return;
+    }
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {
         rv.set(request.into());
         return;
@@ -42,6 +50,7 @@ pub(super) fn object_store_write_callback<'s>(
         return;
     }
     let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
+        discard_unreturned_request(scope, request);
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -50,6 +59,7 @@ pub(super) fn object_store_write_callback<'s>(
         scope.throw_exception(error);
         return;
     };
+    v8::tc_scope!(let scope, scope);
     if execute::execute_started_object_store_write(
         scope,
         store,
@@ -61,5 +71,17 @@ pub(super) fn object_store_write_callback<'s>(
         add_only,
     ) {
         rv.set(request.into());
+    } else if scope.can_continue() {
+        // Preserve the original exception while removing the request which
+        // create_store_request admitted before synchronous validation.
+        let exception = scope.exception();
+        scope.reset();
+        discard_unreturned_request(scope, request);
+        if let Some(exception) = exception {
+            scope.throw_exception(exception);
+        }
+    }
+    if scope.has_caught() {
+        scope.rethrow();
     }
 }
