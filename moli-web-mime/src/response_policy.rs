@@ -170,15 +170,22 @@ pub fn check_script_response_mime(
         return Err(ScriptResponseMimeError::Nosniff);
     }
 
-    let computed_mime_type =
-        computed_response_mime_type(headers, MimeSniffingContext::Script, body);
     if require_javascript_mime {
-        return is_javascript_mime(&computed_mime_type)
+        // A script-context sniffing default cannot satisfy an explicit
+        // JavaScript MIME requirement, including when Content-Type is absent
+        // or cannot be parsed.
+        let supplied_mime_type = response_header_value(headers, "content-type")
+            .as_deref()
+            .and_then(mime_essence)
+            .unwrap_or_default();
+        return is_javascript_mime(&supplied_mime_type)
             .then_some(())
-            .ok_or(ScriptResponseMimeError::Unsupported(computed_mime_type));
+            .ok_or(ScriptResponseMimeError::Unsupported(supplied_mime_type));
     }
 
     if should_script_like_response_be_blocked_due_to_mime_type(headers) {
+        let computed_mime_type =
+            computed_response_mime_type(headers, MimeSniffingContext::Script, body);
         return Err(ScriptResponseMimeError::Unsupported(computed_mime_type));
     }
     Ok(())
