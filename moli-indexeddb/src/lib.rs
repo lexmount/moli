@@ -30,7 +30,7 @@ pub use cursor::{
     compare_cursor_direction, compare_cursor_tuple_direction,
 };
 pub use error::IndexedDbError;
-pub use key::{Key, KeyPath};
+pub use key::{Key, KeyNumber, KeyPath};
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,
