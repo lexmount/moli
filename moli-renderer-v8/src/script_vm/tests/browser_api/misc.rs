@@ -14435,7 +14435,8 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
                   cache: "reload",
                   referrer: "./referrer.html",
                   referrerPolicy: "origin",
-                  integrity: "sha256-test",
+                  // Ignore this algorithm when hashing the response that reflects it.
+                  integrity: "sha1-test",
                   keepalive: true,
                   priority: "low"
                 });
@@ -14456,7 +14457,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|cache=reload|referrer={base_url}/app/referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
+            "200|cache=reload|referrer={base_url}/app/referrer.html|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
         ),
     )
     .await;
@@ -14705,7 +14706,8 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
               cache: "reload",
               referrer: "./worker-referrer.html",
               referrerPolicy: "origin",
-              integrity: "sha256-test",
+              // Ignore this algorithm when hashing the response that reflects it.
+              integrity: "sha1-test",
               keepalive: true,
               priority: "high"
             });
@@ -14758,7 +14760,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|basic|from-worker|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
+            "200|basic|from-worker|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
         ),
     )
     .await;

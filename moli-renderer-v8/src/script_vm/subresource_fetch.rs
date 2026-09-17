@@ -35,6 +35,40 @@ use crate::types::{
 };
 use crate::util::v8_string;
 
+fn validate_pending_window_fetch_integrity(
+    pending: &PendingSubresourceFetchState,
+    method: &str,
+    response: &crate::protocol_types::NavigationResponse,
+    response_filter: Option<&AsyncSubresourceFetchResponseFilter>,
+) -> std::result::Result<(), String> {
+    let Some(fetch) = pending
+        .continuation
+        .window_fetch()
+        .filter(|fetch| !fetch.integrity().is_empty())
+    else {
+        return Ok(());
+    };
+    let filter = response_filter.cloned().unwrap_or_else(|| {
+        crate::network_host::FetchResponseRequest {
+            method,
+            mode: pending.request_mode,
+            redirect_mode: fetch.redirect_mode(),
+        }
+        .network_response_filter(
+            &pending.request_origin,
+            &response.head(),
+            pending.credentials_mode,
+        )
+    });
+    crate::network_host::validate_fetch_response_integrity(
+        fetch.integrity(),
+        method,
+        response.status,
+        &filter,
+        response.body_bytes(),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum WorkerOwnedFetchTarget {
     Dedicated {
@@ -3237,6 +3271,7 @@ impl ScriptVm {
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<()> {
@@ -3270,6 +3305,12 @@ impl ScriptVm {
                         pending.policy_context,
                     )?;
                 }
+                validate_pending_window_fetch_integrity(
+                    &pending,
+                    &request_method,
+                    &response,
+                    response_filter.as_ref(),
+                )?;
                 Ok(response)
             })
         } else {
@@ -3664,6 +3705,7 @@ impl ScriptVm {
                     request_body,
                     response_status_text,
                     skip_fetch_security_validation,
+                    response_filter,
                     network_error_text,
                     result,
                 )
@@ -3780,6 +3822,9 @@ impl ScriptVm {
                         Err(violation) => return Err(violation.into_message()),
                     }
                 }
+                validate_pending_window_fetch_integrity(
+                    &pending, &request_method, &response, response_filter.as_ref(),
+                )?;
                 Ok(response)
             });
             trace_async_subresource_stage(

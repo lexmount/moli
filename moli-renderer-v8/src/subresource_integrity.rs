@@ -23,10 +23,7 @@ pub(crate) fn response_matches_subresource_integrity_metadata(
     integrity: Option<&str>,
     response_is_eligible: bool,
 ) -> bool {
-    let Some(integrity) = integrity
-        .map(str::trim)
-        .filter(|integrity| !integrity.is_empty())
-    else {
+    let Some(integrity) = integrity.filter(|integrity| !integrity.is_empty()) else {
         return true;
     };
     let metadata = parse_integrity_metadata(integrity);

@@ -23,6 +23,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy,
         prepared.csp_report_context,
         prepared.credentials_mode,
@@ -153,24 +154,48 @@ pub(super) fn resolve_local_fetch(
     ) else {
         return Ok(None);
     };
-    let response = result.map_err(|message| {
-        let message = if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
-            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
-        } else {
-            message
-        };
-        host.record_subresource_network(SubresourceNetworkRecord::failure(
-            prepared.frame_id.clone(),
-            prepared.document_url.clone(),
-            prepared.resolved_url.clone(),
-            prepared.method.clone(),
-            prepared.request_headers.clone(),
-            request_body_text(&prepared.body),
-            SubresourceResourceType::Fetch,
-            message.clone(),
-        ));
-        message
-    })?;
+    let response = result
+        .map_err(|message| {
+            if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
+                FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+            } else {
+                message
+            }
+        })
+        .and_then(|response| {
+            if !prepared.integrity.is_empty() {
+                let filter = FetchResponseRequest {
+                    method: &prepared.method,
+                    mode: prepared.request_mode,
+                    redirect_mode: prepared.redirect_mode,
+                }
+                .network_response_filter(
+                    &prepared.request_origin,
+                    &response.head(),
+                    prepared.credentials_mode,
+                );
+                validate_fetch_response_integrity(
+                    &prepared.integrity,
+                    &prepared.method,
+                    response.status,
+                    &filter,
+                    response.body_bytes(),
+                )?;
+            }
+            Ok(response)
+        })
+        .inspect_err(|message| {
+            host.record_subresource_network(SubresourceNetworkRecord::failure(
+                prepared.frame_id.clone(),
+                prepared.document_url.clone(),
+                prepared.resolved_url.clone(),
+                prepared.method.clone(),
+                prepared.request_headers.clone(),
+                request_body_text(&prepared.body),
+                SubresourceResourceType::Fetch,
+                message.clone(),
+            ));
+        })?;
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
             prepared.frame_id.clone(),
@@ -260,6 +285,7 @@ pub(super) fn spawn_network_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy,
         prepared.csp_report_context,
         Some(cancel_handle.clone()),
