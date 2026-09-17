@@ -7,12 +7,14 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 struct IdbObjectStorePrototypeDeclaration {
     #[webapi(method, length = 1, callback = idb_object_store_get_callback)]
     get: (),
-    #[webapi(method, length = 2, callback = idb_object_store_get_all_callback)]
+    #[webapi(method, length = 0, callback = idb_object_store_get_all_callback)]
     get_all: (),
     #[webapi(method, length = 1, callback = idb_object_store_get_key_callback)]
     get_key: (),
-    #[webapi(method, length = 2, callback = idb_object_store_get_all_keys_callback)]
+    #[webapi(method, length = 0, callback = idb_object_store_get_all_keys_callback)]
     get_all_keys: (),
+    #[webapi(method, length = 0, callback = idb_object_store_get_all_records_callback, receiver = web_api_interfaces::IDBObjectStore::is_instance)]
+    get_all_records: (),
     #[webapi(method, length = 1, callback = idb_object_store_count_callback)]
     count: (),
     #[webapi(method, length = 2, callback = idb_object_store_put_callback)]
