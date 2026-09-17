@@ -43,23 +43,3 @@ pub(in crate::context_bootstrap::indexed_db) fn key_path_to_js_value<'s>(
         KeyPath::Sequence(values) => values.as_slice().to_v8_value(scope),
     }
 }
-
-pub(in crate::context_bootstrap::indexed_db) fn key_path_from_js_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<KeyPath> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    if let Ok(array) = v8::Local::<v8::Array>::try_from(value) {
-        let mut key_path = Vec::with_capacity(array.length() as usize);
-        for index in 0..array.length() {
-            let value = array.get_index(scope, index)?;
-            key_path.push(value.to_string(scope)?.to_rust_string_lossy(scope));
-        }
-        return Some(KeyPath::Sequence(key_path));
-    }
-    value
-        .to_string(scope)
-        .map(|value| KeyPath::String(value.to_rust_string_lossy(scope)))
-}
