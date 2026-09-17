@@ -16,6 +16,7 @@ use attribute::{normalized_option_text_content, split_class_names};
 use html5ever::{LocalName, Namespace, Prefix};
 use indexmap::IndexSet;
 use rare_data::ElementRareData;
+use selectors::attr::CaseSensitivity;
 use thin_vec::ThinVec;
 
 use super::NativeDom;
@@ -497,6 +498,14 @@ impl Element {
     }
 
     pub fn matches_class_names(&self, class_name: &str) -> bool {
+        self.matches_class_names_with_case_sensitivity(class_name, CaseSensitivity::CaseSensitive)
+    }
+
+    pub fn matches_class_names_with_case_sensitivity(
+        &self,
+        class_name: &str,
+        case_sensitivity: CaseSensitivity,
+    ) -> bool {
         let expected_classes = split_class_names(class_name);
         if expected_classes.is_empty() {
             return false;
@@ -506,9 +515,12 @@ impl Element {
             return false;
         };
         let actual_classes = split_class_names(actual);
-        expected_classes
-            .iter()
-            .all(|expected| actual_classes.iter().any(|actual| actual == expected))
+        expected_classes.iter().all(|expected| {
+            actual_classes.iter().any(|actual| match case_sensitivity {
+                CaseSensitivity::CaseSensitive => actual == expected,
+                CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(expected),
+            })
+        })
     }
 
     pub fn matches_name(&self, name: &str) -> bool {
