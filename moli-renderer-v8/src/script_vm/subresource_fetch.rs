@@ -42,6 +42,40 @@ use crate::types::{
 };
 use crate::util::v8_string;
 
+fn validate_pending_window_fetch_integrity(
+    pending: &PendingSubresourceFetchState,
+    method: &str,
+    response: &crate::protocol_types::NavigationResponse,
+    response_filter: Option<&AsyncSubresourceFetchResponseFilter>,
+) -> std::result::Result<(), String> {
+    let Some(fetch) = pending
+        .continuation
+        .window_fetch()
+        .filter(|fetch| !fetch.integrity().is_empty())
+    else {
+        return Ok(());
+    };
+    let filter = response_filter.cloned().unwrap_or_else(|| {
+        crate::network_host::FetchResponseRequest {
+            method,
+            mode: pending.request_mode,
+            redirect_mode: fetch.redirect_mode(),
+        }
+        .network_response_filter(
+            &pending.request_origin,
+            &response.head(),
+            pending.credentials_mode,
+        )
+    });
+    crate::network_host::validate_fetch_response_integrity(
+        fetch.integrity(),
+        method,
+        response.status,
+        &filter,
+        response.body_bytes(),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum WorkerOwnedFetchTarget {
     Dedicated {
