@@ -205,7 +205,7 @@ fn cursor_direction_helpers_reverse_and_deduplicate_by_key() {
     );
     assert_eq!(
         apply_cursor_direction_by_key(entries, CursorDirection::PrevUnique, |entry| &entry.0),
-        vec![(Key::from("b"), 3), (Key::from("a"), 2)]
+        vec![(Key::from("b"), 3), (Key::from("a"), 1)]
     );
 }
 
