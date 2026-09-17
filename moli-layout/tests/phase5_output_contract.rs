@@ -940,12 +940,45 @@ fn local_scrollbar_feedback_invalidates_only_the_changed_subtree_and_ancestor_pa
     }
 }
 
+fn fixed_inline_font() -> (ResolvedLayoutStyle, DocumentLayoutServices) {
+    use style::values::computed::font::{
+        FamilyName, FontFamily, FontFamilyList, FontFamilyNameSyntax, SingleFontFamily,
+    };
+    let mut font = style::properties::style_structs::Font::initial_values();
+    font.set_font_family(FontFamily {
+        families: FontFamilyList {
+            list: style::ArcSlice::from_iter(std::iter::once(SingleFontFamily::FamilyName(
+                FamilyName {
+                    name: Atom::from("Moli Ahem"),
+                    syntax: FontFamilyNameSyntax::Quoted,
+                },
+            ))),
+        },
+        is_system_font: false,
+        is_initial: false,
+    });
+    let style = ResolvedLayoutStyle::from_stylo(
+        style::properties::ComputedValues::initial_values_with_font_override(font),
+    );
+    let mut services =
+        DocumentLayoutServices::with_system_font_policy(moli_layout::SystemFontPolicy::Disabled);
+    services
+        .register_web_font(moli_layout::WebFontRegistration::new(
+            "fixed",
+            moli_layout::WebFontFace::new("Moli Ahem"),
+            include_bytes!("fixtures/moli-ahem.ttf").to_vec(),
+        ))
+        .unwrap();
+    (style, services)
+}
+
 #[test]
 fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     const TEXT: &str = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
+        Node::element("fixed-font", vec![3]),
         Node::text("text", TEXT),
     ]);
     let mut styles = Styles::default();
@@ -972,7 +1005,17 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
         ),
     );
 
-    let feedback = build(&source, &mut styles);
+    // The old system-font fixture happened to fit on macOS but exposed
+    // hanging-space overflow on Linux. Bind shaping to the same test face.
+    let (font_style, mut fixed_services) = fixed_inline_font();
+    styles.0.insert(2, font_style);
+    let feedback = build_layout_pass(
+        &source,
+        &mut styles,
+        &mut fixed_services,
+        LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    )
+    .unwrap();
     assert_eq!(feedback.metrics.numeric_layout_pass_count, 2);
     assert_eq!(
         feedback.element_metrics_for_source(1).unwrap().client_size,
@@ -982,7 +1025,11 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     let extent = feedback.scroll_extent(scroller_box).unwrap();
     assert!(extent.vertical_scrollbar.is_some());
     assert!(extent.horizontal_scrollbar.is_none());
-    let feedback_text = feedback.client_rects_for_source(2);
+    let feedback_text = feedback.text_range_rects(3, 0..TEXT.encode_utf16().count());
+    assert!(
+        !feedback_text.is_empty(),
+        "compare real text fragments, not element-only client rects"
+    );
 
     // Lay out the same paragraph directly at the converged 85px content
     // width. Its line fragments must match the scrollbar-corrected result;
@@ -1000,8 +1047,87 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
             },
         ),
     );
-    let direct = build(&source, &mut styles);
-    assert_eq!(feedback_text, direct.client_rects_for_source(2));
+    let direct = build_layout_pass(
+        &source,
+        &mut styles,
+        &mut fixed_services,
+        LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    )
+    .unwrap();
+    assert_eq!(
+        feedback_text,
+        direct.text_range_rects(3, 0..TEXT.encode_utf16().count())
+    );
+    assert!(
+        feedback_text
+            .iter()
+            .all(|quad| quad.points.iter().all(|point| point.x <= 85.0))
+    );
+}
+
+#[test]
+fn inline_scroll_overflow_keeps_unbreakable_text_and_nbsp() {
+    for text in ["abcdefghijklmno", "alpha\u{a0}beta\u{a0}gamma"] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2]),
+            Node::element("fixed-font", vec![3]),
+            Node::text("text", text),
+        ]);
+        let (font_style, mut services) = fixed_inline_font();
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(85.0),
+                        height: length(40.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Scroll,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        styles.0.insert(2, font_style);
+        let output = build_layout_pass(
+            &source,
+            &mut styles,
+            &mut services,
+            LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+        )
+        .unwrap();
+        let scroller = output.source_output(1).unwrap().principal_box.unwrap();
+        assert!(
+            output
+                .scroll_extent(scroller)
+                .unwrap()
+                .horizontal_scrollbar
+                .is_some(),
+            "{text}"
+        );
+        assert!(
+            output
+                .element_metrics_for_source(1)
+                .unwrap()
+                .scroll_size
+                .width
+                > 85.0,
+            "{text}"
+        );
+        assert!(
+            !output
+                .text_range_rects(3, 0..text.encode_utf16().count())
+                .is_empty()
+        );
+    }
 }
 
 #[test]
