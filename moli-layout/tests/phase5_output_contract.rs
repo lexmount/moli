@@ -4349,3 +4349,68 @@ fn transformed_fixed_containing_block_still_clips_its_fixed_descendant() {
         "the fixed containing block's overflow clip must still apply"
     );
 }
+
+#[test]
+fn inline_scroll_overflow_keeps_unbreakable_text_and_nbsp() {
+    for text in ["abcdefghijklmno", "alpha\u{a0}beta\u{a0}gamma"] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2]),
+            Node::element("fixed-font", vec![3]),
+            Node::text("text", text),
+        ]);
+        let (font_style, mut services) = fixed_inline_font();
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(85.0),
+                        height: length(40.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Scroll,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        styles.0.insert(2, font_style);
+        let output = build_layout_pass(
+            &source,
+            &mut styles,
+            &mut services,
+            LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+        )
+        .unwrap();
+        let scroller = output.source_output(1).unwrap().principal_box.unwrap();
+        assert!(
+            output
+                .scroll_extent(scroller)
+                .unwrap()
+                .horizontal_scrollbar
+                .is_some(),
+            "{text}"
+        );
+        assert!(
+            output
+                .element_metrics_for_source(1)
+                .unwrap()
+                .scroll_size
+                .width
+                > 85.0,
+            "{text}"
+        );
+        assert!(
+            !output
+                .text_range_rects(3, 0..text.encode_utf16().count())
+                .is_empty()
+        );
+    }
+}
