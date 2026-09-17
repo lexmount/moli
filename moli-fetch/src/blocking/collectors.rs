@@ -172,6 +172,7 @@ pub struct StreamingResponseCollector {
     cache_body_writer: Option<HttpCacheBodyWriter>,
     cache_plan: Option<StreamingCachePlan>,
     started: bool,
+    headers_finalized: bool,
     header_terminated: bool,
     start_tx: Option<oneshot::Sender<Result<StreamingHtmlResponseStart>>>,
     body_tx: Option<mpsc::UnboundedSender<String>>,
@@ -243,6 +244,7 @@ pub struct RawStreamingResponseCollector {
     cache_body_writer: Option<HttpCacheBodyWriter>,
     cache_plan: Option<StreamingCachePlan>,
     started: bool,
+    headers_finalized: bool,
     header_terminated: bool,
     start_tx: Option<oneshot::Sender<Result<StreamingHtmlResponseStart>>>,
     body_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
@@ -279,6 +281,7 @@ impl StreamingResponseCollector {
             cache_body_writer: None,
             cache_plan: None,
             started: false,
+            headers_finalized: false,
             header_terminated: false,
             start_tx: Some(start_tx),
             body_tx: Some(body_tx),
@@ -317,6 +320,7 @@ impl StreamingResponseCollector {
         self.cache_body_writer = cache_body_writer;
         self.cache_plan = None;
         self.started = false;
+        self.headers_finalized = false;
         self.header_terminated = false;
         self.request_cookie_report = request_cookie_report;
         self.response_credentials_allowed = response_credentials_allowed;
@@ -406,6 +410,24 @@ impl StreamingResponseCollector {
         self.client_hint_restart_requested
     }
 
+    pub(crate) fn finish_headers_at_eof(&mut self) -> Result<()> {
+        if self.headers_finalized || self.cancel_handle.is_cancelled() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.status != 0 && !is_interim_response_status(self.status),
+            "response ended without final HTTP headers"
+        );
+        // Curl may accept EOF after complete header lines without delivering
+        // the empty separator. Run the usual cookie/cache/client-hint policy
+        // before the owner decides whether to publish or retry this response.
+        self.finalize_headers();
+        if let Some(error) = &self.callback_error {
+            return Err(Error::msg(error.clone()));
+        }
+        Ok(())
+    }
+
     fn finalize_headers(&mut self) -> bool {
         if self.response_too_large {
             return false;
@@ -419,6 +441,7 @@ impl StreamingResponseCollector {
             return true;
         };
 
+        self.headers_finalized = true;
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
@@ -643,6 +666,7 @@ impl RawStreamingResponseCollector {
             cache_body_writer: None,
             cache_plan: None,
             started: false,
+            headers_finalized: false,
             header_terminated: false,
             start_tx: Some(start_tx),
             body_tx: Some(body_tx),
@@ -686,6 +710,7 @@ impl RawStreamingResponseCollector {
         self.cache_body_writer = None;
         self.cache_plan = None;
         self.started = false;
+        self.headers_finalized = false;
         self.header_terminated = false;
         self.request_cookie_report = request_cookie_report;
         self.response_credentials_allowed = response_credentials_allowed;
@@ -776,6 +801,23 @@ impl RawStreamingResponseCollector {
         self.client_hint_restart_requested
     }
 
+    pub(crate) fn finish_headers_at_eof(&mut self) -> Result<()> {
+        if self.headers_finalized || self.cancel_handle.is_cancelled() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.status != 0 && !is_interim_response_status(self.status),
+            "response ended without final HTTP headers"
+        );
+        // A deferred redirect or 304 has not started either, so track header
+        // finalization separately to avoid applying its response policy twice.
+        self.finalize_headers();
+        if let Some(error) = &self.callback_error {
+            return Err(Error::msg(error.clone()));
+        }
+        Ok(())
+    }
+
     fn finalize_headers(&mut self) -> bool {
         if self.response_too_large {
             return false;
@@ -789,6 +831,7 @@ impl RawStreamingResponseCollector {
             return true;
         };
 
+        self.headers_finalized = true;
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
@@ -1049,6 +1092,7 @@ impl Handler for StreamingResponseCollector {
 
         if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.headers_finalized = false;
             self.status = parsed.status;
             self.status_text = Some(parsed.status_text);
             self.negotiated_http_version = parsed.version;
@@ -1117,6 +1161,7 @@ impl Handler for RawStreamingResponseCollector {
 
         if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.headers_finalized = false;
             self.status = parsed.status;
             self.status_text = Some(parsed.status_text);
             self.negotiated_http_version = parsed.version;
