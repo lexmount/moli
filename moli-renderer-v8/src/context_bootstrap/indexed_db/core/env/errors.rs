@@ -3,6 +3,7 @@ use super::*;
 fn backend_error_name(error: &IndexedDbError) -> &'static str {
     match error {
         IndexedDbError::Constraint(_) => "ConstraintError",
+        IndexedDbError::InvalidAccess(_) => "InvalidAccessError",
         IndexedDbError::InvalidState(message)
             if message == "StorageBucket IndexedDB bucket is no longer current" =>
         {
@@ -12,6 +13,7 @@ fn backend_error_name(error: &IndexedDbError) -> &'static str {
         IndexedDbError::NotFound(_) => "NotFoundError",
         IndexedDbError::QuotaExceeded { .. } => "QuotaExceededError",
         IndexedDbError::ReadOnly(_) => "ReadOnlyError",
+        IndexedDbError::Syntax(_) => "SyntaxError",
         IndexedDbError::TransactionInactive(_) => "TransactionInactiveError",
         IndexedDbError::Version(_) => "VersionError",
         IndexedDbError::Io(_)
