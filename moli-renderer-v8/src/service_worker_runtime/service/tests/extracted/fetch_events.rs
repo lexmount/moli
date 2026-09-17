@@ -1160,6 +1160,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            body_is_null: false,
             cors_exposed_header_names: None,
             status: 200,
             status_text: "OK".to_owned(),
@@ -1458,6 +1459,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            body_is_null: false,
             cors_exposed_header_names: None,
             status: 200,
             status_text: "OK".to_owned(),

@@ -737,7 +737,16 @@ pub(crate) fn spawn_async_subresource_fetch(
             });
             return;
         }
-        if auth_requires_buffered_transport || !can_stream_subresource_body {
+        // Integrity applies before response handover, including metadata that
+        // the SRI parser later ignores. Never resolve fetch at the headers.
+        let integrity_requires_full_body = request
+            .subresource_request_metadata()
+            .and_then(|metadata| metadata.integrity.as_deref())
+            .is_some_and(|integrity| !integrity.is_empty());
+        if auth_requires_buffered_transport
+            || !can_stream_subresource_body
+            || integrity_requires_full_body
+        {
             let result = fetch_browser_subresource_with_preflight_headers_and_observer(
                 loader,
                 request,
@@ -1774,6 +1783,70 @@ mod tests {
         }
 
         server.await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetch_integrity_waits_for_complete_network_body() -> Result<()> {
+        for truncated in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let addr = listener.local_addr()?;
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_http_request_text(&mut stream).await.unwrap();
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\nhello",
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                if !truncated {
+                    stream.write_all(b" integrity").await.unwrap();
+                }
+            });
+            let mut queue = RendererResourceCompletionTestHarness::new();
+            let loader_owner = ResourceRequestClient::new(&FetchConfig::default())?;
+            let url = Url::parse(&format!("http://{addr}/integrity"))?;
+            let request = Request::get(url.as_str())?
+                .with_request_origin(moli_url::WebOrigin::from_url(&url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+                .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
+                    integrity: Some("sha1-ignored".to_owned()),
+                    ..Default::default()
+                });
+            spawn_async_subresource_fetch(
+                crate::network::RendererResourceTaskRunner::from_current_tokio()?,
+                queue.sender(),
+                loader_owner.handle(),
+                request,
+                Some(FetchCancelHandle::new()),
+                Vec::new(),
+                42,
+                AsyncSubresourceNetworkContext {
+                    frame_id: None,
+                    request_origin: moli_url::WebOrigin::from_url(&url),
+                    document_url: url.clone(),
+                    resource_type: SubresourceResourceType::Fetch,
+                    policy_context: Default::default(),
+                },
+                url,
+                "GET".to_owned(),
+                Vec::new(),
+                None,
+            );
+            match next_async_subresource_event(&mut queue).await? {
+                AsyncSubresourceFetchEvent::Completion(completion) => {
+                    if truncated {
+                        assert!(completion.result.is_err());
+                    } else {
+                        assert_eq!(completion.result.unwrap().body_bytes(), b"hello integrity");
+                    }
+                }
+                other => anyhow::bail!("integrity fetch exposed an incomplete body: {other:?}"),
+            }
+            server.await?;
+        }
         Ok(())
     }
 
