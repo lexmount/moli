@@ -2286,6 +2286,7 @@ mod event_receivers;
 
 mod svg_number_list_native_receivers;
 
+mod fetch_request_guard;
 mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;
