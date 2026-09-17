@@ -14,7 +14,9 @@ use crate::{
         DatabaseData, DatabaseHandleState, IndexData, IndexedDbManager, ObjectStoreData,
         TransactionLifecycle, TransactionState,
     },
-    transaction::{ensure_writeable, resolve_key, transaction_store, transaction_store_mut},
+    transaction::{
+        ensure_writeable, next_generated_key, resolve_key, transaction_store, transaction_store_mut,
+    },
     usage::{database_usage_bytes, origin_usage_bytes, sum_usage},
     validate_index_options, validate_object_store_options,
 };
@@ -680,6 +682,18 @@ impl IndexedDbManager {
             .collect())
     }
 
+    /// Inspect the next generated key without consuming it. The binding uses
+    /// this to inject the key and validate indexes before an atomic write.
+    pub fn next_generated_key(
+        &mut self,
+        transaction: TransactionHandle,
+        store_name: &str,
+    ) -> Result<Key, IndexedDbError> {
+        let tx = self.active_transaction_mut(transaction)?;
+        ensure_writeable(tx)?;
+        next_generated_key(transaction_store(tx, store_name)?)
+    }
+
     pub fn generate_key(
         &mut self,
         transaction: TransactionHandle,
@@ -763,8 +777,10 @@ impl IndexedDbManager {
             let origin = tx.origin.clone();
             let store = transaction_store_mut(tx, store_name)?;
             let previous_store = quota.map(|_| store.clone());
+            let previous_counter = store.auto_increment_counter;
             let resolved_key = resolve_key(store, key)?;
             if add_only && store.records.contains_key(&resolved_key) {
+                store.auto_increment_counter = previous_counter;
                 return Err(IndexedDbError::Constraint(
                     "record already exists for key".to_owned(),
                 ));

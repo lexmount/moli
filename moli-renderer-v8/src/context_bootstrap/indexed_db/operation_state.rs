@@ -1,4 +1,4 @@
-use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo};
+use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
 
 pub(super) enum IndexedDbCursorSource {
@@ -64,8 +64,7 @@ pub(super) enum IndexedDbTransactionOperationInput<'s> {
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
-        value: v8::Local<'s, v8::Value>,
-        key: v8::Local<'s, v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -123,8 +122,7 @@ enum IndexedDbPendingTransactionOperationKind {
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
-        value: v8::Global<v8::Value>,
-        key: v8::Global<v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -181,8 +179,7 @@ pub(super) enum IndexedDbTransactionOperationKindLocals<'s> {
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
-        value: v8::Local<'s, v8::Value>,
-        key: v8::Local<'s, v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -251,15 +248,9 @@ impl IndexedDbPendingTransactionOperation {
                 query: v8::Global::new(scope, query),
             },
             Input::OpenCursor(operation) => Pending::OpenCursor(operation),
-            Input::ObjectStoreWrite {
-                value,
-                key,
-                add_only,
-            } => Pending::ObjectStoreWrite {
-                value: v8::Global::new(scope, value),
-                key: v8::Global::new(scope, key),
-                add_only,
-            },
+            Input::ObjectStoreWrite { prepared, add_only } => {
+                Pending::ObjectStoreWrite { prepared, add_only }
+            }
             Input::ObjectStoreDelete { key } => Pending::ObjectStoreDelete {
                 key: v8::Global::new(scope, key),
             },
@@ -348,15 +339,9 @@ impl IndexedDbPendingTransactionOperation {
                 query: v8::Local::new(scope, &query),
             },
             Pending::OpenCursor(operation) => Locals::OpenCursor(operation),
-            Pending::ObjectStoreWrite {
-                value,
-                key,
-                add_only,
-            } => Locals::ObjectStoreWrite {
-                value: v8::Local::new(scope, &value),
-                key: v8::Local::new(scope, &key),
-                add_only,
-            },
+            Pending::ObjectStoreWrite { prepared, add_only } => {
+                Locals::ObjectStoreWrite { prepared, add_only }
+            }
             Pending::ObjectStoreDelete { key } => Locals::ObjectStoreDelete {
                 key: v8::Local::new(scope, &key),
             },
