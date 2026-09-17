@@ -27,12 +27,17 @@ impl CapturedBlobUrl {
         Some(Self { url, data })
     }
 
-    pub(super) fn response(&self, url: &url::Url) -> Option<super::Response> {
+    pub(super) fn response(
+        &self,
+        url: &url::Url,
+        request_headers: &[(String, String)],
+    ) -> Option<Result<super::Response, super::browser_response::LocalUrlError>> {
         let (body, mime_type) = self.data.as_ref()?;
         Some(super::browser_response::blob_response(
             url,
-            body.to_vec(),
-            mime_type.clone(),
+            body,
+            mime_type,
+            request_headers,
         ))
     }
 
@@ -191,7 +196,7 @@ mod tests {
         let mut url = captured.url.clone();
         url.set_fragment(Some("fragment"));
         let response =
-            super::super::local_url_response_with_blob_entry(&url, "GET", Some(&captured))
+            super::super::local_url_response_with_blob_entry(&url, "GET", &[], Some(&captured))
                 .unwrap()
                 .unwrap();
         assert_eq!(response.head().status, 200);
@@ -201,17 +206,17 @@ mod tests {
             vec![0, 128, 255]
         );
         assert!(
-            super::super::local_url_response_with_blob_entry(&url, "POST", Some(&captured))
+            super::super::local_url_response_with_blob_entry(&url, "POST", &[], Some(&captured))
                 .unwrap()
                 .is_err()
         );
         let other = url::Url::parse("blob:https://example.test/other").unwrap();
         assert!(
-            super::super::local_url_response_with_blob_entry(&other, "GET", Some(&captured))
+            super::super::local_url_response_with_blob_entry(&other, "GET", &[], Some(&captured))
                 .unwrap()
                 .is_err()
         );
         let missing = CapturedBlobUrl { url, data: None };
-        assert!(missing.response(&missing.url).is_none());
+        assert!(missing.response(&missing.url, &[]).is_none());
     }
 }

@@ -2201,6 +2201,7 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
+mod blob_range;
 mod blob_response_headers;
 mod browser_api;
 mod cache_interfaces;
