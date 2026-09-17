@@ -5,7 +5,7 @@ mod blob_store;
 pub mod data_transfer;
 pub mod file;
 
-pub use blob_store::{BlobId, BlobStore};
+pub use blob_store::{BlobId, BlobStore, ObjectUrlData, ObjectUrlTarget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlobLineEndings {

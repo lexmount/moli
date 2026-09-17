@@ -3,6 +3,9 @@ use crate::webidl;
 use moli_web_mime::is_media_source_type_supported;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+mod state;
+pub(crate) use state::{MediaSourceObject, media_source_object};
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "MediaSource.isTypeSupported")]
 struct MediaSourceIsTypeSupportedArgs {
@@ -22,12 +25,13 @@ struct MediaSourceTemplateDeclaration {
     is_type_supported: (),
 }
 
-pub(in crate::context_bootstrap) fn media_source_constructor_callback(
-    _scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::context_bootstrap) fn media_source_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_undefined();
+    state::initialize(scope, args.this());
+    rv.set(args.this().into());
 }
 
 pub(in crate::context_bootstrap) fn install_media_source_template_bindings<'s>(
