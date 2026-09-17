@@ -60,6 +60,18 @@ pub(crate) fn resolve_abort_signal_owner<'s>(
     worker_abort::worker_abort_signal_id(scope, signal).map(|_| &WORKER_SIGNALS)
 }
 
+/// Creates a signal in the current realm using its native abort store.
+pub(crate) fn new_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<ResolvedAbortSignal<'s>> {
+    let signal = if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        crate::native_bridge::abort::create_signal(scope, unsafe { &mut *host }, false, None)?
+    } else {
+        worker_abort::new_worker_abort_signal(scope)?
+    };
+    ResolvedAbortSignal::resolve(scope, signal)
+}
+
 /// Converts the final AddEventListenerOptions member after capture/once/passive.
 /// A dictionary uses Get, not HasProperty: Proxy traps and inherited getters
 /// must run exactly once, and their original exceptions must escape unchanged.
