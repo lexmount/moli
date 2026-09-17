@@ -5,7 +5,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_delete_database_request<
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     storage_scope: IndexedDbStorageScope,
-    name: String,
+    name: IndexedDbName,
 ) {
     if let Err(error) = validate_storage_bucket_scope(scope, &storage_scope) {
         let error = request_error_object(scope, &error);

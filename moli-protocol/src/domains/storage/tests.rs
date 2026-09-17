@@ -151,7 +151,7 @@ fn seed_indexed_db_usage(manager: &moli_core::storage::SharedIndexedDbManager, o
     let opened = manager
         .open(moli_core::storage::IndexedDbOpenOptions {
             origin: origin.to_owned(),
-            name: "site-data".to_owned(),
+            name: "site-data".into(),
             version: Some(1),
         })
         .expect("IndexedDB seed open should succeed");
