@@ -64,15 +64,25 @@ pub(crate) fn resolve_key(
         return Ok(key);
     }
     if store.auto_increment {
-        if store.auto_increment_counter >= MAX_AUTO_INCREMENT_KEY {
-            return Err(IndexedDbError::Constraint(
-                "auto_increment key generator exceeded the maximum safe integer value".to_owned(),
-            ));
-        }
+        let key = next_generated_key(store)?;
         store.auto_increment_counter += 1;
-        return Ok(Key::Integer(store.auto_increment_counter as i64));
+        return Ok(key);
     }
     Err(IndexedDbError::InvalidState(
         "a key is required when auto_increment is disabled".to_owned(),
     ))
+}
+
+pub(crate) fn next_generated_key(store: &ObjectStoreData) -> Result<Key, IndexedDbError> {
+    if !store.auto_increment {
+        return Err(IndexedDbError::InvalidState(
+            "a key is required when auto_increment is disabled".to_owned(),
+        ));
+    }
+    if store.auto_increment_counter >= MAX_AUTO_INCREMENT_KEY {
+        return Err(IndexedDbError::Constraint(
+            "auto_increment key generator exceeded the maximum safe integer value".to_owned(),
+        ));
+    }
+    Ok(Key::Integer((store.auto_increment_counter + 1) as i64))
 }
