@@ -1,11 +1,13 @@
 mod bindings;
 mod input;
+mod integrity;
 mod promise;
 
 use super::request::parse_fetch_init;
 use super::*;
 
 pub(crate) use self::bindings::window_fetch_callback;
+pub(crate) use self::integrity::validate_fetch_response_integrity;
 
 /// Select the HTTP no-cors fetch path using the logical request URL, before
 /// Service Worker or DevTools interception. A DevTools transport URL rewrite
