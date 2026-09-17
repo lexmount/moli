@@ -25,16 +25,23 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
     let Some(metadata) = indexed_db_object_store_metadata(scope, store) else {
         return;
     };
-    if let Some(path) = &metadata.info().key_path
-        && !matches!(extract_key_from_value(scope, clone, path), ExtractedKey::Key(key) if key == primary_key)
-    {
-        let error = dom_exception_value(
-            scope,
-            "The value changes the cursor's effective key.",
-            "DataError",
-        );
-        scope.throw_exception(error);
-        return;
+    if let Some(path) = &metadata.info().key_path {
+        match extract_key_from_value(scope, clone, path) {
+            ExtractedKey::Key(key) if key == primary_key => {}
+            ExtractedKey::Error(error) => {
+                error.throw(scope);
+                return;
+            }
+            _ => {
+                let error = dom_exception_value(
+                    scope,
+                    "The value changes the cursor's effective key.",
+                    "DataError",
+                );
+                scope.throw_exception(error);
+                return;
+            }
+        }
     }
     let Some(request) = create_request_object(scope, cursor.into(), transaction) else {
         return;
