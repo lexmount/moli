@@ -728,10 +728,36 @@ def _script_content_type_handler_reference_patterns(directory: str) -> tuple[re.
     )
 
 
+@lru_cache(maxsize=None)
+def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    resources = tuple(
+        "service-workers/service-worker/resources/" + name
+        for name in (
+            "redirect.py", "update-worker.py", "update-worker-from-file.py",
+            "update-during-installation-worker.py",
+            "import-scripts-version.py", "import-scripts-get.py", "import-scripts-echo.py",
+            "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
+        )
+    ) + ("service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",)
+    for resource in resources:
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
+
 def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
     supported: tuple[re.Pattern[str], ...] = ()
+    if rel is not None:
+        supported += _service_worker_script_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
         supported += _script_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
