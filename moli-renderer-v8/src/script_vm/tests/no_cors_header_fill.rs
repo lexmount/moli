@@ -4,7 +4,7 @@ use super::*;
 async fn no_cors_header_fill_uses_append_guards_in_window_and_worker() {
     let fixture = include_str!("../../../tests/fixtures/no-cors-header-fill.js");
     for worker in [false, true] {
-        let server = StaticHttpServer::spawn_echo(64).await;
+        let server = StaticHttpServer::spawn_echo(72).await;
         let base = server.base_url();
         let origin = serde_json::to_string(base.as_str().trim_end_matches('/')).unwrap();
         let loader = static_http_loader([]);
@@ -52,7 +52,7 @@ async fn no_cors_header_fill_uses_append_guards_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 320, "worker={worker}");
-        assert_eq!(server.finish().await.len(), 64, "worker={worker}");
+        assert_eq!(checks.len(), 360, "worker={worker}");
+        assert_eq!(server.finish().await.len(), 72, "worker={worker}");
     }
 }
