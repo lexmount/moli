@@ -754,7 +754,9 @@ def _supported_wptserve_handler_references(
 @lru_cache(maxsize=None)
 def _xhr_response_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
-    for name in ("status.py", "last-modified.py", "corsenabled.py"):
+    for name in ("status.py", "last-modified.py", "corsenabled.py",
+                 "access-control-basic-put-allow.py",
+                 "access-control-preflight-request-allow-headers-returns-star.py"):
         resource = f"xhr/resources/{name}"
         relative = posixpath.relpath(resource, directory)
         references.extend(("/" + resource, relative, "./" + relative))

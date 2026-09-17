@@ -73,6 +73,8 @@ DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 XHR_RESPONSE_RESOURCE_PATHS = {
+    "/xhr/resources/access-control-basic-put-allow.py",
+    "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
     "/xhr/resources/corsenabled.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
@@ -1705,6 +1707,12 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if unquote(urlparse(self.path).path) in {
+                "/xhr/resources/access-control-basic-put-allow.py",
+                "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
+            }:
+                self._serve_xhr_response_resource()
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
@@ -2426,11 +2434,60 @@ def _make_handler(
             self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
                              status_code=status, status_text=reason)
 
+        def _serve_xhr_preflight_fixture(self, parsed, *, emit_body: bool) -> None:
+            status, headers, body = 200, [], b""
+            try:
+                if unquote(parsed.path) == "/xhr/resources/access-control-basic-put-allow.py":
+                    headers = [("Content-Type", "text/plain")]
+                    if self.command in {"OPTIONS", "PUT"}:
+                        origin = self.headers.get("Origin")
+                        if origin is None:
+                            raise ValueError("upstream handler requires Origin")
+                        headers.extend([
+                            ("Access-Control-Allow-Credentials", "true"),
+                            ("Access-Control-Allow-Origin", origin),
+                        ])
+                        if self.command == "OPTIONS":
+                            headers.append(("Access-Control-Allow-Methods", "PUT"))
+                        else:
+                            request_body = self._read_content_length_request_body()
+                            if request_body is None:
+                                return
+                            body = b"PASS: Cross-domain access allowed.\n" + request_body
+                    else:
+                        body = b"Wrong method: " + self.command.encode("latin-1")
+                elif self.command == "OPTIONS":
+                    headers = [
+                        ("Access-Control-Allow-Origin", "*"),
+                        ("Access-Control-Allow-Headers", "*"),
+                    ]
+                elif self.command == "GET":
+                    headers = [("Access-Control-Allow-Origin", "*")]
+                    if self.headers.get("X-Test"):
+                        headers.append(("Content-Type", "text/plain"))
+                        body = b"PASS"
+                    else:
+                        status = 400
+            except ValueError:
+                self.send_error(500)
+                return
+            self.close_connection = True
+            headers.append(("Connection", "close"))
+            self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
+                             status_code=status, cache_control=None)
+
+
         def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path not in XHR_RESPONSE_RESOURCE_PATHS:
                 return False
+            if path in {
+                "/xhr/resources/access-control-basic-put-allow.py",
+                "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
+            }:
+                self._serve_xhr_preflight_fixture(parsed, emit_body=emit_body)
+                return True
             if path == "/xhr/resources/corsenabled.py":
                 self._serve_xhr_cors_echo(parsed, emit_body=emit_body)
                 return True
