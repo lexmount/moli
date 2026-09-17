@@ -18,9 +18,9 @@ use super::{
     idb_object_store_add_callback as idb_object_store_add_callback_in_current_context,
     idb_object_store_clear_callback as idb_object_store_clear_callback_in_current_context,
     idb_object_store_count_callback as idb_object_store_count_callback_in_current_context,
-    idb_object_store_create_index_callback as idb_object_store_create_index_callback_in_current_context,
+    idb_object_store_create_index_callback,
     idb_object_store_delete_callback as idb_object_store_delete_callback_in_current_context,
-    idb_object_store_delete_index_callback as idb_object_store_delete_index_callback_in_current_context,
+    idb_object_store_delete_index_callback,
     idb_object_store_get_all_callback as idb_object_store_get_all_callback_in_current_context,
     idb_object_store_get_all_keys_callback as idb_object_store_get_all_keys_callback_in_current_context,
     idb_object_store_get_callback as idb_object_store_get_callback_in_current_context,
@@ -97,16 +97,8 @@ indexed_db_receiver_realm_callback!(
     idb_object_store_count_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
-    idb_object_store_create_index_callback,
-    idb_object_store_create_index_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
     idb_object_store_delete_callback,
     idb_object_store_delete_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_delete_index_callback,
-    idb_object_store_delete_index_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_get_all_callback,

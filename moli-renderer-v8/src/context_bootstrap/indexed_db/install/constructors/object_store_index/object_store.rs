@@ -23,7 +23,7 @@ struct IdbObjectStorePrototypeDeclaration {
     _delete: (),
     #[webapi(method, length = 0, callback = idb_object_store_clear_callback)]
     clear: (),
-    #[webapi(method, length = 3, callback = idb_object_store_create_index_callback)]
+    #[webapi(method, length = 2, callback = idb_object_store_create_index_callback)]
     create_index: (),
     #[webapi(method, length = 1, callback = idb_object_store_index_callback)]
     index: (),
