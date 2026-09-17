@@ -9327,6 +9327,23 @@ fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() 
       bytes,
       new ProxyOther(bindOther.call(freshNewTarget(NaN)), {})
     ),
+    boundProxyInterfaces: [
+      ["Module", bytes],
+      ["Instance", new WebAssembly.Module(bytes)],
+      ["Memory", { initial: 0 }],
+      ["Table", { element: "anyfunc", initial: 0 }],
+      ["Global", { value: "i32" }],
+      ["CompileError"], ["LinkError"], ["RuntimeError"]
+    ].every(([name, argument]) => usesNewTargetDefaultPrototype(
+      name, argument, bindOther.call(new ProxyOther(freshNewTarget(false), {}))
+    )),
+    moduleMixedBoundProxy: usesNewTargetDefaultPrototype(
+      "Module",
+      bytes,
+      bindOther.call(new ProxyOther(
+        bindOther.call(new ProxyOther(freshNewTarget(null), {})), {}
+      ))
+    ),
     memoryProxy: usesNewTargetDefaultPrototype(
       "Memory",
       { initial: 0 },
@@ -9347,7 +9364,7 @@ fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() 
 
     assert_eq!(
         result,
-        r#"{"namespaceIsSeparate":true,"constructorFunctionPrototype":true,"moduleDirect":true,"moduleBound":true,"moduleProxy":true,"moduleProxyBound":true,"memoryProxy":true,"compileErrorDirect":true,"moduleTopRealm":true,"moduleIntrinsicSurvivesNamespaceReplacement":true}"#
+        r#"{"namespaceIsSeparate":true,"constructorFunctionPrototype":true,"moduleDirect":true,"moduleBound":true,"moduleProxy":true,"moduleProxyBound":true,"boundProxyInterfaces":true,"moduleMixedBoundProxy":true,"memoryProxy":true,"compileErrorDirect":true,"moduleTopRealm":true,"moduleIntrinsicSurvivesNamespaceReplacement":true}"#
     );
 }
 #[test]
