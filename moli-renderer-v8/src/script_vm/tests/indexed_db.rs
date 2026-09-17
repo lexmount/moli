@@ -3867,6 +3867,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
     const store = open.result.createObjectStore("kv", { keyPath: "id" });
     const created = store.createIndex("by-id", "id", { unique: true });
     const viaLookup = store.index("by-id");
+    const nameDescriptor = Object.getOwnPropertyDescriptor(IDBIndex.prototype, "name");
     store.deleteIndex("by-id");
     store.createIndex("by-id", "id", { unique: true });
     globalThis.__indexedDbIndexResult = [
@@ -3875,6 +3876,13 @@ fn indexed_db_object_store_index_metadata_is_available() {
       Object.hasOwn(store, "transaction"),
       store.autoIncrement,
       Object.keys(created).sort().join(","),
+      Object.hasOwn(created, "name"),
+      typeof nameDescriptor.get,
+      typeof nameDescriptor.set,
+      nameDescriptor.enumerable,
+      nameDescriptor.configurable,
+      viaLookup === created,
+      store.index("by-id") !== created,
       Object.hasOwn(created, "objectStore"),
       store.indexNames.contains("by-id"),
       created.name,
@@ -3897,7 +3905,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
 
     assert_eq!(
         result,
-        "autoIncrement,db,indexNames,keyPath,name,transaction|true|true|false|keyPath,multiEntry,name,objectStore,unique|true|true|by-id|id|true|false|by-id|kv"
+        "autoIncrement,db,indexNames,keyPath,name,transaction|true|true|false|keyPath,multiEntry,objectStore,unique|false|function|function|true|true|true|true|true|true|by-id|id|true|false|by-id|kv"
     );
 }
 

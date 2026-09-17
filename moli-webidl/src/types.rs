@@ -12,6 +12,11 @@ pub struct EnumValue<T>(pub T);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DomString(pub String);
 
+/// Lossless WebIDL DOMString storage for APIs whose identity depends on the
+/// original UTF-16 units, including unpaired surrogates.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DomString16(pub Vec<u16>);
+
 impl From<DomString> for String {
     fn from(value: DomString) -> Self {
         value.0
