@@ -92,8 +92,8 @@ pub(super) enum IndexedDbTransactionOperation {
     },
 }
 
-// Query arguments are converted at the API boundary and retained as native snapshots.
-// Write requests retain their existing deferred value/key conversion behavior.
+// All operation arguments have already been converted at the API boundary.
+// Retain JS handles only for request/source identity, never for deferred keys.
 pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
     source: v8::Global<v8::Object>,

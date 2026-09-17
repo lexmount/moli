@@ -123,7 +123,7 @@ async fn indexed_db_queries_snapshot_arguments_and_delete_key_ranges() -> Result
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            308,
+            548,
             "{target}: {result}"
         );
     }
