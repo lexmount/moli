@@ -8005,3 +8005,27 @@ second.onsuccess = () => {
         r#"["complete","close-microtask","error:AbortError","success:4:records"]"#
     );
 }
+
+#[test]
+fn indexed_db_rejects_invalid_explicit_keys() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-invalid-explicit-key.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbInvalidExplicitKeyError = "pending";
+  const dbName = `app-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("outline");
+  open.onsuccess = () => {
+    const store = open.result.transaction("outline", "readwrite").objectStore("outline");
+    const errors = [];
+    for (const key of [NaN, null, {}, 1n]) {
+      try { store.put({ value: 1 }, key); errors.push("no-error"); }
+      catch (error) { errors.push(error.name); }
+    }
+    globalThis.__indexedDbInvalidExplicitKeyError = errors.join("|");
+  };
+  return "scheduled";
+}

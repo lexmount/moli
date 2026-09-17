@@ -681,3 +681,24 @@ async fn indexed_db_schema_validation_preserves_key_paths_conversion_and_excepti
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_writes_clone_before_key_paths_and_snapshot_queued_values() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-write-clone.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nwriteCloneProbe('write-clone-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: writeChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            165,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
