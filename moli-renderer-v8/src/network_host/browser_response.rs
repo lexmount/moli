@@ -5,6 +5,7 @@ use std::fmt;
 #[derive(Debug)]
 pub(crate) enum LocalUrlError {
     BlobMethod { method: String },
+    BlobRange,
     BlobUnavailable { url: url::Url },
     InvalidData { url: url::Url },
 }
@@ -13,6 +14,7 @@ impl fmt::Display for LocalUrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BlobMethod { method } => write!(f, "blob URL fetch requires GET, got `{method}`"),
+            Self::BlobRange => f.write_str("blob URL fetch has an invalid or unsatisfiable Range header"),
             Self::BlobUnavailable { url } => write!(f, "blob URL `{url}` is unavailable"),
             Self::InvalidData { url } => write!(f, "data URL `{url}` is invalid"),
         }
@@ -21,22 +23,104 @@ impl fmt::Display for LocalUrlError {
 
 impl std::error::Error for LocalUrlError {}
 
-pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
-    let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
-    Some(blob_response(url, body_bytes, mime_type))
+impl LocalUrlError {
+    pub(crate) fn is_unavailable_blob(&self) -> bool {
+        matches!(self, Self::BlobUnavailable { .. })
+    }
+
+    pub(crate) fn into_message(self) -> String {
+        self.to_string()
+    }
 }
 
-pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: String) -> Response {
-    let headers = moli_fetch::headers_from_byte_strings(&[
+/// Fetch's single range parser with HTTP whitespace enabled. Offsets saturate:
+/// oversized starts fail the bounds check, while ends and suffix lengths clamp
+/// to the available bytes without overflowing or limiting decimal digit counts.
+fn blob_byte_range(value: &str, length: usize) -> Option<std::ops::Range<usize>> {
+    fn offset(value: &str) -> Option<usize> {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        Some(value.bytes().fold(0usize, |number, byte| {
+            number
+                .saturating_mul(10)
+                .saturating_add(usize::from(byte - b'0'))
+        }))
+    }
+
+    let value = value
+        .strip_prefix("bytes")?
+        .trim_start_matches(['\t', ' '])
+        .strip_prefix('=')?
+        .trim_start_matches(['\t', ' ']);
+    let (start, end) = value.split_once('-')?;
+    let start = start.trim_end_matches(['\t', ' ']);
+    let end = end.trim_start_matches(['\t', ' ']);
+    if start.is_empty() {
+        // A suffix longer than the Blob selects the whole representation.
+        // A zero suffix produces an empty slice, as in Fetch's scheme fetch.
+        return Some(length.saturating_sub(offset(end)?)..length);
+    }
+    let start = offset(start)?;
+    if start >= length {
+        return None;
+    }
+    let end = if end.is_empty() {
+        length
+    } else {
+        offset(end)?.saturating_add(1).min(length)
+    };
+    (start < end).then_some(start..end)
+}
+
+pub(super) fn blob_response(
+    url: &url::Url,
+    body_bytes: &[u8],
+    mime_type: &str,
+    request_headers: &[(String, String)],
+) -> Result<Response, LocalUrlError> {
+    let mut range_headers = request_headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("range"));
+    let range = if let Some((_, value)) = range_headers.next() {
+        // Getting a repeated header joins its values with a comma, which
+        // cannot be parsed as the single range supported by Blob scheme fetch.
+        let range = blob_byte_range(value, body_bytes.len());
+        if range_headers.next().is_some() || range.is_none() {
+            return Err(LocalUrlError::BlobRange);
+        }
+        range
+    } else {
+        None
+    };
+    let (status, status_text, content_range) = if let Some(range) = &range {
+        let last = range
+            .end
+            .checked_sub(1)
+            .map_or_else(|| "-1".to_owned(), |end| end.to_string());
+        (
+            206,
+            "Partial Content",
+            Some(format!("bytes {}-{last}/{}", range.start, body_bytes.len())),
+        )
+    } else {
+        (200, "OK", None)
+    };
+    let body_bytes = &body_bytes[range.unwrap_or(0..body_bytes.len())];
+    let mut headers = vec![
         ("Content-Length".to_owned(), body_bytes.len().to_string()),
-        ("Content-Type".to_owned(), mime_type),
-    ])
-    .expect("Blob response headers contain ByteStrings");
-    Response::from_head_and_lossy_body_bytes(
+        ("Content-Type".to_owned(), mime_type.to_owned()),
+    ];
+    if let Some(content_range) = content_range {
+        headers.push(("Content-Range".to_owned(), content_range));
+    }
+    let headers = moli_fetch::headers_from_byte_strings(&headers)
+        .expect("Blob response headers contain ByteStrings");
+    Ok(Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
-            status_text: None,
+            status_text: Some(status_text.to_owned()),
             final_url: url.clone(),
-            status: 200,
+            status,
             headers,
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
@@ -45,8 +129,8 @@ pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: Stri
             from_cache: false,
             negotiated_http_version: None,
         },
-        body_bytes,
-    )
+        body_bytes.to_vec(),
+    ))
 }
 
 pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
@@ -74,7 +158,7 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
 
 /// Reads a local resource for consumers whose requests always use GET.
 pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
-    local_url_response_result(url, "GET").and_then(Result::ok)
+    local_url_response_result(url, "GET", &[]).and_then(Result::ok)
 }
 
 /// Resolves renderer-owned URL schemes without falling through to the network
@@ -87,29 +171,33 @@ pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
 pub(crate) fn local_url_response_result(
     url: &url::Url,
     method: &str,
+    request_headers: &[(String, String)],
 ) -> Option<Result<Response, LocalUrlError>> {
-    local_url_response_with_blob_entry(url, method, None)
+    local_url_response_with_blob_entry(url, method, request_headers, None)
 }
 
 pub(crate) fn local_url_response_with_blob_entry(
     url: &url::Url,
     method: &str,
+    request_headers: &[(String, String)],
     entry: Option<&CapturedBlobUrl>,
 ) -> Option<Result<Response, LocalUrlError>> {
     let result = match url.scheme() {
-        "blob" if method != "GET" => {
-            Some(Err(LocalUrlError::BlobMethod { method: method.to_owned() }))
-        }
+        "blob" if method != "GET" => Some(Err(LocalUrlError::BlobMethod { method: method.to_owned() })),
         "blob" => {
             let response = match entry.filter(|entry| entry.matches(url)) {
-                Some(entry) => entry.response(url),
-                None => blob_url_response(url),
+                Some(entry) => entry.response(url, request_headers),
+                None => CapturedBlobUrl::capture(url)
+                    .and_then(|entry| entry.response(url, request_headers)),
             };
-            Some(response.ok_or_else(|| LocalUrlError::BlobUnavailable { url: url.clone() }))
+            Some(
+                response
+                    .unwrap_or_else(|| Err(LocalUrlError::BlobUnavailable { url: url.clone() })),
+            )
         }
-        "data" => {
-            Some(data_url_response(url).ok_or_else(|| LocalUrlError::InvalidData { url: url.clone() }))
-        }
+        "data" => Some(data_url_response(url).ok_or_else(|| {
+            LocalUrlError::InvalidData { url: url.clone() }
+        })),
         _ => None,
     }?;
     Some(result.map(|response| {
@@ -126,6 +214,108 @@ pub(crate) fn local_url_response_with_blob_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blob_byte_ranges_validate_ascii_syntax_and_bound_unlimited_offsets() {
+        for (value, expected) in [
+            ("bytes=2-5", Some(2..6)),
+            ("bytes=4-", Some(4..10)),
+            ("bytes=-3", Some(7..10)),
+            ("bytes=-12", Some(0..10)),
+            ("bytes=-0", Some(10..10)),
+            ("bytes=4-10", Some(4..10)),
+            ("bytes \t= \t1 \t- \t3", Some(1..4)),
+            ("bytes=0001-0003", Some(1..4)),
+            ("bytes=10-", None),
+            ("bytes=4-2", None),
+            ("bytes=-", None),
+            ("bytes=+1-3", None),
+            ("bytes=1-+3", None),
+            ("bytes=1 2-3", None),
+            ("bytes=1-3,", None),
+            ("bytes=1-3,5-8", None),
+            ("bytes=1-3 ", None),
+            (" bytes=1-3", None),
+            ("BYTES=1-3", None),
+            ("bytes=\u{a0}1-3", None),
+            ("bytes=\u{c}1-3", None),
+            ("bytes=１-３", None),
+            ("", None),
+        ] {
+            assert_eq!(blob_byte_range(value, 10), expected, "{value:?}");
+        }
+        let huge = "9".repeat(80);
+        assert_eq!(blob_byte_range(&format!("bytes=1-{huge}"), 10), Some(1..10));
+        assert_eq!(blob_byte_range(&format!("bytes=-{huge}"), 10), Some(0..10));
+        assert_eq!(blob_byte_range(&format!("bytes={huge}-"), 10), None);
+        assert_eq!(
+            blob_byte_range(&format!("bytes=0{}1-3", "0".repeat(80)), 10),
+            Some(1..4)
+        );
+        assert_eq!(blob_byte_range("bytes=0-", 0), None);
+        assert_eq!(blob_byte_range("bytes=-1", 0), Some(0..0));
+    }
+
+    #[test]
+    fn blob_range_response_slices_bytes_and_distinguishes_missing_entries() {
+        let url = url::Url::parse("blob:https://example.test/range").unwrap();
+        let bytes = [0, 255, 128, 65];
+        let response = blob_response(
+            &url,
+            &bytes,
+            "",
+            &[("rAnGe".to_owned(), "bytes=1-2".to_owned())],
+        )
+        .unwrap();
+        let head = response.head();
+        assert_eq!(head.status, 206);
+        assert_eq!(head.status_text.as_deref(), Some("Partial Content"));
+        assert_eq!(
+            head.headers,
+            vec![
+                ("Content-Length".to_owned(), "2".to_owned()),
+                ("Content-Type".to_owned(), "".to_owned()),
+                ("Content-Range".to_owned(), "bytes 1-2/4".to_owned()),
+            ]
+        );
+        assert_eq!(
+            response
+                .into_body()
+                .1
+                .try_into_materialized_bytes()
+                .unwrap(),
+            [255, 128]
+        );
+        for headers in [
+            vec![("Range".to_owned(), "".to_owned())],
+            vec![
+                ("Range".to_owned(), "bytes=0-1".to_owned()),
+                ("range".to_owned(), "bytes=2-3".to_owned()),
+            ],
+        ] {
+            let error = blob_response(&url, &bytes, "", &headers).unwrap_err();
+            assert!(!error.is_unavailable_blob());
+            assert!(error.into_message().contains("Range"));
+            let missing = local_url_response_with_blob_entry(&url, "GET", &headers, None)
+                .unwrap()
+                .unwrap_err();
+            assert!(missing.is_unavailable_blob());
+        }
+        let data = url::Url::parse("data:,0123").unwrap();
+        let response =
+            local_url_response_result(&data, "GET", &[("Range".to_owned(), "invalid".to_owned())])
+                .unwrap()
+                .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response
+                .into_body()
+                .1
+                .try_into_materialized_bytes()
+                .unwrap(),
+            b"0123"
+        );
+    }
 
     #[test]
     fn data_url_response_decodes_plain_and_base64_payloads() {
@@ -160,7 +350,7 @@ mod tests {
     fn unavailable_blob_url_is_a_local_failure() {
         let url = url::Url::parse("blob:https://example.test/not-registered").unwrap();
 
-        let error = local_url_response_result(&url, "GET")
+        let error = local_url_response_result(&url, "GET", &[])
             .expect("blob URL must be owned by the local resolver")
             .expect_err("an unregistered blob URL must fail locally");
 

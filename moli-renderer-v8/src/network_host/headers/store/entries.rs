@@ -167,7 +167,7 @@ fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)>
 
 // JS iteration and XHR's serialized response headers use sort-and-combine;
 // storage and internal Request copies must retain duplicate entries.
-pub(in crate::network_host) fn normalized_headers_entries(
+pub(crate) fn normalized_headers_entries(
     entries: &[(String, String)],
 ) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
