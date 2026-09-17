@@ -1,5 +1,9 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_transaction_start_wake,
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
+    set_indexed_db_transaction_start_request,
+};
 use crate::webidl;
 use moli_indexeddb::{DatabaseHandle, IndexedDbError};
 
@@ -63,7 +67,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
     let mut store_names = parsed.store_names.0;
     store_names.sort_unstable();
     store_names.dedup();
-    // Validate before queuing a readwrite transaction as well: its backend
+    // Validate before queuing a transaction as well: its backend
     // handle may only be allocated after an earlier transaction finishes.
     if store_names
         .iter()
@@ -123,33 +127,28 @@ fn create_regular_transaction<'s>(
     // Objects and task queues belong to the connection's realm even when the
     // operation was borrowed from another Window. Conversion and exceptions
     // remain in the callback's realm.
-    if mode == TransactionMode::ReadWrite {
-        let db_key = object_string_property(scope, database, INDEXED_DB_DATABASE_KEY_SLOT)
-            .unwrap_or_default();
-        let transaction_handle = if has_unfinished_readwrite_transaction_for_db(scope, &db_key) {
-            None
-        } else {
-            Some(with_indexed_db_manager(scope, |manager| {
-                manager.begin_transaction(handle, store_names, mode)
-            })?)
-        };
-        let Some(transaction) =
-            create_transaction_object(scope, database, transaction_handle, mode, store_names)
-        else {
-            return Ok(None);
-        };
-        register_readwrite_transaction(scope, transaction);
-        schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
-        return Ok(Some(transaction));
-    }
-    let transaction_handle = with_indexed_db_manager(scope, |manager| {
-        manager.begin_transaction(handle, store_names, mode)
+    let owner = indexed_db_typed_execution_owner(scope, database).expect("IDB database owner");
+    let wake = indexed_db_transaction_start_wake(scope, owner);
+    let request = with_indexed_db_manager(scope, |manager| {
+        manager.queue_transaction_start(handle, store_names, mode, wake)
     })?;
+    let transaction_handle = if request.handle().is_ready() {
+        Some(with_indexed_db_manager(scope, |manager| {
+            manager.start_queued_transaction(request.handle())
+        })?)
+    } else {
+        None
+    };
     let Some(transaction) =
-        create_transaction_object(scope, database, Some(transaction_handle), mode, store_names)
+        create_transaction_object(scope, database, transaction_handle, mode, store_names)
     else {
+        if let Some(handle) = transaction_handle {
+            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
+        }
         return Ok(None);
     };
+    set_indexed_db_transaction_start_request(scope, transaction, request);
+    register_regular_transaction(scope, transaction);
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     Ok(Some(transaction))
 }

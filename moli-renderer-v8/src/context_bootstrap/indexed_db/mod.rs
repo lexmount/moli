@@ -63,6 +63,10 @@ pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>
     flush_drain_blocked_open_requests_task(scope);
 }
 
+pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '_>) {
+    enqueue_ready_transaction_starts(scope);
+}
+
 pub(crate) fn flush_indexed_db_connection_notification(
     scope: &mut v8::PinScope<'_, '_>,
     handle: moli_indexeddb::DatabaseHandle,

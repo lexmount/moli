@@ -398,6 +398,7 @@ struct IndexedDbTransactionLifecycleState {
     database: Option<v8::Global<v8::Object>>,
     upgrade_open_request: Option<v8::Global<v8::Object>>,
     handle: Option<TransactionHandle>,
+    start_request: Option<moli_indexeddb::TransactionRequestLease>,
     mode: TransactionMode,
     active: bool,
     committing: bool,
@@ -425,6 +426,7 @@ impl IndexedDbTransactionLifecycleState {
             database: Some(database),
             upgrade_open_request: None,
             handle,
+            start_request: None,
             mode,
             active: true,
             committing: false,
@@ -683,6 +685,9 @@ impl IndexedDbRuntimeStateTable {
         for request in self.requests.values_mut() {
             drop(request.connection_request.take());
         }
+        for transaction in self.transactions.values_mut() {
+            drop(transaction.start_request.take());
+        }
     }
 }
 
@@ -878,6 +883,55 @@ pub(super) fn indexed_db_transaction_mode(
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow().transactions.get(&id).map(|state| state.mode)
+}
+
+pub(super) fn set_indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    request: moli_indexeddb::TransactionRequestLease,
+) {
+    let id = indexed_db_typed_state_id(scope, transaction).expect("transaction id");
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let state = table.transactions.get_mut(&id).expect("transaction state");
+    assert!(state.start_request.is_none(), "transaction scheduled twice");
+    state.start_request = Some(request);
+}
+
+pub(super) fn indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::TransactionRequestHandle> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    Some(
+        table
+            .borrow()
+            .transactions
+            .get(&id)?
+            .start_request
+            .as_ref()?
+            .handle()
+            .clone(),
+    )
+}
+
+pub(super) fn finish_indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let request = table
+        .borrow_mut()
+        .transactions
+        .get_mut(&id)
+        .and_then(|state| state.start_request.take());
+    // Releasing admission wakes other event loops after native commit/rollback
+    // and after releasing the local state borrow.
+    drop(request);
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint<

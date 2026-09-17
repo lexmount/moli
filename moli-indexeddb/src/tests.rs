@@ -16,6 +16,8 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod transaction_scheduling;
+
 #[test]
 fn schema_validation_preserves_exception_order_and_does_not_create_invalid_metadata() {
     let mut manager = IndexedDbManager::new_in_memory();
