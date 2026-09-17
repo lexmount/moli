@@ -12,6 +12,8 @@ use crate::{
     *,
 };
 
+mod durability;
+
 struct TestDir {
     path: PathBuf,
 }

@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -8,7 +7,8 @@ use std::{
 use crate::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions, IndexedDbError,
     IndexedDbQuotaCheck, IndexedDbValue, Key, ObjectStoreInfo, ObjectStoreOptions, OpenDisposition,
-    OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    OpenOptions, OpenResult, RequestOutcome, TransactionCommitOptions, TransactionHandle,
+    TransactionMode,
     persistence::IndexedDbPersistenceBackend,
     state::{
         DatabaseData, DatabaseHandleState, IndexData, IndexedDbManager, ObjectStoreData,
@@ -32,7 +32,7 @@ impl IndexedDbManager {
 
     pub fn new(storage_root: impl Into<PathBuf>) -> Result<Self, IndexedDbError> {
         let storage_root = storage_root.into();
-        fs::create_dir_all(&storage_root)
+        crate::persistence::prepare_storage_directory(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
@@ -366,10 +366,11 @@ impl IndexedDbManager {
                     && tx.mode == TransactionMode::ReadWrite
                     && tx.origin == db.origin
                     && tx.db_name == db.name
+                    && !tx.stores.is_disjoint(&store_set)
             })
         {
             return Err(IndexedDbError::InvalidState(
-                "concurrent readwrite transactions are not supported in the MVP backend".to_owned(),
+                "overlapping readwrite transactions require queued admission".to_owned(),
             ));
         }
 
@@ -754,21 +755,7 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
-        let (origin, db_name, working_copy) = {
-            let tx = self.active_transaction_mut(transaction)?;
-            tx.state = TransactionLifecycle::Committed;
-            (
-                tx.origin.clone(),
-                tx.db_name.clone(),
-                tx.working_copy.clone(),
-            )
-        };
-        let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
-            IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
-        })?;
-        origin_state.databases.insert(db_name, working_copy);
-        self.transactions.remove(&transaction);
-        self.persist_origin(&origin)
+        self.commit_transaction_with_options(transaction, TransactionCommitOptions::default())
     }
 
     pub fn commit_transaction_with_quota(
@@ -776,26 +763,80 @@ impl IndexedDbManager {
         transaction: TransactionHandle,
         quota: IndexedDbQuotaCheck,
     ) -> Result<(), IndexedDbError> {
-        let (origin, db_name, working_copy_usage) = {
-            let tx = self.active_transaction_mut(transaction)?;
-            (
-                tx.origin.clone(),
-                tx.db_name.clone(),
-                database_usage_bytes(&tx.db_name, &tx.working_copy),
-            )
-        };
-        let requested = quota
-            .non_indexed_db_usage
-            .saturating_add(self.committed_origin_usage_except_database(&origin, &db_name))
-            .saturating_add(working_copy_usage);
-        if requested > quota.quota {
+        self.commit_transaction_with_options(
+            transaction,
+            TransactionCommitOptions {
+                quota: Some(quota),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn commit_transaction_with_options(
+        &mut self,
+        transaction: TransactionHandle,
+        options: TransactionCommitOptions,
+    ) -> Result<(), IndexedDbError> {
+        let tx = self.active_transaction_mut(transaction)?.clone();
+        if tx.mode == TransactionMode::ReadOnly {
+            self.active_transaction_mut(transaction)?.state = TransactionLifecycle::Committed;
             self.transactions.remove(&transaction);
-            return Err(IndexedDbError::QuotaExceeded {
-                quota: quota.quota,
-                requested,
-            });
+            return Ok(());
         }
-        self.commit_transaction(transaction)
+        let previous = self
+            .origins
+            .get(&tx.origin)
+            .and_then(|origin| origin.databases.get(&tx.db_name))
+            .cloned();
+        let mut merged = previous.clone().unwrap_or_else(|| tx.working_copy.clone());
+        if tx.mode == TransactionMode::VersionChange {
+            merged = tx.working_copy.clone();
+        } else {
+            for name in &tx.stores {
+                if let Some(store) = tx.working_copy.stores.get(name) {
+                    merged.stores.insert(name.clone(), store.clone());
+                }
+            }
+        }
+        if let Some(quota) = options.quota {
+            let requested = quota
+                .non_indexed_db_usage
+                .saturating_add(
+                    self.committed_origin_usage_except_database(&tx.origin, &tx.db_name),
+                )
+                .saturating_add(database_usage_bytes(&tx.db_name, &merged));
+            if requested > quota.quota {
+                self.transactions.remove(&transaction);
+                return Err(IndexedDbError::QuotaExceeded {
+                    quota: quota.quota,
+                    requested,
+                });
+            }
+        }
+        let origin_state = self.origins.get_mut(&tx.origin).ok_or_else(|| {
+            IndexedDbError::NotFound(format!(
+                "origin `{}` was not found during commit",
+                tx.origin
+            ))
+        })?;
+        origin_state.databases.insert(tx.db_name.clone(), merged);
+        self.transactions.remove(&transaction);
+        if let Err(error) = self.persist_origin_with_durability(&tx.origin, options.durability) {
+            let origin = self
+                .origins
+                .get_mut(&tx.origin)
+                .expect("origin existed before persistence");
+            match previous {
+                Some(database) => {
+                    origin.databases.insert(tx.db_name, database);
+                }
+                None => {
+                    origin.databases.remove(&tx.db_name);
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn abort_transaction(
