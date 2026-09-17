@@ -48,6 +48,11 @@ fn parse_idb_key_with_depth(
     if let Ok(array) = v8::Local::<v8::Array>::try_from(value) {
         let mut keys = Vec::with_capacity(array.length() as usize);
         for index in 0..array.length() {
+            let property =
+                v8_string(scope, &index.to_string()).ok_or("IndexedDB key allocation failed.")?;
+            if array.has_own_property(scope, property.into()) != Some(true) {
+                return Err("IndexedDB array keys must not contain missing entries.");
+            }
             let Some(entry) = array.get_index(scope, index) else {
                 return Err("IndexedDB array keys must not contain missing entries.");
             };
