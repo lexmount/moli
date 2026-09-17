@@ -129,7 +129,7 @@ pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
     let mut index = 0;
     loop {
         // Script can change both the values and the sorted pair order.
-        let entries = normalized_headers_entries(&headers_entries(scope, this));
+        let entries = headers_entries(scope, this);
         let Some((name, value)) = entries.get(index) else {
             break;
         };
