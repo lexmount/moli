@@ -12,6 +12,8 @@ use crate::{
     *,
 };
 
+mod schema_validation;
+
 struct TestDir {
     path: PathBuf,
 }
