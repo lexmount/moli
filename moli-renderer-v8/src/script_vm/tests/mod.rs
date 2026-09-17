@@ -15698,6 +15698,7 @@ mod child_dynamic_inline_scripts;
 mod close_watchers;
 mod dom_elements;
 mod dom_xhr;
+mod fetch_referrer;
 mod fetch_request_guard;
 mod http_fixture;
 mod indexed_db;

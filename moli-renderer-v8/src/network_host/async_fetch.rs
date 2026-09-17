@@ -582,7 +582,8 @@ async fn run_cors_preflight_if_needed(
         .with_redirect_mode(RequestRedirectMode::Manual)
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_redirect_chain(request.redirect_chain().to_vec())
-        .with_network_partition_key(request.network_partition_key().map(str::to_owned));
+        .with_network_partition_key(request.network_partition_key().map(str::to_owned))
+        .with_referrer_from(request);
         if let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() {
             preflight_request = preflight_request.with_initiator_url(initiator_url);
         }
@@ -1113,6 +1114,124 @@ mod tests {
         assert_eq!(redirects.request().redirect_chain().len(), 1);
         assert_eq!(redirects.request().redirect_chain()[0].status, 303);
         assert!(redirects.request().redirect_chain()[0].network_extra_info_available);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cors_preflight_preserves_fetch_referrer_and_policy() -> Result<()> {
+        let initiator = Url::parse("http://origin.test/context/page?x=1#fragment")?;
+        for (referrer, policy, document_policy, expected) in [
+            ("", Some("unsafe-url"), None, None),
+            (
+                "about:client",
+                Some("unsafe-url"),
+                None,
+                Some("http://origin.test/context/page?x=1"),
+            ),
+            (
+                "http://user:secret@origin.test/selected?q=1#private",
+                Some("unsafe-url"),
+                None,
+                Some("http://origin.test/selected?q=1"),
+            ),
+            (
+                "http://origin.test/selected",
+                Some("origin"),
+                None,
+                Some("http://origin.test/"),
+            ),
+            (
+                "http://origin.test/selected",
+                None,
+                Some("unsafe-url"),
+                Some("http://origin.test/selected"),
+            ),
+            (
+                "http://origin.test/selected",
+                Some("no-referrer"),
+                Some("unsafe-url"),
+                None,
+            ),
+            (
+                "http://origin.test/selected",
+                None,
+                Some("no-referrer"),
+                None,
+            ),
+            (
+                "http://origin.test/selected",
+                None,
+                None,
+                Some("http://origin.test/"),
+            ),
+        ] {
+            for streaming in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").await?;
+                let url = format!("http://{}/echo", listener.local_addr()?);
+                let server = tokio::spawn(async move {
+                    let mut requests = Vec::new();
+                    for _ in 0..2 {
+                        let (mut socket, _) = listener.accept().await?;
+                        requests.push(read_http_request_text(&mut socket).await?);
+                        socket.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: http://origin.test\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: x-probe\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await?;
+                    }
+                    anyhow::Ok(requests)
+                });
+                let headers = vec![("X-Probe".to_owned(), "preflight".to_owned())];
+                let request = Request::new_browser_bytes(
+                    "GET",
+                    &url,
+                    None,
+                    headers.clone(),
+                    (&initiator).into(),
+                )?
+                .with_initiator_url(&initiator)
+                .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+                .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+                    referrer_policy: policy.map(str::to_owned),
+                    document_referrer_policy: document_policy.map(str::to_owned),
+                    ..Default::default()
+                })
+                .with_fetch_referrer(referrer)?;
+                let mut config = FetchConfig::default();
+                config.set_http_no_proxy(Some("*".to_owned()));
+                let owner = ResourceRequestClient::new(&config)?;
+                let loader = owner.handle();
+                let (head, body) = if streaming {
+                    fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(&loader, request, None, headers)
+                        .await.map_err(anyhow::Error::msg)?.into_response().into_body()
+                } else {
+                    fetch_browser_subresource_with_preflight_and_network_metadata(
+                        loader, request, None,
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?
+                    .into_response()
+                    .into_body()
+                };
+                assert_eq!(head.status, 200);
+                assert_eq!(body.into_materialized_bytes().await?, b"ok");
+                let requests = tokio::time::timeout(Duration::from_secs(5), server).await???;
+                for (request, method) in requests.iter().zip(["OPTIONS", "GET"]) {
+                    assert!(request.starts_with(&format!("{method} /echo HTTP/1.1\r\n")));
+                    let header = |wanted: &str| {
+                        request
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+                            .map(|(_, value)| value.trim())
+                    };
+                    assert_eq!(
+                        header("referer"),
+                        expected,
+                        "{method}, {referrer}, {policy:?}, {document_policy:?}, streaming={streaming}"
+                    );
+                    assert_eq!(header("origin"), Some("http://origin.test"));
+                    assert_eq!(header("sec-fetch-site"), Some("cross-site"));
+                }
+            }
+        }
         Ok(())
     }
 
