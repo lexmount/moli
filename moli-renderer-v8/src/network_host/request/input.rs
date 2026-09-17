@@ -75,7 +75,7 @@ pub(crate) fn validate_request_method_body(
     Ok(())
 }
 
-pub(super) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
+pub(crate) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
     if mode == "no-cors" {
         HeadersGuard::RequestNoCors
     } else {

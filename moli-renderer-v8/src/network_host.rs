@@ -141,7 +141,7 @@ pub(crate) use self::request::{
 };
 pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
 pub(crate) use self::request::{
-    mark_request_input_body_used_for_fetch, request_body_already_used_error,
+    mark_request_input_body_used_for_fetch, request_body_already_used_error, request_headers_guard_for_mode,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
     try_resolve_request_constructor_url_for_child, validate_request_method_body, validate_request_url_credentials,
 };
