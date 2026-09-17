@@ -6029,6 +6029,8 @@ encoding/utf-32-from-win1252.html
 encoding/utf-32.html
 event-timing/supported-types-consistent-with-self.html
 fetch/api/abort/destroyed-context.html
+fetch/api/basic/header-value-combining.any.js?moli-wpt-any=dedicatedworker
+fetch/api/basic/header-value-combining.any.js?moli-wpt-any=window
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=window
 fetch/api/basic/stream-response.any.js?moli-wpt-any=dedicatedworker
@@ -10300,12 +10302,15 @@ xhr/formdata/has-formelement.html
 xhr/formdata/set-formelement.html
 xhr/getallresponseheaders-cookies.htm
 xhr/getallresponseheaders-status.htm
+xhr/getallresponseheaders.htm
 xhr/getresponseheader-case-insensitive.htm
 xhr/getresponseheader-cookies-and-more.htm
 xhr/getresponseheader-error-state.htm
 xhr/getresponseheader-server-date.htm
 xhr/getresponseheader-special-characters.htm
 xhr/getresponseheader-unsent-opened-state.htm
+xhr/getresponseheader.any.js?moli-wpt-any=dedicatedworker
+xhr/getresponseheader.any.js?moli-wpt-any=window
 xhr/historical.html
 xhr/loadstart-and-state.html
 xhr/open-after-abort.htm
