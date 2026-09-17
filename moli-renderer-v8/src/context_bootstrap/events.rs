@@ -341,6 +341,7 @@ fn storage_event_nullable_string_value_utf16<'s>(
         .unwrap_or_else(|| v8::null(scope).into())
 }
 
+pub(in crate::context_bootstrap) use base::define_event_property;
 pub(crate) use base::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_initialized,
