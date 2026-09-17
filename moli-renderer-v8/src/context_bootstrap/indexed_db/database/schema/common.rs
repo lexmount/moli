@@ -17,5 +17,16 @@ pub(super) fn version_change_transaction<'s>(
         scope.throw_exception(error);
         return None;
     };
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The upgrade transaction is not active.",
+            "TransactionInactiveError",
+        );
+        scope.throw_exception(error);
+        return None;
+    }
     Some(transaction)
 }

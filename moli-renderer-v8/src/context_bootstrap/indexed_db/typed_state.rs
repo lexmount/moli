@@ -394,10 +394,10 @@ impl IndexedDbRequestLifecycleState {
 }
 
 struct IndexedDbTransactionLifecycleState {
-    mode: TransactionMode,
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
+    mode: TransactionMode,
     active: bool,
     committing: bool,
     finished: bool,
@@ -421,10 +421,10 @@ impl IndexedDbTransactionLifecycleState {
         db_key: Option<String>,
     ) -> Self {
         Self {
-            mode,
             database: Some(database),
             upgrade_open_request: None,
             handle,
+            mode,
             active: true,
             committing: false,
             finished: false,
@@ -935,9 +935,9 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     track_indexed_db_handle_table(scope, database, &table);
 }
 
-pub(super) fn indexed_db_transaction_mode<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
+pub(super) fn indexed_db_transaction_mode(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
 ) -> Option<TransactionMode> {
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
