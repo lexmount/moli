@@ -23,8 +23,12 @@ IndexedDB/fire-upgradeneeded-event-exception.any.js?moli-wpt-any=window
 IndexedDB/idb-explicit-commit.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idb-explicit-commit.any.js?moli-wpt-any=window
 IndexedDB/idb_webworkers.htm
+IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=window
+IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_transaction.any.js?moli-wpt-any=dedicatedworker
@@ -42,6 +46,8 @@ IndexedDB/idbfactory_open.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=window
 IndexedDB/idbindex-cross-realm-methods.html
 IndexedDB/idbobjectstore-cross-realm-methods.html
+IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_result.any.js?moli-wpt-any=dedicatedworker
@@ -50,6 +56,8 @@ IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=window
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=window
+IndexedDB/keypath_invalid.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/keypath_invalid.any.js?moli-wpt-any=window
 IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/open-request-queue.any.js?moli-wpt-any=window
 IndexedDB/ready-state-destroyed-execution-context.html

@@ -10,14 +10,13 @@ use super::{
     execute_object_store_delete_request, index_info_from_store_metadata, indexed_db_index_info,
     indexed_db_index_object_store, indexed_db_object_store_database, indexed_db_object_store_name,
     indexed_db_object_store_transaction, key_in_range, key_to_js_value, object_bool_property,
-    object_string_property, optional_count_to_value, parse_cursor_direction,
-    parse_cursor_direction_with_context, parse_idb_key, parse_idb_key_path, parse_key_or_range,
-    parse_key_range_from_value, parse_optional_count, prepare_object_store_write,
-    remove_database_index_metadata, request_error_object, scan_index_entries,
-    scan_object_store_entries, serialize_js_value, set_database_index_metadata,
-    storage_bucket_quota_check_for_object_store, store_request_error, store_request_success,
-    submit_cursor_open_operation, throw_type_error, transaction_handle_from_value,
-    with_indexed_db_manager,
+    optional_count_to_value, parse_cursor_direction, parse_cursor_direction_with_context,
+    parse_idb_key, parse_idb_key_path, parse_key_or_range, parse_key_range_from_value,
+    parse_optional_count, prepare_object_store_write, remove_database_index_metadata,
+    request_error_object, scan_index_entries, scan_object_store_entries, serialize_js_value,
+    set_database_index_metadata, storage_bucket_quota_check_for_object_store, store_request_error,
+    store_request_success, submit_cursor_open_operation, throw_type_error,
+    transaction_handle_from_value, with_indexed_db_manager,
 };
 use crate::webidl;
 
