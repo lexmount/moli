@@ -1,5 +1,6 @@
+use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
 use crate::native_bridge;
-use moli_file_api::{BlobData, BlobId, BlobStore};
+use moli_file_api::{BlobData, BlobId, BlobStore, ObjectUrlData, ObjectUrlTarget};
 pub(super) use moli_v8_util::buffer_source_bytes_from_value;
 pub(crate) use moli_webapi::blob::{blob_id_from_object, world_wrapper};
 use moli_webapi::blob::{BlobReadMode, BlobRuntime};
@@ -32,6 +33,7 @@ type RendererBlobStore = BlobStore<
     RendererStoragePartitionIdentity,
     ObjectUrlAccessKey,
     crate::content_security_policy::ContentSecurityPolicySource,
+    Arc<MediaSourceObject>,
 >;
 
 static BLOB_STORE: OnceLock<RendererBlobStore> = OnceLock::new();
@@ -97,7 +99,11 @@ pub(super) fn create_object_url_for_object<'s>(
     object: v8::Local<'s, v8::Object>,
     storage_key: moli_storage_key::MoliStorageKey,
 ) -> Option<String> {
-    let blob_id = blob_id_from_object(scope, object)?;
+    let target = if is_blob_object(scope, object) {
+        ObjectUrlTarget::Blob(blob_id_from_object(scope, object)?)
+    } else {
+        ObjectUrlTarget::MediaSource(media_source_object(scope, object)?)
+    };
     let partition = current_blob_storage_partition_identity(scope)?;
     let owner_id = current_resource_owner_id(scope);
     let origin = storage_key.origin().to_owned();
@@ -113,10 +119,10 @@ pub(super) fn create_object_url_for_object<'s>(
         crate::worker::worker_content_security_policy_snapshot(scope)
             .map(|policy| Arc::new(parking_lot::RwLock::new(policy)))
     };
-    blob_store().create_object_url_with_metadata(
+    blob_store().create_object_url_with_target(
         owner_id,
         lifetime_id,
-        blob_id,
+        target,
         &origin,
         Some(ObjectUrlAccessKey {
             partition,
@@ -124,6 +130,12 @@ pub(super) fn create_object_url_for_object<'s>(
         }),
         policy_source,
     )
+}
+
+pub(crate) type RendererObjectUrlData = ObjectUrlData<Arc<MediaSourceObject>>;
+
+pub(crate) fn object_url_data(url: &str) -> Option<RendererObjectUrlData> {
+    blob_store().object_url_data(url)
 }
 
 pub(crate) fn object_url_content_security_policy(
@@ -176,10 +188,6 @@ pub(crate) fn object_url_download_data(
 
 pub(super) fn object_url_body_and_type(url: &str) -> Option<(String, String)> {
     blob_store().object_url_body_and_type(url)
-}
-
-pub(super) fn object_url_shared_bytes_and_type(url: &str) -> Option<(Arc<[u8]>, String)> {
-    blob_store().object_url_shared_bytes_and_type(url)
 }
 
 #[cfg(feature = "devtools")]
