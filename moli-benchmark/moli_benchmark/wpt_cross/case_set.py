@@ -826,7 +826,7 @@ def _empty_location_handler_reference_patterns(directory: str) -> tuple[re.Patte
 def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
     for name in (
-        "requri.py", "redirect.py", "inspect-headers.py", "echo-headers.py", "content.py",
+        "requri.py", "redirect.py", "headers.py", "inspect-headers.py", "echo-headers.py", "content.py",
         "echo-content-type.py", "corsenabled.py", "win-1252-xml.py", "win-1252-html.py",
         "access-control-basic-put-allow.py",
         "access-control-preflight-request-allow-headers-returns-star.py",
