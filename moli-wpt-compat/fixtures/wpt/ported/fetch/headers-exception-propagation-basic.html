@@ -118,8 +118,10 @@ test(function () {
   const request = new Request("https://example.test/headers", {
     headers: [["x-test", "one"]],
   });
+  let getterCalls = 0;
   Object.defineProperty(request, "headers", {
     get() {
+      getterCalls += 1;
       throw new RangeError("request headers getter failed");
     },
   });
@@ -127,7 +129,8 @@ test(function () {
     "Request(input) should copy the internal header list");
   assert_equals(request.clone().headers.get("x-test"), "one",
     "Request.clone() should copy the internal header list");
-}, "Request copies internal headers without invoking an input headers getter");
+  assert_equals(getterCalls, 0, "internal copies should not read the public headers getter");
+}, "Request copies ignore an overridden public headers getter");
 
 test(function () {
   const init = {};
