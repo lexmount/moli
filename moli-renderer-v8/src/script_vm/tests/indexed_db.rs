@@ -4037,10 +4037,8 @@ fn indexed_db_index_queries_and_key_ranges_work() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbIndexQueryResult)")
         .expect("indexeddb index query result should be readable");
 
-    assert_eq!(
-        result,
-        "lower,lowerOpen,upper,upperOpen|true|news|news|false|false|a|a|a,c|a,c|2"
-    );
+    // Range attributes are inherited readonly accessors, not own properties.
+    assert_eq!(result, "|true|news|news|false|false|a|a|a,c|a,c|2");
 }
 
 #[test]
