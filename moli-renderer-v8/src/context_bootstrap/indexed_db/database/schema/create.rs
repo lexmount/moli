@@ -20,10 +20,10 @@ struct IdbDatabaseCreateObjectStoreArgs {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "IDBObjectStoreParameters")]
 struct IdbObjectStoreParameters {
-    #[webidl(with = parse_optional_idb_key_path_member)]
-    key_path: Option<KeyPath>,
     #[webidl(default = false)]
     auto_increment: bool,
+    #[webidl(with = parse_optional_idb_key_path_member)]
+    key_path: Option<KeyPath>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store_callback<'s>(
