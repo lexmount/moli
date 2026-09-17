@@ -66,7 +66,7 @@ use crate::context_bootstrap::{
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
-    FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
+    FetchResponseSecurityViolation, PreparedXhrSendBody, XHR_ABORTED_SLOT,
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
     XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
     XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
@@ -77,10 +77,10 @@ use crate::network_host::{
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
-    parse_fetch_init, convert_xhr_send_body_from_args, request_input_snapshot,
-    request_object_credentials_mode, resolve_context_url, set_xhr_state_bool, set_xhr_state_number,
-    throw_synchronous_xhr_failure, validate_fetch_response_headers,
-    validate_fetch_response_security_policy,
+    parse_fetch_init, convert_xhr_send_body_from_args, request_headers_guard_for_mode,
+    request_input_snapshot, request_object_credentials_mode, resolve_context_url,
+    set_xhr_state_bool, set_xhr_state_number, throw_synchronous_xhr_failure,
+    validate_fetch_response_headers, validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
     xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
     xhr_state_string_property,
