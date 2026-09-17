@@ -20,7 +20,7 @@ pub(crate) use self::init::{
 pub(crate) use self::init::{parse_request_redirect_mode_label, request_redirect_mode_label};
 pub(crate) use self::input::{
     RequestInputUrl, mark_request_input_body_used_for_fetch, request_body_already_used_error,
-    try_resolve_request_constructor_url_for_base, try_resolve_request_constructor_url_for_child,
-    validate_request_method_body,
+    request_headers_guard_for_mode, try_resolve_request_constructor_url_for_base,
+    try_resolve_request_constructor_url_for_child, validate_request_method_body,
 };
 pub(in crate::network_host) use self::input::{RequestMethodError, normalize_request_method};
