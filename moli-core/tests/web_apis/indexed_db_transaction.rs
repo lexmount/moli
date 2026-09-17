@@ -2,6 +2,27 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_cursors_protect_native_state_and_cache_values_in_getter_realms() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-cursor-state.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ncursorStateProbe('cursor-state-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: cursorChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 673 } else { 709 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
