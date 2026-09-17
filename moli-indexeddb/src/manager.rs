@@ -7,8 +7,8 @@ use std::{
 
 use crate::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions, IndexedDbError,
-    IndexedDbQuotaCheck, IndexedDbValue, Key, ObjectStoreInfo, ObjectStoreOptions, OpenDisposition,
-    OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    IndexedDbName, IndexedDbQuotaCheck, IndexedDbValue, Key, ObjectStoreInfo, ObjectStoreOptions,
+    OpenDisposition, OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
     persistence::IndexedDbPersistenceBackend,
     state::{
         DatabaseData, DatabaseHandleState, IndexData, IndexedDbManager, ObjectStoreData,
@@ -562,9 +562,10 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
         store_name: &str,
-        index_name: &str,
+        index_name: impl Into<IndexedDbName>,
         options: IndexOptions,
     ) -> Result<IndexInfo, IndexedDbError> {
+        let index_name = index_name.into();
         let tx = self.active_transaction_mut(transaction)?;
         if tx.mode != TransactionMode::VersionChange {
             return Err(IndexedDbError::InvalidState(
@@ -572,7 +573,7 @@ impl IndexedDbManager {
             ));
         }
         let store = transaction_store_mut(tx, store_name)?;
-        if store.indexes.contains_key(index_name) {
+        if store.indexes.contains_key(&index_name) {
             return Err(IndexedDbError::Constraint(format!(
                 "index `{index_name}` already exists"
             )));
@@ -608,8 +609,9 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
         store_name: &str,
-        index_name: &str,
+        index_name: impl Into<IndexedDbName>,
     ) -> Result<(), IndexedDbError> {
+        let index_name = index_name.into();
         let tx = self.active_transaction_mut(transaction)?;
         if tx.mode != TransactionMode::VersionChange {
             return Err(IndexedDbError::InvalidState(
@@ -617,7 +619,7 @@ impl IndexedDbManager {
             ));
         }
         let store = transaction_store_mut(tx, store_name)?;
-        if store.indexes.remove(index_name).is_none() {
+        if store.indexes.remove(&index_name).is_none() {
             return Err(IndexedDbError::NotFound(format!(
                 "index `{index_name}` was not found"
             )));
@@ -625,12 +627,46 @@ impl IndexedDbManager {
         Ok(())
     }
 
+    /// Rename the existing index atomically within the upgrade's working copy.
+    pub fn rename_index(
+        &mut self,
+        transaction: TransactionHandle,
+        store_name: &str,
+        old_name: &IndexedDbName,
+        new_name: IndexedDbName,
+    ) -> Result<(), IndexedDbError> {
+        let tx = self.active_transaction_mut(transaction)?;
+        if tx.mode != TransactionMode::VersionChange {
+            return Err(IndexedDbError::InvalidState(
+                "rename_index requires a versionchange transaction".to_owned(),
+            ));
+        }
+        let store = transaction_store_mut(tx, store_name)?;
+        if !store.indexes.contains_key(old_name) {
+            return Err(IndexedDbError::NotFound(format!(
+                "index `{old_name}` was not found"
+            )));
+        }
+        if old_name == &new_name {
+            return Ok(());
+        }
+        if store.indexes.contains_key(&new_name) {
+            return Err(IndexedDbError::Constraint(format!(
+                "index `{new_name}` already exists"
+            )));
+        }
+        let index = store.indexes.remove(old_name).expect("existing index");
+        store.indexes.insert(new_name, index);
+        Ok(())
+    }
+
     pub fn index_info(
         &self,
         database: DatabaseHandle,
         store_name: &str,
-        index_name: &str,
+        index_name: impl Into<IndexedDbName>,
     ) -> Result<IndexInfo, IndexedDbError> {
+        let index_name = index_name.into();
         let db = self.database_state(database)?;
         if db.closed {
             return Err(IndexedDbError::InvalidState(
@@ -644,7 +680,7 @@ impl IndexedDbManager {
             .ok_or_else(|| {
                 IndexedDbError::NotFound(format!("object store `{store_name}` was not found"))
             })?;
-        let index = store.indexes.get(index_name).ok_or_else(|| {
+        let index = store.indexes.get(&index_name).ok_or_else(|| {
             IndexedDbError::NotFound(format!("index `{index_name}` was not found"))
         })?;
         Ok(IndexInfo {

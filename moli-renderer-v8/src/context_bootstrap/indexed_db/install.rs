@@ -10,6 +10,7 @@ use super::{
     idb_index_get_all_records_callback,
     idb_index_get_callback as idb_index_get_callback_in_current_context,
     idb_index_get_key_callback as idb_index_get_key_callback_in_current_context,
+    idb_index_name_getter, idb_index_name_setter,
     idb_index_open_cursor_callback as idb_index_open_cursor_callback_in_current_context,
     idb_index_open_key_cursor_callback as idb_index_open_key_cursor_callback_in_current_context,
     idb_key_range_bound_callback, idb_key_range_includes_callback,
@@ -24,7 +25,7 @@ use super::{
     idb_object_store_get_all_keys_callback, idb_object_store_get_all_records_callback,
     idb_object_store_get_callback as idb_object_store_get_callback_in_current_context,
     idb_object_store_get_key_callback as idb_object_store_get_key_callback_in_current_context,
-    idb_object_store_index_callback as idb_object_store_index_callback_in_current_context,
+    idb_object_store_index_callback,
     idb_object_store_open_cursor_callback as idb_object_store_open_cursor_callback_in_current_context,
     idb_object_store_open_key_cursor_callback as idb_object_store_open_key_cursor_callback_in_current_context,
     idb_object_store_put_callback as idb_object_store_put_callback_in_current_context,
@@ -98,10 +99,6 @@ indexed_db_receiver_realm_callback!(
 indexed_db_receiver_realm_callback!(
     idb_object_store_get_key_callback,
     idb_object_store_get_key_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_index_callback,
-    idb_object_store_index_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_open_cursor_callback,

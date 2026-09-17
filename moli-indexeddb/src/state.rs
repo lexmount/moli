@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    DatabaseHandle, IndexedDbValue, Key, KeyPath, TransactionHandle, TransactionMode,
-    persistence::IndexedDbPersistenceBackend,
+    DatabaseHandle, IndexedDbName, IndexedDbValue, Key, KeyPath, TransactionHandle,
+    TransactionMode, persistence::IndexedDbPersistenceBackend,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +24,7 @@ pub(crate) struct ObjectStoreData {
     pub(crate) key_path: Option<KeyPath>,
     pub(crate) auto_increment: bool,
     pub(crate) auto_increment_counter: u64,
-    pub(crate) indexes: BTreeMap<String, IndexData>,
+    pub(crate) indexes: BTreeMap<IndexedDbName, IndexData>,
     pub(crate) records: BTreeMap<Key, IndexedDbValue>,
 }
 

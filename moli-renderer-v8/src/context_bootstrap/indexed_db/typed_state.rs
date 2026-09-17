@@ -445,22 +445,25 @@ impl IndexedDbTransactionLifecycleState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IndexedDbObjectStoreMetadata {
     info: ObjectStoreInfo,
-    indexes: BTreeMap<String, IndexInfo>,
+    indexes: BTreeMap<IndexedDbName, IndexInfo>,
     created_in_upgrade: bool,
-    created_indexes: BTreeSet<String>,
+    original_index_names: BTreeMap<IndexedDbName, IndexedDbName>,
 }
 
 impl IndexedDbObjectStoreMetadata {
     pub(super) fn new(info: ObjectStoreInfo, indexes: impl IntoIterator<Item = IndexInfo>) -> Self {
-        let indexes = indexes
+        let indexes: BTreeMap<_, _> = indexes
             .into_iter()
             .map(|index| (index.name.clone(), index))
             .collect();
         Self {
             info,
+            original_index_names: indexes
+                .keys()
+                .map(|name| (name.clone(), name.clone()))
+                .collect(),
             indexes,
             created_in_upgrade: false,
-            created_indexes: BTreeSet::new(),
         }
     }
 
@@ -468,7 +471,7 @@ impl IndexedDbObjectStoreMetadata {
         &self.info
     }
 
-    pub(super) fn index(&self, name: &str) -> Option<&IndexInfo> {
+    pub(super) fn index(&self, name: &IndexedDbName) -> Option<&IndexInfo> {
         self.indexes.get(name)
     }
 
@@ -481,16 +484,34 @@ impl IndexedDbObjectStoreMetadata {
     }
 
     fn set_index(&mut self, info: IndexInfo) {
-        self.created_indexes.insert(info.name.clone());
+        self.original_index_names.remove(&info.name);
         if !self.info.index_names.iter().any(|name| name == &info.name) {
             self.info.index_names.push(info.name.clone());
         }
         self.indexes.insert(info.name.clone(), info);
     }
 
-    fn remove_index(&mut self, name: &str) {
+    fn remove_index(&mut self, name: &IndexedDbName) {
         self.info.index_names.retain(|candidate| candidate != name);
         self.indexes.remove(name);
+        self.original_index_names.remove(name);
+    }
+
+    fn rename_index(&mut self, old_name: &IndexedDbName, new_name: &IndexedDbName) {
+        let mut info = self
+            .indexes
+            .remove(old_name)
+            .expect("existing index metadata");
+        info.name = new_name.clone();
+        self.indexes.insert(new_name.clone(), info);
+        if let Some(original) = self.original_index_names.remove(old_name) {
+            self.original_index_names.insert(new_name.clone(), original);
+        }
+        for name in &mut self.info.index_names {
+            if name == old_name {
+                *name = new_name.clone();
+            }
+        }
     }
 }
 
@@ -570,26 +591,29 @@ impl IndexedDbObjectStoreLifecycleState {
 }
 
 struct IndexedDbIndexLifecycleState {
+    wrapper: v8::Weak<v8::Object>,
     object_store: v8::Global<v8::Value>,
     info: IndexInfo,
     marker: bool,
     deleted: bool,
-    created_in_upgrade: bool,
+    original_name: Option<IndexedDbName>,
 }
 
 impl IndexedDbIndexLifecycleState {
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
+        wrapper: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
         info: IndexInfo,
-        created_in_upgrade: bool,
+        original_name: Option<IndexedDbName>,
     ) -> Self {
         Self {
+            wrapper: v8::Weak::new(scope, wrapper),
             object_store: v8::Global::new(scope, v8::Local::<v8::Value>::from(object_store)),
             info,
             marker: true,
             deleted: false,
-            created_in_upgrade,
+            original_name,
         }
     }
 }
@@ -1169,14 +1193,13 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     let Some(id) = indexed_db_typed_state_id(scope, index) else {
         return;
     };
-    let created_in_upgrade =
-        indexed_db_object_store_metadata(scope, object_store).is_some_and(|metadata| {
-            metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
-        });
+    let original_name = indexed_db_object_store_metadata(scope, object_store)
+        .filter(|metadata| !metadata.created_in_upgrade)
+        .and_then(|metadata| metadata.original_index_names.get(&info.name).cloned());
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     table.borrow_mut().indexes.insert(
         id,
-        IndexedDbIndexLifecycleState::new(scope, object_store, info, created_in_upgrade),
+        IndexedDbIndexLifecycleState::new(scope, index, object_store, info, original_name),
     );
 }
 
@@ -1872,7 +1895,7 @@ pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
-    index_name: &str,
+    index_name: &IndexedDbName,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
@@ -2625,7 +2648,7 @@ mod tests {
             [],
         );
         let index = IndexInfo {
-            name: "by-tag".to_owned(),
+            name: "by-tag".into(),
             key_path: KeyPath::String("tag".to_owned()),
             unique: true,
             multi_entry: false,
@@ -2633,17 +2656,17 @@ mod tests {
 
         metadata.set_index(index.clone());
 
-        assert_eq!(metadata.info().index_names, ["by-tag"]);
-        assert_eq!(metadata.index("by-tag"), Some(&index));
+        assert_eq!(metadata.info().index_names, [IndexedDbName::from("by-tag")]);
+        assert_eq!(metadata.index(&IndexedDbName::from("by-tag")), Some(&index));
         assert_eq!(
             metadata.indexes_in_name_order(),
             std::slice::from_ref(&index)
         );
 
-        metadata.remove_index("by-tag");
+        metadata.remove_index(&IndexedDbName::from("by-tag"));
 
         assert!(metadata.info().index_names.is_empty());
-        assert!(metadata.index("by-tag").is_none());
+        assert!(metadata.index(&IndexedDbName::from("by-tag")).is_none());
         assert!(metadata.indexes_in_name_order().is_empty());
     }
 }
