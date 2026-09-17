@@ -792,7 +792,8 @@ async fn indexed_db_clear_validates_before_requests_and_preserves_callee_errors(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn indexed_db_schema_methods_expose_arity_and_read_store_options_in_order() -> Result<()> {
+async fn indexed_db_schema_validation_preserves_key_paths_conversion_and_exception_order()
+-> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let fixture = include_str!("fixtures/indexeddb-schema-validation.js");
@@ -802,9 +803,8 @@ async fn indexed_db_schema_methods_expose_arity_and_read_store_options_in_order(
         );
         let result = run_probe(&browser, &server, target, &source).await?;
         assert_eq!(result["state"], "pass", "{target}: {result}");
-        assert_eq!(
-            result["checks"].as_array().unwrap().len(),
-            5,
+        assert!(
+            result["checks"].as_array().unwrap().len() >= 160,
             "{target}: {result}"
         );
     }
