@@ -83,10 +83,11 @@ pub(super) fn parse_window_fetch_input<'s>(
             &method,
             request_mode,
         )?;
-        if request_mode == moli_fetch::RequestMode::NoCors {
-            headers = filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors);
-        } else {
-            headers = filter_headers_for_guard(&headers, HeadersGuard::Request);
+        if init.headers_present || request_mode == moli_fetch::RequestMode::NoCors {
+            headers = filter_headers_for_guard(
+                &headers,
+                request_headers_guard_for_mode(request_mode.as_ref()),
+            );
         }
         let credentials_mode = init
             .credentials_mode
@@ -144,11 +145,10 @@ pub(super) fn parse_window_fetch_input<'s>(
             &init.method,
             request_mode,
         )?;
-        let headers = if request_mode == moli_fetch::RequestMode::NoCors {
-            filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
-        } else {
-            filter_headers_for_guard(&init.headers, HeadersGuard::Request)
-        };
+        let headers = filter_headers_for_guard(
+            &init.headers,
+            request_headers_guard_for_mode(request_mode.as_ref()),
+        );
         let credentials_mode = init
             .credentials_mode
             .unwrap_or(moli_fetch::RequestCredentialsMode::SameOrigin);
