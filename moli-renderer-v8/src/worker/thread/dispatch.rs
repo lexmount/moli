@@ -2344,6 +2344,8 @@ fn service_worker_respond_with_settled<'s>(
                     );
                     return;
                 }
+                let body_is_null =
+                    crate::network_host::body_stream_object(scope, response).is_none();
                 let body_source_id = new_network_body_source_id();
                 let (body, stream_cancel_handle) =
                     build_service_worker_respond_with_stream_chunk_callback(
@@ -2371,7 +2373,7 @@ fn service_worker_respond_with_settled<'s>(
                     });
                 match body {
                     MaterializedResponseBody::Ready(body) => ServiceWorkerFetchResult::Response(
-                        service_worker_fetch_response_from_materialized(head, body),
+                        service_worker_fetch_response_from_materialized(head, body, body_is_null),
                     ),
                     MaterializedResponseBody::Pending(promise) => {
                         let stream_body = stream_cancel_handle.is_some();
@@ -2505,8 +2507,13 @@ fn service_worker_respond_with_lifetime_settled_for_event(
 fn service_worker_fetch_response_from_materialized(
     head: MaterializedResponseHead,
     body: Vec<u8>,
+    body_is_null: bool,
 ) -> ServiceWorkerFetchResponse {
-    head.with_body(body)
+    ServiceWorkerFetchResponse {
+        head,
+        body,
+        body_is_null,
+    }
 }
 
 fn service_worker_fetch_response_head_from_materialized(
@@ -3001,7 +3008,7 @@ fn service_worker_respond_with_body_settled_for_event(
                 pending.pending_respond_with_stream_body_source_id = None;
                 pending.pending_respond_with_stream_cancel_handle = None;
                 ServiceWorkerFetchResult::Response(service_worker_fetch_response_from_materialized(
-                    head, body,
+                    head, body, false,
                 ))
             }
             Err(error) => {

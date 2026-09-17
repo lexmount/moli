@@ -82,11 +82,12 @@ pub(super) fn start<'s>(
     let service_worker_client = state.borrow().service_worker_client_id;
     let task_runner = load.task_runner();
     task_runner.spawn(async move {
+        let integrity = metadata.integrity.clone();
         control
             .fetch_load(request, info, load, cancel, policy_context)
             .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
-            .run_fetch(completion, fetch_id, resource_timing)
+            .run_fetch(completion, fetch_id, resource_timing, integrity)
             .await;
     });
     Some(promise)

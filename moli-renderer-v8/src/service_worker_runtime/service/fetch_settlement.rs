@@ -143,6 +143,7 @@ fn service_worker_fetch_can_forward_stream(
         &response_head.headers,
     )?;
     Ok(job.direct_completion_tx.is_none()
+        && job.metadata.integrity.is_empty()
         && !matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::Audio
@@ -649,6 +650,13 @@ impl ServiceWorkerRuntimeService {
             validate_service_worker_fetch_response_body_security_policy(&job, &response, &final_url)
         {
             self.complete_fetch_with_failure(job, message);
+            return;
+        }
+        if response.body_is_null && !job.metadata.integrity.is_empty() {
+            self.complete_fetch_with_failure(
+                job,
+                "fetch: integrity metadata requires a non-null response body".to_owned(),
+            );
             return;
         }
         let response_filter =
@@ -1303,6 +1311,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1345,6 +1355,135 @@ mod tests {
             vec![("content-type".to_owned(), b"text/plain".to_vec())]
         );
         assert_eq!(response.body_text(), "service-worker-body");
+    }
+
+    #[test]
+    fn fetch_integrity_rejects_synthetic_null_bodies_but_preserves_empty_bodies() {
+        for integrity in ["", "sha1-ignored", " "] {
+            for body_is_null in [false, true] {
+                let service = new_service_worker_runtime_service();
+                let event_id = ServiceWorkerEventId(21);
+                let version_id = ServiceWorkerVersionId(1);
+                let run = RendererServiceWorkerRunIdentity::fresh();
+                let mut queue =
+                    crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+                let final_url = insert_active_fetch_job(
+                    &service,
+                    event_id,
+                    version_id,
+                    &run,
+                    301,
+                    queue.sender(),
+                );
+                service
+                    .inner
+                    .state
+                    .lock()
+                    .pending_fetch_jobs
+                    .get_mut(&event_id)
+                    .unwrap()
+                    .metadata
+                    .integrity = integrity.to_owned();
+                service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+                    event_id,
+                    owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                        version_id, run,
+                    ),
+                    result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        body_is_null,
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: moli_fetch_types::FetchResponseType::Default,
+                                timing_allow_passed: true,
+                                url_list: (Some(final_url)).into_iter().collect(),
+                                redirected: false,
+                                cors_exposed_header_names: None,
+                            },
+                            status: 200,
+                            status_text: "OK".to_owned(),
+                            headers: Vec::new(),
+                        },
+                        body: Vec::new(),
+                    }),
+                });
+                let completion = pop_async_subresource_completion(&mut queue);
+                assert_eq!(
+                    completion.result.is_ok(),
+                    integrity.is_empty() || !body_is_null,
+                    "integrity={integrity:?}, body_is_null={body_is_null}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_integrity_defers_service_worker_stream_handover() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(21);
+        let version_id = ServiceWorkerVersionId(1);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        let final_url =
+            insert_active_fetch_job(&service, event_id, version_id, &run, 301, queue.sender());
+        service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .get_mut(&event_id)
+            .unwrap()
+            .metadata
+            .integrity = "sha1-ignored".to_owned();
+        service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
+            event_id,
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                version_id,
+                run.clone(),
+            ),
+            body_source_id: 77,
+            response_head: MaterializedServiceWorkerFetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: (Some(final_url.clone())).into_iter().collect(),
+                    redirected: false,
+                    cors_exposed_header_names: None,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
+        });
+        assert!(queue.pop_next_async_subresource_event().is_none());
+        service.finish_fetch_stream_chunk(ServiceWorkerFetchStreamChunk {
+            event_id,
+            body_source_id: 77,
+            bytes: b"hello".to_vec(),
+        });
+        assert!(queue.pop_next_async_subresource_event().is_none());
+        service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+            event_id,
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
+            result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+                head: moli_fetch_types::FetchResponseHead {
+                    metadata: moli_fetch_types::FetchResponseMetadata {
+                        response_type: moli_fetch_types::FetchResponseType::Default,
+                        timing_allow_passed: true,
+                        url_list: (Some(final_url)).into_iter().collect(),
+                        redirected: false,
+                        cors_exposed_header_names: None,
+                    },
+                    status: 200,
+                    status_text: "OK".to_owned(),
+                    headers: Vec::new(),
+                },
+                body: b"hello integrity".to_vec(),
+            }),
+        });
+        let completion = pop_async_subresource_completion(&mut queue);
+        assert_eq!(completion.result.unwrap().body_bytes(), b"hello integrity");
+        assert!(queue.pop_next_async_subresource_event().is_none());
     }
 
     #[test]
@@ -1458,6 +1597,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1590,6 +1731,7 @@ mod tests {
                         version_id, run,
                     ),
                     result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        body_is_null: false,
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
                                 response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1668,6 +1810,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Opaque,
@@ -1724,6 +1868,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
@@ -1779,6 +1925,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1827,6 +1975,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1882,6 +2032,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2010,6 +2162,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2082,6 +2236,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2169,6 +2325,7 @@ mod tests {
                 }
             }));
         let redirect = || ServiceWorkerFetchResponse {
+            body_is_null: false,
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
                     response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2261,6 +2418,8 @@ mod tests {
             .without_inferred_referrer()
             .with_fetch_priority_hint(Some(moli_fetch::FetchPriorityHint::High));
         let response = ServiceWorkerFetchResponse {
+            body_is_null: false,
+
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
                     response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2366,6 +2525,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2418,6 +2579,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2490,6 +2653,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Error,
@@ -2542,6 +2707,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Cors,
@@ -2595,6 +2762,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Opaque,
@@ -2662,6 +2831,8 @@ mod tests {
                     run.clone(),
                 ),
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                    body_is_null: false,
+
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
                             response_type: moli_fetch_types::FetchResponseType::Opaque,
@@ -2714,6 +2885,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2774,6 +2947,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2844,6 +3019,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2910,6 +3087,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -2975,6 +3154,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3040,6 +3221,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3106,6 +3289,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3166,6 +3351,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3231,6 +3418,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3295,6 +3484,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3353,6 +3544,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3618,6 +3811,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3671,6 +3866,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -3731,6 +3928,8 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
