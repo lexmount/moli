@@ -4,7 +4,10 @@
 //! Window/worker owners.
 
 mod callbacks;
+mod event_target;
 mod state;
+
+pub(crate) use event_target::event_target_when;
 
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -215,11 +218,14 @@ fn subscribe<'s>(
             signal.register_algorithm(scope, algorithm);
         }
     }
-    if fresh
-        && let Some(callback) = object_slot(scope, observable, INITIALIZER)
-        && let Some(exception) = invoke(scope, callback, &[subscriber.into()])
-    {
-        subscriber_error(scope, subscriber, exception);
+    if fresh {
+        if let Some(callback) = object_slot(scope, observable, INITIALIZER) {
+            if let Some(exception) = invoke(scope, callback, &[subscriber.into()]) {
+                subscriber_error(scope, subscriber, exception);
+            }
+        } else {
+            event_target::subscribe(scope, observable, subscriber);
+        }
     }
 }
 
@@ -316,14 +322,21 @@ fn next<'s>(
     let Some(parsed) = webidl::parse_args::<ValueArgs<'s>>(scope, &args) else {
         return;
     };
-    let subscriber = args.this();
+    subscriber_next(scope, args.this(), parsed.value);
+}
+
+fn subscriber_next<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    subscriber: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) {
     if !active(scope, subscriber) || !is_current(scope, subscriber) {
         return;
     }
     // Reentrant subscribe/cancel must not change this notification's snapshot.
     for observer in list(scope, subscriber, OBSERVERS) {
         if let Some(callback) = object_slot(scope, observer, NEXT) {
-            invoke_and_report(scope, callback, &[parsed.value]);
+            invoke_and_report(scope, callback, &[value]);
         }
     }
 }
