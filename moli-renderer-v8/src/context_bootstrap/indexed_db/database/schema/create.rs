@@ -1,7 +1,6 @@
 use super::common::version_change_transaction;
 use super::*;
 use crate::webidl;
-use moli_indexeddb::{ObjectStoreOptionsValidationError, validate_object_store_options};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.createObjectStore")]
@@ -15,10 +14,11 @@ struct IdbDatabaseCreateObjectStoreArgs {
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "IDBObjectStoreParameters")]
 struct IdbObjectStoreParameters {
-    #[webidl(with = parse_optional_idb_key_path_member)]
-    key_path: Option<KeyPath>,
+    // Dictionary conversion observes members in WebIDL lexicographic order.
     #[webidl(default = false)]
     auto_increment: bool,
+    #[webidl(with = parse_optional_idb_key_path_member)]
+    key_path: Option<KeyPath>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store_callback<'s>(
@@ -32,15 +32,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     let name = parsed.name;
     let key_path = parsed.options.key_path;
     let auto_increment = parsed.options.auto_increment;
-    if let Err(error) = validate_object_store_options(key_path.as_ref(), auto_increment) {
-        let error = dom_exception_value(
-            scope,
-            create_object_store_options_error_message(error),
-            "InvalidAccessError",
-        );
-        scope.throw_exception(error);
-        return;
-    }
     let database = args.this();
     let Some(transaction) = version_change_transaction(scope, database) else {
         return;
@@ -91,17 +82,4 @@ fn parse_create_object_store_options_arg<'s>(
         .map(|object| webidl::parse_dictionary_object(scope, object))
         .transpose()
         .map(|options| options.unwrap_or_default())
-}
-
-fn create_object_store_options_error_message(
-    error: ObjectStoreOptionsValidationError,
-) -> &'static str {
-    match error {
-        ObjectStoreOptionsValidationError::AutoIncrementEmptyKeyPath => {
-            "Failed to execute 'createObjectStore': autoIncrement cannot be used with an empty keyPath."
-        }
-        ObjectStoreOptionsValidationError::AutoIncrementSequenceKeyPath => {
-            "Failed to execute 'createObjectStore': autoIncrement cannot be used with a sequence keyPath."
-        }
-    }
 }

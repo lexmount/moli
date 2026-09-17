@@ -7,9 +7,12 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key_path<'s>(
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
 ) -> Result<KeyPath, webidl::WebIdlError> {
-    if should_parse_key_path_sequence(scope, value, context)? {
-        let key_path =
-            webidl::convert::<webidl::Sequence<webidl::DomString>>(scope, value, context)?;
+    if let Some(key_path) = webidl::convert_optional_sequence::<webidl::DomString>(
+        scope,
+        value,
+        context,
+        &Default::default(),
+    )? {
         return Ok(KeyPath::Sequence(
             key_path.0.into_iter().map(Into::into).collect(),
         ));
@@ -59,23 +62,4 @@ pub(in crate::context_bootstrap::indexed_db) fn key_path_from_js_value<'s>(
     value
         .to_string(scope)
         .map(|value| KeyPath::String(value.to_rust_string_lossy(scope)))
-}
-
-fn should_parse_key_path_sequence<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> Result<bool, webidl::WebIdlError> {
-    if value.is_string() {
-        return Ok(false);
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(false);
-    };
-    let iterator_key = v8::Symbol::get_iterator(scope);
-    let Some(iterator) = webidl::symbol_property_result(scope, object, iterator_key, context)?
-    else {
-        return Ok(false);
-    };
-    Ok(!iterator.is_null_or_undefined())
 }

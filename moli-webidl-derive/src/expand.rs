@@ -22,6 +22,31 @@ pub(crate) fn expand_webidl_args(input: DeriveInput) -> Result<proc_macro2::Toke
         impl_parts_for_scope(&generics, attrs.scope_lifetime.as_ref(), struct_name.span())?;
     let fields = named_fields(&input.data)?;
 
+    // Arity is checked before any conversion, including custom parsers. A
+    // missing later argument must not invoke an earlier argument's toString.
+    let required_checks = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let attrs = parse_field_attrs(field)?;
+            if !attrs.required {
+                return Ok(quote! {});
+            }
+            let ident = field_ident(field)?;
+            let index = attrs.index.unwrap_or(index) as i32;
+            let message = attrs
+                .missing_message
+                .clone()
+                .unwrap_or_else(|| default_required_arg_message(&prefix, &ident, &attrs));
+            Ok(quote! {
+                if args.length() <= #index {
+                    return ::std::result::Result::Err(
+                        ::moli_webidl::WebIdlError::custom_message(#message),
+                    );
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     let bindings = fields
         .iter()
         .enumerate()
@@ -38,6 +63,7 @@ pub(crate) fn expand_webidl_args(input: DeriveInput) -> Result<proc_macro2::Toke
                 scope: &mut v8::PinScope<#scope_lifetime, '_>,
                 args: &v8::FunctionCallbackArguments<#scope_lifetime>,
             ) -> ::std::result::Result<Self, ::moli_webidl::WebIdlError> {
+                #(#required_checks)*
                 #(#bindings)*
                 ::std::result::Result::Ok(Self {
                     #(#idents),*
@@ -299,8 +325,8 @@ fn expand_args_field(
         });
     }
     if let Some(with) = attrs.with.as_ref() {
-        // Custom parsers own the entire field binding. They receive the raw V8
-        // argument list and resolved index so complex APIs can preserve
+        // Custom parsers own conversion after the required-arity preflight.
+        // They receive the raw V8 argument list and resolved index so APIs can preserve
         // browser-specific ordering or validation without fighting generated
         // scalar conversion.
         let arg_index = attrs.index.unwrap_or(index) as i32;
@@ -316,13 +342,6 @@ fn expand_args_field(
     let unwrap_value = converter.unwrap_value(quote!(value));
     let options = converter.options_expr(&attrs)?;
     let context = quote!(::moli_webidl::Context::argument(#prefix, #ordinal));
-    let missing_error = if let Some(message) = attrs.missing_message.as_ref() {
-        quote!(::moli_webidl::WebIdlError::custom_message(#message))
-    } else {
-        let message = default_required_arg_message(prefix, &ident, &attrs);
-        quote!(::moli_webidl::WebIdlError::custom_message(#message))
-    };
-
     if attrs.nullable && !is_option_type(&field.ty) {
         return Err(Error::new(
             field.span(),
@@ -337,9 +356,6 @@ fn expand_args_field(
         if attrs.required {
             quote! {
                 let #ident = {
-                    if args.length() <= #arg_index {
-                        return ::std::result::Result::Err(#missing_error);
-                    }
                     let raw = args.get(#arg_index);
                     if raw.is_null() || raw.is_undefined() {
                         ::std::option::Option::None
@@ -394,9 +410,6 @@ fn expand_args_field(
     } else if attrs.required {
         quote! {
             let #ident = {
-                if args.length() <= #arg_index {
-                    return ::std::result::Result::Err(#missing_error);
-                }
                 let value = ::moli_webidl::argument_with_options::<#converter_ty>(
                     scope,
                     args,
