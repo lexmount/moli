@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_cursor_state, set_indexed_db_cursor_position,
+    IndexedDbCursorOpenOperation, IndexedDbCursorSnapshot, indexed_db_cursor_state,
+    set_indexed_db_cursor_position,
 };
 
 mod accessors;
