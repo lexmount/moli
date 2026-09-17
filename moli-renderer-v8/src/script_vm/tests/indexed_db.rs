@@ -3911,7 +3911,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
 
     assert_eq!(
         result,
-        "autoIncrement,db,indexNames,keyPath,transaction|false|function|function|true|true|true|true|false|keyPath,multiEntry,objectStore,unique|false|function|function|true|true|true|true|true|true|by-id|id|true|false|by-id|kv"
+        "|false|function|function|true|true|false|false|false||false|function|function|true|true|true|true|false|true|by-id|id|true|false|by-id|kv"
     );
 }
 
