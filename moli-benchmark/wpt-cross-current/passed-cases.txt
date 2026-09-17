@@ -10298,8 +10298,10 @@ xhr/formdata/delete-formelement.html
 xhr/formdata/get-formelement.html
 xhr/formdata/has-formelement.html
 xhr/formdata/set-formelement.html
+xhr/getallresponseheaders-cookies.htm
 xhr/getallresponseheaders-status.htm
 xhr/getresponseheader-case-insensitive.htm
+xhr/getresponseheader-cookies-and-more.htm
 xhr/getresponseheader-error-state.htm
 xhr/getresponseheader-server-date.htm
 xhr/getresponseheader-special-characters.htm
