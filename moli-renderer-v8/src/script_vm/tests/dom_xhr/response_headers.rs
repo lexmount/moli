@@ -26,6 +26,7 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
             assert_eq!(pending.len(), 1);
             let request = &pending[0];
             let head = moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: request.url.clone(),
                 status: 200,
                 headers: headers.clone(),
