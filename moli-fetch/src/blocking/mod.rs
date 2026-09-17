@@ -197,6 +197,12 @@ fn outgoing_request_header_bytes_for_url(
         outgoing.push((name.clone(), value.clone()));
     }
 
+    // Fetch selects identity whenever Range is present, even with an invalid
+    // value. Explicit embedder encoding preferences still take precedence.
+    if header_present(&outgoing, "range") {
+        append_header_if_missing(&mut outgoing, "Accept-Encoding", "identity".to_owned());
+    }
+
     if request.has_browser_identity_override() {
         append_encoded_header_if_missing(
             &mut outgoing,
