@@ -1,6 +1,29 @@
 use super::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 
 #[test]
+fn changing_limits_evicts_oversized_then_oldest_without_reordering_survivors() {
+    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(20, 10));
+    buffer.insert("a", 1, 3);
+    buffer.insert("b", 2, 6);
+    buffer.insert("c", 3, 3);
+    assert_eq!(
+        buffer.set_limits(ByteLimits::new(4, 4)),
+        vec![("b", 2), ("a", 1)]
+    );
+    assert_eq!(buffer.used_bytes(), 3);
+    assert_eq!(buffer.get(&"c"), Some(&3));
+    assert!(buffer.set_limits(ByteLimits::new(10, 10)).is_empty());
+    assert_eq!(
+        buffer.insert("d", 4, 8),
+        InsertOutcome::Stored {
+            evicted: vec![("c", 3)]
+        }
+    );
+    assert_eq!(buffer.set_limits(ByteLimits::new(0, 0)), vec![("d", 4)]);
+    assert!(buffer.is_empty());
+}
+
+#[test]
 fn accepts_entries_at_exact_limits() {
     let mut buffer = BoundedByteBuffer::new(ByteLimits::new(4, 4));
 

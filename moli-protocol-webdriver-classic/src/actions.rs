@@ -178,6 +178,15 @@ pub fn element_click_input_commands(
         ),
         dispatch_mouse_event_command(
             context,
+            DevToolsMouseEventType::Moved,
+            DevToolsPointerType::Mouse,
+            point.x,
+            point.y,
+            0,
+            Some(0),
+        ),
+        dispatch_mouse_event_command(
+            context,
             DevToolsMouseEventType::Pressed,
             DevToolsPointerType::Mouse,
             point.x,

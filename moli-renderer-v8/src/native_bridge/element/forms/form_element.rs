@@ -358,6 +358,8 @@ fn collect_form_control_elements_from(
     form_handle: Option<DomHandle>,
     include_image_inputs: bool,
 ) -> Vec<DomHandle> {
+    #[cfg(test)]
+    crate::native_bridge::element::record_form_lookup_traversal_for_test();
     let mut out = Vec::new();
     let mut stack = Vec::new();
     if include_root {
@@ -732,30 +734,15 @@ fn object_has_expando_named_property(
     if form_native_property_can_be_overridden(key) {
         return false;
     }
-    let Some(names) = object.get_own_property_names(
-        scope,
-        v8::GetPropertyNamesArgs {
-            mode: v8::KeyCollectionMode::OwnOnly,
-            property_filter: v8::PropertyFilter::ALL_PROPERTIES | v8::PropertyFilter::SKIP_SYMBOLS,
-            index_filter: v8::IndexFilter::IncludeIndices,
-            key_conversion: v8::KeyConversionMode::KeepNumbers,
-        },
-    ) else {
+    let Some(key) = v8_string(scope, key) else {
         return false;
     };
-    for index in 0..names.length() {
-        let Some(name) = names
-            .get_index(scope, index)
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-        else {
-            continue;
-        };
-        if name == key {
-            return true;
-        }
-    }
-    false
+    // Enumerating own keys invokes the indexed interceptor, which resolves every
+    // form control. A real-property check neither enumerates virtual properties
+    // nor evaluates an own accessor getter.
+    object
+        .has_real_named_property(scope, key.into())
+        .unwrap_or(false)
 }
 
 fn form_native_property_can_be_overridden(key: &str) -> bool {
@@ -922,6 +909,8 @@ pub(in crate::native_bridge) fn form_indexed_enumerator(
     args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
+    #[cfg(test)]
+    crate::native_bridge::element::record_form_lookup_enumeration_for_test();
     let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         rv.set(v8::Array::new(scope, 0));
@@ -984,6 +973,12 @@ fn form_named_item_matches(
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
+    // Only a miss is conclusive. A hit still needs the existing form-owner,
+    // custom-element, shadow-tree and image-fallback rules below. The caller
+    // separately checks the past-names map even when this returns no matches.
+    if !runtime.dom_host().has_element_with_named_item_key(key) {
+        return Vec::new();
+    }
     let controls = form_control_elements(runtime, form_handle)
         .into_iter()
         .filter(|handle| {

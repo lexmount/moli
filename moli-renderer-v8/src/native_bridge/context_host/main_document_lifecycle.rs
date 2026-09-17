@@ -6,6 +6,7 @@ use crate::frame_owner_model::{
     MainDocumentLoadCompletionState, MainDocumentMediaLoadDelayBinding,
     MainDocumentScriptLoadDelayKind, MainDocumentScriptLoadDelayLease,
     MainDocumentScriptLoadDelayRelease, MainDocumentStyleLoadEventBinding,
+    MainDocumentStyleLoadEventSettlement,
 };
 use crate::{
     document_runtime::{
@@ -210,7 +211,7 @@ impl JsContextHost {
     pub(crate) fn settle_main_style_load_event(
         &mut self,
         binding: MainDocumentStyleLoadEventBinding,
-    ) -> bool {
+    ) -> MainDocumentStyleLoadEventSettlement {
         self.frame_owner_store.settle_main_style_load_event(binding)
     }
 

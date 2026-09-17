@@ -748,8 +748,8 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
     let output = build(&source, &mut styles);
     assert_eq!(output.metrics.numeric_layout_pass_count, 3);
     assert_eq!(
-        output.metrics.numeric_feedback_invalidated_node_count, 4,
-        "each newly revealed axis invalidates only the scroller-to-root path"
+        output.metrics.numeric_feedback_invalidated_node_count, 6,
+        "each newly revealed axis invalidates the scroller subtree and root path"
     );
     let metrics = output.element_metrics_for_source(1).unwrap();
     assert_eq!(
@@ -764,6 +764,180 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
     let extent = output.scroll_extent(box_id).unwrap();
     assert!(extent.horizontal_scrollbar.is_some());
     assert!(extent.vertical_scrollbar.is_some());
+}
+
+#[test]
+fn viewport_scrollbar_feedback_relayouts_nested_absolute_descendants() {
+    for (tall_height, expects_feedback) in [(100.0, false), (480.0, true)] {
+        let source = Source(vec![
+            Node::element("root", vec![1, 6]),
+            Node::element("positioned-container", vec![2]),
+            Node::element("absolute-menu", vec![3]),
+            Node::element("menu-item", vec![4]),
+            Node::element("menu-link", vec![5]),
+            Node::text("menu-link-text", "New"),
+            Node::element("page-content", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            fixed_size(LayoutDisplay::Block, 40.0, 25.0).with_position(LayoutPosition::Relative),
+        );
+        styles.0.insert(
+            2,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(0.0),
+                        right: LengthPercentageAuto::auto(),
+                        top: length(25.0),
+                        bottom: LengthPercentageAuto::auto(),
+                    },
+                    size: Size {
+                        width: length(120.0),
+                        height: Dimension::auto(),
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Absolute),
+        );
+        styles
+            .0
+            .insert(3, resolved(LayoutDisplay::Block, Style::default()));
+        styles
+            .0
+            .insert(4, fixed_size(LayoutDisplay::Block, 120.0, 35.0));
+        styles.0.insert(
+            5,
+            resolved(LayoutDisplay::Inline, Style::default()).with_text_metrics(14.0, 21.0),
+        );
+        styles
+            .0
+            .insert(6, fixed_size(LayoutDisplay::Block, 320.0, tall_height));
+
+        let output = build(&source, &mut styles);
+        assert_eq!(
+            output.metrics.numeric_layout_pass_count > 1,
+            expects_feedback,
+            "only the overflowing control should need scrollbar feedback"
+        );
+        let link = output
+            .source_output(4)
+            .and_then(|source| source.principal_box)
+            .and_then(|id| output.box_geometry(id))
+            .expect("the nested absolute descendant must retain a principal box");
+        assert_rect(link.border_box, LayoutRect::new(0.0, 0.0, 120.0, 35.0));
+    }
+}
+
+#[test]
+fn local_scrollbar_feedback_invalidates_only_the_changed_subtree_and_ancestor_path() {
+    for (content_height, expects_feedback) in [(50.0, false), (200.0, true)] {
+        let source = Source(vec![
+            Node::element("root", vec![1, 7]),
+            Node::element("scroller", vec![2, 6]),
+            Node::element("absolute-menu", vec![3]),
+            Node::element("menu-item", vec![4]),
+            Node::element("menu-link", vec![5]),
+            Node::text("menu-link-text", "New"),
+            Node::element("scroll-content", Vec::new()),
+            Node::element("unrelated-fixed", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    position: Position::Relative,
+                    size: Size {
+                        width: length(200.0),
+                        height: length(100.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Scroll,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Relative),
+        );
+        styles.0.insert(
+            2,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(0.0),
+                        right: LengthPercentageAuto::auto(),
+                        top: length(0.0),
+                        bottom: LengthPercentageAuto::auto(),
+                    },
+                    size: Size {
+                        width: length(120.0),
+                        height: Dimension::auto(),
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Absolute),
+        );
+        styles
+            .0
+            .insert(3, resolved(LayoutDisplay::Block, Style::default()));
+        styles
+            .0
+            .insert(4, fixed_size(LayoutDisplay::Block, 120.0, 35.0));
+        styles.0.insert(
+            5,
+            resolved(LayoutDisplay::Inline, Style::default()).with_text_metrics(14.0, 21.0),
+        );
+        styles
+            .0
+            .insert(6, fixed_size(LayoutDisplay::Block, 200.0, content_height));
+        styles.0.insert(
+            7,
+            fixed_size(LayoutDisplay::Block, 10.0, 10.0).with_position(LayoutPosition::Fixed),
+        );
+
+        let output = build(&source, &mut styles);
+        assert_eq!(
+            output.metrics.numeric_layout_pass_count > 1,
+            expects_feedback,
+            "a non-overflowing local scrollport must keep its first-pass caches"
+        );
+        assert_eq!(
+            output.metrics.numeric_feedback_invalidated_node_count,
+            if expects_feedback { 12 } else { 0 },
+            "each of two scrollbar turns must invalidate the five-box numeric scroller subtree and its root ancestor; inline text has no separate numeric box, and the unrelated fixed branch remains cached"
+        );
+        let link = output
+            .source_output(4)
+            .and_then(|source| source.principal_box)
+            .and_then(|id| output.box_geometry(id))
+            .expect("the nested local descendant must retain a principal box");
+        assert_rect(link.border_box, LayoutRect::new(0.0, 0.0, 120.0, 35.0));
+        assert_eq!(
+            output
+                .source_output(7)
+                .and_then(|source| source.principal_box)
+                .and_then(|id| output.box_geometry(id))
+                .expect("the unrelated fixed branch must retain geometry")
+                .border_box,
+            LayoutRect::new(0.0, 0.0, 10.0, 10.0),
+        );
+    }
 }
 
 #[test]
@@ -804,6 +978,10 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
         feedback.element_metrics_for_source(1).unwrap().client_size,
         moli_layout::LayoutSize::new(85.0, 40.0),
     );
+    let scroller_box = feedback.source_output(1).unwrap().principal_box.unwrap();
+    let extent = feedback.scroll_extent(scroller_box).unwrap();
+    assert!(extent.vertical_scrollbar.is_some());
+    assert!(extent.horizontal_scrollbar.is_none());
     let feedback_text = feedback.client_rects_for_source(2);
 
     // Lay out the same paragraph directly at the converged 85px content
@@ -2633,6 +2811,583 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
 }
 
 #[test]
+fn split_inline_block_continuation_keeps_its_middle_fragment() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("split-inline", vec![2, 3]),
+        Node::element("flex", Vec::new()),
+        Node::element("block", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 120.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Flex, 50.0, 20.0));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 80.0, 30.0));
+    let output = build(&source, &mut styles);
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 3, "{rects:?}");
+    let middle = rects[1].bounding_rect();
+    assert_eq!(middle.width, 200.0, "{rects:?}");
+    assert_eq!(middle.height, 50.0, "{rects:?}");
+    assert_eq!(rects[0].bounding_rect().width, 0.0);
+    assert_eq!(rects[2].bounding_rect().width, 0.0);
+    assert_rect(
+        rects[0].bounding_rect(),
+        LayoutRect::new(0.0, 0.0, 0.0, 0.0),
+    );
+    assert_rect(
+        rects[2].bounding_rect(),
+        LayoutRect::new(0.0, 50.0, 0.0, 0.0),
+    );
+}
+
+#[test]
+fn split_inline_nested_and_transformed_continuations_keep_source_geometry() {
+    for nested in [false, true] {
+        for transformed_child in [false, true] {
+            let source = Source(vec![
+                Node::element("root", vec![1]),
+                Node::element("outer", vec![2]),
+                Node::element("inner", vec![3]),
+                Node::element("block", Vec::new()),
+            ]);
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                fixed_size(LayoutDisplay::Block, 200.0, 120.0)
+                    .with_2d_transform(LayoutTransform2D::translation(10.0, 5.0)),
+            );
+            styles
+                .0
+                .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+            styles.0.insert(
+                2,
+                resolved(
+                    if nested {
+                        LayoutDisplay::Inline
+                    } else {
+                        LayoutDisplay::Contents
+                    },
+                    Style::default(),
+                ),
+            );
+            let mut child = fixed_size(LayoutDisplay::Block, 50.0, 20.0);
+            if transformed_child {
+                child = child.with_2d_transform(LayoutTransform2D::translation(100.0, 10.0));
+            }
+            styles.0.insert(3, child);
+            let output = build(&source, &mut styles);
+            for source_id in if nested { vec![1, 2] } else { vec![1] } {
+                let rects = output.client_rects_for_source(source_id);
+                assert_eq!(
+                    rects.len(),
+                    3,
+                    "nested={nested}, source={source_id}: {rects:?}"
+                );
+                assert_rect(
+                    rects[0].bounding_rect(),
+                    LayoutRect::new(10.0, 5.0, 0.0, 0.0),
+                );
+                assert_rect(
+                    rects[1].bounding_rect(),
+                    LayoutRect::new(10.0, 5.0, 200.0, 20.0),
+                );
+                assert_rect(
+                    rects[2].bounding_rect(),
+                    LayoutRect::new(10.0, 25.0, 0.0, 0.0),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn split_inline_does_not_union_out_of_flow_descendants() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("inline", vec![2, 3]),
+        Node::element("block", Vec::new()),
+        Node::element("absolute", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 120.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+    styles.0.insert(
+        3,
+        fixed_size(LayoutDisplay::Block, 500.0, 800.0).with_position(LayoutPosition::Absolute),
+    );
+    let output = build(&source, &mut styles);
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 3, "{rects:?}");
+    assert_rect(
+        rects[1].bounding_rect(),
+        LayoutRect::new(0.0, 0.0, 200.0, 20.0),
+    );
+}
+
+#[test]
+fn split_inline_percentage_block_height_uses_nonanonymous_containing_block() {
+    for nested in [false, true] {
+        for rule in 0..3 {
+            let source = Source(vec![
+                Node::element("root", vec![1]),
+                Node::element("outer", if nested { vec![2] } else { vec![3] }),
+                Node::element("inner", vec![3]),
+                Node::element("block", Vec::new()),
+            ]);
+            let mut styles = Styles::default();
+            styles
+                .0
+                .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+            for id in [1, 2] {
+                styles
+                    .0
+                    .insert(id, resolved(LayoutDisplay::Inline, Style::default()));
+            }
+            let mut child = Style {
+                size: Size {
+                    width: percent(0.5),
+                    height: if rule == 2 {
+                        length(150.0)
+                    } else {
+                        Dimension::auto()
+                    },
+                },
+                ..Style::default()
+            };
+            match rule {
+                0 => child.size.height = percent(0.5),
+                1 => child.min_size.height = percent(0.5),
+                _ => child.max_size.height = percent(0.5),
+            }
+            styles.0.insert(3, resolved(LayoutDisplay::Block, child));
+            let output = build(&source, &mut styles);
+            assert_rect(
+                output.client_rects_for_source(3)[0].bounding_rect(),
+                LayoutRect::new(0.0, 0.0, 100.0, 100.0),
+            );
+            let rects = output.client_rects_for_source(1);
+            assert_rect(
+                rects[1].bounding_rect(),
+                LayoutRect::new(0.0, 0.0, 200.0, 100.0),
+            );
+        }
+    }
+}
+
+#[test]
+fn split_inline_middle_fragment_ignores_child_relative_insets() {
+    for parent_mode in 0..3 {
+        let fixed_height = parent_mode == 1;
+        for (top, bottom, expected_offset) in [
+            (length(10.0), LengthPercentageAuto::auto(), 10.0),
+            (LengthPercentageAuto::auto(), length(10.0), -10.0),
+            (
+                percent(0.1),
+                LengthPercentageAuto::auto(),
+                if fixed_height { 20.0 } else { 0.0 },
+            ),
+            (
+                LengthPercentageAuto::auto(),
+                percent(0.1),
+                if fixed_height { -20.0 } else { 0.0 },
+            ),
+        ] {
+            let source = Source(vec![
+                Node::element("root", vec![1]),
+                Node::element("inline", vec![2]),
+                Node::element("block", Vec::new()),
+            ]);
+            let mut styles = Styles::default();
+            styles.0.insert(
+                0,
+                resolved(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: length(200.0),
+                            height: if fixed_height {
+                                length(200.0)
+                            } else {
+                                Dimension::auto()
+                            },
+                        },
+                        min_size: Size {
+                            width: Dimension::auto(),
+                            height: if parent_mode == 2 {
+                                length(200.0)
+                            } else {
+                                Dimension::auto()
+                            },
+                        },
+                        ..Style::default()
+                    },
+                ),
+            );
+            styles
+                .0
+                .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+            styles.0.insert(
+                2,
+                resolved(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: length(100.0),
+                            height: length(20.0),
+                        },
+                        inset: Rect {
+                            left: length(30.0),
+                            top,
+                            bottom,
+                            ..Rect::auto()
+                        },
+                        ..Style::default()
+                    },
+                )
+                .with_position(LayoutPosition::Relative),
+            );
+            let output = build(&source, &mut styles);
+            assert_rect(
+                output.client_rects_for_source(2)[0].bounding_rect(),
+                LayoutRect::new(30.0, expected_offset, 100.0, 20.0),
+            );
+            let rects = output.client_rects_for_source(1);
+            assert_rect(
+                rects[1].bounding_rect(),
+                LayoutRect::new(0.0, 0.0, 200.0, 20.0),
+            );
+        }
+    }
+}
+
+#[test]
+fn split_inline_relative_basis_tracks_clamped_and_ratio_sized_parents() {
+    for mode in 0..3 {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("inline", vec![2]),
+            Node::element("child", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        let mut parent = Style {
+            size: Size {
+                width: length(200.0),
+                height: if mode == 2 {
+                    Dimension::auto()
+                } else {
+                    length(200.0)
+                },
+            },
+            ..Style::default()
+        };
+        if mode == 0 {
+            parent.max_size.height = length(100.0);
+        }
+        if mode == 1 {
+            parent.min_size.height = length(300.0);
+        }
+        if mode == 2 {
+            parent.aspect_ratio = Some(2.0);
+        }
+        styles.0.insert(0, resolved(LayoutDisplay::Block, parent));
+        styles
+            .0
+            .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+        styles.0.insert(
+            2,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(100.0),
+                        height: length(20.0),
+                    },
+                    inset: Rect {
+                        top: percent(0.5),
+                        ..Rect::auto()
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Relative),
+        );
+        let output = build(&source, &mut styles);
+        let middle = output.client_rects_for_source(1)[1].bounding_rect();
+        assert_rect(middle, LayoutRect::new(0.0, 0.0, 200.0, 20.0));
+    }
+}
+
+#[test]
+fn split_inline_avatar_flex_and_title_inline_both_keep_nonempty_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 5]),
+        Node::element("avatar-cell", vec![2]),
+        Node::html_element("avatar-link", "a", vec![3]),
+        Node::element("avatar-flex", vec![4]),
+        Node::text("avatar-letter", "D"),
+        Node::html_element("title-link", "a", vec![6]),
+        Node::text("title", "Primer / design"),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles
+        .0
+        .insert(1, fixed_size(LayoutDisplay::Block, 48.0, 48.0));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Flex, 48.0, 48.0));
+    for id in [2, 4, 5, 6] {
+        styles
+            .0
+            .insert(id, resolved(LayoutDisplay::Inline, Style::default()));
+    }
+    let output = build(&source, &mut styles);
+    let avatar = output.client_rects_for_source(2);
+    assert_eq!(avatar.len(), 3);
+    assert_rect(
+        avatar[1].bounding_rect(),
+        LayoutRect::new(0.0, 0.0, 48.0, 48.0),
+    );
+    let title = output.client_rects_for_source(5);
+    assert!(!title.is_empty() && title.iter().any(|r| r.bounding_rect().width > 0.0));
+}
+
+#[test]
+fn split_inline_two_block_runs_keep_content_fragment_order() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("inline", vec![2, 3, 4]),
+        Node::element("first", Vec::new()),
+        Node::text("between", "between"),
+        Node::element("second", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+    styles
+        .0
+        .insert(3, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(4, fixed_size(LayoutDisplay::Block, 80.0, 30.0));
+    let output = build(&source, &mut styles);
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 5, "{rects:?}");
+    assert_eq!(rects[1].bounding_rect().height, 20.0);
+    assert!(rects[2].bounding_rect().width > 0.0);
+    assert_eq!(rects[3].bounding_rect().height, 30.0);
+    for pair in rects.windows(2) {
+        assert!(
+            pair[0].bounding_rect().y <= pair[1].bounding_rect().y,
+            "{rects:?}"
+        );
+    }
+}
+
+#[test]
+fn split_inline_large_float_between_blocks_does_not_expand_middle_fragments() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("inline", vec![2, 3, 4]),
+        Node::element("first", Vec::new()),
+        Node::element("float", Vec::new()),
+        Node::element("second", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 20.0));
+    styles.0.insert(
+        3,
+        fixed_size(LayoutDisplay::Block, 500.0, 800.0)
+            .with_float(taffy::Float::Left, taffy::Clear::None),
+    );
+    styles
+        .0
+        .insert(4, fixed_size(LayoutDisplay::Block, 200.0, 30.0));
+    let output = build(&source, &mut styles);
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 5, "{rects:?}");
+    assert_rect(
+        rects[1].bounding_rect(),
+        LayoutRect::new(0.0, 0.0, 200.0, 20.0),
+    );
+    assert_rect(
+        rects[2].bounding_rect(),
+        LayoutRect::new(500.0, 20.0, 0.0, 0.0),
+    );
+    assert_rect(
+        rects[3].bounding_rect(),
+        LayoutRect::new(0.0, 20.0, 200.0, 30.0),
+    );
+}
+
+#[test]
+fn split_inline_metadata_survives_discarded_table_children() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 4]),
+        Node::element("column-group", vec![2]),
+        Node::element("discarded", vec![3]),
+        Node::text("discarded-text", "discarded"),
+        Node::element("inline", vec![5]),
+        Node::element("block", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    styles.0.insert(
+        1,
+        resolved(LayoutDisplay::TableColumnGroup, Style::default()),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+    styles
+        .0
+        .insert(3, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(4, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(5, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+    let output = build(&source, &mut styles);
+    let rects = output.client_rects_for_source(4);
+    assert_eq!(rects.len(), 3, "{rects:?}");
+    assert_eq!(rects[1].bounding_rect().width, 200.0);
+    assert_eq!(rects[1].bounding_rect().height, 20.0);
+}
+
+#[test]
+fn split_inline_escaped_margins_keep_middle_flow_bounds() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("inline", vec![2]),
+        Node::element("block", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(100.0),
+                    height: length(20.0),
+                },
+                margin: Rect {
+                    top: length(10.0),
+                    bottom: length(10.0),
+                    ..Rect::zero()
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    let output = build(&source, &mut styles);
+    assert_rect(
+        output.client_rects_for_source(2)[0].bounding_rect(),
+        LayoutRect::new(0.0, 10.0, 100.0, 20.0),
+    );
+    let rects = output.client_rects_for_source(1);
+    assert_rect(
+        rects[0].bounding_rect(),
+        LayoutRect::new(0.0, 10.0, 0.0, 0.0),
+    );
+    assert_rect(
+        rects[1].bounding_rect(),
+        LayoutRect::new(0.0, 10.0, 200.0, 20.0),
+    );
+    assert_rect(
+        rects[2].bounding_rect(),
+        LayoutRect::new(0.0, 40.0, 0.0, 0.0),
+    );
+}
+
+#[test]
+fn split_inline_middle_fragment_preserves_child_flow_and_margin_collapse() {
+    for margin in [0.0, 10.0, -5.0] {
+        let mut observed = Vec::new();
+        for split in [false, true] {
+            let source = Source(vec![
+                Node::element("root", if split { vec![1] } else { vec![2, 3] }),
+                Node::element("inline", vec![2, 3]),
+                Node::element("first", Vec::new()),
+                Node::element("second", Vec::new()),
+            ]);
+            let mut styles = Styles::default();
+            styles
+                .0
+                .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 120.0));
+            styles
+                .0
+                .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+            for id in [2, 3] {
+                styles.0.insert(
+                    id,
+                    resolved(
+                        LayoutDisplay::Block,
+                        Style {
+                            size: Size {
+                                width: percent(0.5),
+                                height: length(20.0),
+                            },
+                            margin: Rect {
+                                top: length(margin),
+                                bottom: length(margin),
+                                ..Rect::zero()
+                            },
+                            ..Style::default()
+                        },
+                    ),
+                );
+            }
+            let output = build(&source, &mut styles);
+            observed.push([2, 3].map(|id| output.client_rects_for_source(id)[0].bounding_rect()));
+        }
+        assert_eq!(observed[0], observed[1], "margin={margin}");
+    }
+}
+
+#[test]
 fn split_inline_continuations_remain_mapped_to_the_originating_element() {
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -2660,9 +3415,13 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
 
     let output = build(&source, &mut styles);
     let rects = output.client_rects_for_source(1);
-    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(rects.len(), 3, "{rects:?}");
     let first = rects[0].bounding_rect();
-    let second = rects[1].bounding_rect();
+    let middle = rects[1].bounding_rect();
+    let second = rects[2].bounding_rect();
+    assert_eq!(middle.width, 200.0);
+    assert_eq!(middle.height, 20.0);
+    assert!(first.y < middle.y && middle.y < second.y, "{rects:?}");
     assert!(first.width > 0.0 && second.width > 0.0);
     assert!(second.y > first.y, "{rects:?}");
     let union = output

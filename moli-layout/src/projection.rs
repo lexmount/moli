@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
-use taffy::ResolveOrZero;
+use taffy::{MaybeMath, MaybeResolve, ResolveOrZero};
 
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
@@ -53,6 +53,7 @@ where
     projection.build_scroll_extents(&overflow);
     projection.build_coordinate_spaces()?;
     projection.build_fragments();
+    projection.build_split_block_fragments();
     projection.assign_clip_and_paint_order();
 
     let content_size = projection.document_content_size();
@@ -750,6 +751,140 @@ where
         }
     }
 
+    fn build_split_block_fragments(&mut self) {
+        // Construction records only contiguous, promoted in-flow block runs.
+        // Their middle continuation uses the existing flow bounds and parent
+        // content width, not transformed descendant ink or a new numeric box.
+        // In particular this must not introduce an auto-height containing block.
+        for run in &self.world.inline_split_block_runs {
+            let first = &self.world.boxes[run.first.index()];
+            let last = &self.world.boxes[run.last.index()];
+            let Some(parent) = first.parent else {
+                continue;
+            };
+            let content = self.boxes[parent.index()].content_box;
+            let basis = self.split_block_relative_inset_basis(parent);
+            let direction = self.world.boxes[parent.index()].style.direction();
+            let first_offset =
+                crate::inline::relative_inset_offset(&first.style.taffy, basis, direction);
+            let last_offset =
+                crate::inline::relative_inset_offset(&last.style.taffy, basis, direction);
+            let top = first.final_layout.location.y - first_offset.y;
+            let bottom =
+                last.final_layout.location.y - last_offset.y + last.final_layout.size.height;
+            let rect = LayoutRect::new(content.x, top, content.width, (bottom - top).max(0.0));
+            // A zero-area leading continuation follows escaped leading
+            // margins into the first block's flow position. It carries no
+            // line strut of its own and must not remain at the pre-collapse y.
+            for id in &self.boxes[run.preceding_inline.index()].fragments {
+                let existing = &mut self.fragments[id.index()];
+                if matches!(existing.kind, LayoutFragmentKind::InlineBox { .. })
+                    && existing.rect.width == 0.0
+                    && existing.rect.height == 0.0
+                {
+                    let original = self.coordinate_spaces[existing.coordinate_space.index()]
+                        .layout
+                        .local_to_document_ignoring_css_transforms
+                        .map_point(LayoutPoint::new(existing.rect.x, existing.rect.y));
+                    let x = self.coordinate_spaces[parent.index() + 1]
+                        .layout
+                        .local_to_document_ignoring_css_transforms
+                        .inverse()
+                        .map(|inverse| inverse.map_point(original).x)
+                        .unwrap_or(existing.rect.x);
+                    let boundary = LayoutRect::new(x, top, 0.0, 0.0);
+                    existing.rect = boundary;
+                    existing.coordinate_space =
+                        LayoutCoordinateSpaceId::from_index(parent.index() + 1);
+                    existing.box_model = Some(LayoutFragmentBoxModel {
+                        content: boundary,
+                        padding: boundary,
+                        border: boundary,
+                        margin: boundary,
+                    });
+                }
+            }
+            let fragment = self.push_fragment(LayoutFragment {
+                id: LayoutFragmentId::from_index(0),
+                kind: LayoutFragmentKind::Box {
+                    box_id: LayoutOutputBoxId::from_index(run.preceding_inline.index()),
+                },
+                rect,
+                box_model: Some(LayoutFragmentBoxModel {
+                    content: rect,
+                    padding: rect,
+                    border: rect,
+                    margin: rect,
+                }),
+                coordinate_space: LayoutCoordinateSpaceId::from_index(parent.index() + 1),
+                clip_chain: None,
+                paint_order: None,
+            });
+            self.register_box_fragment(run.preceding_inline.index(), fragment);
+        }
+    }
+
+    fn split_block_relative_inset_basis(&self, parent: LayoutBoxId) -> taffy::Size<Option<f32>> {
+        let content = self.boxes[parent.index()].content_box;
+        let Some(inputs) = self
+            .world
+            .inline_split_parent_inputs
+            .get(&parent)
+            .copied()
+            .flatten()
+        else {
+            return taffy::Size {
+                width: Some(content.width),
+                height: None,
+            };
+        };
+        let layout_box = &self.world.boxes[parent.index()];
+        let style = &layout_box.style.taffy;
+        let percentage_basis = inputs
+            .constraint_space(layout_box.style.writing_mode())
+            .margin_padding_percentage_basis();
+        let padding = style
+            .padding
+            .resolve_or_zero(percentage_basis, crate::style::resolve_stylo_calc_value);
+        let border = style
+            .border
+            .resolve_or_zero(percentage_basis, crate::style::resolve_stylo_calc_value);
+        let padding_border = (padding + border).sum_axes();
+        let adjustment = if style.box_sizing == taffy::BoxSizing::ContentBox {
+            padding_border
+        } else {
+            taffy::Size::ZERO
+        };
+        // Match the block backend's relative-inset definiteness, not its
+        // broader percentage-size/min-height basis. The actual incoming
+        // definite dimensions win; auto/min-height alone remain indefinite.
+        let preferred = if inputs.sizing_mode == taffy::SizingMode::InherentSize {
+            let size = style
+                .size
+                .maybe_resolve(inputs.parent_size, crate::style::resolve_stylo_calc_value)
+                .maybe_add(adjustment);
+            block_relative_inset_preferred_size(
+                size,
+                style.size.map(|dimension| dimension.is_auto()),
+                layout_box.style.writing_mode(),
+                inputs.block_auto_behavior,
+                layout_box.resolved_aspect_ratio(),
+                padding_border,
+            )
+        } else {
+            taffy::Size::NONE
+        };
+        let vertical_inset = layout_box.final_layout.size.height - content.height;
+        taffy::Size {
+            width: Some(content.width),
+            height: inputs
+                .definite_dimensions
+                .height
+                .or(preferred.height)
+                .map(|height| (height - vertical_inset).max(0.0)),
+        }
+    }
+
     fn register_box_fragment(&mut self, box_index: usize, fragment: LayoutFragmentId) {
         self.boxes[box_index].fragments.push(fragment);
     }
@@ -1320,12 +1455,32 @@ where
     let right_padding = if has_right_edge { padding.right } else { 0.0 };
     let left_border = if has_left_edge { border.left } else { 0.0 };
     let right_border = if has_right_edge { border.right } else { 0.0 };
-    let border_box = LayoutRect::new(
+    let mut border_box = LayoutRect::new(
         content_origin.x + fragment.rect.x + left_margin,
         content_origin.y + fragment.rect.y - padding.top - border.top,
         (fragment.rect.width - left_margin - right_margin).max(0.0),
         fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
     );
+    if fragment.rect.width == 0.0
+        && inline_box
+            .source
+            .or(inline_box.owner)
+            .is_some_and(|source| world.inline_split_sources.contains(&source))
+        && padding.top + padding.bottom + border.top + border.bottom == 0.0
+    {
+        // Empty split continuations are zero-area boundaries of the block
+        // continuation, not font-height glyph boxes. Ordinary empty inlines
+        // retain their normal font metrics.
+        if let Some(line) = owner
+            .inline_layout
+            .as_ref()
+            .and_then(|context| context.fragments.lines.get(fragment.line_index))
+            .filter(|line| line.rect.height == 0.0)
+        {
+            border_box.y = content_origin.y + line.rect.y;
+            border_box.height = 0.0;
+        }
+    }
     let padding_box = inset_rect(
         border_box,
         border.top,
@@ -1355,9 +1510,85 @@ where
     }
 }
 
+// Taffy 71bc149 compute/block.rs uses the *unclamped preferred size* for
+// relative-inset definiteness, not used/min/max height. This narrow adapter
+// mirrors common/aspect_ratio.rs::apply_preferred_aspect_ratio; it does not
+// re-run layout or transfer min/max constraints. Taffy keeps that helper private.
+fn block_relative_inset_preferred_size(
+    size: taffy::Size<Option<f32>>,
+    size_is_auto: taffy::Size<bool>,
+    writing_mode: taffy::WritingMode,
+    block_auto_behavior: taffy::AutoSizeBehavior,
+    aspect_ratio: Option<taffy::ResolvedAspectRatio>,
+    padding_border: taffy::Size<f32>,
+) -> taffy::Size<Option<f32>> {
+    let ratio_size = size.maybe_apply_aspect_ratio_with_box_sizing(
+        aspect_ratio,
+        taffy::BoxSizing::BorderBox,
+        padding_border,
+    );
+    if block_auto_behavior != taffy::AutoSizeBehavior::StretchExplicit {
+        return ratio_size;
+    }
+    let source = writing_mode.to_logical(size);
+    let auto = writing_mode.to_logical(size_is_auto);
+    let mut resolved = writing_mode.to_logical(ratio_size);
+    if auto.block_size && source.block_size.is_none() && resolved.block_size.is_some() {
+        resolved.block_size = None;
+    }
+    writing_mode.to_physical(resolved)
+}
+
 #[cfg(test)]
 mod paint_space_tests {
     use super::*;
+
+    #[test]
+    fn split_block_relative_basis_keeps_preferred_ratio_and_stretch_provenance() {
+        use taffy::{AutoSizeBehavior, BoxSizing, ResolvedAspectRatio, Size, WritingMode};
+        let ratio = ResolvedAspectRatio::new(2.0, BoxSizing::BorderBox);
+        let source = Size {
+            width: Some(200.0),
+            height: None,
+        };
+        let auto = Size {
+            width: false,
+            height: true,
+        };
+        let fit = block_relative_inset_preferred_size(
+            source,
+            auto,
+            WritingMode::HorizontalTb,
+            AutoSizeBehavior::FitContent,
+            ratio,
+            Size::ZERO,
+        );
+        assert_eq!(fit.height, Some(100.0));
+        let stretch = block_relative_inset_preferred_size(
+            source,
+            auto,
+            WritingMode::HorizontalTb,
+            AutoSizeBehavior::StretchExplicit,
+            ratio,
+            Size::ZERO,
+        );
+        assert_eq!(stretch.height, None);
+        let explicit = block_relative_inset_preferred_size(
+            Size {
+                width: Some(200.0),
+                height: Some(200.0),
+            },
+            Size {
+                width: false,
+                height: false,
+            },
+            WritingMode::HorizontalTb,
+            AutoSizeBehavior::StretchExplicit,
+            ratio,
+            Size::ZERO,
+        );
+        assert_eq!(explicit.height, Some(200.0));
+    }
 
     fn property_transform(transform: LayoutTransform2D) -> ResolvedLayoutTransform {
         ResolvedLayoutTransform {

@@ -314,11 +314,13 @@ where
 ///
 /// Every iteration enters Taffy through the synthetic viewport root, but that
 /// is a scheduling entry point rather than an unconditional full-tree layout.
-/// `invalidate_scrollbar_feedback` clears only changed boxes and their numeric
-/// ancestors. All other subtrees keep valid Taffy cache entries and return
+/// `invalidate_scrollbar_feedback` clears a changed local scroll container's
+/// subtree and numeric ancestor path. A viewport gutter invalidates the whole
+/// tree because it changes the initial containing block. Unaffected branches
+/// of a local scrollbar change keep valid Taffy cache entries and return
 /// immediately. This is the same important boundary as Blink's corrective
 /// scrollbar relayout: pay a follow-up pass only after state changes, and only
-/// recompute the paths whose available space can have changed.
+/// recompute boxes whose available space can have changed.
 #[derive(Default)]
 struct NumericLayoutMetrics {
     pass_count: usize,

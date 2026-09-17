@@ -116,7 +116,49 @@ getComputedStyle(document.getElementById('fallback')).display
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn geometry_batch_reuses_latest_tree_at_same_viewport_until_fresh_paint_replaces_it() {
+async fn viewport_scrollbar_feedback_relayouts_text_bearing_absolute_descendant() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/scrollbar-absolute-descendant.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body { margin:0 }
+body { min-height:2000px }
+#positioned { position:absolute; top:80px; left:100px }
+#menu { position:absolute; top:20px; left:0; width:120px; margin:0; padding:0 }
+.item { height:35px }
+.item a { display:block; width:120px; height:35px }
+</style>`;
+document.body.innerHTML = `<div id=positioned><button>Hot</button><div id=menu><div class=item><a id=target>New</a></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const menu=document.getElementById('menu').getBoundingClientRect(),target=document.getElementById('target').getBoundingClientRect();return {menu:[menu.width,menu.height],target:[target.width,target.height]}})())"#,
+        )?;
+        assert_eq!(
+            geometry,
+            r#"{"menu":[120,35],"target":[120,35]}"#,
+            "a viewport scrollbar corrective pass must not reuse the text-bearing descendant's size-only cache entry"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("viewport scrollbar absolute-descendant fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn geometry_batch_refreshes_dirty_tree_on_demand_and_reuses_clean_tree() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -169,11 +211,10 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
                 source: transformed,
             },
         ]);
-        let viewport = moli_layout::LayoutViewport::new(320, 200, 1.0);
         let first = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
+            moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
         let after_first = page_vm.vm().layout_pass_observability_for_test();
@@ -229,10 +270,18 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
         page_vm
             .vm_mut()
             .eval("document.getElementById('target').style.width='180px'; 'mutated'")?;
+        let after_mutation = page_vm.vm().layout_pass_observability_for_test();
+        let cache_after_mutation = page_vm
+            .vm()
+            .layout_snapshot_cache_observability_for_test();
+        assert_eq!(after_mutation.1, after_first.1);
+        assert_eq!(cache_after_mutation, cache_after_first);
+
+        let second_viewport = moli_layout::LayoutViewport::new(480, 300, 2.0);
         let second = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
+            second_viewport,
             &batch,
         )?;
         let after_second = page_vm.vm().layout_pass_observability_for_test();
@@ -240,39 +289,38 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_second.0);
-        assert_eq!(after_second.1, before.1 + 1);
-        assert_eq!(cache_after_second.0, cache_before.0 + 1);
-        assert_eq!(cache_after_second.1, cache_before.1 + 1);
-        assert_eq!(cache_after_second.2, cache_before.2 + 1);
+        assert_eq!(after_second.1, before.1 + 2);
+        assert_eq!(cache_after_second.0, cache_before.0);
+        assert_eq!(cache_after_second.1, cache_before.1 + 2);
+        assert_eq!(cache_after_second.2, cache_before.2 + 2);
         let second_width = match &second.answers[1] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
             }
             answer => panic!("unexpected box-model answer: {answer:?}"),
         };
-        assert!((second_width - 120.0).abs() <= 0.05, "{second_width}");
-        assert_eq!(after_second.2, after_first.2);
-        assert_eq!(after_second.3, after_first.3);
-        assert_eq!(second.metrics, first.metrics);
+        assert!((second_width - 180.0).abs() <= 0.05, "{second_width}");
+        assert_eq!(second.metrics.reason, moli_layout::LayoutFlushReason::SynchronousGeometry);
+        assert_eq!(second.metrics.paint_operation_count, 0);
         assert!(matches!(
             second.answers[0],
             moli_layout::LayoutQueryAnswer::DocumentMetrics(metrics)
-                if metrics.viewport == viewport
+                if metrics.viewport == second_viewport
         ));
 
         let snapshot = page_vm
             .vm_mut()
-            .screenshot_layout_snapshot(viewport)?
+            .screenshot_layout_snapshot(moli_layout::LayoutViewport::new(320, 200, 1.0))?
             .expect("current document screenshot layout");
         let after_screenshot = page_vm.vm().layout_pass_observability_for_test();
         let cache_after_screenshot = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert!(!after_screenshot.0);
-        assert_eq!(after_screenshot.1, before.1 + 2);
-        assert_eq!(cache_after_screenshot.0, cache_before.0 + 1);
-        assert_eq!(cache_after_screenshot.1, cache_before.1 + 1);
-        assert_eq!(cache_after_screenshot.2, cache_before.2 + 2);
+        assert_eq!(after_screenshot.1, before.1 + 3);
+        assert_eq!(cache_after_screenshot.0, cache_before.0);
+        assert_eq!(cache_after_screenshot.1, cache_before.1 + 2);
+        assert_eq!(cache_after_screenshot.2, cache_before.2 + 3);
         let (_, retention) = cache_after_screenshot
             .3
             .expect("fresh paint layout should publish its frozen tree");
@@ -293,20 +341,34 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
                 && diagnostic.code != "scroll-paint-deferred"
         }));
 
+        page_vm.vm_mut().eval("'clean turn'")?;
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            after_screenshot.1,
+            "a clean script turn must not eagerly rebuild layout"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_snapshot_cache_observability_for_test(),
+            cache_after_screenshot,
+            "turn-exit side-cache cleanup must retain the clean frozen tree"
+        );
+
         let third = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-            viewport,
+            moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
         let after_third = page_vm.vm().layout_pass_observability_for_test();
         let cache_after_third = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
-        assert_eq!(after_third.1, before.1 + 2);
-        assert_eq!(cache_after_third.0, cache_before.0 + 2);
-        assert_eq!(cache_after_third.1, cache_before.1 + 1);
-        assert_eq!(cache_after_third.2, cache_before.2 + 2);
+        assert_eq!(after_third.1, before.1 + 3);
+        assert_eq!(cache_after_third.0, cache_before.0 + 1);
+        assert_eq!(cache_after_third.1, cache_before.1 + 2);
+        assert_eq!(cache_after_third.2, cache_before.2 + 3);
         let third_width = match &third.answers[1] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
@@ -371,23 +433,83 @@ document.body.innerHTML = '<div id=target></div>';
         page_vm
             .vm_mut()
             .eval("document.getElementById('target').style.width='80px'; 'mutated'")?;
-        let stale = moli_layout::GeometryProvider::answer(
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before + 1,
+            "the style mutation must not eagerly rebuild layout",
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_snapshot_cache_observability_for_test(),
+            cache_after_first,
+            "marking the first frame dirty must retain its frozen tree until demand",
+        );
+
+        let refreshed_on_demand = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
             moli_layout::LayoutViewport::new(320, 200, 1.0),
             &batch,
         )?;
-        let stale_width = match &stale.answers[0] {
+        let refreshed_on_demand_width = match &refreshed_on_demand.answers[0] {
             moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
                 model.border.bounding_rect().width
             }
-            answer => panic!("unexpected stale box-model answer: {answer:?}"),
+            answer => panic!("unexpected refreshed box-model answer: {answer:?}"),
         };
-        assert!((stale_width - 40.0).abs() <= 0.05, "{stale_width}");
+        assert!(
+            (refreshed_on_demand_width - 80.0).abs() <= 0.05,
+            "{refreshed_on_demand_width}"
+        );
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 1
+            passes_before + 2
         );
+        let cache_after_demand = page_vm
+            .vm()
+            .layout_snapshot_cache_observability_for_test();
+        assert_eq!(cache_after_demand.0, cache_before.0);
+        assert_eq!(cache_after_demand.1, cache_before.1 + 1);
+        assert_eq!(cache_after_demand.2, cache_before.2 + 2);
+
+        page_vm.vm_mut().eval("'clean turn'")?;
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before + 2,
+            "a clean script turn must not rebuild the demanded layout",
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_snapshot_cache_observability_for_test(),
+            cache_after_demand,
+            "turn-exit side-cache cleanup must retain the clean frozen tree",
+        );
+        let reused = moli_layout::GeometryProvider::answer(
+            page_vm.vm_mut(),
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+            moli_layout::LayoutViewport::new(320, 200, 1.0),
+            &batch,
+        )?;
+        let reused_width = match &reused.answers[0] {
+            moli_layout::LayoutQueryAnswer::BoxModel(Some(model)) => {
+                model.border.bounding_rect().width
+            }
+            answer => panic!("unexpected reused box-model answer: {answer:?}"),
+        };
+        assert!((reused_width - 80.0).abs() <= 0.05, "{reused_width}");
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before + 2,
+            "a repeated exact read across a clean turn must reuse the frozen tree",
+        );
+        let cache_after_reuse = page_vm
+            .vm()
+            .layout_snapshot_cache_observability_for_test();
+        assert_eq!(cache_after_reuse.0, cache_before.0 + 1);
+        assert_eq!(cache_after_reuse.1, cache_before.1 + 1);
+        assert_eq!(cache_after_reuse.2, cache_before.2 + 2);
 
         page_vm
             .vm_mut()
@@ -398,14 +520,14 @@ document.body.innerHTML = '<div id=target></div>';
             .expect("second screencast frame layout");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 2
+            passes_before + 3
         );
         let cache_after_second = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert_eq!(cache_after_second.0, cache_before.0 + 1);
-        assert_eq!(cache_after_second.1, cache_before.1);
-        assert_eq!(cache_after_second.2, cache_before.2 + 2);
+        assert_eq!(cache_after_second.1, cache_before.1 + 1);
+        assert_eq!(cache_after_second.2, cache_before.2 + 3);
         assert!(cache_after_second.3.is_some());
 
         let refreshed = moli_layout::GeometryProvider::answer(
@@ -423,14 +545,14 @@ document.body.innerHTML = '<div id=target></div>';
         assert!((refreshed_width - 80.0).abs() <= 0.05, "{refreshed_width}");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
-            passes_before + 2
+            passes_before + 3
         );
         let cache_after_query = page_vm
             .vm()
             .layout_snapshot_cache_observability_for_test();
         assert_eq!(cache_after_query.0, cache_before.0 + 2);
-        assert_eq!(cache_after_query.1, cache_before.1);
-        assert_eq!(cache_after_query.2, cache_before.2 + 2);
+        assert_eq!(cache_after_query.1, cache_before.1 + 1);
+        assert_eq!(cache_after_query.2, cache_before.2 + 3);
         Ok::<_, anyhow::Error>(())
     })
     .await
