@@ -35,14 +35,13 @@ pub(in crate::context_bootstrap::indexed_db) fn materialize_cursor_result_in_req
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    entries: Vec<CursorSnapshotEntry>,
-    direction: CursorDirection,
-    key_only: bool,
+    snapshot: IndexedDbCursorSnapshot,
+    operation: &IndexedDbCursorOpenOperation,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let relevant_context = request.get_creation_context(scope)?;
     if relevant_context == scope.get_current_context() {
         return create_cursor_object_in_current_context(
-            scope, source, request, entries, direction, key_only,
+            scope, source, request, snapshot, operation,
         );
     }
 
@@ -52,15 +51,8 @@ pub(in crate::context_bootstrap::indexed_db) fn materialize_cursor_result_in_req
         let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
         let source = v8::Local::new(target_scope, &source);
         let request = v8::Local::new(target_scope, &request);
-        create_cursor_object_in_current_context(
-            target_scope,
-            source,
-            request,
-            entries,
-            direction,
-            key_only,
-        )
-        .map(|cursor| v8::Global::new(target_scope, cursor))
+        create_cursor_object_in_current_context(target_scope, source, request, snapshot, operation)
+            .map(|cursor| v8::Global::new(target_scope, cursor))
     }?;
     Some(v8::Local::new(scope, &cursor))
 }
@@ -69,20 +61,19 @@ fn create_cursor_object_in_current_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    entries: Vec<CursorSnapshotEntry>,
-    direction: CursorDirection,
-    key_only: bool,
+    snapshot: IndexedDbCursorSnapshot,
+    operation: &IndexedDbCursorOpenOperation,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let cursor = IdbCursorObjectDeclaration::new(source, request)
         .bind(scope)
         .ok()?;
-    let prototype = if key_only {
+    let prototype = if operation.key_only {
         global_constructor_prototype(scope, "IDBCursor")?
     } else {
         global_constructor_prototype(scope, "IDBCursorWithValue")?
     };
     let _ = cursor.set_prototype(scope, prototype.into());
-    let interface = if key_only {
+    let interface = if operation.key_only {
         "IDBCursor"
     } else {
         "IDBCursorWithValue"
@@ -99,6 +90,6 @@ fn create_cursor_object_in_current_context<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_cursor_lifecycle(scope, cursor, entries, direction, key_only);
+    register_indexed_db_cursor_lifecycle(scope, cursor, snapshot, operation);
     Some(cursor)
 }

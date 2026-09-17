@@ -16,6 +16,7 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod record_revision;
 mod transaction_scheduling;
 
 #[test]

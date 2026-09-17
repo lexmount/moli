@@ -72,7 +72,7 @@ fn cached_attribute_getter<'s>(
         return Some(());
     }
     let state = indexed_db_cursor_state(scope, cursor)?;
-    let entry = state.entries.get(state.position?)?;
+    let entry = state.snapshot.entries.get(state.position?)?;
     let value = match attribute {
         CachedAttribute::Key => key_to_js_value(scope, &entry.key),
         CachedAttribute::PrimaryKey => key_to_js_value(scope, &entry.primary_key),

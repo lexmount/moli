@@ -2,6 +2,26 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_cursors_observe_writes_without_changing_pending_values() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-cursor-live.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ncursorLiveProbe('cursor-live-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: liveChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert!(
+            result["checks"].as_array().unwrap().len() > 500,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_cursor_navigation_validates_state_in_spec_order() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
