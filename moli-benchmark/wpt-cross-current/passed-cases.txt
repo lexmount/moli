@@ -4228,6 +4228,7 @@ dom/nodes/getElementsByClassName-08.htm
 dom/nodes/getElementsByClassName-09.htm
 dom/nodes/getElementsByClassName-12.htm
 dom/nodes/getElementsByClassName-13.htm
+dom/nodes/getElementsByClassName-14.htm
 dom/nodes/getElementsByClassName-15.htm
 dom/nodes/getElementsByClassName-16.htm
 dom/nodes/getElementsByClassName-17.htm

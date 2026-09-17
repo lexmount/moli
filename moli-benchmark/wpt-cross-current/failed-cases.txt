@@ -2489,7 +2489,6 @@ document-policy/reporting/sync-xhr-reporting.html
 dom/events/scrolling/scroll-event-fired-to-element.html
 dom/events/scrolling/scroll-event-fired-to-iframe.html
 dom/events/scrolling/scrollend-with-snap-on-fractional-offset.html
-dom/nodes/getElementsByClassName-14.htm
 dom/nodes/moveBefore/child-style-preserve.html
 dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html
 dom/nodes/moveBefore/moveBefore-size-query.html
