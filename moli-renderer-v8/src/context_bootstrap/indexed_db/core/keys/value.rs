@@ -221,15 +221,6 @@ pub(in crate::context_bootstrap::indexed_db) fn key_to_js_value<'s>(
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn optional_count_to_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    count: Option<usize>,
-) -> v8::Local<'s, v8::Value> {
-    count
-        .map(|count| v8::Number::new(scope, count as f64).into())
-        .unwrap_or_else(|| v8::undefined(scope).into())
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn parse_optional_count<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,

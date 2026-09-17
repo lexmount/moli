@@ -1,6 +1,5 @@
 use super::*;
 
-mod collection_parse;
 mod cursor;
 mod flush;
 mod index;

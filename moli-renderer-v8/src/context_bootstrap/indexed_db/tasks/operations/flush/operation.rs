@@ -5,7 +5,7 @@ pub(super) struct QueuedTransactionOperation<'s> {
     pub(super) request: v8::Local<'s, v8::Object>,
     pub(super) handle: TransactionHandle,
     pub(super) store_name: String,
-    pub(super) kind: IndexedDbTransactionOperationKindLocals<'s>,
+    pub(super) kind: IndexedDbTransactionOperation,
 }
 
 impl<'s> QueuedTransactionOperation<'s> {
@@ -24,17 +24,6 @@ impl<'s> QueuedTransactionOperation<'s> {
             kind: operation.kind,
         }
     }
-}
-
-pub(super) fn collection_direction_from_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    direction: v8::Local<'s, v8::Value>,
-) -> CursorDirection {
-    direction
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .and_then(|value| CursorDirection::parse(&value))
-        .unwrap_or_else(CursorDirection::default_next)
 }
 
 pub(super) fn flush_queued_transaction_operation<'s>(

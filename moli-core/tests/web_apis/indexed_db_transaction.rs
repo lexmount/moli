@@ -2,6 +2,27 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_queries_snapshot_arguments_and_delete_key_ranges() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-query-snapshots.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nquerySnapshotProbe('query-snapshots-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: queryChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            548,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_keys_preserve_types_order_and_binary_snapshots() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

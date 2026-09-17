@@ -5,26 +5,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_request
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    query_value: v8::Local<'s, v8::Value>,
+    query: &IdbKeyRangeQuery,
 ) {
-    let query = match parse_key_or_range(scope, query_value) {
-        Ok(Some(query)) => query,
-        Ok(None) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'get': the query is not a valid key or key range.",
-                "DataError",
-            );
-            store_request_error(scope, request, error);
-            return;
-        }
-        Err(error) => {
-            let value = error.into_value(scope);
-            store_request_error(scope, request, value);
-            return;
-        }
-    };
-    match scan_object_store_entries(scope, handle, store_name, Some(&query)) {
+    match scan_object_store_entries(scope, handle, store_name, Some(query)) {
         Ok(entries) => {
             let result = entries
                 .first()
@@ -44,26 +27,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_key_req
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    query_value: v8::Local<'s, v8::Value>,
+    query: &IdbKeyRangeQuery,
 ) {
-    let query = match parse_key_or_range(scope, query_value) {
-        Ok(Some(query)) => query,
-        Ok(None) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'getKey': the query is not a valid key or key range.",
-                "DataError",
-            );
-            store_request_error(scope, request, error);
-            return;
-        }
-        Err(error) => {
-            let value = error.into_value(scope);
-            store_request_error(scope, request, value);
-            return;
-        }
-    };
-    match scan_object_store_entries(scope, handle, store_name, Some(&query)) {
+    match scan_object_store_entries(scope, handle, store_name, Some(query)) {
         Ok(entries) => {
             let result = entries
                 .first()

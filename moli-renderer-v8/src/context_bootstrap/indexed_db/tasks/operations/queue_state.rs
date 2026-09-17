@@ -57,7 +57,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation<'s
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     store_name: &str,
-    input: IndexedDbTransactionOperationInput<'s>,
+    input: IndexedDbTransactionOperation,
 ) {
     let transaction_context = transaction
         .get_creation_context(scope)

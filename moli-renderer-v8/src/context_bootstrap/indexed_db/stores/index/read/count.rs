@@ -38,7 +38,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
             index,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::IndexCount { query: query_value },
+            IndexedDbTransactionOperation::IndexCount { query },
         );
         rv.set(request.into());
         return;

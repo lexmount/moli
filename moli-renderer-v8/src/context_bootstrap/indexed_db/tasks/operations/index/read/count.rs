@@ -6,23 +6,15 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_count_request<'s>(
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    query_value: v8::Local<'s, v8::Value>,
+    query: Option<&IdbKeyRangeQuery>,
 ) {
-    let query = match parse_key_or_range(scope, query_value) {
-        Ok(query) => query,
-        Err(error) => {
-            let value = error.into_value(scope);
-            store_request_error(scope, request, value);
-            return;
-        }
-    };
     let Some(index_info) = index_info_from_index_object(scope, index) else {
         let error =
             dom_exception_value(scope, "The requested index was not found.", "NotFoundError");
         store_request_error(scope, request, error);
         return;
     };
-    match scan_index_entries(scope, handle, store_name, &index_info, query.as_ref()) {
+    match scan_index_entries(scope, handle, store_name, &index_info, query) {
         Ok(entries) => store_request_success(
             scope,
             request,

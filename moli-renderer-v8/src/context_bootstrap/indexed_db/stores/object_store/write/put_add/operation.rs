@@ -41,7 +41,7 @@ pub(super) fn object_store_write_callback<'s>(
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreWrite { prepared, add_only },
+            IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only },
         );
     } else if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
         execute_object_store_write_request(

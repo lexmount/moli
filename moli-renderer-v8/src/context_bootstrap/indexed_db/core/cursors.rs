@@ -7,8 +7,8 @@ mod surface;
 
 pub(in crate::context_bootstrap::indexed_db) use self::direction::{
     apply_cursor_direction, apply_index_collection_direction,
-    apply_object_store_collection_direction, cursor_direction_from_cursor,
-    cursor_direction_to_value, parse_cursor_direction, parse_cursor_direction_with_context,
+    apply_object_store_collection_direction, cursor_direction_from_cursor, parse_cursor_direction,
+    parse_cursor_direction_with_context,
 };
 use self::entries::cursor_entries_to_js_array;
 pub(in crate::context_bootstrap::indexed_db) use self::entries::cursor_entry_object;

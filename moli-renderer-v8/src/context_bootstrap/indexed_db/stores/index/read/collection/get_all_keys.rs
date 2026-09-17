@@ -25,18 +25,16 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_get_all_keys_callback<
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
     {
-        let count_value = optional_count_to_value(scope, parsed.count);
-        let direction_value = cursor_direction_to_value(scope, parsed.direction);
         enqueue_transaction_operation(
             scope,
             transaction,
             index,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::IndexGetAllKeys {
-                query: parsed.query_value,
-                count: count_value,
-                direction: direction_value,
+            IndexedDbTransactionOperation::IndexGetAllKeys {
+                query: parsed.query,
+                count: parsed.count,
+                direction: parsed.direction,
             },
         );
         rv.set(request.into());

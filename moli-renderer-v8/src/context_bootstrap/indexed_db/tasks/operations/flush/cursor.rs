@@ -4,7 +4,7 @@ pub(super) fn try_dispatch_cursor_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     operation: &operation::QueuedTransactionOperation<'s>,
 ) -> bool {
-    let IndexedDbTransactionOperationKindLocals::OpenCursor(cursor) = &operation.kind else {
+    let IndexedDbTransactionOperation::OpenCursor(cursor) = &operation.kind else {
         return false;
     };
     execute_cursor_open_operation(

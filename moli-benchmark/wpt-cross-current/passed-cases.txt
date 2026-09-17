@@ -14,6 +14,8 @@ IndexedDB/clone-before-keypath-eval.any.js?moli-wpt-any=window
 IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/close-in-upgradeneeded.any.js?moli-wpt-any=window
 IndexedDB/database-names-by-origin.html
+IndexedDB/delete-range.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/delete-range.any.js?moli-wpt-any=window
 IndexedDB/error-attributes.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/error-attributes.any.js?moli-wpt-any=window
 IndexedDB/fire-error-event-exception.any.js?moli-wpt-any=dedicatedworker
@@ -68,12 +70,16 @@ IndexedDB/idbkeyrange-includes.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-add-put-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-add-put-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-cross-realm-methods.html
+IndexedDB/idbobjectstore-delete-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore-delete-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore_delete.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore_delete.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_put.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_put.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=dedicatedworker
