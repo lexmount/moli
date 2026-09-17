@@ -1507,7 +1507,7 @@ return [
 }
 
 #[test]
-fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
+fn geometry_getters_refresh_after_mutation_and_reuse_clean_layout() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1557,7 +1557,7 @@ yield; // Publish this scene before reading its geometry.
     )
     .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|38|0");
+    assert_eq!(result, "38|8|38|8|38|43|8");
     let passes = vm
         ._context_host
         .borrow()
@@ -1565,13 +1565,13 @@ yield; // Publish this scene before reading its geometry.
         .1
         .saturating_sub(passes_before);
     assert_eq!(
-        passes, 1,
-        "only the explicit fixture publication builds layout"
+        passes, 2,
+        "the explicit fixture publication and the first dirty geometry read build layout"
     );
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 11);
-    assert_eq!(cache_after.1, cache_before.1);
-    assert_eq!(cache_after.2, cache_before.2 + 1);
+    assert_eq!(cache_after.0, cache_before.0 + 10);
+    assert_eq!(cache_after.1, cache_before.1 + 1);
+    assert_eq!(cache_after.2, cache_before.2 + 2);
     assert!(cache_after.3.is_some());
 }
 

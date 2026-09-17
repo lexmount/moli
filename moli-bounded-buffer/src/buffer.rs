@@ -66,6 +66,36 @@ where
         self.limits
     }
 
+    /// Changes budgets, returning oversized and then oldest entries that no
+    /// longer fit. Retained entries keep their original insertion order.
+    pub fn set_limits(&mut self, limits: ByteLimits) -> Vec<(K, V)> {
+        self.limits = limits;
+        let oversized = self
+            .insertion_order
+            .iter()
+            .filter(|key| {
+                self.entries
+                    .get(*key)
+                    .is_some_and(|entry| entry.byte_len > limits.max_entry_bytes)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut evicted = Vec::new();
+        for key in oversized {
+            if let Some(value) = self.remove(&key) {
+                evicted.push((key, value));
+            }
+        }
+        while self.used_bytes > limits.max_total_bytes {
+            if let Some(entry) = self.pop_oldest() {
+                evicted.push(entry);
+            } else {
+                break;
+            }
+        }
+        evicted
+    }
+
     /// Returns the sum of the logical byte charges for retained entries.
     pub fn used_bytes(&self) -> usize {
         self.used_bytes

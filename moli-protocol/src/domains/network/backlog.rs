@@ -261,6 +261,7 @@ fn emit_complete_subresource_network_delivery_record(
                     .then(|| output.request_cookie_report())
                     .flatten(),
                 &[],
+                true,
             );
         }
     }
@@ -312,6 +313,7 @@ fn emit_complete_subresource_network_delivery_record(
                         !redirect.cookie_set_reports.is_empty(),
                         redirect.request_cookie_report.as_ref(),
                         &[],
+                        true,
                     );
                     emit_redirect_response_received_extra_info(
                         out,
@@ -453,6 +455,10 @@ fn emit_staged_subresource_request_started(
                 false,
                 output.request_cookie_report(),
                 &[],
+                // Cookie selection precedes transport header generation. Keep
+                // it in the main event, but defer ExtraInfo until completion
+                // supplies the actual headers (or a terminal fallback).
+                false,
             );
         }
     }
@@ -528,6 +534,7 @@ fn emit_staged_subresource_response_started(
                 !redirect.cookie_set_reports.is_empty(),
                 redirect.request_cookie_report.as_ref(),
                 &[],
+                true,
             );
             emit_redirect_response_received_extra_info(
                 out,
