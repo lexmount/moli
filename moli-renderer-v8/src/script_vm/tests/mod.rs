@@ -2278,9 +2278,7 @@ mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
-
-mod svg_number_list_native_receivers;
-
+mod fetch_referrer;
 mod fetch_request_guard;
 mod geometry_matrix_constructor_union;
 mod geometry_point_conversion_order;
@@ -2472,6 +2470,5 @@ mod rtc_encoded_frames;
 mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
-
-mod fetch_referrer;
 mod sqlite_web_storage;
+mod svg_number_list_native_receivers;
