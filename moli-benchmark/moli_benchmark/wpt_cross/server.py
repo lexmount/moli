@@ -85,6 +85,27 @@ FETCH_ABORT_RESOURCE_PATHS = {
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
 )
+SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS = {
+    "/service-workers/service-worker/resources/mime-type-worker.py",
+    "/service-workers/service-worker/resources/import-mime-type-worker.py",
+    "/service-workers/service-worker/resources/malformed-worker.py",
+    "/service-workers/service-worker/resources/invalid-chunked-encoding.py",
+    "/service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
+}
+SERVICE_WORKER_MALFORMED_SCRIPTS = {
+    "parse-error": 'var foo = function() {;',
+    "undefined-error": 'foo.bar = 42;',
+    "uncaught-exception": 'throw new DOMException("AbortError");',
+    "caught-exception": 'try { throw new Error; } catch(e) {}',
+    "import-malformed-script": 'importScripts("malformed-worker.py?parse-error");',
+    "import-no-such-script": 'importScripts("no-such-script.js");',
+    "top-level-await": 'await Promise.resolve(1);',
+    "instantiation-error": 'import nonexistent from "./imported-module-script.js";',
+    "instantiation-error-and-top-level-await":
+        'import nonexistent from "./imported-module-script.js"; await Promise.resolve(1);',
+}
+
+
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
@@ -1608,6 +1629,9 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                self._serve_service_worker_registration_resource()
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1635,6 +1659,9 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                self._serve_service_worker_registration_resource()
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1683,6 +1710,9 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                self._serve_service_worker_registration_resource()
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1705,6 +1735,9 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                self._serve_service_worker_registration_resource()
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
@@ -1831,6 +1864,9 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                self._serve_service_worker_registration_resource()
+                return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
             parsed = urlparse(self.path)
@@ -2316,6 +2352,66 @@ def _make_handler(
                 emit_body=emit_body, cache_control=None,
             )
 
+        def _serve_service_worker_invalid_chunked(self, *, delayed: bool) -> None:
+            self.close_connection = True
+            self.protocol_version = self.request_version
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Transfer-Encoding", "chunked")
+                # wptserve adds a length for the returned body, but not for
+                # the explicit writer used by the delayed variant.
+                if not delayed:
+                    self.send_header("Content-Length", "6")
+                self.end_headers()
+                self.wfile.flush()
+                if delayed and stopping.wait(1):
+                    return
+                # An explicit upstream writer also emits its bytes for HEAD.
+                if delayed or self.command != "HEAD":
+                    self.wfile.write(b"XX\r\n\r\n")
+                    self.wfile.flush()
+            except OSError:
+                return
+
+
+        def _serve_service_worker_registration_resource(self) -> None:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path.endswith(("/invalid-chunked-encoding.py", "/invalid-chunked-encoding-with-flush.py")):
+                self._serve_service_worker_invalid_chunked(delayed=path.endswith("-with-flush.py"))
+                return
+            if not self._consume_request_body():
+                return
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            headers: list[tuple[str, str]] = []
+            body = b""
+            try:
+                if path.endswith("/mime-type-worker.py"):
+                    if "mime" in params:
+                        headers.append(("Content-Type", params["mime"][0]))
+                elif path.endswith("/import-mime-type-worker.py"):
+                    headers.append(("Content-Type", "application/javascript"))
+                    suffix = "?mime=" + params["mime"][0] if "mime" in params else ""
+                    body = f"importScripts('./mime-type-worker.py{suffix}');".encode("latin-1")
+                else:
+                    script = SERVICE_WORKER_MALFORMED_SCRIPTS.get(parsed.query)
+                    if script is None:
+                        self.send_error(500)
+                        return
+                    headers.append(("Content-Type", "application/javascript"))
+                    body = script.encode("utf-8")
+                for _, value in headers:
+                    if "\r" in value or "\n" in value:
+                        raise ValueError("invalid response header")
+                    value.encode("latin-1")
+            except (ValueError, UnicodeError):
+                self.send_error(400)
+                return
+            self._send_bytes(None, body, emit_body=self.command != "HEAD",
+                             extra_headers=headers, cache_control=None)
+
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -2361,6 +2457,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
+                return self._serve_service_worker_registration_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             raise AttributeError(name)
