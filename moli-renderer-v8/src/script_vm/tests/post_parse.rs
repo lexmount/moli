@@ -4055,9 +4055,9 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBCursor.prototype, "delete", 0],
                 [IDBKeyRange.prototype, "includes", 1],
                 [IDBKeyRange, "only", 1],
-                [IDBKeyRange, "bound", 4],
-                [IDBKeyRange, "lowerBound", 2],
-                [IDBKeyRange, "upperBound", 2],
+                [IDBKeyRange, "bound", 2],
+                [IDBKeyRange, "lowerBound", 1],
+                [IDBKeyRange, "upperBound", 1],
               ];
               for (const [target, name, length] of methods) {
                 const descriptor = Object.getOwnPropertyDescriptor(target, name);

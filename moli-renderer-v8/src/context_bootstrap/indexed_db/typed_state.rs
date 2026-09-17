@@ -26,7 +26,6 @@ pub(super) enum IndexedDbWrapperKind {
     Cursor,
     ObjectStore,
     Index,
-    KeyRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,8 +156,7 @@ impl IndexedDbWrapperState {
             | IndexedDbWrapperKind::Transaction
             | IndexedDbWrapperKind::Cursor
             | IndexedDbWrapperKind::ObjectStore
-            | IndexedDbWrapperKind::Index
-            | IndexedDbWrapperKind::KeyRange => self.owner.dispatch_scope(),
+            | IndexedDbWrapperKind::Index => self.owner.dispatch_scope(),
         }
     }
 }
@@ -546,10 +544,6 @@ impl IndexedDbIndexLifecycleState {
     }
 }
 
-struct IndexedDbKeyRangeLifecycleState {
-    marker: bool,
-}
-
 #[derive(Default)]
 pub(super) struct IndexedDbRuntimeStateTable {
     next_id: u64,
@@ -568,7 +562,6 @@ pub(super) struct IndexedDbRuntimeStateTable {
     cursors: BTreeMap<IndexedDbObjectId, IndexedDbCursorLifecycleState>,
     object_stores: BTreeMap<IndexedDbObjectId, IndexedDbObjectStoreLifecycleState>,
     indexes: BTreeMap<IndexedDbObjectId, IndexedDbIndexLifecycleState>,
-    key_ranges: BTreeMap<IndexedDbObjectId, IndexedDbKeyRangeLifecycleState>,
 }
 
 impl IndexedDbRuntimeStateTable {
@@ -948,21 +941,6 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
         id,
         IndexedDbIndexLifecycleState::new(scope, object_store, info),
     );
-}
-
-pub(super) fn register_indexed_db_key_range_lifecycle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    key_range: v8::Local<'s, v8::Object>,
-    marker: bool,
-) {
-    let Some(id) = indexed_db_typed_state_id(scope, key_range) else {
-        return;
-    };
-    let table = indexed_db_runtime_state_table_for_object(scope, key_range);
-    table
-        .borrow_mut()
-        .key_ranges
-        .insert(id, IndexedDbKeyRangeLifecycleState { marker });
 }
 
 pub(super) fn indexed_db_typed_owner_scope<'s>(
@@ -1699,9 +1677,6 @@ pub(super) fn indexed_db_typed_slot_value<'s>(
     if let Some(index) = table.indexes.get(&id) {
         return indexed_db_typed_index_slot_value(scope, index, key);
     }
-    if let Some(key_range) = table.key_ranges.get(&id) {
-        return indexed_db_typed_key_range_slot_value(scope, key_range, key);
-    }
     None
 }
 
@@ -1733,9 +1708,6 @@ pub(super) fn set_indexed_db_typed_slot_value(
     }
     if let Some(index) = table.indexes.get_mut(&id) {
         return set_indexed_db_typed_index_slot_value(index, key, value);
-    }
-    if let Some(key_range) = table.key_ranges.get_mut(&id) {
-        return set_indexed_db_typed_key_range_slot_value(key_range, key, value);
     }
     false
 }
@@ -2114,31 +2086,6 @@ fn set_indexed_db_typed_index_slot_value(
     match key {
         INDEXED_DB_INDEX_MARKER_SLOT => {
             index.marker = value.is_true();
-            true
-        }
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_key_range_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    key_range: &IndexedDbKeyRangeLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_KEY_RANGE_MARKER_SLOT => Some(v8::Boolean::new(scope, key_range.marker).into()),
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_key_range_slot_value(
-    key_range: &mut IndexedDbKeyRangeLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_KEY_RANGE_MARKER_SLOT => {
-            key_range.marker = value.is_true();
             true
         }
         _ => false,
