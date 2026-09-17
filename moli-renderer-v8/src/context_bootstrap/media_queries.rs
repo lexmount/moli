@@ -22,9 +22,10 @@ pub(crate) use self::events::{
     dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
-    install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
-    simple_object_event_set_handler, simple_object_has_event_listeners,
+    invoke_simple_event_target_listeners, simple_event_target_handler_getter_callback,
+    simple_event_target_handler_setter_callback,
+    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
 };
 pub(super) use self::events::{
     media_query_list_add_listener_callback, media_query_list_remove_listener_callback,

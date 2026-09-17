@@ -47,7 +47,6 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
-
 use crate::web_api_interfaces;
 use moli_webapi::events::{construct_native_event, init::EventInit};
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
@@ -148,7 +147,7 @@ impl<'s> webidl::WebIdlArguments<'s> for WindowPostMessageArgs<'s> {
     }
 }
 
-fn capture_window_event_target_receiver<'s>(
+pub(crate) fn capture_window_event_target_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     host: &PageScriptHost,
@@ -195,6 +194,61 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     let Some(call) = parsed else {
         return;
     };
+    register_dom_event_target_listener(
+        scope,
+        identity.listener_owner,
+        host_ptr,
+        window_receiver,
+        call,
+    );
+}
+
+/// Native algorithms enter after Web IDL conversion, without consulting an
+/// author-visible addEventListener method or converting dictionary members twice.
+pub(crate) fn register_event_target_webidl_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    call: AddEventListenerArgs<'s>,
+) {
+    let Some(identity) = resolve_event_target(scope, receiver) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if ResolvedSimpleEventTarget::from_identity(scope, identity).is_some() {
+        if let Some(listener) = call.listener {
+            crate::context_bootstrap::simple_object_event_target_register_webidl_listener(
+                scope,
+                identity.listener_owner,
+                call.event_type,
+                listener,
+                call.options.options,
+                call.options.signal,
+            );
+        }
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let window_receiver =
+        capture_window_event_target_receiver(scope, receiver, unsafe { &*host_ptr });
+    register_dom_event_target_listener(
+        scope,
+        identity.listener_owner,
+        host_ptr,
+        window_receiver,
+        call,
+    );
+}
+
+fn register_dom_event_target_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    listener_owner: v8::Local<'s, v8::Object>,
+    host_ptr: *mut PageScriptHost,
+    window_receiver: Option<WindowOperationReceiver>,
+    call: AddEventListenerArgs<'s>,
+) {
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -213,7 +267,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         };
         Some(target)
     } else {
-        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
+        event_target_handle_from_receiver(scope, listener_owner, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
