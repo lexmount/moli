@@ -14,6 +14,7 @@ mod database;
 mod event_target;
 mod install;
 mod operation_state;
+mod record;
 mod runtime;
 mod slots;
 mod state;

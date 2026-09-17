@@ -6,8 +6,8 @@ use super::{
     idb_database_transaction_callback, idb_factory_cmp_callback, idb_factory_databases_callback,
     idb_factory_delete_database_callback, idb_factory_open_callback,
     idb_index_count_callback as idb_index_count_callback_in_current_context,
-    idb_index_get_all_callback as idb_index_get_all_callback_in_current_context,
-    idb_index_get_all_keys_callback as idb_index_get_all_keys_callback_in_current_context,
+    idb_index_get_all_callback, idb_index_get_all_keys_callback,
+    idb_index_get_all_records_callback,
     idb_index_get_callback as idb_index_get_callback_in_current_context,
     idb_index_get_key_callback as idb_index_get_key_callback_in_current_context,
     idb_index_open_cursor_callback as idb_index_open_cursor_callback_in_current_context,
@@ -20,9 +20,8 @@ use super::{
     idb_object_store_count_callback as idb_object_store_count_callback_in_current_context,
     idb_object_store_create_index_callback,
     idb_object_store_delete_callback as idb_object_store_delete_callback_in_current_context,
-    idb_object_store_delete_index_callback,
-    idb_object_store_get_all_callback as idb_object_store_get_all_callback_in_current_context,
-    idb_object_store_get_all_keys_callback as idb_object_store_get_all_keys_callback_in_current_context,
+    idb_object_store_delete_index_callback, idb_object_store_get_all_callback,
+    idb_object_store_get_all_keys_callback, idb_object_store_get_all_records_callback,
     idb_object_store_get_callback as idb_object_store_get_callback_in_current_context,
     idb_object_store_get_key_callback as idb_object_store_get_key_callback_in_current_context,
     idb_object_store_index_callback as idb_object_store_index_callback_in_current_context,
@@ -61,14 +60,6 @@ indexed_db_receiver_realm_callback!(
     idb_index_count_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
-    idb_index_get_all_callback,
-    idb_index_get_all_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_index_get_all_keys_callback,
-    idb_index_get_all_keys_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
     idb_index_get_callback,
     idb_index_get_callback_in_current_context
 );
@@ -99,14 +90,6 @@ indexed_db_receiver_realm_callback!(
 indexed_db_receiver_realm_callback!(
     idb_object_store_delete_callback,
     idb_object_store_delete_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_get_all_callback,
-    idb_object_store_get_all_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_get_all_keys_callback,
-    idb_object_store_get_all_keys_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_get_callback,

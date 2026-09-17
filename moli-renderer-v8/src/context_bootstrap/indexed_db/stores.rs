@@ -1,11 +1,10 @@
 use super::{
     CursorDirection, CursorSnapshotEntry, INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
     INDEXED_DB_TRANSACTION_STARTED_SLOT, IdbKeyRangeQuery, IndexInfo, IndexOptions,
-    IndexedDbCursorOpenOperation, IndexedDbError, IndexedDbTransactionOperation,
-    KeyConversionError, KeyPath, TransactionHandle, apply_cursor_direction,
-    apply_index_collection_direction, apply_object_store_collection_direction, compare_idb_keys,
-    create_index_object, create_key_range_object, create_request_object, deserialize_js_value,
-    dom_exception_value, enqueue_transaction_operation, execute_object_store_clear_request,
+    IndexedDbCursorOpenOperation, IndexedDbError, IndexedDbTransactionOperation, KeyPath,
+    TransactionHandle, apply_cursor_direction, compare_idb_keys, create_index_object,
+    create_key_range_object, create_request_object, deserialize_js_value, dom_exception_value,
+    enqueue_transaction_operation, execute_object_store_clear_request,
     execute_object_store_delete_request, execute_object_store_write_request,
     index_info_from_store_metadata, indexed_db_index_info, indexed_db_index_object_store,
     indexed_db_object_store_database, indexed_db_object_store_name,
@@ -19,13 +18,12 @@ use super::{
 };
 use crate::webidl;
 
-mod collection_args;
+pub(super) mod collection;
 pub(in crate::context_bootstrap::indexed_db::stores) mod cursor_open_parse;
 mod index;
 mod key_range;
 mod object_store;
 
-use self::collection_args::{CollectionRequestArgsError, parse_collection_request_args};
 pub(super) use self::index::*;
 pub(super) use self::key_range::*;
 pub(super) use self::object_store::*;
