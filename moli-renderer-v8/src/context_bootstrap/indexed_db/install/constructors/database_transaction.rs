@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::idb_transaction_durability_getter;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -24,6 +25,8 @@ struct IdbDatabasePrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBTransaction, enumerable)]
 struct IdbTransactionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_transaction_durability_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    durability: (),
     #[webapi(accessor_property, getter = idb_transaction_object_store_names_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
     object_store_names: (),
     #[webapi(method, length = 1, callback = idb_transaction_object_store_callback)]
