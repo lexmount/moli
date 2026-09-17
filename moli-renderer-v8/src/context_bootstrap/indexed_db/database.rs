@@ -24,11 +24,13 @@ use super::{
 };
 use moli_indexeddb::IndexedDbName;
 
+mod attributes;
 mod factory;
 mod schema;
 mod store_names;
 mod transactions;
 
+pub(super) use self::attributes::*;
 pub(super) use self::factory::*;
 pub(super) use self::schema::*;
 pub(super) use self::store_names::*;
