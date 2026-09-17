@@ -10,8 +10,7 @@ const INDEXED_DB_FACTORY_INITIALIZED_FIELD: &str = "moli.IndexedDb.runtime.facto
 const INDEXED_DB_TASK_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.taskQueue";
 const INDEXED_DB_OPEN_DATABASES_FIELD: &str = "moli.IndexedDb.runtime.openDatabases";
 const INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.blockedOpenQueue";
-const INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD: &str =
-    "moli.IndexedDb.runtime.readwriteTransactionQueue";
+const INDEXED_DB_TRANSACTION_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.transactionQueue";
 
 #[derive(Default, WebApiObject)]
 #[webapi(interface = web_api_interfaces::IDBFactory, require_prototype)]
@@ -33,6 +32,7 @@ pub(crate) enum IndexedDbTaskSourceEntry {
     RuntimeQueue(IndexedDbTaskId),
     DrainBlockedOpenRequests,
     VersionChange(DatabaseHandle),
+    TransactionsReady,
 }
 
 #[derive(Clone, Copy)]
@@ -40,7 +40,7 @@ pub(in crate::context_bootstrap::indexed_db) enum IndexedDbRuntimeArray {
     TaskQueue,
     OpenDatabases,
     BlockedOpenQueue,
-    ReadwriteTransactions,
+    Transactions,
 }
 
 impl IndexedDbRuntimeArray {
@@ -49,7 +49,7 @@ impl IndexedDbRuntimeArray {
             Self::TaskQueue => INDEXED_DB_TASK_QUEUE_FIELD,
             Self::OpenDatabases => INDEXED_DB_OPEN_DATABASES_FIELD,
             Self::BlockedOpenQueue => INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD,
-            Self::ReadwriteTransactions => INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD,
+            Self::Transactions => INDEXED_DB_TRANSACTION_QUEUE_FIELD,
         }
     }
 }
@@ -157,6 +157,16 @@ pub(super) fn indexed_db_connection_notification_wake(
         owner,
         IndexedDbTaskSourceEntry::VersionChange(handle),
     )
+}
+
+pub(super) fn indexed_db_transaction_start_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+) -> state::ConnectionRequestWake {
+    // Connection retirement aborts native transactions and cancels their
+    // admissions. This callback only wakes the owner; it must not reenter the
+    // storage manager when cancellation is running under the manager lock.
+    indexed_db_task_wake(scope, owner, IndexedDbTaskSourceEntry::TransactionsReady)
 }
 
 pub(super) fn indexed_db_has_external_task_source(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -323,7 +333,7 @@ fn ensure_runtime_state_fields<'s>(
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::TaskQueue)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::OpenDatabases)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::BlockedOpenQueue)?;
-    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::ReadwriteTransactions)?;
+    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::Transactions)?;
     Some(())
 }
 
