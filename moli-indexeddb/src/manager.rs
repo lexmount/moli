@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -8,7 +7,8 @@ use std::{
 use crate::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions, IndexedDbError,
     IndexedDbName, IndexedDbQuotaCheck, IndexedDbValue, Key, ObjectStoreInfo, ObjectStoreOptions,
-    OpenDisposition, OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    OpenDisposition, OpenOptions, OpenResult, RequestOutcome, TransactionCommitOptions,
+    TransactionHandle, TransactionMode,
     persistence::IndexedDbPersistenceBackend,
     state::{
         DatabaseData, DatabaseHandleState, IndexData, IndexedDbManager, ObjectStoreData,
@@ -43,7 +43,7 @@ impl IndexedDbManager {
 
     pub fn new(storage_root: impl Into<PathBuf>) -> Result<Self, IndexedDbError> {
         let storage_root = storage_root.into();
-        fs::create_dir_all(&storage_root)
+        crate::persistence::prepare_storage_directory(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
             transaction_requests: Default::default(),
@@ -997,6 +997,34 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
+        self.commit_transaction_with_options(transaction, TransactionCommitOptions::default())
+    }
+
+    pub fn commit_transaction_with_options(
+        &mut self,
+        transaction: TransactionHandle,
+        options: TransactionCommitOptions,
+    ) -> Result<(), IndexedDbError> {
+        if let Some(quota) = options.quota {
+            let tx = self.active_transaction(transaction)?;
+            if tx.mode != TransactionMode::ReadOnly {
+                let requested = quota
+                    .non_indexed_db_usage
+                    .saturating_add(
+                        self.committed_origin_usage_except_database(&tx.origin, &tx.db_name),
+                    )
+                    .saturating_add(self.transaction_commit_usage(tx)?);
+                if requested > quota.quota {
+                    let database = tx.database;
+                    self.transactions.remove(&transaction);
+                    self.finish_pending_database_close(database);
+                    return Err(IndexedDbError::QuotaExceeded {
+                        quota: quota.quota,
+                        requested,
+                    });
+                }
+            }
+        }
         let (database, origin, db_name, mode) = {
             let tx = self.active_transaction_mut(transaction)?;
             tx.state = TransactionLifecycle::Committed;
@@ -1006,16 +1034,23 @@ impl IndexedDbManager {
             .transactions
             .remove(&transaction)
             .expect("active transaction");
-        let result = if mode == TransactionMode::ReadOnly {
-            // Readers never publish their snapshot, even when another store
-            // in the same database has changed since the reader started.
-            Ok(())
-        } else {
+        let result = (|| {
+            if mode == TransactionMode::ReadOnly {
+                // Readers never publish their snapshot, even when another store
+                // in the same database has changed since the reader started.
+                return Ok(());
+            }
             let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
                 IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
             })?;
+            // The manager is exclusively borrowed during persistence. Retain the
+            // previous database until the file replacement succeeds so a failed
+            // commit never becomes visible to the next transaction.
+            let previous = origin_state.databases.get(&db_name).cloned();
             if mode == TransactionMode::VersionChange {
-                origin_state.databases.insert(db_name, tx.working_copy);
+                origin_state
+                    .databases
+                    .insert(db_name.clone(), tx.working_copy);
             } else {
                 let current = origin_state.databases.get_mut(&db_name).ok_or_else(|| {
                     IndexedDbError::NotFound(format!(
@@ -1028,8 +1063,21 @@ impl IndexedDbManager {
                     }
                 }
             }
-            self.persist_origin(&origin)
-        };
+            let result = self.persist_origin_with_durability(&origin, options.durability);
+            if result.is_err() {
+                let databases = &mut self
+                    .origins
+                    .get_mut(&origin)
+                    .expect("commit origin")
+                    .databases;
+                if let Some(previous) = previous {
+                    databases.insert(db_name, previous);
+                } else {
+                    databases.remove(&db_name);
+                }
+            }
+            result
+        })();
         self.finish_pending_database_close(database);
         result
     }
@@ -1039,24 +1087,13 @@ impl IndexedDbManager {
         transaction: TransactionHandle,
         quota: IndexedDbQuotaCheck,
     ) -> Result<(), IndexedDbError> {
-        let tx = self.active_transaction(transaction)?;
-        if tx.mode == TransactionMode::ReadOnly {
-            return self.commit_transaction(transaction);
-        }
-        let database = tx.database;
-        let requested = quota
-            .non_indexed_db_usage
-            .saturating_add(self.committed_origin_usage_except_database(&tx.origin, &tx.db_name))
-            .saturating_add(self.transaction_commit_usage(tx)?);
-        if requested > quota.quota {
-            self.transactions.remove(&transaction);
-            self.finish_pending_database_close(database);
-            return Err(IndexedDbError::QuotaExceeded {
-                quota: quota.quota,
-                requested,
-            });
-        }
-        self.commit_transaction(transaction)
+        self.commit_transaction_with_options(
+            transaction,
+            TransactionCommitOptions {
+                quota: Some(quota),
+                ..Default::default()
+            },
+        )
     }
 
     fn transaction_commit_usage(&self, tx: &TransactionState) -> Result<u64, IndexedDbError> {
