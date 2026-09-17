@@ -22,11 +22,14 @@ use super::{
     unregister_regular_transaction, v8_string, v8str, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };
+use moli_indexeddb::IndexedDbName;
 
 mod factory;
 mod schema;
+mod store_names;
 mod transactions;
 
 pub(super) use self::factory::*;
 pub(super) use self::schema::*;
+pub(super) use self::store_names::*;
 pub(super) use self::transactions::*;

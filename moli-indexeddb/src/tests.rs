@@ -20,6 +20,7 @@ struct TestDir {
 
 mod index_rename;
 mod record_revision;
+mod store_rename;
 mod transaction_scheduling;
 
 #[test]
@@ -284,7 +285,7 @@ fn seed_database_record(manager: &mut IndexedDbManager, origin: &str, name: &str
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -575,7 +576,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -600,7 +601,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let tx = manager
         .begin_transaction(
             reopened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -654,7 +655,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -684,7 +685,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let read = manager
         .begin_transaction(
             reopened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("read transaction should start");
@@ -720,7 +721,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -737,7 +738,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -796,7 +797,7 @@ fn external_blob_bytes_participate_in_quota_and_rollback() {
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -855,7 +856,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -882,7 +883,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let read = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("read transaction should start");
@@ -933,7 +934,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -958,7 +959,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("replace transaction should start");
@@ -1172,7 +1173,7 @@ fn readwrite_transaction_can_list_keys() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1217,7 +1218,7 @@ fn mixed_keys_sort_in_indexeddb_order() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1265,7 +1266,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1277,7 +1278,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let check = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -1483,7 +1484,7 @@ fn readonly_transaction_rejects_writes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -1522,7 +1523,7 @@ fn transaction_scope_is_enforced_per_object_store() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1635,7 +1636,7 @@ fn upgrade_can_delete_object_store_before_commit() {
     let info = manager
         .database_info(opened.database)
         .expect("database info should be readable");
-    assert_eq!(info.object_store_names, vec!["items".to_owned()]);
+    assert_eq!(info.object_store_names, vec![IndexedDbName::from("items")]);
 
     let error = manager
         .object_store_info(opened.database, "temp")
@@ -1709,14 +1710,14 @@ fn distinct_origins_persist_to_distinct_storage_files() {
             .database_info(first.database)
             .expect("first info should exist")
             .object_store_names,
-        vec!["alpha".to_owned()]
+        vec![IndexedDbName::from("alpha")]
     );
     assert_eq!(
         reopened
             .database_info(second.database)
             .expect("second info should exist")
             .object_store_names,
-        vec!["beta".to_owned()]
+        vec![IndexedDbName::from("beta")]
     );
 }
 
@@ -1820,7 +1821,7 @@ fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &["items".to_owned()],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .unwrap();
@@ -1863,7 +1864,7 @@ fn auto_increment_rejects_exhausted_generator_range() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1872,7 +1873,7 @@ fn auto_increment_rejects_exhausted_generator_range() {
             .transactions
             .get_mut(&tx)
             .expect("transaction should exist"),
-        "items",
+        &"items".into(),
     )
     .expect("store should exist");
     store.auto_increment_counter = MAX_AUTO_INCREMENT_KEY;

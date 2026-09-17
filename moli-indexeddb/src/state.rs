@@ -16,7 +16,7 @@ pub(crate) struct OriginState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DatabaseData {
     pub(crate) version: u64,
-    pub(crate) stores: BTreeMap<String, ObjectStoreData>,
+    pub(crate) stores: BTreeMap<IndexedDbName, ObjectStoreData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +48,7 @@ pub(crate) struct TransactionState {
     pub(crate) origin: String,
     pub(crate) db_name: String,
     pub(crate) mode: TransactionMode,
-    pub(crate) stores: BTreeSet<String>,
+    pub(crate) stores: BTreeSet<IndexedDbName>,
     pub(crate) state: TransactionLifecycle,
     pub(crate) working_copy: DatabaseData,
     pub(crate) record_revision: u64,

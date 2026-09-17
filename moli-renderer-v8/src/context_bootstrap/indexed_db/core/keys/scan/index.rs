@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::context_bootstrap::indexed_db) fn scan_index_entries(
     scope: &mut v8::PinScope<'_, '_>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     index: &IndexInfo,
     query: Option<&IdbKeyRangeQuery>,
 ) -> std::result::Result<Vec<IndexEntry>, IndexedDbError> {

@@ -4,7 +4,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_count_reque
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     query: Option<&IdbKeyRangeQuery>,
 ) {
     match scan_object_store_entries(scope, handle, store_name, query) {

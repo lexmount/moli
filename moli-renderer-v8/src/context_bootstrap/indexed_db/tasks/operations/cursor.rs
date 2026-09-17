@@ -6,7 +6,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_cursor_open_operation<'s>
     transaction: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     operation: IndexedDbCursorOpenOperation,
 ) {
     let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
@@ -28,7 +28,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     operation: &IndexedDbCursorOpenOperation,
 ) {
     let snapshot = capture_cursor_snapshot(scope, handle, store_name, operation);
@@ -38,7 +38,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s
 pub(in crate::context_bootstrap::indexed_db) fn capture_cursor_snapshot(
     scope: &mut v8::PinScope<'_, '_>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     operation: &IndexedDbCursorOpenOperation,
 ) -> std::result::Result<IndexedDbCursorSnapshot, IndexedDbError> {
     let record_revision =
