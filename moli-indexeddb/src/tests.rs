@@ -1754,6 +1754,78 @@ fn failed_open_does_not_block_later_delete_database() {
 }
 
 #[test]
+fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
+    let dir = TestDir::new();
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager
+        .open(OpenOptions {
+            origin: "https://example.com".to_owned(),
+            name: "key-preview".to_owned(),
+            version: None,
+        })
+        .unwrap();
+    let tx = opened.upgrade_transaction.unwrap();
+    manager
+        .create_object_store(
+            tx,
+            "items",
+            ObjectStoreOptions {
+                key_path: None,
+                auto_increment: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::Integer(1)
+    );
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::Integer(1)
+    );
+    assert_eq!(
+        manager
+            .put(tx, "items", Some(Key::Integer(1)), vec![1])
+            .unwrap(),
+        Key::Integer(1)
+    );
+    let error = manager
+        .put_with_quota(
+            tx,
+            "items",
+            Some(Key::Integer(20)),
+            vec![2],
+            IndexedDbQuotaCheck {
+                quota: 0,
+                non_indexed_db_usage: 0,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(error, IndexedDbError::QuotaExceeded { .. }));
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::Integer(2)
+    );
+    assert_eq!(
+        manager.put(tx, "items", None, vec![3]).unwrap(),
+        Key::Integer(2)
+    );
+    manager.commit_transaction(tx).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".to_owned()],
+            TransactionMode::ReadWrite,
+        )
+        .unwrap();
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::Integer(3)
+    );
+    manager.abort_transaction(tx).unwrap();
+}
+
+#[test]
 fn auto_increment_rejects_exhausted_safe_integer_range() {
     let dir = TestDir::new();
     let mut manager = IndexedDbManager::new(&dir.path).expect("manager should be created");

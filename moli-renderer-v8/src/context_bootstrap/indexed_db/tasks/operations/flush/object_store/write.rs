@@ -5,21 +5,14 @@ pub(super) fn try_dispatch_object_store_write_operation<'s>(
     operation: &operation::QueuedTransactionOperation<'s>,
 ) -> bool {
     match &operation.kind {
-        IndexedDbTransactionOperation::ObjectStoreWrite {
-            value,
-            key,
-            add_only,
-        } => {
-            let value = v8::Local::new(scope, value);
-            let key = v8::Local::new(scope, key);
+        IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only } => {
             execute_object_store_write_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                value,
-                key,
+                prepared,
                 *add_only,
             );
         }
