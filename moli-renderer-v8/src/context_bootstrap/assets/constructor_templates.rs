@@ -979,7 +979,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 web_api_interfaces::IDBVersionChangeEvent,
                 crate::context_bootstrap::indexed_db::idb_version_change_event_constructor_callback
             ))
-            .length(2)
+            .length(1)
             .build(scope)
         }
     };
