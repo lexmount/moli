@@ -33,13 +33,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_callback<'s>
     let key = parsed.key.unwrap_or_else(|| v8::undefined(scope).into());
     let target = match parse_idb_key(scope, key) {
         Ok(key) => key,
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'continue': the key is not valid.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };

@@ -3,8 +3,8 @@ use crate::{
     state::{ObjectStoreData, TransactionState},
 };
 
-const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-pub(crate) const MAX_AUTO_INCREMENT_KEY: u64 = MAX_SAFE_INTEGER as u64;
+// The generator can return 2^53 once; only the following generated key fails.
+pub(crate) const MAX_AUTO_INCREMENT_KEY: u64 = 1 << 53;
 
 pub(crate) fn transaction_store<'a>(
     tx: &'a TransactionState,
@@ -49,16 +49,15 @@ pub(crate) fn resolve_key(
 ) -> Result<Key, IndexedDbError> {
     if let Some(key) = key {
         if store.auto_increment
-            && let Key::Integer(value) = key
-            && value > 0
+            && let Key::Number(number) = &key
         {
-            let value = value as u64;
-            if value > MAX_AUTO_INCREMENT_KEY {
-                return Err(IndexedDbError::Constraint(
-                    "auto_increment key generator exceeded the maximum safe integer value"
-                        .to_owned(),
-                ));
-            }
+            // Explicit numeric keys remain valid beyond the generator range.
+            // Only their floored, capped value advances the generator; Date
+            // keys never participate even though their payload is numeric.
+            let value = number
+                .value()
+                .floor()
+                .clamp(0.0, MAX_AUTO_INCREMENT_KEY as f64) as u64;
             store.auto_increment_counter = store.auto_increment_counter.max(value);
         }
         return Ok(key);
@@ -81,8 +80,8 @@ pub(crate) fn next_generated_key(store: &ObjectStoreData) -> Result<Key, Indexed
     }
     if store.auto_increment_counter >= MAX_AUTO_INCREMENT_KEY {
         return Err(IndexedDbError::Constraint(
-            "auto_increment key generator exceeded the maximum safe integer value".to_owned(),
+            "auto_increment key generator exceeded the maximum value of 2^53".to_owned(),
         ));
     }
-    Ok(Key::Integer((store.auto_increment_counter + 1) as i64))
+    Ok(Key::from((store.auto_increment_counter + 1) as i64))
 }
