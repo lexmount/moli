@@ -1,4 +1,4 @@
-use super::super::store::{get_header_prop, headers_entries, normalized_header_name_or_throw};
+use super::super::store::{get_header_prop, headers_list, normalized_header_name_or_throw};
 use super::*;
 use crate::webidl;
 
@@ -58,7 +58,7 @@ pub(in crate::network_host::headers) fn headers_get_set_cookie_callback<'s>(
     let Some(this) = require_headers_receiver(scope, args.this()) else {
         return;
     };
-    let values = headers_entries(scope, this)
+    let values = headers_list(scope, this)
         .into_iter()
         .filter_map(|(name, value)| (name == "set-cookie").then_some(value))
         .filter_map(|value| v8_string(scope, &value).map(Into::into))

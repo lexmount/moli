@@ -1,7 +1,7 @@
 use super::super::*;
 use super::entries::{
     HEADERS_ENTRIES_SLOT, HEADERS_GUARD_SLOT, HEADERS_IMMUTABLE_SLOT, HeadersGuard,
-    headers_entries, headers_entries_json, normalized_header_name_or_throw,
+    headers_entries_json, headers_list, normalized_header_name_or_throw,
 };
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
@@ -23,7 +23,7 @@ pub(in crate::network_host) fn get_header_prop<'s>(
     name: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let lower = normalized_header_name_or_throw(scope, name)?;
-    let values = headers_entries(scope, obj)
+    let values = headers_list(scope, obj)
         .into_iter()
         .filter_map(|(entry_name, value)| (entry_name == lower).then_some(value))
         .collect::<Vec<_>>();

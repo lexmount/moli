@@ -144,20 +144,26 @@ pub(in crate::network_host) fn set_headers_entries(
 }
 
 pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]) -> String {
-    let entries = normalized_headers_entries(entries);
+    // Keep each field in the header list. Refilling a Request after changing
+    // its guard must append these fields individually, in their original order.
+    let entries = normalized_header_list(entries);
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned())
+}
+
+fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = normalized_header_name(name)?;
+            let value = normalize_header_value(value);
+            is_valid_header_value(&value).then_some((name, value))
+        })
+        .collect()
 }
 
 pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
-    for (name, value) in entries {
-        let Some(lower) = normalized_header_name(name) else {
-            continue;
-        };
-        let value = normalize_header_value(value);
-        if !is_valid_header_value(&value) {
-            continue;
-        }
+    for (lower, value) in normalized_header_list(entries) {
         if lower == "set-cookie" {
             normalized.push((lower, value));
             continue;
@@ -232,19 +238,22 @@ fn is_http_whitespace(ch: char) -> bool {
     matches!(ch, '\t' | '\n' | '\r' | ' ')
 }
 
+/// The sorted, combined view used by public iteration and header consumers.
 pub(crate) fn headers_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
-    headers_entries_if_present(scope, obj).unwrap_or_default()
+    normalized_headers_entries(&headers_list(scope, obj))
 }
 
-pub(in crate::network_host) fn headers_entries_if_present<'s>(
+/// The internal header list, before the public sort-and-combine projection.
+pub(in crate::network_host) fn headers_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
-) -> Option<Vec<(String, String)>> {
+) -> Vec<(String, String)> {
     private_string_value(scope, obj, HEADERS_ENTRIES_SLOT)
         .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+        .unwrap_or_default()
 }
 
 fn private_string_value<'s>(

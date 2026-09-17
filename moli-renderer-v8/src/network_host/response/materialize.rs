@@ -4,6 +4,7 @@ use super::super::fetch_surface::{
     response_slot_number,
 };
 use super::*;
+use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
 use moli_fetch::{RequestMode, RequestRedirectMode};
 use moli_url::WebOrigin;
@@ -698,7 +699,7 @@ fn materialize_response_head_for_purpose<'s>(
     let status_text =
         response_slot_string(scope, response, RESPONSE_STATUS_TEXT_SLOT).unwrap_or_default();
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)
-        .map(|headers| headers_entries(scope, headers))
+        .map(|headers| headers_list(scope, headers))
         .unwrap_or_default();
 
     // Cache admission uses the public response before restoring its internal
@@ -779,7 +780,7 @@ fn restore_response_internal_head<'s>(
             response_slot_string(scope, response, RESPONSE_INTERNAL_STATUS_TEXT_SLOT)
                 .unwrap_or_default();
         head.headers = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
-            .map(|headers| headers_entries(scope, headers))
+            .map(|headers| headers_list(scope, headers))
             .unwrap_or_default();
     }
 }
