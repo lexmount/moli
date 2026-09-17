@@ -23,7 +23,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_upper_bound_callba
     let range = IdbKeyRangeQuery {
         lower: None,
         upper: Some(upper),
-        lower_open: false,
+        lower_open: true,
         upper_open: parsed.open,
     };
     if let Some(object) = create_key_range_object(scope, &range) {
