@@ -5707,6 +5707,8 @@ fetch/api/response/response-stream-with-broken-then.any.js?moli-wpt-any=dedicate
 fetch/api/response/response-stream-with-broken-then.any.js?moli-wpt-any=window
 fetch/content-length/content-length.html
 fetch/nosniff/importscripts.html
+fetch/range/blob.any.js?moli-wpt-any=dedicatedworker
+fetch/range/blob.any.js?moli-wpt-any=window
 fetch/security/dangling-markup/media.html
 fetch/security/dangling-markup/option.html
 fetch/security/dangling-markup/textarea.html

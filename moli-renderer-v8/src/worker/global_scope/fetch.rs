@@ -1,6 +1,7 @@
 use super::*;
 use crate::network_host::{
     CapturedBlobUrl, convert_fetch_arguments, local_url_response_with_blob_entry,
+    normalized_headers_entries,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
@@ -186,8 +187,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     // Resolve local URLs before scheduling: fetch(url) already parsed and
     // captured its entry when JavaScript regains control and may revoke it.
-    let local_response =
-        local_url_response_with_blob_entry(&resolved_url, &method, blob_url_entry.as_ref());
+    let local_response = local_url_response_with_blob_entry(
+        &resolved_url,
+        &method,
+        &headers,
+        blob_url_entry.as_ref(),
+    );
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
         let (result, network_request_headers) = if let Err(message) =
@@ -199,7 +204,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             (
                 result
                     .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
-                    .map_err(|error| format!("fetch: {error}")),
+                    .map_err(|error| format!("fetch: {}", error.into_message())),
                 None,
             )
         } else {
@@ -2105,6 +2110,9 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
+    // Use the same normalized header list as Request before policy checks and
+    // context overrides can otherwise discard a repeated Range field.
+    let request_headers = normalized_headers_entries(&request_headers);
     let headers = merge_worker_request_headers(&extra_http_headers, &request_headers);
     if let Some(signal) = signal
         && worker_abort_signal_aborted(scope, signal)

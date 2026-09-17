@@ -112,9 +112,7 @@ pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned())
 }
 
-pub(in crate::network_host) fn normalized_headers_entries(
-    entries: &[(String, String)],
-) -> Vec<(String, String)> {
+pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
     for (name, value) in entries {
         let Some(lower) = normalized_header_name(name) else {

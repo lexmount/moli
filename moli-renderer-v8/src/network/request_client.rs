@@ -1201,8 +1201,12 @@ fn streaming_raw_response_from_cached_subresource(
 }
 
 fn local_text_response(request: &Request) -> Option<Result<Response>> {
-    crate::network_host::local_url_response_result(&request.url, &request.method)
-        .map(|result| result.map_err(anyhow::Error::msg))
+    crate::network_host::local_url_response_result(
+        &request.url,
+        &request.method,
+        &request.request_headers,
+    )
+    .map(|result| result.map_err(anyhow::Error::msg))
 }
 
 fn streaming_raw_response_from_local_response(response: Response) -> Result<StreamingRawResponse> {

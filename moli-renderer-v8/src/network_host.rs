@@ -117,7 +117,9 @@ pub(in crate::network_host) use self::fetch_surface::{
 pub(crate) use self::fetch_surface::{mark_response_headers_immutable, set_response_slot_string};
 pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
-pub(crate) use self::headers::{HeadersGuard, filter_headers_for_guard};
+pub(crate) use self::headers::{
+    HeadersGuard, filter_headers_for_guard, normalized_headers_entries,
+};
 pub(crate) use self::image::{
     ImageElementResourceFetchStart, ScannedImagePreloadStart, image_response_descriptor,
     start_image_element_resource_fetch, start_scanned_image_preload,

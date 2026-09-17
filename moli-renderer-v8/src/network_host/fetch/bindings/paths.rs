@@ -150,16 +150,17 @@ pub(super) fn resolve_local_fetch(
     let Some(result) = local_url_response_with_blob_entry(
         &prepared.resolved_url,
         &prepared.method,
+        &prepared.request_headers,
         prepared.blob_url_entry.as_ref(),
     ) else {
         return Ok(None);
     };
     let response = result
-        .map_err(|message| {
-            if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
+        .map_err(|error| {
+            if error.is_unavailable_blob() {
                 FILE_NOT_FOUND_ERROR_TEXT.to_owned()
             } else {
-                message
+                error.into_message()
             }
         })
         .and_then(|response| {
