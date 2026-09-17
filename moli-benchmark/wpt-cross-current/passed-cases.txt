@@ -5648,6 +5648,8 @@ event-timing/supported-types-consistent-with-self.html
 fetch/api/abort/destroyed-context.html
 fetch/api/basic/header-value-combining.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/header-value-combining.any.js?moli-wpt-any=window
+fetch/api/basic/request-forbidden-headers.any.js?moli-wpt-any=dedicatedworker
+fetch/api/basic/request-forbidden-headers.any.js?moli-wpt-any=window
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=window
 fetch/api/basic/stream-response.any.js?moli-wpt-any=dedicatedworker

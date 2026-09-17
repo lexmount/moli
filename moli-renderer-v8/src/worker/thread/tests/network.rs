@@ -1,6 +1,54 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_fetch_request_initializers_use_request_header_guards() {
+    ensure_v8();
+    let source = format!(
+        "{}\nonmessage = async () => {{ const result = await fetchRequestGuardProbe('https://fetch-guard.test', false); postMessage(result); close(); }};",
+        include_str!("../../../../tests/fixtures/fetch-request-guard.js"),
+    );
+    let mut handle = spawn_worker_with_request_client_and_network_policy(
+        source,
+        "https://fetch-guard.test/worker.js".into(),
+        ResourceRequestClient::new(&FetchConfig::default()).expect("worker fetch loader"),
+        WorkerNetworkPolicy::default(),
+    );
+    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.post_message(serialize_test_string("go"));
+    let mut requests = 0;
+    let result = loop {
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("worker response timeout")
+            .expect("worker channel closed");
+        match message {
+            WorkerToParentMessage::PendingSubresourceFetch(pending) => {
+                assert_eq!(pending.info.url.path(), "/echo");
+                requests += 1;
+                assert!(requests <= 33);
+                let body = serde_json::json!({"headers": pending.info.request_headers}).to_string();
+                let request =
+                    pending_worker_fetch_continue(pending.fetch_id, requests, &pending.info, false);
+                handle.fulfill_pending_fetch(
+                    request,
+                    200,
+                    vec![("content-type".to_owned(), "application/json".to_owned())],
+                    RendererSyntheticResponseBody::from_bytes(body.into_bytes()),
+                );
+            }
+            WorkerToParentMessage::Post(payload) => break stringify_payload(&payload),
+            WorkerToParentMessage::SubresourceNetwork(_)
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
+            other => panic!("unexpected worker response: {other:?}"),
+        }
+    };
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(requests, 33);
+    assert_eq!(result["state"], "pass", "{result}");
+    assert_eq!(result["checks"].as_array().unwrap().len(), 1046);
+}
+
+#[tokio::test]
 async fn worker_fetch_csp_violations_preserve_each_call_location() {
     ensure_v8();
     for enforce in [false, true] {
