@@ -429,7 +429,7 @@ async fn indexed_db_version_change_events_preserve_native_attributes_and_diction
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 128 } else { 384 },
+            if target == "worker" { 144 } else { 432 },
             "{target}: {result}"
         );
     }
