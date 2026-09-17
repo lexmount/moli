@@ -1528,6 +1528,7 @@ mod abort_signal_events;
 mod abort_signal_statics;
 mod cors_redirects;
 mod imported_scripts;
+mod indexed_db;
 mod lazy_storage;
 mod lifecycle;
 mod modules;
