@@ -95,6 +95,7 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
     "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/headers.py",
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/content.py",
     "/xhr/resources/corsenabled.py",
@@ -2528,6 +2529,20 @@ def _make_handler(
                     headers = [("Pragma", "no-cache"), ("Location", location)]
                     cache_control = "no-cache"
                     body = ("Hello guest. You have been redirected to " + location).encode("utf-8")
+                elif path == "/xhr/resources/headers.py":
+                    status, reason, body = 200, None, b"TEST"
+                    headers = [
+                        ("Content-Type", "text/plain"),
+                        ("X-Custom-Header", "test"),
+                        ("Set-Cookie", "test"),
+                        ("Set-Cookie2", "test"),
+                        ("X-Custom-Header-Empty", ""),
+                        ("X-Custom-Header-Comma", "1"),
+                        ("X-Custom-Header-Comma", "2"),
+                        # Upstream writes the UTF-8 bytes for an ellipsis.
+                        # send_header encodes its string argument as Latin-1.
+                        ("X-Custom-Header-Bytes", "\u00e2\u0080\u00a6"),
+                    ]
                 elif path == "/xhr/resources/inspect-headers.py":
                     status, reason = 200, None
                     headers, body = _xhr_inspect_headers_fixture_response(
