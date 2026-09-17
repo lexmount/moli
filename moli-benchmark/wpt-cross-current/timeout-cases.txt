@@ -1,6 +1,3 @@
-IndexedDB/idbfactory-databases-opaque-origin.html
-IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
-IndexedDB/idbfactory-open-opaque-origin.html
 compression/compression-large-flush-output.any.js?moli-wpt-any=window
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
