@@ -15800,6 +15800,7 @@ mod lazy_storage;
 mod lazy_window_surfaces;
 mod mouse_snapshot;
 mod no_cors_header_fill;
+mod observable;
 mod observer_callbacks;
 mod post_parse;
 mod queue_microtask;

@@ -77,6 +77,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     FileReaderSync,
     XmlSerializer,
     AbortController,
+    Observable,
     BroadcastChannel,
     EventSource,
     IdleDetector,

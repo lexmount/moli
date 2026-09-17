@@ -412,6 +412,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
     install_css_style_declaration_template_accessors(scope, template, spec.interface.name());
     install_abort_template_bindings(scope, template, spec.interface.name());
+    crate::observable::install_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
     install_dom_quad_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
