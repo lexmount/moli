@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::context_bootstrap::indexed_db) fn validate_existing_index_entries(
     scope: &mut v8::PinScope<'_, '_>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     index: &IndexInfo,
 ) -> Result<(), IndexedDbError> {
     if !index.unique {
@@ -28,7 +28,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enforce_object_store_unique_cons
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     primary_key: &Key,
     value: v8::Local<'s, v8::Value>,
 ) -> std::result::Result<(), IndexedDbError> {

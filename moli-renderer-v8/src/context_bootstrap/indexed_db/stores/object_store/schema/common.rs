@@ -12,7 +12,7 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
         v8::Local<'s, v8::Object>,
         v8::Local<'s, v8::Object>,
         TransactionHandle,
-        String,
+        IndexedDbName,
     ),
     IndexedDbError,
 > {

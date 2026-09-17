@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.deleteObjectStore")]
 struct IdbDatabaseDeleteObjectStoreArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, with = parse_store_name_arg)]
+    name: IndexedDbName,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store_callback<'s>(
@@ -37,4 +37,17 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
             scope.throw_exception(error);
         }
     }
+}
+
+fn parse_store_name_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IndexedDbName, webidl::WebIdlError> {
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        args.get(index),
+        webidl::Context::argument("IDBDatabase.deleteObjectStore", (index + 1) as usize),
+    )
+    .map(|name| IndexedDbName::from_utf16(name.0))
 }

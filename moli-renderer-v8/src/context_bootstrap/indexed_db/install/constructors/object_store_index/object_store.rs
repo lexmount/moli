@@ -5,6 +5,8 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBObjectStore, enumerable, receiver)]
 struct IdbObjectStorePrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_object_store_name_getter, setter = idb_object_store_name_setter)]
+    name: (),
     #[webapi(method, length = 1, callback = idb_object_store_get_callback)]
     get: (),
     #[webapi(method, length = 0, callback = idb_object_store_get_all_callback)]
