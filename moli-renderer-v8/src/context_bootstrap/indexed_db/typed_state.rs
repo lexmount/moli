@@ -569,6 +569,7 @@ struct IndexedDbObjectStoreLifecycleState {
     database: v8::Global<v8::Value>,
     name: IndexedDbName,
     metadata: IndexedDbObjectStoreMetadata,
+    key_path: v8::Global<v8::Value>,
     deleted: bool,
 }
 
@@ -579,6 +580,7 @@ impl IndexedDbObjectStoreLifecycleState {
         transaction: v8::Local<'_, v8::Object>,
         database: v8::Local<'_, v8::Object>,
         metadata: IndexedDbObjectStoreMetadata,
+        key_path: v8::Local<'_, v8::Value>,
     ) -> Self {
         let name = metadata.info.name.clone();
         Self {
@@ -587,6 +589,7 @@ impl IndexedDbObjectStoreLifecycleState {
             database: v8::Global::new(scope, v8::Local::<v8::Value>::from(database)),
             name,
             metadata,
+            key_path: v8::Global::new(scope, key_path),
             deleted: false,
         }
     }
@@ -596,6 +599,7 @@ struct IndexedDbIndexLifecycleState {
     wrapper: v8::Weak<v8::Object>,
     object_store: v8::Global<v8::Value>,
     info: IndexInfo,
+    key_path: v8::Global<v8::Value>,
     marker: bool,
     deleted: bool,
     original_name: Option<IndexedDbName>,
@@ -608,11 +612,13 @@ impl IndexedDbIndexLifecycleState {
         object_store: v8::Local<'_, v8::Object>,
         info: IndexInfo,
         original_name: Option<IndexedDbName>,
+        key_path: v8::Local<'_, v8::Value>,
     ) -> Self {
         Self {
             wrapper: v8::Weak::new(scope, wrapper),
             object_store: v8::Global::new(scope, v8::Local::<v8::Value>::from(object_store)),
             info,
+            key_path: v8::Global::new(scope, key_path),
             marker: true,
             deleted: false,
             original_name,
@@ -1176,12 +1182,19 @@ pub(super) fn register_indexed_db_object_store_lifecycle<'s>(
     transaction: v8::Local<'s, v8::Object>,
     database: v8::Local<'s, v8::Object>,
     metadata: IndexedDbObjectStoreMetadata,
+    key_path: v8::Local<'s, v8::Value>,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, store) else {
         return;
     };
-    let state =
-        IndexedDbObjectStoreLifecycleState::new(scope, store, transaction, database, metadata);
+    let state = IndexedDbObjectStoreLifecycleState::new(
+        scope,
+        store,
+        transaction,
+        database,
+        metadata,
+        key_path,
+    );
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     table.borrow_mut().object_stores.insert(id, state);
 }
@@ -1191,6 +1204,7 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     index: v8::Local<'s, v8::Object>,
     object_store: v8::Local<'s, v8::Object>,
     info: IndexInfo,
+    key_path: v8::Local<'s, v8::Value>,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, index) else {
         return;
@@ -1201,7 +1215,14 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     table.borrow_mut().indexes.insert(
         id,
-        IndexedDbIndexLifecycleState::new(scope, index, object_store, info, original_name),
+        IndexedDbIndexLifecycleState::new(
+            scope,
+            index,
+            object_store,
+            info,
+            original_name,
+            key_path,
+        ),
     );
 }
 
@@ -1984,18 +2005,29 @@ pub(super) fn indexed_db_index_info(
         .map(|index| index.info.clone())
 }
 
-pub(super) fn set_indexed_db_object_store_metadata<'s>(
+// Each handle retains its own keyPath value. Schema changes and author edits
+// to this exposed array must not replace it or change the native key path.
+pub(super) fn indexed_db_object_store_key_path<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
-    metadata: IndexedDbObjectStoreMetadata,
-) -> Option<()> {
+) -> Option<v8::Local<'s, v8::Value>> {
     let id = indexed_db_typed_state_id(scope, store)?;
     let table = indexed_db_runtime_state_table_for_object(scope, store);
-    let mut table = table.borrow_mut();
-    let store = table.object_stores.get_mut(&id)?;
-    store.name = metadata.info.name.clone();
-    store.metadata = metadata;
-    Some(())
+    let table = table.borrow();
+    Some(v8::Local::new(
+        scope,
+        &table.object_stores.get(&id)?.key_path,
+    ))
+}
+
+pub(super) fn indexed_db_index_key_path<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let id = indexed_db_typed_state_id(scope, index)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, index);
+    let table = table.borrow();
+    Some(v8::Local::new(scope, &table.indexes.get(&id)?.key_path))
 }
 
 pub(super) fn current_indexed_db_execution_owner(

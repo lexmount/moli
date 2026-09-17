@@ -5,6 +5,14 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBObjectStore, enumerable, receiver)]
 struct IdbObjectStorePrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_object_store_key_path_getter)]
+    key_path: (),
+    #[webapi(accessor_property, getter = idb_object_store_auto_increment_getter)]
+    auto_increment: (),
+    #[webapi(accessor_property, getter = idb_object_store_index_names_getter)]
+    index_names: (),
+    #[webapi(accessor_property, getter = idb_object_store_transaction_getter)]
+    transaction: (),
     #[webapi(accessor_property, getter = idb_object_store_name_getter, setter = idb_object_store_name_setter)]
     name: (),
     #[webapi(method, length = 1, callback = idb_object_store_get_callback)]
