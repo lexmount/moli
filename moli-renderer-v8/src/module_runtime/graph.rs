@@ -831,23 +831,8 @@ impl NativeModuleGraphJob {
         request: &NativeModuleGraphFetchRequest,
         source: std::result::Result<ModuleGraphFetchedSource, ModuleLoadError>,
     ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        let client = request.tree_client.ok_or_else(|| {
-            ModuleLoadError::new(
-                ModuleLoadStage::Fetch,
-                "module graph fetch request was missing its module tree client token",
-            )
-        })?;
-        if let Err(error) = &source {
-            let key = request.pending_fetch_key().cloned().ok_or_else(|| {
-                ModuleLoadError::new(
-                    ModuleLoadStage::Fetch,
-                    "failed module graph fetch request was missing its module map key",
-                )
-            })?;
-            vm.document_runtime
-                .mark_native_module_failed(key, error.clone());
-        }
-        self.finish_pending_chromium_tree_fetch_for_client(vm, client, request, source)
+        let mut owner = NativeModuleTreeDocumentOwner::new(vm);
+        self.finish_pending_chromium_tree_fetch_for_request_with_owner(&mut owner, request, source)
     }
 
     fn finish_pending_chromium_tree_fetch_for_request_with_owner<O>(
@@ -865,26 +850,20 @@ impl NativeModuleGraphJob {
                 "module graph fetch request was missing its module tree client token",
             )
         })?;
+        if let Err(error) = &source {
+            let key = request.pending_fetch_key().cloned().ok_or_else(|| {
+                ModuleLoadError::new(
+                    ModuleLoadStage::Fetch,
+                    "failed module graph fetch request was missing its module map key",
+                )
+            })?;
+            // Settle the shared fetch before failing this graph, so joined
+            // clients and later imports observe the cached fetch failure.
+            owner.mark_module_failed(key, error.clone());
+        }
         self.finish_pending_chromium_tree_fetch_for_client_with_owner(
             owner, client, request, source,
         )
-    }
-
-    fn finish_pending_chromium_tree_fetch_for_client(
-        &mut self,
-        vm: &mut ScriptVm,
-        client: module_tree::SingleModuleClientToken,
-        request: &NativeModuleGraphFetchRequest,
-        source: std::result::Result<ModuleGraphFetchedSource, ModuleLoadError>,
-    ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        trace_module_tree_fetch_completed_to_job(client, source.is_ok());
-        let outcome = match source {
-            Ok(source) => module_tree::ModuleFetchOutcome::Fetched(Box::new(
-                chromium_fetched_source_for_request(source, request)?,
-            )),
-            Err(error) => module_tree::ModuleFetchOutcome::Failed(chromium_error(error)),
-        };
-        self.resume_chromium_tree_fetch_outcome(vm, client, outcome)
     }
 
     fn finish_pending_chromium_tree_fetch_for_client_with_owner<O>(
@@ -905,16 +884,6 @@ impl NativeModuleGraphJob {
             Err(error) => module_tree::ModuleFetchOutcome::Failed(chromium_error(error)),
         };
         self.resume_chromium_tree_fetch_outcome_with_owner(owner, client, outcome)
-    }
-
-    fn resume_chromium_tree_fetch_outcome(
-        &mut self,
-        vm: &mut ScriptVm,
-        client: module_tree::SingleModuleClientToken,
-        outcome: module_tree::ModuleFetchOutcome,
-    ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        let mut owner = NativeModuleTreeDocumentOwner::new(vm);
-        self.resume_chromium_tree_fetch_outcome_with_owner(&mut owner, client, outcome)
     }
 
     pub(crate) fn resume_chromium_tree_fetch_outcome_with_owner<O>(
