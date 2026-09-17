@@ -16,6 +16,7 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod index_rename;
 mod record_revision;
 mod transaction_scheduling;
 
@@ -106,7 +107,7 @@ fn schema_validation_preserves_exception_order_and_does_not_create_invalid_metad
             .object_store_info(open.database, "existing")
             .unwrap()
             .index_names,
-        ["index"]
+        [IndexedDbName::from("index")]
     );
     assert!(matches!(
         manager.object_store_info(open.database, "invalid"),
@@ -473,7 +474,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     assert_eq!(
         index,
         IndexInfo {
-            name: "by-id".to_owned(),
+            name: "by-id".into(),
             key_path: KeyPath::from("id"),
             unique: true,
             multi_entry: false,
@@ -487,7 +488,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let store_info = manager
         .object_store_info(opened.database, "items")
         .expect("store info should exist");
-    assert_eq!(store_info.index_names, vec!["by-id".to_owned()]);
+    assert_eq!(store_info.index_names, vec![IndexedDbName::from("by-id")]);
 
     let index_info = manager
         .index_info(opened.database, "items", "by-id")
@@ -510,7 +511,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let store_info = reopened_manager
         .object_store_info(reopened.database, "items")
         .expect("store info should still exist");
-    assert_eq!(store_info.index_names, vec!["by-id".to_owned()]);
+    assert_eq!(store_info.index_names, vec![IndexedDbName::from("by-id")]);
 }
 
 #[test]

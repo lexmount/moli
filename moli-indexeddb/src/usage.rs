@@ -1,5 +1,5 @@
 use crate::{
-    IndexedDbExternalObject, IndexedDbValue, Key, KeyPath,
+    IndexedDbExternalObject, IndexedDbName, IndexedDbValue, Key, KeyPath,
     state::{DatabaseData, IndexData, ObjectStoreData, OriginState},
 };
 
@@ -85,8 +85,8 @@ fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
         })))
 }
 
-fn index_usage_bytes(name: &str, index: &IndexData) -> u64 {
-    string_usage_bytes(name)
+fn index_usage_bytes(name: &IndexedDbName, index: &IndexData) -> u64 {
+    name.usage_bytes()
         .saturating_add(key_path_usage_bytes(&index.key_path))
         .saturating_add(BOOL_STORAGE_BYTES)
         .saturating_add(BOOL_STORAGE_BYTES)
