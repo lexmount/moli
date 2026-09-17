@@ -1,6 +1,5 @@
 use super::{
     array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    define_non_enumerable_value_property as define_public_non_enumerable_value_property,
     global_constructor_prototype, object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,

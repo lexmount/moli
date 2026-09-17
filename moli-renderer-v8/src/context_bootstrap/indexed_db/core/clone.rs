@@ -517,12 +517,11 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<IndexedDbValue> {
-    let mut should_throw_data_clone_error = false;
     let external_objects = Rc::new(RefCell::new(Vec::new()));
     let external_object_sources = Rc::new(RefCell::new(Vec::new()));
     let serialized = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
+        let mut scope = try_catch.init();
         let context = scope.get_current_context();
         let serializer = v8::ValueSerializer::new(
             &scope,
@@ -535,8 +534,11 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
         match serializer.write_value(context, value) {
             Some(true) => Some(serializer.release()),
             _ => {
-                should_throw_data_clone_error =
-                    scope.has_caught() && scope.can_continue() && !scope.has_terminated();
+                // The delegate creates DataCloneError for unsupported values.
+                // Exceptions from author getters must retain their identity.
+                if scope.has_caught() {
+                    scope.rethrow();
+                }
                 None
             }
         }
@@ -544,14 +546,6 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
     if let Some(wire_bytes) = serialized {
         let external_objects = external_objects.borrow().clone();
         return Some(IndexedDbValue::new(wire_bytes, external_objects));
-    }
-    if should_throw_data_clone_error {
-        let exception = dom_exception_value(
-            scope,
-            "The value could not be cloned for IndexedDB storage.",
-            "DataCloneError",
-        );
-        scope.throw_exception(exception);
     }
     None
 }

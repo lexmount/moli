@@ -6,43 +6,34 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    value: v8::Local<'s, v8::Value>,
-    key_value: v8::Local<'s, v8::Value>,
+    prepared: &PreparedObjectStoreWrite,
     add_only: bool,
 ) {
-    let explicit_key = match parse_idb_key(scope, key_value) {
+    let primary_key = match prepared.key.clone().map(Ok).unwrap_or_else(|| {
+        with_indexed_db_manager(scope, |manager| {
+            manager.next_generated_key(handle, store_name)
+        })
+    }) {
         Ok(key) => key,
-        Err(message) => {
-            let error = dom_exception_value(scope, message, "TypeError");
+        Err(error) => {
+            let error = request_error_object(scope, &error);
             store_request_error(scope, request, error);
             return;
         }
     };
-    let prepared =
-        match prepare_object_store_write(scope, store, handle, store_name, value, explicit_key) {
-            Ok(prepared) => prepared,
-            Err(PreparedObjectStoreWriteError::DomException { message, name }) => {
-                let error = dom_exception_value(scope, message, name);
-                store_request_error(scope, request, error);
-                return;
-            }
-            Err(PreparedObjectStoreWriteError::Backend(error)) => {
-                let error = request_error_object(scope, &error);
-                store_request_error(scope, request, error);
-                return;
-            }
-        };
-    let Some(value_bytes) = serialize_js_value(scope, prepared.value) else {
+    let Some(value) = deserialize_js_value(scope, &prepared.value) else {
         return;
     };
-    let Some(primary_key) = prepared.key.clone() else {
-        let error = dom_exception_value(
-            scope,
-            "Failed to execute the operation: a key is required for stores without autoIncrement.",
-            "DataError",
-        );
-        store_request_error(scope, request, error);
-        return;
+    let value_bytes = if let Some(path) = &prepared.injection_path {
+        if inject_key_path_into_value(scope, value, path, &primary_key).is_none() {
+            return;
+        }
+        let Some(bytes) = serialize_js_value(scope, value) else {
+            return;
+        };
+        bytes
+    } else {
+        prepared.value.clone()
     };
     if let Err(error) = enforce_object_store_unique_constraints(
         scope,
@@ -50,7 +41,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
         handle,
         store_name,
         &primary_key,
-        prepared.value,
+        value,
     ) {
         let error = request_error_object(scope, &error);
         store_request_error(scope, request, error);
@@ -71,12 +62,12 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
                 manager.add_with_quota(
                     handle,
                     store_name,
-                    prepared.key.clone(),
+                    Some(primary_key.clone()),
                     value_bytes,
                     quota.quota_check,
                 )
             } else {
-                manager.add(handle, store_name, prepared.key.clone(), value_bytes)
+                manager.add(handle, store_name, Some(primary_key.clone()), value_bytes)
             }
         })
     } else {
@@ -85,12 +76,12 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
                 manager.put_with_quota(
                     handle,
                     store_name,
-                    prepared.key.clone(),
+                    Some(primary_key.clone()),
                     value_bytes,
                     quota.quota_check,
                 )
             } else {
-                manager.put(handle, store_name, prepared.key.clone(), value_bytes)
+                manager.put(handle, store_name, Some(primary_key.clone()), value_bytes)
             }
         })
     };
