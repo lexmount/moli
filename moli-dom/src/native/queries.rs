@@ -5,6 +5,7 @@ use crate::forms::{
     OptionDisabledAncestorStep, OptionNearestSelectStep, OptionNearestSelectTraversal,
     option_disabled_ancestor_step, parse_non_negative_integer_prefix,
 };
+use selectors::attr::CaseSensitivity;
 
 impl NativeDom {
     pub fn is_html_element_named(&self, node_id: NativeNodeId, local_name: &str) -> bool {
@@ -260,8 +261,19 @@ impl NativeDom {
         class_name: &str,
         include_root: bool,
     ) -> Vec<NativeNodeId> {
+        let document = self.node(root).and_then(|node| {
+            node.as_document().or_else(|| {
+                self.node(node.owner_document()?)
+                    .and_then(Node::as_document)
+            })
+        });
+        let case_sensitivity = if document.is_some_and(|document| document.is_quirks_mode()) {
+            CaseSensitivity::AsciiCaseInsensitive
+        } else {
+            CaseSensitivity::CaseSensitive
+        };
         self.collect_matching_elements(root, include_root, |element, _| {
-            element.matches_class_names(class_name)
+            element.matches_class_names_with_case_sensitivity(class_name, case_sensitivity)
         })
     }
 
