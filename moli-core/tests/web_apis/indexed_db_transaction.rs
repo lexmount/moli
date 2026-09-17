@@ -2,6 +2,27 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_validation_preserves_key_paths_conversion_and_exception_order()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-schema-validation.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nschemaValidationProbe('schema-validation-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: schemaChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert!(
+            result["checks"].as_array().unwrap().len() >= 160,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_unique_index_builds_abort_in_order_and_deduplicate_multi_entry_keys()
 -> Result<()> {
     let server = FixtureServer::spawn().await?;

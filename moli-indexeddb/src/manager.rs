@@ -16,6 +16,7 @@ use crate::{
     },
     transaction::{ensure_writeable, resolve_key, transaction_store, transaction_store_mut},
     usage::{database_usage_bytes, origin_usage_bytes, sum_usage},
+    validate_index_options, validate_object_store_options,
 };
 
 impl IndexedDbManager {
@@ -453,11 +454,29 @@ impl IndexedDbManager {
                 "create_object_store requires a versionchange transaction".to_owned(),
             ));
         }
+        // Object-store creation checks syntax before duplicate names; index
+        // creation below deliberately uses the opposite order.
+        if options
+            .key_path
+            .as_ref()
+            .is_some_and(|path| !path.is_valid())
+        {
+            return Err(IndexedDbError::Syntax(
+                "The key path is not valid.".to_owned(),
+            ));
+        }
         if tx.working_copy.stores.contains_key(name) {
             return Err(IndexedDbError::Constraint(format!(
                 "object store `{name}` already exists"
             )));
         }
+        validate_object_store_options(options.key_path.as_ref(), options.auto_increment).map_err(
+            |_| {
+                IndexedDbError::InvalidAccess(
+                    "autoIncrement cannot be used with an empty or sequence key path.".to_owned(),
+                )
+            },
+        )?;
         tx.working_copy.stores.insert(
             name.to_owned(),
             ObjectStoreData {
@@ -511,11 +530,16 @@ impl IndexedDbManager {
                 "index `{index_name}` already exists"
             )));
         }
-        if options.multi_entry && options.key_path.is_sequence() {
-            return Err(IndexedDbError::InvalidState(
-                "multiEntry indexes cannot use a sequence key_path".to_owned(),
+        if !options.key_path.is_valid() {
+            return Err(IndexedDbError::Syntax(
+                "The key path is not valid.".to_owned(),
             ));
         }
+        validate_index_options(&options.key_path, options.multi_entry).map_err(|_| {
+            IndexedDbError::InvalidAccess(
+                "multiEntry indexes cannot use a sequence key path.".to_owned(),
+            )
+        })?;
         let info = IndexInfo {
             name: index_name.to_owned(),
             key_path: options.key_path.clone(),
