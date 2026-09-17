@@ -19,8 +19,8 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_key_range_from_value<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn parse_key_or_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> std::result::Result<Option<IdbKeyRangeQuery>, &'static str> {
-    if value.is_undefined() {
+) -> std::result::Result<Option<IdbKeyRangeQuery>, KeyConversionError> {
+    if value.is_null_or_undefined() {
         return Ok(None);
     }
     if let Some(range) = parse_key_range_from_value(scope, value) {

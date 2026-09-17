@@ -4,6 +4,7 @@ pub(in crate::context_bootstrap::indexed_db) enum ExtractedKey {
     Key(Key),
     Missing,
     Invalid,
+    Error(KeyConversionError),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn extract_key_from_value<'s>(
@@ -36,7 +37,8 @@ fn extract_string_key<'s>(
     };
     match parse_idb_key(scope, value) {
         Ok(Some(key)) => ExtractedKey::Key(key),
-        _ => ExtractedKey::Invalid,
+        Ok(None) => ExtractedKey::Invalid,
+        Err(error) => ExtractedKey::Error(error),
     }
 }
 
@@ -72,7 +74,7 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s
     }
     match extract_key_from_value(scope, value, key_path) {
         ExtractedKey::Key(key) => vec![key],
-        ExtractedKey::Missing | ExtractedKey::Invalid => Vec::new(),
+        ExtractedKey::Missing | ExtractedKey::Invalid | ExtractedKey::Error(_) => Vec::new(),
     }
 }
 

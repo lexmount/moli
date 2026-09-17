@@ -39,7 +39,7 @@ promise_test(async () => {
     "cmp second key is required"
   );
   assert_throws_name(
-    "TypeError",
+    "DataError",
     () => indexedDB.cmp(undefined, "a"),
     "cmp validates present undefined as an IndexedDB key"
   );
@@ -117,7 +117,7 @@ promise_test(async () => {
     "objectStore.delete key is required"
   );
   assert_throws_name(
-    "TypeError",
+    "DataError",
     () => writeStore.delete(undefined),
     "objectStore.delete validates present undefined as a key"
   );

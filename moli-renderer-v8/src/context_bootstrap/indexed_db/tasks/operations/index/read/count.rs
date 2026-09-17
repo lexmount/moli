@@ -10,13 +10,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_count_request<'s>(
 ) {
     let query = match parse_key_or_range(scope, query_value) {
         Ok(query) => query,
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'count': the query is not a valid key or key range.",
-                "DataError",
-            );
-            store_request_error(scope, request, error);
+        Err(error) => {
+            let value = error.into_value(scope);
+            store_request_error(scope, request, value);
             return;
         }
     };

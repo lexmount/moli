@@ -9,13 +9,18 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_delete_requ
 ) {
     let key = match parse_idb_key(scope, key_value) {
         Ok(Some(key)) => key,
-        _ => {
+        Ok(None) => {
             let error = dom_exception_value(
                 scope,
                 "Failed to execute 'delete': invalid key.",
-                "TypeError",
+                "DataError",
             );
             store_request_error(scope, request, error);
+            return;
+        }
+        Err(error) => {
+            let value = error.into_value(scope);
+            store_request_error(scope, request, value);
             return;
         }
     };

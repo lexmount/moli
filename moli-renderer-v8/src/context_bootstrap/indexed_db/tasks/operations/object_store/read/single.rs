@@ -9,13 +9,18 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_request
 ) {
     let query = match parse_key_or_range(scope, query_value) {
         Ok(Some(query)) => query,
-        _ => {
+        Ok(None) => {
             let error = dom_exception_value(
                 scope,
                 "Failed to execute 'get': the query is not a valid key or key range.",
                 "DataError",
             );
             store_request_error(scope, request, error);
+            return;
+        }
+        Err(error) => {
+            let value = error.into_value(scope);
+            store_request_error(scope, request, value);
             return;
         }
     };
@@ -43,13 +48,18 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_key_req
 ) {
     let query = match parse_key_or_range(scope, query_value) {
         Ok(Some(query)) => query,
-        _ => {
+        Ok(None) => {
             let error = dom_exception_value(
                 scope,
                 "Failed to execute 'getKey': the query is not a valid key or key range.",
                 "DataError",
             );
             store_request_error(scope, request, error);
+            return;
+        }
+        Err(error) => {
+            let value = error.into_value(scope);
+            store_request_error(scope, request, value);
             return;
         }
     };

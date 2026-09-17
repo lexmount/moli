@@ -12,10 +12,9 @@ pub(in crate::context_bootstrap::indexed_db::tasks::operations) fn parse_collect
 ) -> Option<(Option<IdbKeyRangeQuery>, Option<usize>)> {
     let query = match parse_key_or_range(scope, query_value) {
         Ok(query) => query,
-        Err(_) => {
-            let error =
-                dom_exception_value(scope, invalid_query_message(operation_name), "DataError");
-            store_request_error(scope, request, error);
+        Err(error) => {
+            let value = error.into_value(scope);
+            store_request_error(scope, request, value);
             return None;
         }
     };
@@ -45,14 +44,5 @@ fn error_message_or_fallback(error: &crate::webidl::WebIdlError) -> String {
         "Failed to execute IndexedDB collection operation: invalid count.".to_owned()
     } else {
         error.to_string()
-    }
-}
-
-fn invalid_query_message(operation_name: &str) -> &'static str {
-    match operation_name {
-        "getAllKeys" => {
-            "Failed to execute 'getAllKeys': the query is not a valid key or key range."
-        }
-        _ => "Failed to execute 'getAll': the query is not a valid key or key range.",
     }
 }

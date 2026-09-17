@@ -23,12 +23,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         rv.set(request.into());
         return;
     };
-    match parse_idb_key(scope, parsed.key) {
-        Ok(Some(_)) => {}
-        _ => {
-            throw_type_error(scope, "Failed to execute 'delete': invalid key.");
-            return;
-        }
+    if require_idb_key(scope, parsed.key).is_none() {
+        return;
     }
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)

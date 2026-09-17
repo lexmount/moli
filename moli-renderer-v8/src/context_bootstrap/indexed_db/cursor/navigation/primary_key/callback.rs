@@ -1,4 +1,3 @@
-use super::parse::parse_continue_primary_key_key;
 use super::position::{next_primary_key_cursor_position, target_is_after_current_cursor};
 use super::*;
 use crate::webidl;
@@ -33,12 +32,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_primary_key_
         scope.throw_exception(error);
         return;
     }
-    let key = match parse_continue_primary_key_key(scope, parsed.key, "key") {
+    let key = match require_idb_key(scope, parsed.key) {
         Some(key) => key,
         None => return,
     };
-    let primary_key = match parse_continue_primary_key_key(scope, parsed.primary_key, "primary key")
-    {
+    let primary_key = match require_idb_key(scope, parsed.primary_key) {
         Some(key) => key,
         None => return,
     };
