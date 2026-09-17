@@ -9717,7 +9717,12 @@ xhr/formdata/delete-formelement.html
 xhr/formdata/get-formelement.html
 xhr/formdata/has-formelement.html
 xhr/formdata/set-formelement.html
+xhr/getallresponseheaders-status.htm
+xhr/getresponseheader-case-insensitive.htm
 xhr/getresponseheader-error-state.htm
+xhr/getresponseheader-server-date.htm
+xhr/getresponseheader-special-characters.htm
+xhr/getresponseheader-unsent-opened-state.htm
 xhr/historical.html
 xhr/loadstart-and-state.html
 xhr/open-after-abort.htm
@@ -9754,6 +9759,7 @@ xhr/progress-events-response-data-gzip.htm
 xhr/progressevent-constructor.html
 xhr/progressevent-interface.html
 xhr/response-invalid-responsetype.htm
+xhr/responseText-status.html
 xhr/responseType-document-in-worker.html
 xhr/responseXML-unavailable-in-worker.html
 xhr/responsedocument-decoding.htm

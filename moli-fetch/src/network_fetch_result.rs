@@ -1,3 +1,5 @@
+use crate::headers::{decode_http_header_bytes, parse_http_header_line};
+
 use std::{fmt, sync::Arc};
 
 use moli_cookie_jar::StoredCookieQueryReport;
@@ -233,7 +235,7 @@ impl NetworkObservationRecorder {
         if state.journal.truncated {
             return;
         }
-        let line = String::from_utf8_lossy(data);
+        let line = decode_http_header_bytes(data);
         let line = line.trim_end_matches(['\r', '\n']);
 
         if let Some(status) = parse_status_line(line) {
@@ -273,7 +275,7 @@ impl NetworkObservationRecorder {
             response.truncated = true;
             return;
         }
-        if let Some(header) = parse_header_line(line) {
+        if let Some(header) = parse_http_header_line(line) {
             response.headers.push(header);
         }
     }
@@ -323,7 +325,7 @@ fn bounded_header_data(data: &[u8]) -> (&[u8], bool) {
 }
 
 fn parse_request_header_block(data: &[u8]) -> Vec<(String, String)> {
-    String::from_utf8_lossy(data)
+    decode_http_header_bytes(data)
         .lines()
         .enumerate()
         .filter_map(|(index, line)| {
@@ -331,7 +333,7 @@ fn parse_request_header_block(data: &[u8]) -> Vec<(String, String)> {
             if (index == 0 && is_http_request_line(line)) || line.starts_with(':') {
                 return None;
             }
-            parse_header_line(line)
+            parse_http_header_line(line)
         })
         .collect()
 }
@@ -349,15 +351,6 @@ fn is_http_request_line(line: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
         && !target.is_empty()
         && version.starts_with("HTTP/")
-}
-
-fn parse_header_line(line: &str) -> Option<(String, String)> {
-    let (name, value) = line.split_once(':')?;
-    let name = name.trim();
-    if name.is_empty() {
-        return None;
-    }
-    Some((name.to_owned(), value.trim().to_owned()))
 }
 
 fn parse_status_line(line: &str) -> Option<u16> {

@@ -1,4 +1,27 @@
+use std::borrow::Cow;
+
 use moli_web_mime::request_header_content_type_essence;
+
+// Header strings represent HTTP bytes one-for-one, including obs-text. UTF-8
+// decoding would either replace bytes or combine a valid multibyte sequence.
+pub(crate) fn decode_http_header_bytes(data: &[u8]) -> Cow<'_, str> {
+    if data.is_ascii() {
+        Cow::Borrowed(std::str::from_utf8(data).expect("ASCII is valid UTF-8"))
+    } else {
+        Cow::Owned(data.iter().copied().map(char::from).collect())
+    }
+}
+
+pub(crate) fn parse_http_header_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let (name, value) = line.split_once(':')?;
+    let name = name.trim_matches([' ', '\t']);
+    if name.is_empty() {
+        return None;
+    }
+    // Only HTTP OWS is framing. NBSP and NEL are ordinary header bytes.
+    Some((name.to_owned(), value.trim_matches([' ', '\t']).to_owned()))
+}
 
 pub fn is_forbidden_request_header_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();

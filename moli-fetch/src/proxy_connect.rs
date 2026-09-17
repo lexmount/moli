@@ -1,3 +1,5 @@
+use crate::headers::{decode_http_header_bytes, parse_http_header_line};
+
 const MAX_PROXY_CONNECT_HEADER_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,7 +59,7 @@ impl ProxyConnectResponseRecorder {
             return;
         }
 
-        let line = String::from_utf8_lossy(data);
+        let line = decode_http_header_bytes(data);
         let line = line.trim_end_matches(['\r', '\n']);
         if let Some(parsed) = crate::response::parse_http_response_status_line(data) {
             self.pending_status = Some(parsed.status);
@@ -77,7 +79,7 @@ impl ProxyConnectResponseRecorder {
                 });
             return;
         }
-        if let Some(header) = parse_header_line(line) {
+        if let Some(header) = parse_http_header_line(line) {
             self.pending_headers.push(header);
         }
     }
@@ -101,15 +103,6 @@ fn is_connect_request_header_block(data: &[u8]) -> bool {
         .is_some_and(|method| method.eq_ignore_ascii_case(b"CONNECT"))
 }
 
-fn parse_header_line(line: &str) -> Option<(String, String)> {
-    let (name, value) = line.split_once(':')?;
-    let name = name.trim();
-    if name.is_empty() {
-        return None;
-    }
-    Some((name.to_owned(), value.trim().to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +115,7 @@ mod tests {
             b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n"
         ));
         recorder.record_incoming_header_line(b"HTTP/1.1 407 Proxy Authentication Required\r\n");
-        recorder.record_incoming_header_line(b"Proxy-Authenticate: Basic realm=\"proxy\"\r\n");
+        recorder.record_incoming_header_line(b"Proxy-Authenticate: Basic realm=\"\xff\"\r\n");
         recorder.record_incoming_header_line(b"\r\n");
 
         assert!(
@@ -141,7 +134,7 @@ mod tests {
                 status_text: "Proxy Authentication Required".to_owned(),
                 headers: vec![(
                     "Proxy-Authenticate".to_owned(),
-                    "Basic realm=\"proxy\"".to_owned(),
+                    "Basic realm=\"\u{ff}\"".to_owned(),
                 )],
             })
         );
