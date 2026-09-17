@@ -17,7 +17,7 @@ use crate::{
     transaction::{
         ensure_writeable, next_generated_key, resolve_key, transaction_store, transaction_store_mut,
     },
-    usage::{database_usage_bytes, origin_usage_bytes, sum_usage},
+    usage::{database_usage_bytes, database_usage_bytes_for_stores, origin_usage_bytes, sum_usage},
     validate_index_options, validate_object_store_options,
 };
 
@@ -29,6 +29,7 @@ impl IndexedDbManager {
 
     pub fn new_in_memory() -> Self {
         Self {
+            transaction_requests: Default::default(),
             connection_requests: Default::default(),
             connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::InMemory,
@@ -45,6 +46,7 @@ impl IndexedDbManager {
         fs::create_dir_all(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
+            transaction_requests: Default::default(),
             connection_requests: Default::default(),
             connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
@@ -222,8 +224,14 @@ impl IndexedDbManager {
     }
 
     pub fn clear_origins_with_prefix(&mut self, origin_prefix: &str) -> Result<(), IndexedDbError> {
-        self.databases
-            .retain(|_, db| !db.origin.starts_with(origin_prefix));
+        let handles: Vec<_> = self
+            .databases
+            .iter()
+            .filter_map(|(handle, db)| db.origin.starts_with(origin_prefix).then_some(*handle))
+            .collect();
+        for handle in handles {
+            self.force_close_database(handle)?;
+        }
         self.transactions
             .retain(|_, tx| !tx.origin.starts_with(origin_prefix));
         self.origins
@@ -295,6 +303,7 @@ impl IndexedDbManager {
         self.databases.remove(&handle).ok_or_else(|| {
             IndexedDbError::InvalidState(format!("database handle {:?} is invalid", handle))
         })?;
+        self.transaction_requests.cancel_connection(handle);
         self.connection_notifications.unregister(handle);
         Ok(())
     }
@@ -393,6 +402,42 @@ impl IndexedDbManager {
         })
     }
 
+    pub fn queue_transaction_start(
+        &self,
+        database: DatabaseHandle,
+        store_names: &[String],
+        mode: TransactionMode,
+        wake: crate::ConnectionRequestWake,
+    ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
+        let db = self.database_state(database)?;
+        if db.closed || mode == TransactionMode::VersionChange {
+            return Err(IndexedDbError::InvalidState(
+                "regular transaction requires an open connection".to_owned(),
+            ));
+        }
+        let stores = store_names.iter().cloned().collect();
+        self.ensure_store_names_exist(self.database_data(&db.origin, &db.name)?, &stores)?;
+        Ok(self.transaction_requests.enqueue(
+            (db.origin.clone(), db.name.clone()),
+            database,
+            stores,
+            mode,
+            wake,
+        ))
+    }
+
+    pub fn start_queued_transaction(
+        &mut self,
+        request: &crate::TransactionRequestHandle,
+    ) -> Result<TransactionHandle, IndexedDbError> {
+        if !request.belongs_to(&self.transaction_requests) || !request.is_ready() {
+            return Err(IndexedDbError::InvalidState(
+                "transaction is not ready to start".to_owned(),
+            ));
+        }
+        self.begin_transaction(request.database(), &request.store_names(), request.mode())
+    }
+
     pub fn begin_transaction(
         &mut self,
         database: DatabaseHandle,
@@ -415,16 +460,15 @@ impl IndexedDbManager {
         let store_set = store_names.iter().cloned().collect::<BTreeSet<_>>();
         self.ensure_store_names_exist(&current, &store_set)?;
 
-        if mode == TransactionMode::ReadWrite
-            && self.transactions.values().any(|tx| {
-                tx.state == TransactionLifecycle::Active
-                    && tx.mode == TransactionMode::ReadWrite
-                    && tx.origin == db.origin
-                    && tx.db_name == db.name
-            })
-        {
+        if self.transactions.values().any(|tx| {
+            tx.state == TransactionLifecycle::Active
+                && tx.origin == db.origin
+                && tx.db_name == db.name
+                && (mode != TransactionMode::ReadOnly || tx.mode != TransactionMode::ReadOnly)
+                && !tx.stores.is_disjoint(&store_set)
+        }) {
             return Err(IndexedDbError::InvalidState(
-                "concurrent readwrite transactions are not supported in the MVP backend".to_owned(),
+                "an overlapping transaction has not finished".to_owned(),
             ));
         }
 
@@ -770,11 +814,9 @@ impl IndexedDbManager {
         add_only: bool,
         quota: Option<IndexedDbQuotaCheck>,
     ) -> Result<Key, IndexedDbError> {
-        let (origin, db_name, working_copy_usage, resolved_key, previous_store) = {
+        let (resolved_key, previous_store) = {
             let tx = self.active_transaction_mut(transaction)?;
             ensure_writeable(tx)?;
-            let db_name = tx.db_name.clone();
-            let origin = tx.origin.clone();
             let store = transaction_store_mut(tx, store_name)?;
             let previous_store = quota.map(|_| store.clone());
             let previous_counter = store.auto_increment_counter;
@@ -786,21 +828,17 @@ impl IndexedDbManager {
                 ));
             }
             store.records.insert(resolved_key.clone(), value);
-            let working_copy_usage = database_usage_bytes(&db_name, &tx.working_copy);
-            (
-                origin,
-                db_name,
-                working_copy_usage,
-                resolved_key,
-                previous_store,
-            )
+            (resolved_key, previous_store)
         };
 
         if let Some(quota) = quota {
+            let tx = self.active_transaction(transaction)?;
             let requested = quota
                 .non_indexed_db_usage
-                .saturating_add(self.committed_origin_usage_except_database(&origin, &db_name))
-                .saturating_add(working_copy_usage);
+                .saturating_add(
+                    self.committed_origin_usage_except_database(&tx.origin, &tx.db_name),
+                )
+                .saturating_add(self.transaction_commit_usage(tx)?);
             if requested > quota.quota {
                 if let Some(previous_store) = previous_store {
                     let tx = self.active_transaction_mut(transaction)?;
@@ -847,22 +885,39 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
-        let (database, origin, db_name, working_copy) = {
+        let (database, origin, db_name, mode) = {
             let tx = self.active_transaction_mut(transaction)?;
             tx.state = TransactionLifecycle::Committed;
-            (
-                tx.database,
-                tx.origin.clone(),
-                tx.db_name.clone(),
-                tx.working_copy.clone(),
-            )
+            (tx.database, tx.origin.clone(), tx.db_name.clone(), tx.mode)
         };
-        let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
-            IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
-        })?;
-        origin_state.databases.insert(db_name, working_copy);
-        self.transactions.remove(&transaction);
-        let result = self.persist_origin(&origin);
+        let tx = self
+            .transactions
+            .remove(&transaction)
+            .expect("active transaction");
+        let result = if mode == TransactionMode::ReadOnly {
+            // Readers never publish their snapshot, even when another store
+            // in the same database has changed since the reader started.
+            Ok(())
+        } else {
+            let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
+                IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
+            })?;
+            if mode == TransactionMode::VersionChange {
+                origin_state.databases.insert(db_name, tx.working_copy);
+            } else {
+                let current = origin_state.databases.get_mut(&db_name).ok_or_else(|| {
+                    IndexedDbError::NotFound(format!(
+                        "database `{db_name}` was not found during commit"
+                    ))
+                })?;
+                for (name, store) in tx.working_copy.stores {
+                    if tx.stores.contains(&name) {
+                        current.stores.insert(name, store);
+                    }
+                }
+            }
+            self.persist_origin(&origin)
+        };
         self.finish_pending_database_close(database);
         result
     }
@@ -872,19 +927,15 @@ impl IndexedDbManager {
         transaction: TransactionHandle,
         quota: IndexedDbQuotaCheck,
     ) -> Result<(), IndexedDbError> {
-        let (database, origin, db_name, working_copy_usage) = {
-            let tx = self.active_transaction_mut(transaction)?;
-            (
-                tx.database,
-                tx.origin.clone(),
-                tx.db_name.clone(),
-                database_usage_bytes(&tx.db_name, &tx.working_copy),
-            )
-        };
+        let tx = self.active_transaction(transaction)?;
+        if tx.mode == TransactionMode::ReadOnly {
+            return self.commit_transaction(transaction);
+        }
+        let database = tx.database;
         let requested = quota
             .non_indexed_db_usage
-            .saturating_add(self.committed_origin_usage_except_database(&origin, &db_name))
-            .saturating_add(working_copy_usage);
+            .saturating_add(self.committed_origin_usage_except_database(&tx.origin, &tx.db_name))
+            .saturating_add(self.transaction_commit_usage(tx)?);
         if requested > quota.quota {
             self.transactions.remove(&transaction);
             self.finish_pending_database_close(database);
@@ -894,6 +945,24 @@ impl IndexedDbManager {
             });
         }
         self.commit_transaction(transaction)
+    }
+
+    fn transaction_commit_usage(&self, tx: &TransactionState) -> Result<u64, IndexedDbError> {
+        if tx.mode == TransactionMode::VersionChange {
+            return Ok(database_usage_bytes(&tx.db_name, &tx.working_copy));
+        }
+        let current = self.database_data(&tx.origin, &tx.db_name)?;
+        Ok(database_usage_bytes_for_stores(
+            &tx.db_name,
+            current.stores.iter().map(|(name, store)| {
+                let store = if tx.stores.contains(name) {
+                    &tx.working_copy.stores[name]
+                } else {
+                    store
+                };
+                (name, store)
+            }),
+        ))
     }
 
     pub fn abort_transaction(
@@ -970,6 +1039,20 @@ impl IndexedDbManager {
             .ok_or_else(|| {
                 IndexedDbError::NotFound(format!(
                     "database `{name}` for origin `{origin}` was not found"
+                ))
+            })
+    }
+
+    fn active_transaction(
+        &self,
+        handle: TransactionHandle,
+    ) -> Result<&TransactionState, IndexedDbError> {
+        self.transactions
+            .get(&handle)
+            .filter(|tx| tx.state == TransactionLifecycle::Active)
+            .ok_or_else(|| {
+                IndexedDbError::TransactionInactive(format!(
+                    "transaction handle {handle:?} is not active"
                 ))
             })
     }

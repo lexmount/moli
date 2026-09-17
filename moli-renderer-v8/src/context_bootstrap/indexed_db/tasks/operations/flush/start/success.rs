@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn start_readwrite_transaction<'s>(
+pub(super) fn start_regular_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
     transaction_handle: TransactionHandle,

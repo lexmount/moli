@@ -63,6 +63,8 @@ pub(crate) enum TransactionLifecycle {
 pub struct IndexedDbManager {
     pub(crate) connection_notifications: std::sync::Arc<crate::ConnectionNotifications>,
     pub(crate) connection_requests: std::sync::Arc<crate::ConnectionRequestQueues>,
+    pub(crate) transaction_requests:
+        std::sync::Arc<crate::transaction_queue::TransactionRequestQueues>,
     pub(crate) backend: IndexedDbPersistenceBackend,
     pub(crate) origins: BTreeMap<String, OriginState>,
     pub(crate) databases: BTreeMap<DatabaseHandle, DatabaseHandleState>,
