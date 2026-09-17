@@ -151,7 +151,6 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
     let version = snapshot.version;
     let names = snapshot.stores.keys().cloned().collect::<Vec<_>>();
     let tables = indexed_db_handle_tables(scope, database);
-    let mut stores = Vec::new();
     for table in &tables {
         for store in table.borrow_mut().object_stores.values_mut() {
             if store.transaction.to_local(scope) != transaction {
@@ -178,10 +177,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                     .expect("existing store has upgrade snapshot")
             };
             store.name = metadata.info.name.clone();
-            store.metadata = metadata.clone();
-            if let Some(wrapper) = store.wrapper.to_local(scope) {
-                stores.push((wrapper, metadata));
-            }
+            store.metadata = metadata;
         }
     }
     for table in &tables {
@@ -219,20 +215,16 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         v8::PropertyAttribute::NONE,
     );
     set_indexed_db_transaction_store_names(scope, transaction, &names);
-    for (store, metadata) in stores {
-        let _ = sync_store_surface_from_metadata(scope, store, metadata);
-    }
 }
 
-// Update every handle for this store, including separately obtained wrappers.
-// V8 surface writes happen after releasing the runtime table's borrow.
+// Update native metadata only. Author properties and cached keyPath arrays
+// are independent of schema changes, including deletion and rollback.
 pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &IndexedDbName,
 ) {
     let metadata = indexed_db_database_store_metadata(scope, database, store_name);
-    let mut stores = Vec::new();
     for table in indexed_db_handle_tables(scope, database) {
         for store in table.borrow_mut().object_stores.values_mut() {
             if store.deleted
@@ -252,14 +244,8 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
                 }
             };
             store.name = metadata.info.name.clone();
-            store.metadata = metadata.clone();
-            if let Some(wrapper) = store.wrapper.to_local(scope) {
-                stores.push((wrapper, metadata));
-            }
+            store.metadata = metadata;
         }
-    }
-    for (store, metadata) in stores {
-        let _ = sync_store_surface_from_metadata(scope, store, metadata);
     }
 }
 

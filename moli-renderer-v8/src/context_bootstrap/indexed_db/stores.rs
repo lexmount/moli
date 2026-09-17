@@ -18,12 +18,14 @@ use super::{
 };
 use crate::webidl;
 
+mod attributes;
 pub(super) mod collection;
 pub(in crate::context_bootstrap::indexed_db::stores) mod cursor_open_parse;
 mod index;
 mod key_range;
 mod object_store;
 
+pub(super) use self::attributes::*;
 pub(super) use self::index::*;
 pub(super) use self::key_range::*;
 pub(super) use self::object_store::*;

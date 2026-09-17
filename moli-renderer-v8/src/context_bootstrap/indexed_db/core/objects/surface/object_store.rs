@@ -4,13 +4,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::IDBObjectStore, require_prototype)]
-struct IdbObjectStoreObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    transaction: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property, enumerable)]
-    db: v8::Local<'scope, v8::Object>,
-}
+struct IdbObjectStoreObjectDeclaration {}
 
 pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -24,9 +18,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
         return Some(store);
     }
     let metadata = indexed_db_database_store_metadata(scope, db, &info.name)?;
-    let store = IdbObjectStoreObjectDeclaration::new(tx, db)
-        .bind(scope)
-        .ok()?;
+    let key_path = match &info.key_path {
+        Some(path) => key_path_to_js_value(scope, path)?,
+        None => v8::null(scope).into(),
+    };
+    let store = IdbObjectStoreObjectDeclaration::new().bind(scope).ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
     let owner = indexed_db_typed_execution_owner(scope, tx)
         .expect("IDBObjectStore should inherit typed owner from transaction");
@@ -38,7 +34,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_object_store_lifecycle(scope, store, tx, db, metadata.clone());
-    sync_store_surface_from_metadata(scope, store, metadata)?;
+    register_indexed_db_object_store_lifecycle(scope, store, tx, db, metadata, key_path);
     Some(store)
 }
