@@ -1121,8 +1121,10 @@ impl ScriptVm {
         let local_response = crate::network_host::local_url_response_with_blob_entry(
             &request.url,
             &request.method,
+            &request.request_headers,
             state.pending.blob_url_entry.as_ref(),
-        );
+        )
+        .map(|result| result.map_err(|error| error.into_message()));
         let internal_id = state.pending.info.internal_id;
         let host = self._context_host.borrow();
         if let Some(check) = host.window_fetch_redirect_check_for_pending(&state.pending) {

@@ -23,7 +23,7 @@ fn blob_download_activation_retains_bytes_after_revocation_and_creator_retiremen
             let activation = activations.pop().unwrap();
             assert_eq!(activation.url, url);
             assert_eq!(activation.suggested_filename.as_deref(), Some("bytes.bin"));
-            assert!(crate::blob::object_url_bytes_and_type(&url).is_none());
+            assert!(crate::blob::object_url_body_and_type(&url).is_none());
             let response = activation
                 .response
                 .expect("accepted Blob download must own its response");
