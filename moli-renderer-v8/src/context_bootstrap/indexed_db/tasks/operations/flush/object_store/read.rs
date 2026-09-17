@@ -14,19 +14,13 @@ pub(super) fn try_dispatch_object_store_read_operation<'s>(
                 query,
             );
         }
-        IndexedDbTransactionOperation::ObjectStoreGetAll {
-            query,
-            count,
-            direction,
-        } => {
+        IndexedDbTransactionOperation::ObjectStoreGetAll(collection) => {
             execute_object_store_get_all_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                query.as_ref(),
-                *count,
-                *direction,
+                collection,
             );
         }
         IndexedDbTransactionOperation::ObjectStoreGetKey { query } => {
@@ -38,21 +32,7 @@ pub(super) fn try_dispatch_object_store_read_operation<'s>(
                 query,
             );
         }
-        IndexedDbTransactionOperation::ObjectStoreGetAllKeys {
-            query,
-            count,
-            direction,
-        } => {
-            execute_object_store_get_all_keys_request(
-                scope,
-                operation.request,
-                operation.handle,
-                &operation.store_name,
-                query.as_ref(),
-                *count,
-                *direction,
-            );
-        }
+
         IndexedDbTransactionOperation::ObjectStoreCount { query } => {
             execute_object_store_count_request(
                 scope,

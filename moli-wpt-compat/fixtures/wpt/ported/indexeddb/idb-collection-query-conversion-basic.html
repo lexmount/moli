@@ -122,7 +122,7 @@ promise_test(async () => {
   assert_array_equals(
     await wait_request(index.getAllKeys({ direction: "prevunique" })),
     [3, 1],
-    "index.getAllKeys() applies options prevunique direction"
+    "index.getAllKeys() applies options prevunique direction using the lowest primary key"
   );
 
   assert_throws_name(

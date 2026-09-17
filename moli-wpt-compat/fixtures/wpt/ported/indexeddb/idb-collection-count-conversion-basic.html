@@ -113,8 +113,8 @@ promise_test(async () => {
   );
   assert_array_equals(
     await wait_request(store.getAllKeys(undefined, null)),
-    [],
-    "objectStore.getAllKeys converts null count to zero"
+    [1, 2, 3],
+    "objectStore.getAllKeys converts null count to zero, which means no limit"
   );
   assert_id_array(
     await wait_request(index.getAll(undefined, { valueOf() { return 1.9; } })),

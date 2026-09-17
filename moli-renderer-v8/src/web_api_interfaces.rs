@@ -282,6 +282,7 @@ interfaces! {
     IDBFactory;
     IDBIndex;
     IDBKeyRange;
+    IDBRecord;
     IDBObjectStore;
     IDBOpenDBRequest: IDBRequest;
     IDBRequest: EventTarget;
