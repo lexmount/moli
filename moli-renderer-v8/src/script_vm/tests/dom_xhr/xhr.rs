@@ -222,6 +222,7 @@ fn pending_fetch_continuation<'s>(
             )
             .expect("test Fetch should capture its CSP report context"),
             moli_fetch::RequestRedirectMode::Follow,
+            String::new(),
         ),
     )
 }
