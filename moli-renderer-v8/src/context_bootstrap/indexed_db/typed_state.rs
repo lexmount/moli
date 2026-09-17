@@ -398,6 +398,7 @@ struct IndexedDbTransactionLifecycleState {
     handle: Option<TransactionHandle>,
     start_request: Option<moli_indexeddb::TransactionRequestLease>,
     mode: TransactionMode,
+    durability: IdbTransactionDurability,
     active: bool,
     committing: bool,
     finished: bool,
@@ -418,7 +419,7 @@ impl IndexedDbTransactionLifecycleState {
         database: v8::Global<v8::Object>,
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
-        started: bool,
+        durability: IdbTransactionDurability,
         db_key: Option<String>,
     ) -> Self {
         Self {
@@ -427,11 +428,12 @@ impl IndexedDbTransactionLifecycleState {
             handle,
             start_request: None,
             mode,
+            durability,
             active: true,
             committing: false,
             finished: false,
             aborted: false,
-            started,
+            started: handle.is_some(),
             start_scheduled: false,
             abort_dispatched: false,
             pending: 0,
@@ -874,7 +876,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     database: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
-    started: bool,
+    durability: IdbTransactionDurability,
     db_key: Option<String>,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
@@ -884,7 +886,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         v8::Global::new(scope, database),
         handle,
         mode,
-        started,
+        durability,
         db_key,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
@@ -898,6 +900,19 @@ pub(super) fn indexed_db_transaction_mode(
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow().transactions.get(&id).map(|state| state.mode)
+}
+
+pub(super) fn indexed_db_transaction_durability(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<IdbTransactionDurability> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .map(|state| state.durability)
 }
 
 pub(super) fn set_indexed_db_transaction_start_request(
