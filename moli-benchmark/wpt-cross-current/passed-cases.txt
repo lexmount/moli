@@ -33,6 +33,16 @@ IndexedDB/idb_binary_key_conversion.any.js?moli-wpt-any=window
 IndexedDB/idb_webworkers.htm
 IndexedDB/idbcursor-delete-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor-delete-exception-order.any.js?moli-wpt-any=window
+IndexedDB/idbcursor-direction.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor-direction.any.js?moli-wpt-any=window
+IndexedDB/idbcursor-key.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor-key.any.js?moli-wpt-any=window
+IndexedDB/idbcursor-primarykey.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor-primarykey.any.js?moli-wpt-any=window
+IndexedDB/idbcursor-request.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor-request.any.js?moli-wpt-any=window
+IndexedDB/idbcursor-source.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor-source.any.js?moli-wpt-any=window
 IndexedDB/idbcursor-update-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor-update-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_delete_index.any.js?moli-wpt-any=dedicatedworker

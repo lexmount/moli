@@ -26,12 +26,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_primary_key_
         scope.throw_exception(error);
         return;
     }
-    let current = cursor_position(scope, cursor);
-    if current < 0 {
+    let Some(current) = cursor_current_position(scope, cursor) else {
         let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
         scope.throw_exception(error);
         return;
-    }
+    };
     let key = match require_idb_key(scope, parsed.key) {
         Some(key) => key,
         None => return,
@@ -50,24 +49,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_primary_key_
         scope.throw_exception(error);
         return;
     }
-    if !target_is_after_current_cursor(
-        scope,
-        cursor,
-        current as usize,
-        direction,
-        &key,
-        &primary_key,
-    ) {
+    if !target_is_after_current_cursor(scope, cursor, current, direction, &key, &primary_key) {
         return;
     }
-    let next = next_primary_key_cursor_position(
-        scope,
-        cursor,
-        current as usize,
-        direction,
-        &key,
-        &primary_key,
-    );
+    let next =
+        next_primary_key_cursor_position(scope, cursor, current, direction, &key, &primary_key);
     let _ = result::enqueue_cursor_result(scope, cursor, next);
     rv.set_undefined();
 }

@@ -4500,10 +4500,8 @@ fn indexed_db_object_store_cursors_can_iterate() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbStoreCursorResult)")
         .expect("indexeddb object store cursor result should be readable");
 
-    assert_eq!(
-        result,
-        "a:one,c:three|direction,key,primaryKey,request,source,value|b|b|direction,key,primaryKey,request,source"
-    );
+    // Cursor attributes are inherited readonly accessors.
+    assert_eq!(result, "a:one,c:three||b|b|");
 }
 
 #[tokio::test]
