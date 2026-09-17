@@ -1,103 +1,189 @@
 use super::*;
 use crate::webidl;
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> std::result::Result<Option<Key>, &'static str> {
-    parse_idb_key_with_depth(scope, value, 0)
+pub(in crate::context_bootstrap::indexed_db) enum KeyConversionError {
+    Invalid(&'static str),
+    Exception(v8::Global<v8::Value>),
 }
 
-fn parse_idb_key_with_depth(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-    depth: usize,
+impl KeyConversionError {
+    pub(in crate::context_bootstrap::indexed_db) fn into_value<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> v8::Local<'s, v8::Value> {
+        match self {
+            Self::Invalid(message) => dom_exception_value(scope, message, "DataError"),
+            Self::Exception(value) => v8::Local::new(scope, value),
+        }
+    }
+
+    pub(in crate::context_bootstrap::indexed_db) fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
+        let value = self.into_value(scope);
+        scope.throw_exception(value);
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<Key>, KeyConversionError> {
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    let parsed = parse_idb_key_value(&mut scope, value);
+    // Retain the original exception without leaving a pending rethrow for
+    // callers to accidentally replace while building a generic DataError.
+    if let Some(exception) = scope.exception() {
+        return Err(KeyConversionError::Exception(v8::Global::new(
+            &scope, exception,
+        )));
+    }
+    parsed.map_err(KeyConversionError::Invalid)
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn require_idb_key<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<Key> {
+    match parse_idb_key(scope, value) {
+        Ok(Some(key)) => Some(key),
+        Ok(None) => {
+            KeyConversionError::Invalid("The value is not a valid IndexedDB key.").throw(scope);
+            None
+        }
+        Err(error) => {
+            error.throw(scope);
+            None
+        }
+    }
+}
+
+fn parse_idb_key_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
 ) -> std::result::Result<Option<Key>, &'static str> {
     if value.is_undefined() {
         return Ok(None);
     }
-    if depth > 64 {
-        return Err("IndexedDB array keys are too deeply nested.");
+    struct ArrayFrame<'s> {
+        array: v8::Local<'s, v8::Array>,
+        length: u32,
+        keys: Vec<Key>,
     }
-    if value.is_string() {
-        if let Some(text) = value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-        {
-            return Ok(Some(Key::String(text)));
-        }
-        return Err("IndexedDB string key conversion failed.");
-    }
-    if value.is_string_object() {
-        if let Some(text) = value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-        {
-            return Ok(Some(Key::String(text)));
-        }
-        return Err("IndexedDB string object key conversion failed.");
-    }
-    if value_has_array_buffer_view_tag(value)
-        || v8::Local::<v8::ArrayBufferView>::try_from(value).is_ok()
-        || v8::Local::<v8::ArrayBuffer>::try_from(value).is_ok()
-    {
-        return Err(
-            "Only string, number, date, and array keys are supported in this IndexedDB MVP.",
-        );
-    }
-    if let Ok(array) = v8::Local::<v8::Array>::try_from(value) {
-        let mut keys = Vec::with_capacity(array.length() as usize);
-        for index in 0..array.length() {
-            let property =
-                v8_string(scope, &index.to_string()).ok_or("IndexedDB key allocation failed.")?;
-            if array.has_own_property(scope, property.into()) != Some(true) {
-                return Err("IndexedDB array keys must not contain missing entries.");
+    let mut seen = std::collections::HashSet::new();
+    let mut frames: Vec<ArrayFrame<'s>> = Vec::new();
+    let mut input = value;
+    loop {
+        let mut key = if let Ok(array) = v8::Local::<v8::Array>::try_from(input) {
+            // Reject a cycle along the current path, while allowing an array
+            // to supply the same subkey again in a later sibling.
+            if !seen.insert(array) {
+                return Err("IndexedDB array keys must not contain cycles.");
             }
-            let Some(entry) = array.get_index(scope, index) else {
-                return Err("IndexedDB array keys must not contain missing entries.");
+            let length = array.length();
+            if length != 0 {
+                input = array_key_entry(scope, array, 0)?;
+                frames.push(ArrayFrame {
+                    array,
+                    length,
+                    keys: Vec::new(),
+                });
+                continue;
+            }
+            seen.remove(&array);
+            Key::Array(Vec::new())
+        } else {
+            scalar_idb_key(scope, input)?
+        };
+        loop {
+            let Some(frame) = frames.last_mut() else {
+                return Ok(Some(key));
             };
-            let Some(key) = parse_idb_key_with_depth(scope, entry, depth + 1)? else {
-                return Err("IndexedDB array keys must not contain undefined entries.");
-            };
-            keys.push(key);
+            frame.keys.push(key);
+            let index = frame.keys.len() as u32;
+            if index < frame.length {
+                input = array_key_entry(scope, frame.array, index)?;
+                break;
+            }
+            let frame = frames.pop().unwrap();
+            seen.remove(&frame.array);
+            key = Key::Array(frame.keys);
         }
-        return Ok(Some(Key::Array(keys)));
     }
-    if value.is_number() || value.is_number_object() {
-        let number = value
-            .number_value(scope)
-            .ok_or("IndexedDB number key conversion failed.")?;
-        return number_to_idb_key(number);
+}
+
+fn array_key_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    array: v8::Local<'s, v8::Array>,
+    index: u32,
+) -> Result<v8::Local<'s, v8::Value>, &'static str> {
+    let property =
+        v8_string(scope, &index.to_string()).ok_or("IndexedDB key allocation failed.")?;
+    if array.has_own_property(scope, property.into()) != Some(true) {
+        return Err("IndexedDB array keys must not contain missing entries.");
+    }
+    array
+        .get_index(scope, index)
+        .ok_or("IndexedDB array key getter threw an exception.")
+}
+
+fn scalar_idb_key(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<Key, &'static str> {
+    if let Ok(number) = v8::Local::<v8::Number>::try_from(value) {
+        return Key::number(number.value()).ok_or("NaN is not an IndexedDB key.");
     }
     if let Ok(date) = v8::Local::<v8::Date>::try_from(value) {
-        return number_to_idb_key(date.value_of());
+        let ms = date.value_of();
+        return if ms.is_nan() {
+            Err("Invalid Date is not an IndexedDB key.")
+        } else {
+            Ok(Key::Date(ms as i64))
+        };
     }
-    Err("Only string and integer keys are supported in this IndexedDB MVP.")
+    if let Ok(string) = v8::Local::<v8::String>::try_from(value) {
+        return Ok(Key::String(
+            crate::util::v8_string_to_u16_string(scope, string).into_vec(),
+        ));
+    }
+    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
+        if buffer.was_detached() {
+            return Err("Detached buffers are not IndexedDB keys.");
+        }
+        let backing = buffer.get_backing_store();
+        reject_unsupported_key_buffer(scope, &backing)?;
+        return Ok(Key::Binary(backing.iter().map(|byte| byte.get()).collect()));
+    }
+    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
+        let buffer = view
+            .buffer(scope)
+            .ok_or("IndexedDB key buffer is unavailable.")?;
+        if buffer.was_detached() {
+            return Err("Detached buffer views are not IndexedDB keys.");
+        }
+        reject_unsupported_key_buffer(scope, &buffer.get_backing_store())?;
+        let mut bytes = vec![0; view.byte_length()];
+        let copied = view.copy_contents(&mut bytes);
+        bytes.truncate(copied);
+        return Ok(Key::Binary(bytes));
+    }
+    Err("The value is not a number, Date, string, binary, or array key.")
 }
 
-fn value_has_array_buffer_view_tag(value: v8::Local<'_, v8::Value>) -> bool {
-    value.is_int8_array()
-        || value.is_uint8_array()
-        || value.is_uint8_clamped_array()
-        || value.is_int16_array()
-        || value.is_uint16_array()
-        || value.is_int32_array()
-        || value.is_uint32_array()
-        || value.is_big_int64_array()
-        || value.is_big_uint64_array()
-        || value.is_float32_array()
-        || value.is_float64_array()
-        || value.is_data_view()
-}
-
-fn number_to_idb_key(number: f64) -> std::result::Result<Option<Key>, &'static str> {
-    if !number.is_finite() || number.fract() != 0.0 {
-        return Err("Only string and integer keys are supported in this IndexedDB MVP.");
+fn reject_unsupported_key_buffer(
+    scope: &mut v8::PinScope<'_, '_>,
+    backing: &v8::BackingStore,
+) -> Result<(), &'static str> {
+    if backing.is_shared() || backing.is_resizable_by_user_javascript() {
+        let message = v8str(
+            scope,
+            "IndexedDB binary keys require a fixed, unshared buffer.",
+        );
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        return Err("Unsupported IndexedDB key buffer.");
     }
-    if number < -(MAX_SAFE_INTEGER as f64) || number > MAX_SAFE_INTEGER as f64 {
-        return Err("Only string keys and safe integer keys are supported in this IndexedDB MVP.");
-    }
-    Ok(Some(Key::Integer(number as i64)))
+    Ok(())
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn compare_idb_keys(left: &Key, right: &Key) -> i32 {
@@ -113,10 +199,16 @@ pub(in crate::context_bootstrap::indexed_db) fn key_to_js_value<'s>(
     key: &Key,
 ) -> v8::Local<'s, v8::Value> {
     match key {
-        Key::String(value) => v8_string(scope, value)
+        Key::String(value) => crate::util::v8_string_from_utf16_units(scope, value)
             .map(Into::into)
             .unwrap_or_else(|| v8::undefined(scope).into()),
-        Key::Integer(value) => v8::Number::new(scope, *value as f64).into(),
+        Key::Number(value) => v8::Number::new(scope, value.value()).into(),
+        Key::Date(value) => v8::Date::new(scope, *value as f64)
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        Key::Binary(bytes) => crate::blob::array_buffer_from_bytes(scope, bytes.clone())
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
         Key::Array(values) => {
             let values = values
                 .iter()

@@ -19,17 +19,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_includes_callback<
         rv.set_bool(false);
         return;
     };
-    let key = match parse_idb_key(scope, parsed.key) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'includes': the key is not a valid key.",
-                "DataError",
-            );
-            scope.throw_exception(error);
-            return;
-        }
+    let Some(key) = require_idb_key(scope, parsed.key) else {
+        return;
     };
     rv.set_bool(key_in_range(&key, &range));
 }

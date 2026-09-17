@@ -103,8 +103,9 @@ fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
 
 fn key_usage_bytes(key: &Key) -> u64 {
     match key {
-        Key::String(value) => string_usage_bytes(value),
-        Key::Integer(_) => I64_STORAGE_BYTES,
+        Key::String(value) => (value.len() as u64).saturating_mul(2),
+        Key::Binary(value) => value.len() as u64,
+        Key::Number(_) | Key::Date(_) => I64_STORAGE_BYTES,
         Key::Array(values) => sum_usage(values.iter().map(key_usage_bytes)),
     }
 }
