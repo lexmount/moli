@@ -19,8 +19,7 @@ use super::{
     idb_key_range_lower_bound_callback, idb_key_range_only_callback,
     idb_key_range_upper_bound_callback,
     idb_object_store_add_callback as idb_object_store_add_callback_in_current_context,
-    idb_object_store_auto_increment_getter,
-    idb_object_store_clear_callback as idb_object_store_clear_callback_in_current_context,
+    idb_object_store_auto_increment_getter, idb_object_store_clear_callback,
     idb_object_store_count_callback as idb_object_store_count_callback_in_current_context,
     idb_object_store_create_index_callback,
     idb_object_store_delete_callback as idb_object_store_delete_callback_in_current_context,
@@ -84,10 +83,6 @@ indexed_db_receiver_realm_callback!(
 indexed_db_receiver_realm_callback!(
     idb_object_store_add_callback,
     idb_object_store_add_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_clear_callback,
-    idb_object_store_clear_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_count_callback,
