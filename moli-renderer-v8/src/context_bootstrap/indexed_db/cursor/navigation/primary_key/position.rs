@@ -29,34 +29,3 @@ pub(super) fn target_is_after_current_cursor<'s>(
     }
     true
 }
-
-pub(super) fn next_primary_key_cursor_position<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
-    current: usize,
-    direction: CursorDirection,
-    key: &Key,
-    primary_key: &Key,
-) -> Option<usize> {
-    for index in (current + 1)..cursor_entries_len(scope, cursor) {
-        let Some(candidate_key) = cursor_key_at(scope, cursor, index) else {
-            continue;
-        };
-        let Some(candidate_primary_key) = cursor_primary_key_at(scope, cursor, index) else {
-            continue;
-        };
-        match compare::cursor_direction_cmp(direction, &candidate_key, key) {
-            std::cmp::Ordering::Less => continue,
-            std::cmp::Ordering::Greater => return Some(index),
-            std::cmp::Ordering::Equal => {
-                if compare::cursor_direction_cmp(direction, &candidate_primary_key, primary_key)
-                    == std::cmp::Ordering::Less
-                {
-                    continue;
-                }
-                return Some(index);
-            }
-        }
-    }
-    None
-}

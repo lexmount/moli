@@ -54,8 +54,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_callback<'s>
         scope.throw_exception(error);
         return;
     }
-    let next = next_cursor_position(scope, cursor, current, target.as_ref(), &direction);
-    let _ = result::enqueue_cursor_result(scope, cursor, next);
+    let _ = result::enqueue_cursor_result(scope, cursor, CursorIteration::Continue(target));
     rv.set_undefined();
 }
 
@@ -81,33 +80,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_advance_callback<'s>(
     {
         return;
     }
-    let Some(current) = cursor_iteration_position(scope, cursor) else {
+    if cursor_iteration_position(scope, cursor).is_none() {
         return;
-    };
-    let next = current + count as usize;
-    let next = (next < cursor_entries_len(scope, cursor)).then_some(next);
-    let _ = result::enqueue_cursor_result(scope, cursor, next);
-    rv.set_undefined();
-}
-
-fn next_cursor_position<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
-    current: usize,
-    target: Option<&Key>,
-    direction: &CursorDirection,
-) -> Option<usize> {
-    for index in (current + 1)..cursor_entries_len(scope, cursor) {
-        let Some(candidate_key) = cursor_key_at(scope, cursor, index) else {
-            continue;
-        };
-        if let Some(target) = target {
-            let cmp = compare::cursor_direction_cmp(*direction, &candidate_key, target);
-            if cmp == std::cmp::Ordering::Less {
-                continue;
-            }
-        }
-        return Some(index);
     }
-    None
+    let _ = result::enqueue_cursor_result(scope, cursor, CursorIteration::Advance(count));
+    rv.set_undefined();
 }

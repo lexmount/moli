@@ -524,9 +524,16 @@ impl IndexedDbDatabaseLifecycleState {
     }
 }
 
+pub(super) struct IndexedDbCursorSnapshot {
+    pub(super) entries: Vec<CursorSnapshotEntry>,
+    pub(super) record_revision: u64,
+}
+
 #[derive(Clone)]
 pub(super) struct IndexedDbCursorLifecycleState {
-    pub(super) entries: Rc<[CursorSnapshotEntry]>,
+    pub(super) snapshot: Rc<IndexedDbCursorSnapshot>,
+    pub(super) operation: Rc<IndexedDbCursorOpenOperation>,
+    pending_snapshot: Option<Rc<IndexedDbCursorSnapshot>>,
     pub(super) position: Option<usize>,
     pub(super) got_value: bool,
     pub(super) direction: CursorDirection,
@@ -1065,20 +1072,21 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
 pub(super) fn register_indexed_db_cursor_lifecycle(
     scope: &mut v8::PinScope<'_, '_>,
     cursor: v8::Local<'_, v8::Object>,
-    entries: Vec<CursorSnapshotEntry>,
-    direction: CursorDirection,
-    key_only: bool,
+    snapshot: IndexedDbCursorSnapshot,
+    operation: &IndexedDbCursorOpenOperation,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, cursor) else {
         return;
     };
-    let position = (!entries.is_empty()).then_some(0);
+    let position = (!snapshot.entries.is_empty()).then_some(0);
     let state = IndexedDbCursorLifecycleState {
-        entries: entries.into(),
+        snapshot: Rc::new(snapshot),
+        operation: Rc::new(operation.clone()),
+        pending_snapshot: None,
         position,
         got_value: position.is_some(),
-        direction,
-        key_only,
+        direction: operation.direction,
+        key_only: operation.key_only,
     };
     let table = indexed_db_runtime_state_table_for_object(scope, cursor);
     table.borrow_mut().cursors.insert(id, state);
@@ -1102,11 +1110,25 @@ pub(super) fn set_indexed_db_cursor_position(
     let table = indexed_db_runtime_state_table_for_object(scope, cursor);
     let mut table = table.borrow_mut();
     let state = table.cursors.get_mut(&id)?;
+    if let Some(snapshot) = state.pending_snapshot.take() {
+        state.snapshot = snapshot;
+    }
     if let Some(position) = position {
-        state.entries.get(position)?;
+        state.snapshot.entries.get(position)?;
     }
     state.position = position;
     state.got_value = position.is_some();
+    Some(())
+}
+
+pub(super) fn set_indexed_db_cursor_pending_snapshot(
+    scope: &mut v8::PinScope<'_, '_>,
+    cursor: v8::Local<'_, v8::Object>,
+    snapshot: Rc<IndexedDbCursorSnapshot>,
+) -> Option<()> {
+    let id = indexed_db_typed_state_id(scope, cursor)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, cursor);
+    table.borrow_mut().cursors.get_mut(&id)?.pending_snapshot = Some(snapshot);
     Some(())
 }
 
