@@ -10,7 +10,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OriginState {
-    pub(crate) databases: BTreeMap<String, DatabaseData>,
+    pub(crate) databases: BTreeMap<IndexedDbName, DatabaseData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +38,7 @@ pub(crate) struct IndexData {
 #[derive(Debug, Clone)]
 pub(crate) struct DatabaseHandleState {
     pub(crate) origin: String,
-    pub(crate) name: String,
+    pub(crate) name: IndexedDbName,
     pub(crate) closed: bool,
 }
 
@@ -46,7 +46,7 @@ pub(crate) struct DatabaseHandleState {
 pub(crate) struct TransactionState {
     pub(crate) database: DatabaseHandle,
     pub(crate) origin: String,
-    pub(crate) db_name: String,
+    pub(crate) db_name: IndexedDbName,
     pub(crate) mode: TransactionMode,
     pub(crate) stores: BTreeSet<IndexedDbName>,
     pub(crate) state: TransactionLifecycle,

@@ -7,7 +7,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_open_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     storage_scope: IndexedDbStorageScope,
-    name: String,
+    name: IndexedDbName,
     version: Option<u64>,
 ) {
     let database_name = name.clone();
