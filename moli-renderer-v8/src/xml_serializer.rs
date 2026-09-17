@@ -73,10 +73,32 @@ fn serialize_native_value<'s>(
     // SAFETY: the node bridge only returns the context host installed for this
     // live V8 callback, and serialization holds no reference past the callback.
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
+    Some(serialize_native_handle(dom_host, handle))
+}
+
+pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) -> String {
     let mut next_generated_prefix = 1;
-    Some(serialize_native_node(
+    serialize_native_node(
         dom_host,
         handle,
+        &NamespaceContext::default(),
+        &mut next_generated_prefix,
+    )
+}
+
+pub(crate) fn serialize_native_inner_html(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+) -> Option<String> {
+    let child_container = dom_host
+        .node(handle)?
+        .as_element()
+        .and_then(|element| element.template_contents())
+        .unwrap_or(handle);
+    let mut next_generated_prefix = 1;
+    Some(serialize_native_children(
+        dom_host,
+        child_container,
         &NamespaceContext::default(),
         &mut next_generated_prefix,
     ))

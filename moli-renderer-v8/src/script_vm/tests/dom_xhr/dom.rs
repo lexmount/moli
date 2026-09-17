@@ -1711,6 +1711,37 @@ fn xml_serializer_synthesizes_required_namespace_declarations() {
 }
 
 #[test]
+fn outer_html_uses_xml_serialization_for_elements_in_xml_documents() {
+    let mut vm = new_storage_test_vm("https://xml-outer-html.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xml = document.implementation.createDocument(null, '');
+  const htmlNamespace = 'http://www.w3.org/1999/xhtml';
+  const div = xml.createElementNS(htmlNamespace, 'div');
+  const br = xml.createElementNS(htmlNamespace, 'br');
+  const htmlBr = document.createElement('br');
+  return JSON.stringify({
+    contentType: xml.contentType,
+    div: div.outerHTML,
+    br: br.outerHTML,
+    serializerDiv: new XMLSerializer().serializeToString(div),
+    htmlBr: htmlBr.outerHTML
+  });
+})()
+"#,
+        )
+        .expect("XML document element outerHTML should use XML serialization");
+
+    assert_eq!(
+        result,
+        r#"{"contentType":"application/xml","div":"<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>","br":"<br xmlns=\"http://www.w3.org/1999/xhtml\" />","serializerDiv":"<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>","htmlBr":"<br>"}"#
+    );
+}
+
+#[test]
 fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() {
     let mut vm = new_storage_test_vm("https://xml-serializer-node-kinds.test/");
 
