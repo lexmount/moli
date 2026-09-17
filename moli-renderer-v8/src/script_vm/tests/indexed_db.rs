@@ -392,7 +392,7 @@ fn indexed_db_request_state_and_event_handlers_are_inherited() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":[],"openHandlers":[false,false],"databaseKeys":["name","version"],"databaseHandlers":[false,false,false,false],"databaseVersion":1,"databaseStores":true,"transactionKeys":[],"transactionHandlers":[false,false,false],"transactionMode":"readonly","transactionStores":true,"requestKeys":[],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":[],"openHandlers":[false,false],"databaseKeys":[],"databaseHandlers":[false,false,false,false],"databaseVersion":1,"databaseStores":true,"transactionKeys":[],"transactionHandlers":[false,false,false],"transactionMode":"readonly","transactionStores":true,"requestKeys":[],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 

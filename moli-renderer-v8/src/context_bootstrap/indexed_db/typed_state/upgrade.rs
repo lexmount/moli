@@ -135,13 +135,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         }
         (snapshot.version, names)
     };
-    let version = v8::Number::new(scope, version as f64);
-    let _ = database.define_own_property(
-        scope,
-        v8str(scope, "version").into(),
-        version.into(),
-        v8::PropertyAttribute::NONE,
-    );
+    set_indexed_db_database_version(scope, database, version);
     set_indexed_db_transaction_store_names(scope, transaction, &names);
 }
 
