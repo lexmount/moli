@@ -1855,7 +1855,7 @@ mod tests {
     fn text_document_stream_preserves_literal_markup_and_leading_newline() {
         let payload = "\n<b>Gülçek</b>&amp;<script>window.executed=1</script></pre>";
         for content_type in ["text/plain", "application/json", "application/problem+json"] {
-            let mut stream = HtmlParser::SCRIPTING_ENABLED.start_text_document(
+            let stream = HtmlParser::SCRIPTING_ENABLED.start_text_document(
                 Url::parse("https://example.test/data").unwrap(),
                 content_type,
             );
