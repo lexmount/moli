@@ -1,5 +1,18 @@
 use super::*;
-use crate::{util::context_host_ptr_from_window_object, webidl};
+use crate::{util::context_host_ptr_from_window_object, web_api_interfaces, webidl};
+use moli_webapi_declare::WebApiObject;
+
+#[derive(Default, WebApiObject)]
+#[webapi(
+    fragment,
+    prototype = "WorkerGlobalScope",
+    enumerable,
+    receiver = web_api_interfaces::WorkerGlobalScope::is_instance
+)]
+struct WorkerIndexedDbPrototypeDeclaration {
+    #[webapi(accessor_property = "indexedDB", getter = worker_indexed_db_getter)]
+    indexed_db: (),
+}
 
 pub(in crate::context_bootstrap) fn ensure_indexed_db_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -9,27 +22,25 @@ pub(in crate::context_bootstrap) fn ensure_indexed_db_runtime_state<'s>(
 
 pub(crate) fn install_worker_indexed_db_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    global
-        .set_lazy_data_property_with_configuration(
-            scope,
-            v8str(scope, "indexedDB").into(),
-            v8::LazyDataPropertyConfiguration::new(worker_indexed_db_lazy_getter)
-                .property_attribute(v8::PropertyAttribute::DONT_ENUM)
-                .getter_side_effect_type(v8::SideEffectType::HasNoSideEffect),
-        )
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| anyhow!("failed to install lazy worker IndexedDB factory"))
+    let prototype = crate::util::global_constructor_prototype(scope, "WorkerGlobalScope")
+        .ok_or_else(|| anyhow!("WorkerGlobalScope prototype missing during IndexedDB bootstrap"))?;
+    WorkerIndexedDbPrototypeDeclaration::default()
+        .initialize(scope, prototype)
+        .map_err(|error| anyhow!("failed to install WorkerGlobalScope indexedDB getter: {error}"))
 }
 
-fn worker_indexed_db_lazy_getter<'s>(
+fn worker_indexed_db_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _name: v8::Local<'s, v8::Name>,
-    _args: v8::PropertyCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    // Laziness and SameObject identity belong to the realm's private cache,
+    // independently of author properties shadowing the prototype getter.
     match ensure_indexed_db_runtime_state(scope) {
         Some(factory) => rv.set(factory.into()),
         None => rv.set(v8::undefined(scope).into()),
