@@ -1,11 +1,12 @@
 //! URL parsing captures the blob entry, including a failed lookup. Revoking
 //! the URL must not invalidate an existing Request or a successfully opened
-//! XHR. Private carriers retain shared bytes until their last JS owner is
-//! collected; the isolate store also releases them on isolate teardown.
+//! XHR. Private carriers retain the Blob bytes or native MediaSource identity
+//! until their last JS owner is collected; isolate teardown also releases them.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::util::{get_private_value, set_private_value};
+use moli_file_api::ObjectUrlData;
 
 pub(in crate::network_host) const BLOB_URL_ENTRY_SLOT: &str = "__lmBlobUrlEntry";
 const ID_SLOT: &str = "__lmBlobUrlEntryId";
@@ -13,7 +14,7 @@ const ID_SLOT: &str = "__lmBlobUrlEntryId";
 #[derive(Clone)]
 pub(crate) struct CapturedBlobUrl {
     url: url::Url,
-    data: Option<(Arc<[u8]>, String)>,
+    data: Option<crate::blob::RendererObjectUrlData>,
 }
 
 impl CapturedBlobUrl {
@@ -23,7 +24,7 @@ impl CapturedBlobUrl {
         }
         let mut url = url.clone();
         url.set_fragment(None);
-        let data = crate::blob::object_url_shared_bytes_and_type(url.as_str());
+        let data = crate::blob::object_url_data(url.as_str());
         Some(Self { url, data })
     }
 
@@ -32,7 +33,18 @@ impl CapturedBlobUrl {
         url: &url::Url,
         request_headers: &[(String, String)],
     ) -> Option<Result<super::Response, super::browser_response::LocalUrlResponseError>> {
-        let (body, mime_type) = self.data.as_ref()?;
+        let ObjectUrlData::Blob {
+            bytes: body,
+            mime_type,
+        } = self.data.as_ref()?
+        else {
+            // Fetch's blob scheme only reads Blob objects, never MediaSource.
+            return Some(Err(
+                super::browser_response::LocalUrlResponseError::InvalidRequest(
+                    "MediaSource object URLs cannot be fetched".to_owned(),
+                ),
+            ));
+        };
         Some(super::browser_response::blob_response(
             url,
             body,
@@ -129,11 +141,22 @@ pub(crate) fn blob_url_entry<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    fn bytes(entry: &CapturedBlobUrl) -> &Arc<[u8]> {
+        let Some(ObjectUrlData::Blob { bytes, .. }) = &entry.data else {
+            panic!("expected captured Blob bytes");
+        };
+        bytes
+    }
 
     fn entry() -> CapturedBlobUrl {
         CapturedBlobUrl {
             url: url::Url::parse("blob:https://example.test/captured").unwrap(),
-            data: Some((Arc::from([0, 128, 255]), "application/example".to_owned())),
+            data: Some(ObjectUrlData::Blob {
+                bytes: Arc::from([0, 128, 255]),
+                mime_type: "application/example".to_owned(),
+            }),
         }
     }
 
@@ -149,7 +172,7 @@ mod tests {
                 let scope = &mut v8::ContextScope::new(scope, first);
                 let owner = v8::Object::new(scope);
                 let entry = entry();
-                let weak = Arc::downgrade(&entry.data.as_ref().unwrap().0);
+                let weak = Arc::downgrade(bytes(&entry));
                 set_blob_url_entry(scope, owner, Some(entry));
                 let second = v8::Context::new(scope, Default::default());
                 let scope = &mut v8::ContextScope::new(scope, second);
@@ -157,10 +180,7 @@ mod tests {
                 let carrier = get_private_value(scope, owner, BLOB_URL_ENTRY_SLOT).unwrap();
                 set_private_value(scope, other, BLOB_URL_ENTRY_SLOT, carrier);
                 let captured = blob_url_entry(scope, other).unwrap();
-                assert!(Arc::ptr_eq(
-                    &captured.data.unwrap().0,
-                    &weak.upgrade().unwrap()
-                ));
+                assert!(Arc::ptr_eq(bytes(&captured), &weak.upgrade().unwrap()));
                 (weak, v8::Global::new(scope, other))
             };
             isolate.low_memory_notification();
@@ -183,7 +203,7 @@ mod tests {
             let scope = &mut v8::ContextScope::new(scope, context);
             let owner = v8::Object::new(scope);
             let entry = entry();
-            let weak = Arc::downgrade(&entry.data.as_ref().unwrap().0);
+            let weak = Arc::downgrade(bytes(&entry));
             set_blob_url_entry(scope, owner, Some(entry));
             weak
         };

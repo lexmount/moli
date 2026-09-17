@@ -50,7 +50,7 @@ mod media_cues;
 pub(crate) use media_cues::new_media_error_value;
 mod media_file_template;
 mod media_queries;
-mod media_source;
+pub(crate) mod media_source;
 mod message_ports;
 mod microtask_checkpoint;
 mod navigation_activation;
