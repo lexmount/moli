@@ -7,10 +7,10 @@ pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
 }
 
 pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: String) -> Response {
-    let mut headers = Vec::new();
-    if !mime_type.is_empty() {
-        headers.push(("Content-Type".to_owned(), mime_type));
-    }
+    let headers = vec![
+        ("Content-Length".to_owned(), body_bytes.len().to_string()),
+        ("Content-Type".to_owned(), mime_type),
+    ];
     Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
             status_text: None,
