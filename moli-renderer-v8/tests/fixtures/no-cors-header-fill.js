@@ -13,6 +13,8 @@ async function noCorsFillProbe(base) {
   const longType = 'text/plain;x=' + 'a'.repeat(114);
   cases.push(
     ['type/duplicate', 'Content-Type', ['text/plain', 'text/plain'], 'text/plain', false],
+    ['type/parameter', 'Content-Type', ['text/plain;charset=utf8', 'extra'], 'text/plain;charset=utf8, extra', true],
+    ['type/parameter-second-type', 'Content-Type', ['text/plain;charset=utf8', 'application/json'], 'text/plain;charset=utf8, application/json', true],
     ['type/unsafe', 'Content-Type', ['text/plain;charset=utf8', '"'], 'text/plain;charset=utf8', false],
     ['type/invalid-first', 'Content-Type', ['application/json', 'text/plain'], 'text/plain', false],
     ['type/overflow', 'Content-Type', [longType, 'ok'], longType, false],
