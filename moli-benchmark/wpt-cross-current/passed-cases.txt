@@ -5710,6 +5710,8 @@ fetch/content-length/content-length.html
 fetch/nosniff/importscripts.html
 fetch/range/blob.any.js?moli-wpt-any=dedicatedworker
 fetch/range/blob.any.js?moli-wpt-any=window
+fetch/range/general.any.js?moli-wpt-any=dedicatedworker
+fetch/range/general.any.js?moli-wpt-any=window
 fetch/security/dangling-markup/media.html
 fetch/security/dangling-markup/option.html
 fetch/security/dangling-markup/textarea.html

@@ -199,3 +199,170 @@ async fn http_header_bytes_survive_disk_cache_reopen() -> Result<()> {
     }
     Ok(())
 }
+
+fn accept_encoding_values(request: &[u8]) -> Vec<&str> {
+    std::str::from_utf8(request)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("accept-encoding")
+                .then_some(value.trim())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn range_requests_select_identity_in_every_transport() -> Result<()> {
+    // Presence, including an empty or malformed value, selects identity.
+    // Ordinary requests before and after must still negotiate compression.
+    let ranges = [
+        None,
+        Some("bytes=0-10"),
+        Some("foo=0-10"),
+        Some("foo"),
+        Some(""),
+        Some("bytes=-3"),
+        Some("bytes=0-1,4-5"),
+        None,
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/range", listener.local_addr()?);
+    let server = tokio::spawn(serve_responses(
+        listener,
+        vec![response(b""); ranges.len() * 3],
+    ));
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        for range in ranges {
+            let headers = range
+                .map(|value| vec![("rAnGe".into(), value.into())])
+                .unwrap_or_default();
+            let recorder = NetworkObservationRecorder::default();
+            let request = Request::new("GET", &url, None, headers)?
+                .with_network_observation_recorder(recorder.clone());
+            fetch_in_mode(&client, request.clone(), mode).await?;
+            assert!(
+                request
+                    .request_headers
+                    .iter()
+                    .all(|(name, _)| !name.eq_ignore_ascii_case("accept-encoding"))
+            );
+            if range.is_some() {
+                let journal = recorder.snapshot();
+                assert!(
+                    journal
+                        .final_request_observation()
+                        .unwrap()
+                        .headers()
+                        .iter()
+                        .any(|(name, value)| name.eq_ignore_ascii_case("accept-encoding")
+                            && value == "identity"),
+                    "{mode}: {range:?}"
+                );
+            }
+        }
+    }
+    let requests = server.await??;
+    assert_eq!(requests.len(), ranges.len() * 3);
+    for (request, range) in requests.iter().zip(ranges.into_iter().cycle()) {
+        let values = accept_encoding_values(request);
+        if range.is_some() {
+            assert_eq!(values, ["identity"], "{range:?}");
+        } else {
+            assert_eq!(values.len(), 1);
+            assert!(values[0].contains("gzip"), "{values:?}");
+        }
+    }
+    assert!(client.shutdown().is_clean());
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_requests_respect_native_header_configuration() -> Result<()> {
+    for (defaults, headers, expected) in [
+        (vec![("Range", "bytes=0-10")], vec![], "identity"),
+        (
+            vec![("aCcEpT-EnCoDiNg", "gzip")],
+            vec![("Range", "bytes=0-10")],
+            "gzip",
+        ),
+        (
+            vec![("Range", "bytes=0-10")],
+            vec![("Accept-Encoding", "br")],
+            "br",
+        ),
+        (
+            vec![("Range", "bytes=0-10")],
+            vec![("Accept-Encoding", "")],
+            "",
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/configured", listener.local_addr()?);
+        let server = tokio::spawn(serve_responses(listener, vec![response(b""); 3]));
+        let mut config = FetchConfig::default();
+        for (name, value) in defaults {
+            config.push_default_request_header(name, value);
+        }
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        for mode in ["buffered", "html", "raw"] {
+            let request = Request::new(
+                "GET",
+                &url,
+                None,
+                headers
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), v.to_string()))
+                    .collect(),
+            )?;
+            fetch_in_mode(&client, request, mode).await?;
+        }
+        for request in server.await?? {
+            assert_eq!(accept_encoding_values(&request), [expected]);
+        }
+        assert!(client.shutdown().is_clean());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn range_redirects_keep_identity_and_response_decompression() -> Result<()> {
+    // A native HTTP caller still receives decoded bytes if a server ignores
+    // the requested encoding and sends a complete gzip response.
+    let gzip = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x49\x4d\xce\x4f\x49\x4d\x01\x00\xf6\x9a\xf0\x1a\x07\x00\x00\x00";
+    let compressed = [
+        format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", gzip.len()).as_bytes(),
+        gzip,
+    ].concat();
+    let redirect = b"HTTP/1.1 307 Redirect\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+    for mode in ["html", "raw"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/start", listener.local_addr()?);
+        let server = tokio::spawn(serve_responses(
+            listener,
+            vec![redirect.clone(), compressed.clone(), compressed.clone()],
+        ));
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let request = Request::new(
+            "GET",
+            &url,
+            None,
+            vec![("Range".into(), "bytes=0-10".into())],
+        )?;
+        let (head, body) = fetch_in_mode(&client, request, mode).await?;
+        assert!(head.redirected);
+        assert_eq!(head.final_url.path(), "/final");
+        assert_eq!(body, b"decoded");
+        let (_, body) = fetch_in_mode(&client, Request::get(&url)?, mode).await?;
+        assert_eq!(body, b"decoded");
+        let requests = server.await??;
+        assert_eq!(requests.len(), 3);
+        for request in &requests[..2] {
+            assert_eq!(accept_encoding_values(request), ["identity"]);
+        }
+        assert!(accept_encoding_values(&requests[2])[0].contains("gzip"));
+        assert!(client.shutdown().is_clean());
+    }
+    Ok(())
+}
