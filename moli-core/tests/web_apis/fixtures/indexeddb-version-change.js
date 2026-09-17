@@ -143,11 +143,20 @@ async function versionChangeProbe(prefix = 'version-change') {
       second.onupgradeneeded = value => inspectNative('upgrade', value, 1, 2);
       const newDb = await requestResult(second);
       newDb.onversionchange = value => { inspectNative('delete notification', value, 2, null); newDb.close(); };
-      await requestResult(factory.deleteDatabase(name));
+      const deletion = factory.deleteDatabase(name);
+      await new Promise((resolve, reject) => {
+        deletion.onsuccess = value => { inspectNative('delete success', value, 2, null); resolve(); };
+        deletion.onerror = () => reject(deletion.error);
+      });
+      const absent = factory.deleteDatabase(name);
+      await new Promise((resolve, reject) => {
+        absent.onsuccess = value => { inspectNative('absent delete', value, 0, null); resolve(); };
+        absent.onerror = () => reject(absent.error);
+      });
     } finally { Realm.IDBVersionChangeEvent = savedCtor; }
     if (inspectionError) throw inspectionError;
     same(label + ': native event order', seen,
-      ['create', 'versionchange', 'blocked', 'upgrade', 'delete notification']);
+      ['create', 'versionchange', 'blocked', 'upgrade', 'delete notification', 'delete success', 'absent delete']);
     for (const [name, value, oldVersion, newVersion] of nativeEvents) {
       same(label + ': retained native ' + name, [get('oldVersion', value), get('newVersion', value)], [oldVersion, newVersion]);
     }
