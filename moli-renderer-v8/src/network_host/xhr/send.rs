@@ -10,7 +10,7 @@ use self::paths::{
 #[cfg(test)]
 pub(crate) use self::request::prepare_xhr_send_body;
 pub(crate) use self::request::{
-    PreparedXhrSendBody, prepare_xhr_send_body_from_args, xhr_author_request_headers,
+    PreparedXhrSendBody, convert_xhr_send_body_from_args, xhr_author_request_headers,
 };
 use self::request::{
     PreparedXhrSendRequest, XhrSendPrepareError, prepare_xhr_send_request,
@@ -39,9 +39,7 @@ pub(super) fn xhr_send_callback<'s>(
     }
 
     let xhr = args.this();
-    let method =
-        xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_else(|| "GET".to_owned());
-    let prepared_body = match prepare_xhr_send_body_from_args(scope, &args, &method) {
+    let body = match convert_xhr_send_body_from_args(scope, &args) {
         Ok(body) => body,
         Err(error) => {
             crate::webidl::throw_error(scope, &error);
@@ -60,7 +58,16 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
+    let method =
+        xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_else(|| "GET".to_owned());
     let async_request = xhr_is_async(scope, xhr);
+    let prepared_body = match body.prepare(scope, &method) {
+        Ok(body) => body,
+        Err(error) => {
+            crate::webidl::throw_error(scope, &error);
+            return;
+        }
+    };
 
     cancel_xhr_timeout(scope, xhr);
     set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, true);

@@ -2064,13 +2064,13 @@ fn xml_http_request_send_callback_parses_webidl_body_argument() {
 
   const get = new XMLHttpRequest();
   get.open('GET', '/ignored-body');
-  const ignoredGetBody = probe(() => get.send(Symbol('ignored')));
+  const getSymbolBody = probe(() => get.send(Symbol('ignored')));
 
   const lowercaseGet = new XMLHttpRequest();
   lowercaseGet.open('get', '/ignored-lower-body');
-  const ignoredLowercaseGetBody = probe(() => lowercaseGet.send(Symbol('ignored')));
+  const lowercaseGetSymbolBody = probe(() => lowercaseGet.send(Symbol('ignored')));
 
-  return [symbol, throwing, ignoredGetBody, ignoredLowercaseGetBody].join('|');
+  return [symbol, throwing, getSymbolBody, lowercaseGetSymbolBody].join('|');
 })()
             "#,
         )
@@ -2078,7 +2078,7 @@ fn xml_http_request_send_callback_parses_webidl_body_argument() {
 
     assert_eq!(
         result,
-        "throw:TypeError|throw:RangeError|undefined|undefined"
+        "throw:TypeError|throw:RangeError|throw:TypeError|throw:TypeError"
     );
 }
 #[test]

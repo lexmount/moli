@@ -15,7 +15,12 @@ struct XmlHttpRequestTemplateMethodsDeclaration {
     )]
     open: (),
 
-    #[webapi(method = "send", length = 0, callback = xhr_send_callback)]
+    #[webapi(
+        method = "send",
+        length = 0,
+        callback = xhr_send_callback,
+        receiver = web_api_interfaces::XMLHttpRequest::is_instance
+    )]
     send: (),
 
     #[webapi(method = "abort", length = 0, callback = xhr_abort_callback)]
