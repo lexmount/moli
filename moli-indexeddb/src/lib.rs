@@ -16,6 +16,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod transaction;
+mod transaction_queue;
 mod types;
 mod usage;
 
@@ -37,6 +38,7 @@ pub use options::{
     validate_index_options, validate_object_store_options,
 };
 pub use state::IndexedDbManager;
+pub use transaction_queue::{TransactionRequestHandle, TransactionRequestLease};
 pub use types::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions,
     IndexedDbExternalObject, IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind,

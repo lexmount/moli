@@ -17,13 +17,17 @@ pub(crate) fn origin_usage_bytes(state: &OriginState) -> u64 {
 }
 
 pub(crate) fn database_usage_bytes(name: &str, database: &DatabaseData) -> u64 {
+    database_usage_bytes_for_stores(name, database.stores.iter())
+}
+
+pub(crate) fn database_usage_bytes_for_stores<'a>(
+    name: &str,
+    stores: impl Iterator<Item = (&'a String, &'a ObjectStoreData)>,
+) -> u64 {
     string_usage_bytes(name)
         .saturating_add(U64_STORAGE_BYTES)
         .saturating_add(sum_usage(
-            database
-                .stores
-                .iter()
-                .map(|(name, store)| object_store_usage_bytes(name, store)),
+            stores.map(|(name, store)| object_store_usage_bytes(name, store)),
         ))
 }
 
