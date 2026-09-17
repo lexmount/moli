@@ -19,7 +19,7 @@ use super::{
     storage_scope_for_window_execution_context, store_request_error,
     sync_transaction_object_store_names_from_database, throw_type_error,
     transaction_handle_from_value, unregister_open_database_connection,
-    unregister_regular_transaction, v8_string, v8str, validate_storage_bucket_scope,
+    unregister_regular_transaction, v8_string, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };
 use moli_indexeddb::IndexedDbName;
