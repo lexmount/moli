@@ -136,6 +136,7 @@ fn service_worker_fetch_can_forward_stream(
         &response_head.headers,
     )?;
     Ok(job.direct_completion_tx.is_none()
+        && job.metadata.integrity.is_empty()
         && !matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::Audio
@@ -615,6 +616,13 @@ impl ServiceWorkerRuntimeService {
             &response.headers,
         ) {
             self.complete_fetch_with_failure(job, message);
+            return;
+        }
+        if response.body_is_null && !job.metadata.integrity.is_empty() {
+            self.complete_fetch_with_failure(
+                job,
+                "fetch: integrity metadata requires a non-null response body".to_owned(),
+            );
             return;
         }
         let response_filter =
@@ -1254,6 +1262,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
@@ -1286,6 +1295,122 @@ mod tests {
             vec![("content-type".to_owned(), b"text/plain".to_vec())]
         );
         assert_eq!(response.body_text(), "service-worker-body");
+    }
+
+    #[test]
+    fn fetch_integrity_rejects_synthetic_null_bodies_but_preserves_empty_bodies() {
+        for integrity in ["", "sha1-ignored", " "] {
+            for body_is_null in [false, true] {
+                let service = new_service_worker_runtime_service();
+                let event_id = ServiceWorkerEventId(21);
+                let version_id = ServiceWorkerVersionId(1);
+                let run = RendererServiceWorkerRunIdentity::fresh();
+                let mut queue =
+                    crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+                let final_url = insert_active_fetch_job(
+                    &service,
+                    event_id,
+                    version_id,
+                    &run,
+                    301,
+                    queue.sender(),
+                );
+                service
+                    .inner
+                    .state
+                    .lock()
+                    .pending_fetch_jobs
+                    .get_mut(&event_id)
+                    .unwrap()
+                    .metadata
+                    .integrity = integrity.to_owned();
+                service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+                    event_id,
+                    owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                        version_id, run,
+                    ),
+                    result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        body_is_null,
+                        cors_exposed_header_names: None,
+                        final_url: Some(final_url),
+                        response_type: "default".to_owned(),
+                        redirected: false,
+                        status: 200,
+                        status_text: "OK".to_owned(),
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    }),
+                });
+                let completion = pop_async_subresource_completion(&mut queue);
+                assert_eq!(
+                    completion.result.is_ok(),
+                    integrity.is_empty() || !body_is_null,
+                    "integrity={integrity:?}, body_is_null={body_is_null}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_integrity_defers_service_worker_stream_handover() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(21);
+        let version_id = ServiceWorkerVersionId(1);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        let final_url =
+            insert_active_fetch_job(&service, event_id, version_id, &run, 301, queue.sender());
+        service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .get_mut(&event_id)
+            .unwrap()
+            .metadata
+            .integrity = "sha1-ignored".to_owned();
+        service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
+            event_id,
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                version_id,
+                run.clone(),
+            ),
+            body_source_id: 77,
+            response_head: MaterializedServiceWorkerFetchResponseHead {
+                cors_exposed_header_names: None,
+                final_url: Some(final_url.clone()),
+                response_type: "default".to_owned(),
+                redirected: false,
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
+        });
+        assert!(queue.pop_next_async_subresource_event().is_none());
+        service.finish_fetch_stream_chunk(ServiceWorkerFetchStreamChunk {
+            event_id,
+            body_source_id: 77,
+            bytes: b"hello".to_vec(),
+        });
+        assert!(queue.pop_next_async_subresource_event().is_none());
+        service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+            event_id,
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
+            result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+                cors_exposed_header_names: None,
+                final_url: Some(final_url),
+                response_type: "default".to_owned(),
+                redirected: false,
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+                body: b"hello integrity".to_vec(),
+            }),
+        });
+        let completion = pop_async_subresource_completion(&mut queue);
+        assert_eq!(completion.result.unwrap().body_bytes(), b"hello integrity");
+        assert!(queue.pop_next_async_subresource_event().is_none());
     }
 
     #[test]
@@ -1397,6 +1522,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
@@ -1523,6 +1649,7 @@ mod tests {
                         version_id, run,
                     ),
                     result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        body_is_null: false,
                         cors_exposed_header_names: None,
                         final_url: None,
                         response_type: "default".to_owned(),
@@ -1588,6 +1715,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "opaque".to_owned(),
@@ -1634,6 +1762,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
@@ -1679,6 +1808,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
@@ -1723,6 +1853,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://example.test/app/manual-final.txt")),
                 response_type: "default".to_owned(),
@@ -1772,6 +1903,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -1896,6 +2028,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -1958,6 +2091,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -2041,6 +2175,7 @@ mod tests {
                 }
             }));
         let redirect = || ServiceWorkerFetchResponse {
+            body_is_null: false,
             cors_exposed_header_names: None,
             final_url: None,
             response_type: "default".to_owned(),
@@ -2126,6 +2261,7 @@ mod tests {
             .without_inferred_referrer()
             .with_fetch_priority_hint(Some(moli_fetch::FetchPriorityHint::High));
         let response = ServiceWorkerFetchResponse {
+            body_is_null: false,
             cors_exposed_header_names: None,
             final_url: Some(request_url.clone()),
             response_type: "default".to_owned(),
@@ -2201,6 +2337,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -2249,6 +2386,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(response_url.clone()),
                 response_type: "default".to_owned(),
@@ -2317,6 +2455,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "error".to_owned(),
@@ -2365,6 +2504,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cross-origin.test/data.txt")),
                 response_type: "cors".to_owned(),
@@ -2412,6 +2552,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "opaque".to_owned(),
@@ -2475,6 +2616,7 @@ mod tests {
                     run.clone(),
                 ),
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                    body_is_null: false,
                     cors_exposed_header_names: None,
                     final_url: None,
                     response_type: "opaque".to_owned(),
@@ -2523,6 +2665,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
@@ -2577,6 +2720,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
@@ -2641,6 +2785,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2701,6 +2846,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2760,6 +2906,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2819,6 +2966,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2879,6 +3027,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2933,6 +3082,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2992,6 +3142,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -3050,6 +3201,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -3102,6 +3254,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -3349,6 +3502,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -3398,6 +3552,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
@@ -3446,6 +3601,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
                 cors_exposed_header_names: None,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
