@@ -1,20 +1,19 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
+use crate::context_bootstrap::indexed_db::{
+    DATABASE_NAME_SLOT, DATABASE_VERSION_SLOT, initialize_indexed_db_event_target,
+};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBDatabase,
-    require_prototype,
-    data_properties,
-    enumerable
-)]
+#[webapi(interface = web_api_interfaces::IDBDatabase, require_prototype)]
 struct IdbDatabaseObjectDeclaration {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
+    #[webapi(slot = DATABASE_NAME_SLOT)]
     name: String,
+    #[webapi(slot = DATABASE_VERSION_SLOT)]
     version: f64,
 }
 

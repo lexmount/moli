@@ -2,6 +2,28 @@ use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_database_attributes_preserve_connection_state_across_upgrade_and_close()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-database-attributes.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ndatabaseAttributesProbe('database-attributes-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: databaseAttributeChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 234 } else { 770 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_transaction_attributes_preserve_native_state_receivers_and_lifetime()
 -> Result<()> {
     let server = FixtureServer::spawn().await?;
