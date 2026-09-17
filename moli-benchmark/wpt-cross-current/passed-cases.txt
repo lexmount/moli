@@ -10371,6 +10371,8 @@ xhr/responsexml-non-document-types.htm
 xhr/responsexml-non-well-formed.htm
 xhr/send-accept-language.htm
 xhr/send-after-setting-document-domain.htm
+xhr/send-data-sharedarraybuffer.any.js?moli-wpt-any=dedicatedworker
+xhr/send-data-sharedarraybuffer.any.js?moli-wpt-any=window
 xhr/send-non-same-origin.htm
 xhr/send-receive-utf16.htm
 xhr/send-redirect-no-location.htm
