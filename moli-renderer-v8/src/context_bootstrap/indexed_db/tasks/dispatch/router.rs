@@ -23,6 +23,7 @@ pub(crate) fn flush_next_indexed_db_task(scope: &mut v8::PinScope<'_, '_>) -> bo
                     scope, handle,
                 );
             }
+            IndexedDbTaskSourceEntry::TransactionsReady => enqueue_ready_transaction_starts(scope),
         }
         return true;
     }

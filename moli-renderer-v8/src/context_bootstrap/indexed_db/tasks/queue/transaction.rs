@@ -7,7 +7,7 @@ mod successor;
 
 pub(in crate::context_bootstrap::indexed_db) use self::abort::enqueue_transaction_abort_task;
 pub(in crate::context_bootstrap::indexed_db) use self::commit::enqueue_transaction_commit_task;
-pub(in crate::context_bootstrap::indexed_db) use self::successor::enqueue_next_readwrite_transaction_start;
+pub(in crate::context_bootstrap::indexed_db) use self::successor::enqueue_ready_transaction_starts;
 
 pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,

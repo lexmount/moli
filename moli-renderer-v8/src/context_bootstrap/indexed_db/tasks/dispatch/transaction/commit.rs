@@ -126,9 +126,6 @@ fn finish_transaction<'s>(
         INDEXED_DB_TRANSACTION_FINISHED_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    let db_key = transaction_db_key(scope, transaction);
-    unregister_readwrite_transaction(scope, transaction);
-    if let Some(db_key) = db_key {
-        enqueue_next_readwrite_transaction_start(scope, &db_key);
-    }
+    unregister_regular_transaction(scope, transaction);
+    enqueue_ready_transaction_starts(scope);
 }
