@@ -4,7 +4,7 @@ pub(super) struct QueuedTransactionOperation<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) request: v8::Local<'s, v8::Object>,
     pub(super) handle: TransactionHandle,
-    pub(super) store_name: String,
+    pub(super) store_name: IndexedDbName,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 

@@ -55,7 +55,7 @@ pub struct OpenResult {
 pub struct DatabaseInfo {
     pub name: String,
     pub version: u64,
-    pub object_store_names: Vec<String>,
+    pub object_store_names: Vec<IndexedDbName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +66,7 @@ pub struct DatabaseNameAndVersion {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub key_path: Option<KeyPath>,
     pub auto_increment: bool,
     pub index_names: Vec<IndexedDbName>,

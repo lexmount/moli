@@ -65,7 +65,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_name_to_v8<'s>(
         .expect("IndexedDB name string")
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn new_idb_index_name_list<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn new_idb_name_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     names: &[IndexedDbName],
 ) -> v8::Local<'s, v8::Object> {
@@ -109,15 +109,6 @@ fn new_dom_string_list_with_values<'s>(
         .bind_into(scope, object)
         .expect("IDB DOMStringList declaration should bind");
     object
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn new_idb_name_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    names: &[String],
-) -> v8::Local<'s, v8::Object> {
-    let mut names = names.to_vec();
-    names.sort_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
-    new_idb_dom_string_list(scope, &names)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn install_dom_string_list_template_bindings<'s>(

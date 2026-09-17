@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct IndexedDbUpgradeMetadata {
     version: u64,
-    stores: BTreeMap<String, IndexedDbObjectStoreMetadata>,
+    stores: BTreeMap<IndexedDbName, IndexedDbObjectStoreMetadata>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn associate_indexed_db_upgrade_open<'s>(
@@ -158,7 +158,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                 continue;
             }
             // Replacements with the same name are separate object stores.
-            store.deleted = store.metadata.created_in_upgrade;
+            store.deleted = store.metadata.original_name.is_none();
             let metadata = if store.deleted {
                 let mut metadata = store.metadata.clone();
                 metadata.info.index_names.clear();
@@ -167,10 +167,17 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             } else {
                 snapshot
                     .stores
-                    .get(&store.name)
+                    .get(
+                        store
+                            .metadata
+                            .original_name
+                            .as_ref()
+                            .expect("existing store name"),
+                    )
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
+            store.name = metadata.info.name.clone();
             store.metadata = metadata.clone();
             if let Some(wrapper) = store.wrapper.to_local(scope) {
                 stores.push((wrapper, metadata));
@@ -211,20 +218,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         version.into(),
         v8::PropertyAttribute::NONE,
     );
-    let database_names = new_idb_name_list(scope, &names);
-    let transaction_names = new_idb_name_list(scope, &names);
-    let _ = database.define_own_property(
-        scope,
-        v8str(scope, "objectStoreNames").into(),
-        database_names.into(),
-        v8::PropertyAttribute::NONE,
-    );
-    let _ = transaction.define_own_property(
-        scope,
-        v8str(scope, "objectStoreNames").into(),
-        transaction_names.into(),
-        v8::PropertyAttribute::NONE,
-    );
+    set_indexed_db_transaction_store_names(scope, transaction, &names);
     for (store, metadata) in stores {
         let _ = sync_store_surface_from_metadata(scope, store, metadata);
     }
@@ -235,14 +229,14 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
 pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) {
     let metadata = indexed_db_database_store_metadata(scope, database, store_name);
     let mut stores = Vec::new();
     for table in indexed_db_handle_tables(scope, database) {
         for store in table.borrow_mut().object_stores.values_mut() {
             if store.deleted
-                || store.name != store_name
+                || &store.name != store_name
                 || store.database.to_local(scope) != database
             {
                 continue;
@@ -257,6 +251,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
                     metadata
                 }
             };
+            store.name = metadata.info.name.clone();
             store.metadata = metadata.clone();
             if let Some(wrapper) = store.wrapper.to_local(scope) {
                 stores.push((wrapper, metadata));
@@ -271,7 +266,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
 pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_deleted(
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     index_name: &IndexedDbName,
 ) {
     for table in indexed_db_handle_tables(scope, database) {
@@ -290,7 +285,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             .collect::<Vec<_>>();
         for (id, store) in indexes {
             if !indexed_db_object_store_is_deleted(scope, store)
-                && indexed_db_object_store_name(scope, store).as_deref() == Some(store_name)
+                && indexed_db_object_store_name(scope, store).as_ref() == Some(store_name)
                 && indexed_db_object_store_database(scope, store) == Some(database)
             {
                 table
@@ -398,7 +393,7 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index_metadata
             .collect::<Vec<_>>();
         for (id, store) in indexes {
             if !indexed_db_object_store_is_deleted(scope, store)
-                && indexed_db_object_store_name(scope, store).as_deref() == Some(&store_name)
+                && indexed_db_object_store_name(scope, store).as_ref() == Some(&store_name)
                 && indexed_db_object_store_transaction(scope, store) == Some(transaction)
             {
                 table
@@ -417,13 +412,13 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index_metadata
 pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
-    name: &str,
+    name: &IndexedDbName,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
     table.object_stores.values().find_map(|store| {
         if !store.deleted
-            && store.name == name
+            && &store.name == name
             && store.transaction.to_local(scope) == transaction
         {
             store.wrapper.to_local(scope)
@@ -431,4 +426,44 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'
             None
         }
     })
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_store_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    old_name: &IndexedDbName,
+    new_name: &IndexedDbName,
+) {
+    let database = indexed_db_object_store_database(scope, store).expect("store database");
+    let database_id = indexed_db_typed_state_id(scope, database).expect("store database id");
+    let transaction = indexed_db_object_store_transaction(scope, store).expect("store transaction");
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    let metadata = {
+        let mut table = table.borrow_mut();
+        let database = table
+            .databases
+            .get_mut(&database_id)
+            .expect("store database metadata");
+        let mut metadata = database
+            .metadata
+            .remove(old_name)
+            .expect("existing store metadata");
+        metadata.info.name = new_name.clone();
+        database.metadata.insert(new_name.clone(), metadata.clone());
+        metadata
+    };
+    for table in indexed_db_handle_tables(scope, database) {
+        // Replacements and handles retained from finished transactions are
+        // separate objects, even if their last names happen to match.
+        for store in table.borrow_mut().object_stores.values_mut() {
+            if !store.deleted
+                && &store.name == old_name
+                && store.transaction.to_local(scope) == transaction
+            {
+                store.name = new_name.clone();
+                store.metadata = metadata.clone();
+            }
+        }
+    }
+    sync_transaction_object_store_names_from_database(scope, transaction, database);
 }

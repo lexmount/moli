@@ -4,7 +4,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_delete_requ
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     query: &IdbKeyRangeQuery,
 ) {
     let result = with_indexed_db_manager(scope, |manager| {
@@ -38,7 +38,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_clear_reque
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) {
     match with_indexed_db_manager(scope, |manager| manager.clear(handle, store_name)) {
         Ok(()) => store_request_success(scope, request, v8::undefined(scope).into()),

@@ -8,7 +8,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_get_all_request<'s
     index: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     collection: &CollectionRequest,
 ) {
     let Some(index_info) = parse::index_info_for_collection(scope, index, request) else {

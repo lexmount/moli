@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::context_bootstrap::indexed_db) fn object_store_cursor_snapshot(
     scope: &mut v8::PinScope<'_, '_>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     query: Option<&IdbKeyRangeQuery>,
     direction: CursorDirection,
     key_only: bool,

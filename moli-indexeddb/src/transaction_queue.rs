@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use crate::{DatabaseHandle, TransactionMode};
+use crate::{DatabaseHandle, IndexedDbName, TransactionMode};
 
 /// Schedules the accepting event loop after admission becomes possible.
 pub type TransactionRequestWake = Arc<dyn Fn() + Send + Sync>;
@@ -27,7 +27,7 @@ struct QueueState {
 }
 
 struct TransactionScope {
-    stores: BTreeSet<String>,
+    stores: BTreeSet<IndexedDbName>,
     mode: TransactionMode,
 }
 
@@ -76,7 +76,7 @@ impl TransactionRequestQueues {
         self: &Arc<Self>,
         key: (String, String),
         database: DatabaseHandle,
-        stores: BTreeSet<String>,
+        stores: BTreeSet<IndexedDbName>,
         mode: TransactionMode,
         wake: TransactionRequestWake,
     ) -> TransactionRequestLease {
@@ -163,7 +163,7 @@ impl TransactionRequestHandle {
         self.database
     }
 
-    pub fn store_names(&self) -> Vec<String> {
+    pub fn store_names(&self) -> Vec<IndexedDbName> {
         self.scope.stores.iter().cloned().collect()
     }
 
@@ -239,7 +239,7 @@ mod tests {
                 .belongs_to(&Arc::new(TransactionRequestQueues::default()))
         );
         assert_eq!(reader.handle().database(), DatabaseHandle::from_raw(1));
-        assert_eq!(reader.handle().store_names(), ["a"]);
+        assert_eq!(reader.handle().store_names(), [IndexedDbName::from("a")]);
         assert_eq!(reader.handle().mode(), TransactionMode::ReadOnly);
         let parallel_reader = request(&queues, 2, &["a"], TransactionMode::ReadOnly, wake.clone());
         let writer = request(
