@@ -247,6 +247,7 @@ pub(super) struct PendingWindowFetchContinuation {
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
     redirect_csp_state: crate::network_host::FetchCspRedirectState,
     redirect_mode: moli_fetch::RequestRedirectMode,
+    integrity: String,
 }
 
 enum PendingWindowFetchPromise {
@@ -263,6 +264,7 @@ impl PendingWindowFetchContinuation {
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         redirect_mode: moli_fetch::RequestRedirectMode,
+        integrity: String,
     ) -> Self {
         Self {
             intercepted_request: None,
@@ -275,6 +277,7 @@ impl PendingWindowFetchContinuation {
             connect_policy,
             csp_report_context,
             redirect_mode,
+            integrity,
         }
     }
 
@@ -346,6 +349,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn redirect_mode(&self) -> moli_fetch::RequestRedirectMode {
         self.redirect_mode
+    }
+
+    pub(super) fn integrity(&self) -> &str {
+        &self.integrity
     }
 }
 

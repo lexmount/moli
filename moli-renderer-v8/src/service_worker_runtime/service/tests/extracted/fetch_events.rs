@@ -347,6 +347,8 @@ fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
             event_id,
             owner,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                body_is_null: false,
+
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
                         response_type: moli_fetch_types::FetchResponseType::Default,
@@ -1532,6 +1534,8 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            body_is_null: false,
+
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
                     response_type: moli_fetch_types::FetchResponseType::Basic,
@@ -1835,6 +1839,8 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            body_is_null: false,
+
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
                     response_type: moli_fetch_types::FetchResponseType::Basic,

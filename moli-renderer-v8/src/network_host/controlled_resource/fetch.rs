@@ -234,6 +234,7 @@ impl super::ControlledResourceLoad {
         completion: mpsc::UnboundedSender<WorkerFetchEvent>,
         fetch_id: u32,
         resource_timing: FetchResourceTiming,
+        integrity: String,
     ) {
         // Network/CDP correlation follows redirects; Resource Timing names
         // the original request, including when interception rewrites its URL.
@@ -259,7 +260,7 @@ impl super::ControlledResourceLoad {
             self.load.clone(),
             resource_timing.clone(),
         ));
-        let result = self.run_inner(Some(&mut stream)).await;
+        let result = self.run_inner(integrity.is_empty().then_some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));
         if stream.body_source_id().is_some() {
@@ -294,6 +295,26 @@ impl super::ControlledResourceLoad {
                     blocked_opaque = true
                 }
                 Err(error) => result = Err(error.into_message()),
+            }
+        }
+        if !integrity.is_empty() && let Ok(delivered) = &result {
+            let head = delivered.response.head();
+            let filter = self.response_filter.clone().or_else(|| {
+                super::super::network_response_filter(
+                    self.request.request_origin().expect("Worker fetch has a requesting origin"),
+                    &head,
+                    self.request.request_mode,
+                    self.request.redirect_mode(),
+                )
+            }).unwrap_or_else(|| crate::types::FetchResponseType::Basic.into());
+            if let Err(error) = super::super::validate_fetch_response_integrity(
+                &integrity,
+                &self.request.method,
+                head.status,
+                &filter,
+                delivered.response.body_bytes(),
+            ) {
+                result = Err(error);
             }
         }
         let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);

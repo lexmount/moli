@@ -601,7 +601,12 @@ pub(crate) struct ServiceWorkerFetchEvent {
     pub(crate) navigation_preload_sent: bool,
 }
 
-pub(crate) use moli_fetch_types::FetchResponse as ServiceWorkerFetchResponse;
+#[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerFetchResponse {
+    pub(crate) head: moli_fetch_types::FetchResponseHead,
+    pub(crate) body: Vec<u8>,
+    pub(crate) body_is_null: bool,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum ServiceWorkerFetchResult {

@@ -339,6 +339,7 @@ fn register_pending_window_fetch_for_test(
         v8::Global::new(scope, resolver),
         crate::context_bootstrap::FetchResourceTiming::capture(scope, &(&url).into()),
         keepalive,
+        String::new(),
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -519,6 +520,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         v8::Global::new(scope, resolver),
         crate::context_bootstrap::FetchResourceTiming::capture(scope, &(&document_url).into()),
         keepalive,
+        String::new(),
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -2328,6 +2330,7 @@ mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
 mod geometry_matrix_constructor_union;
