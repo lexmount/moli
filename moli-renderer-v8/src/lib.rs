@@ -74,6 +74,7 @@ mod mutation_coordinator;
 pub(crate) mod native_bridge;
 pub mod network;
 mod network_host;
+mod observable;
 mod observer_runtime;
 mod opfs_owner_tasks;
 mod opfs_task_result;

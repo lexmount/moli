@@ -2494,7 +2494,6 @@ dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html
 dom/nodes/moveBefore/moveBefore-size-query.html
 dom/nodes/moveBefore/preserve-render-blocking-script.html
 dom/nodes/moveBefore/preserve-render-blocking-style.html
-dom/observable/tentative/idlharness.html
 dom/ranges/tentative/OpaqueRange-auto-disconnect.html
 dom/ranges/tentative/OpaqueRange-basic.html
 dom/ranges/tentative/OpaqueRange-disconnect.html

@@ -332,6 +332,13 @@ fn worker_abort_store(scope: &mut v8::PinScope<'_, '_>) -> Option<Rc<RefCell<Wor
     get_worker_state(scope).map(|state| state.borrow().abort.clone())
 }
 
+pub(crate) fn new_worker_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let store = worker_abort_store(scope)?;
+    create_signal(scope, &mut store.borrow_mut(), false, None)
+}
+
 pub(crate) fn worker_abort_signal_aborted<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: v8::Local<'s, v8::Object>,

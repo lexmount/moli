@@ -389,6 +389,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AbortController,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::Observable::DESCRIPTOR,
+        kind: ConstructorKind::Observable,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Subscriber::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::BroadcastChannel::DESCRIPTOR,
         kind: ConstructorKind::BroadcastChannel,
     },
