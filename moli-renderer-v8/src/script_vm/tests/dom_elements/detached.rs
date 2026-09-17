@@ -363,50 +363,26 @@ fn offline_html_documents_parse_and_serialize_noscript_with_scripting_disabled()
 }
 
 #[test]
-fn domparser_xml_uses_document_interface_and_chromium_error_documents() {
-    let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
-
+fn domparser_xml_error_documents_preserve_metadata_and_replace_partial_trees() {
+    let mut vm = new_parsed_test_vm(
+        "https://domparser-xml-errors.test/source.html",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let fixture = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/domparser-xml-errors.js"
+    ));
     let result = vm
-        .eval(
-            r#"
-(() => {
-  const parser = new DOMParser();
-  return JSON.stringify([
-    "text/xml",
-    "application/xml",
-    "application/xhtml+xml",
-    "image/svg+xml"
-  ].map(contentType => {
-    const valid = parser.parseFromString("<root/>", contentType);
-    const invalid = parser.parseFromString("<foo>", contentType);
-    const namespaceInvalid = parser.parseFromString(
-      '<span x:test="testing">1</span>',
-      contentType
-    );
-    const invalidError = invalid.getElementsByTagName("parsererror")[0];
-    const namespaceError = namespaceInvalid.getElementsByTagName("parsererror")[0];
-    return [
-      valid.contentType,
-      Object.getPrototypeOf(valid) === Document.prototype,
-      valid instanceof XMLDocument,
-      invalid.contentType,
-      Object.getPrototypeOf(invalid) === Document.prototype,
-      invalid instanceof XMLDocument,
-      invalid.documentElement.localName,
-      invalidError.namespaceURI,
-      namespaceInvalid.documentElement.localName,
-      namespaceError.namespaceURI
-    ];
-  }));
-})()
-"#,
-        )
-        .expect("DOMParser XML content type probe should evaluate");
-
-    assert_eq!(
-        result,
-        r#"[["text/xml",true,false,"text/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xml",true,false,"application/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xhtml+xml",true,false,"application/xhtml+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["image/svg+xml",true,false,"image/svg+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"]]"#
-    );
+        .eval(&format!(
+            r#"{fixture}
+(() => {{
+  const result = domParserXmlErrorsProbe();
+  return JSON.stringify({{count: result.checks.length, failures: result.checks.filter(check => !check.pass)}});
+}})()
+"#
+        ))
+        .expect("DOMParser XML error document probe should evaluate");
+    assert_eq!(result, r#"{"count":1776,"failures":[]}"#);
 }
 
 #[test]
@@ -9645,7 +9621,7 @@ fn domparser_xml_preserves_requested_content_type_for_success_and_error_document
 
     assert_eq!(
         result,
-        r#"[["text/xml","text/xml","html"],["application/xml","application/xml","html"],["application/xhtml+xml","application/xhtml+xml","html"],["image/svg+xml","image/svg+xml","html"]]"#
+        r#"[["text/xml","text/xml","parsererror"],["application/xml","application/xml","parsererror"],["application/xhtml+xml","application/xhtml+xml","parsererror"],["image/svg+xml","image/svg+xml","parsererror"]]"#
     );
 }
 
