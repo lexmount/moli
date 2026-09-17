@@ -22,6 +22,30 @@ pub struct ObjectUrlEntry<AccessKey> {
     pub access_key: Option<AccessKey>,
 }
 
+/// The object associated with an object URL. MediaSource is supplied by the
+/// embedding, so the store can retain its identity without treating it as bytes.
+#[derive(Clone, Debug)]
+pub enum ObjectUrlTarget<MediaSource> {
+    Blob(BlobId),
+    MediaSource(MediaSource),
+}
+
+impl<MediaSource> ObjectUrlTarget<MediaSource> {
+    fn blob_id(&self) -> Option<BlobId> {
+        match self {
+            Self::Blob(id) => Some(*id),
+            Self::MediaSource(_) => None,
+        }
+    }
+}
+
+/// A resolved entry retained by a parsed URL independently of revocation.
+#[derive(Clone, Debug)]
+pub enum ObjectUrlData<MediaSource> {
+    Blob { bytes: Arc<[u8]>, mime_type: String },
+    MediaSource(MediaSource),
+}
+
 #[derive(Clone, Debug)]
 struct BlobState<OwnerId, PartitionId> {
     owner_id: Option<OwnerId>,
@@ -50,10 +74,10 @@ impl<OwnerId, PartitionId> Default for BlobEntries<OwnerId, PartitionId> {
 }
 
 #[derive(Debug)]
-struct ObjectUrlState<OwnerId, AccessKey, Metadata> {
+struct ObjectUrlState<OwnerId, AccessKey, Metadata, MediaSource> {
     owner_id: Option<OwnerId>,
     lifetime_id: Option<u64>,
-    blob_id: BlobId,
+    target: ObjectUrlTarget<MediaSource>,
     access_key: Option<AccessKey>,
     metadata: Option<Metadata>,
 }
@@ -64,14 +88,20 @@ struct ObjectUrlState<OwnerId, AccessKey, Metadata> {
 /// counts. The embedding layer owns JS wrappers and calls the retain/release
 /// hooks from its finalizers.
 #[derive(Debug)]
-pub struct BlobStore<OwnerId, PartitionId, AccessKey = (), Metadata = ()> {
+pub struct BlobStore<
+    OwnerId,
+    PartitionId,
+    AccessKey = (),
+    Metadata = (),
+    MediaSource = std::convert::Infallible,
+> {
     blobs: Mutex<BlobEntries<OwnerId, PartitionId>>,
     next_blob_id: AtomicU64,
-    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey, Metadata>>>,
+    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey, Metadata, MediaSource>>>,
 }
 
-impl<OwnerId, PartitionId, AccessKey, Metadata> Default
-    for BlobStore<OwnerId, PartitionId, AccessKey, Metadata>
+impl<OwnerId, PartitionId, AccessKey, Metadata, MediaSource> Default
+    for BlobStore<OwnerId, PartitionId, AccessKey, Metadata, MediaSource>
 {
     fn default() -> Self {
         Self {
@@ -82,7 +112,8 @@ impl<OwnerId, PartitionId, AccessKey, Metadata> Default
     }
 }
 
-impl<OwnerId, PartitionId, AccessKey, Metadata> BlobStore<OwnerId, PartitionId, AccessKey, Metadata>
+impl<OwnerId, PartitionId, AccessKey, Metadata, MediaSource>
+    BlobStore<OwnerId, PartitionId, AccessKey, Metadata, MediaSource>
 where
     OwnerId: Copy + Eq + Hash,
     PartitionId: Eq,
@@ -241,7 +272,29 @@ where
         access_key: Option<AccessKey>,
         metadata: Option<Metadata>,
     ) -> Option<String> {
-        self.retain_blob_object_url_ref(blob_id)?;
+        self.create_object_url_with_target(
+            owner_id,
+            lifetime_id,
+            ObjectUrlTarget::Blob(blob_id),
+            origin,
+            access_key,
+            metadata,
+        )
+    }
+
+    /// Register a Blob or MediaSource under its creating environment's key.
+    pub fn create_object_url_with_target(
+        &self,
+        owner_id: Option<OwnerId>,
+        lifetime_id: Option<u64>,
+        target: ObjectUrlTarget<MediaSource>,
+        origin: &str,
+        access_key: Option<AccessKey>,
+        metadata: Option<Metadata>,
+    ) -> Option<String> {
+        if let Some(blob_id) = target.blob_id() {
+            self.retain_blob_object_url_ref(blob_id)?;
+        }
         let mut object_urls = self.object_urls.lock();
         let object_url = loop {
             let candidate = format!("blob:{origin}/{}", random_uuid());
@@ -254,7 +307,7 @@ where
             ObjectUrlState {
                 owner_id,
                 lifetime_id,
-                blob_id,
+                target,
                 access_key,
                 metadata,
             },
@@ -262,7 +315,7 @@ where
         Some(object_url)
     }
 
-    /// Revoke an object URL and release its Blob object-URL reference.
+    /// Revoke an object URL and release its associated object reference.
     pub fn revoke_object_url(&self, url: &str) -> bool {
         self.revoke_object_url_if(url, |_| true)
     }
@@ -279,7 +332,7 @@ where
     fn revoke_object_url_if(
         &self,
         url: &str,
-        is_authorized: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey, Metadata>) -> bool,
+        is_authorized: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey, Metadata, MediaSource>) -> bool,
     ) -> bool {
         let state = {
             let mut object_urls = self.object_urls.lock();
@@ -288,7 +341,9 @@ where
             }
             object_urls.remove(url).expect("authorized entry is locked")
         };
-        self.release_blob_object_url_ref(state.blob_id);
+        if let Some(blob_id) = state.target.blob_id() {
+            self.release_blob_object_url_ref(blob_id);
+        }
         true
     }
 
@@ -311,7 +366,7 @@ where
     pub fn object_url_shared_bytes_and_type(&self, url: &str) -> Option<(Arc<[u8]>, String)> {
         let url = url.split_once('#').map_or(url, |(url, _)| url);
         let object_urls = self.object_urls.lock();
-        self.object_url_blob_data(object_urls.get(url)?.blob_id)
+        self.object_url_blob_data(object_urls.get(url)?.target.blob_id()?)
     }
 
     /// Atomically capture the Blob backing and the URL creator's access key.
@@ -323,7 +378,7 @@ where
         let url = url.split_once('#').map_or(url, |(url, _)| url);
         let object_urls = self.object_urls.lock();
         let state = object_urls.get(url)?;
-        let (bytes, mime_type) = self.object_url_blob_data(state.blob_id)?;
+        let (bytes, mime_type) = self.object_url_blob_data(state.target.blob_id()?)?;
         Some(ObjectUrlEntry {
             bytes,
             mime_type,
@@ -335,6 +390,28 @@ where
         let blobs = self.blobs.lock();
         let blob = blobs.by_id.get(&blob_id)?;
         Some((blob.bytes.clone(), blob.mime_type.clone()))
+    }
+
+    /// Resolve the associated object, retaining the distinction between Blob
+    /// bytes and MediaSource. Lookup ignores the URL fragment.
+    pub fn object_url_data(&self, url: &str) -> Option<ObjectUrlData<MediaSource>>
+    where
+        MediaSource: Clone,
+    {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
+        let object_urls = self.object_urls.lock();
+        match &object_urls.get(url)?.target {
+            ObjectUrlTarget::Blob(id) => {
+                let (bytes, mime_type) = self.object_url_blob_data(*id)?;
+                Some(ObjectUrlData::Blob {
+                    bytes,
+                    mime_type,
+                })
+            }
+            ObjectUrlTarget::MediaSource(source) => {
+                Some(ObjectUrlData::MediaSource(source.clone()))
+            }
+        }
     }
 
     /// Return object URL body decoded lossily as text plus MIME type.
@@ -360,22 +437,14 @@ where
     /// Revoke one owner's URLs for an execution-context lifetime.
     /// Lifetime identifiers are local to each resource owner.
     pub fn cleanup_object_url_lifetime(&self, owner_id: OwnerId, lifetime_id: u64) -> usize {
-        let removed_blob_ids = {
-            let mut object_urls = self.object_urls.lock();
-            let mut removed_blob_ids = Vec::new();
-            object_urls.retain(|_, state| {
-                if state.owner_id == Some(owner_id) && state.lifetime_id == Some(lifetime_id) {
-                    removed_blob_ids.push(state.blob_id);
-                    false
-                } else {
-                    true
-                }
-            });
-            removed_blob_ids
-        };
-        let removed_count = removed_blob_ids.len();
-        for blob_id in removed_blob_ids {
-            self.release_blob_object_url_ref(blob_id);
+        let removed = self.take_object_urls_if(|state| {
+            state.owner_id == Some(owner_id) && state.lifetime_id == Some(lifetime_id)
+        });
+        let removed_count = removed.len();
+        for state in removed {
+            if let Some(blob_id) = state.target.blob_id() {
+                self.release_blob_object_url_ref(blob_id);
+            }
         }
         removed_count
     }
@@ -398,19 +467,25 @@ where
         };
 
         let removed = self.take_object_urls_if(|state| {
-            state.owner_id == Some(owner_id) || removed_blob_ids.contains(&state.blob_id)
+            state.owner_id == Some(owner_id)
+                || state
+                    .target
+                    .blob_id()
+                    .is_some_and(|id| removed_blob_ids.contains(&id))
         });
         for state in removed {
-            if !removed_blob_ids.contains(&state.blob_id) {
-                self.release_blob_object_url_ref(state.blob_id);
+            if let Some(blob_id) = state.target.blob_id()
+                && !removed_blob_ids.contains(&blob_id)
+            {
+                self.release_blob_object_url_ref(blob_id);
             }
         }
     }
 
     fn take_object_urls_if(
         &self,
-        mut remove: impl FnMut(&ObjectUrlState<OwnerId, AccessKey>) -> bool,
-    ) -> Vec<ObjectUrlState<OwnerId, AccessKey>> {
+        mut remove: impl FnMut(&ObjectUrlState<OwnerId, AccessKey, Metadata, MediaSource>) -> bool,
+    ) -> Vec<ObjectUrlState<OwnerId, AccessKey, Metadata, MediaSource>> {
         // Removed URL state is returned so associated objects are released after the lock.
         self.object_urls
             .lock()
@@ -531,6 +606,99 @@ mod tests {
         assert!(store.object_url_entry(&url).unwrap().access_key.is_none());
         assert!(store.object_url_entry("blob:null/missing").is_none());
         assert!(store.object_url_entry(&format!("{url}?query")).is_none());
+    }
+
+    #[test]
+    fn media_source_urls_preserve_type_identity_and_creator_lifetimes() {
+        let store = BlobStore::<u64, u64, String, String, Arc<String>>::default();
+        let source = Arc::new("native MediaSource".to_owned());
+        let weak = Arc::downgrade(&source);
+        let key = "creator".to_owned();
+        let first = store
+            .create_object_url_with_target(
+                Some(1),
+                Some(7),
+                ObjectUrlTarget::MediaSource(source.clone()),
+                "https://example.test",
+                Some(key.clone()),
+                Some("policy".to_owned()),
+            )
+            .unwrap();
+        let second = store
+            .create_object_url_with_target(
+                Some(2),
+                Some(7),
+                ObjectUrlTarget::MediaSource(source),
+                "https://example.test",
+                Some(key.clone()),
+                None,
+            )
+            .unwrap();
+        assert_ne!(first, second);
+        assert!(store.object_url_shared_bytes_and_type(&first).is_none());
+        assert!(store.object_url_entry(&first).is_none());
+        assert_eq!(store.object_url_metadata(&first).as_deref(), Some("policy"));
+        let Some(ObjectUrlData::MediaSource(captured)) =
+            store.object_url_data(&format!("{first}#fragment"))
+        else {
+            panic!("MediaSource entry should resolve");
+        };
+        let Some(ObjectUrlData::MediaSource(other)) = store.object_url_data(&second) else {
+            panic!("second URL should resolve");
+        };
+        assert!(Arc::ptr_eq(&captured, &other));
+        drop(other);
+        assert!(!store.revoke_object_url_with_access_key(&first, &"other partition".to_owned()));
+        assert!(!store.revoke_object_url_with_access_key(&format!("{first}#fragment"), &key));
+        assert!(store.revoke_object_url_with_access_key(&first, &key));
+        assert!(store.object_url_data(&first).is_none());
+        assert!(store.object_url_data(&second).is_some());
+        assert_eq!(store.cleanup_object_url_lifetime(1, 7), 0);
+        assert_eq!(store.cleanup_object_url_lifetime(2, 7), 1);
+        assert!(store.object_url_data(&second).is_none());
+        assert!(weak.upgrade().is_some());
+        drop(captured);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn mixed_object_url_cleanup_releases_only_the_creating_owner() {
+        let store = BlobStore::<u64, u64, (), (), Arc<String>>::default();
+        let blob = store.create_blob(Some(10), Some(1), b"blob".to_vec(), "text/plain".to_owned());
+        let blob_url = store
+            .create_object_url(Some(1), blob, "https://example.test")
+            .unwrap();
+        let source = Arc::new("native MediaSource".to_owned());
+        let weak = Arc::downgrade(&source);
+        let media_url = store
+            .create_object_url_with_target(
+                Some(1),
+                Some(7),
+                ObjectUrlTarget::MediaSource(source.clone()),
+                "https://example.test",
+                None,
+                None,
+            )
+            .unwrap();
+        let retained_url = store
+            .create_object_url_with_target(
+                Some(2),
+                Some(7),
+                ObjectUrlTarget::MediaSource(source),
+                "https://example.test",
+                None,
+                None,
+            )
+            .unwrap();
+        store.release_blob_wrapper_ref(blob);
+        store.cleanup_owner_resources(1);
+        assert!(store.object_url_data(&blob_url).is_none());
+        assert!(store.blob_bytes(blob).is_none());
+        assert!(store.object_url_data(&media_url).is_none());
+        assert!(store.object_url_data(&retained_url).is_some());
+        assert!(weak.upgrade().is_some());
+        store.cleanup_owner_resources(2);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
