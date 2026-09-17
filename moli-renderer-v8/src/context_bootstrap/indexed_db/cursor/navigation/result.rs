@@ -6,17 +6,8 @@ pub(super) fn enqueue_cursor_result<'s>(
     next_position: Option<usize>,
 ) -> Option<()> {
     let (request, transaction) = cursor_request_and_transaction(scope, cursor)?;
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return None;
-    }
+    cursor_active_transaction(scope, cursor)?;
+    begin_indexed_db_cursor_iteration(scope, cursor)?;
     queue_transaction_request(scope, transaction, request);
     prepare_cursor_request(scope, request);
     set_indexed_db_slot_value(
