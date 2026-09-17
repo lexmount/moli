@@ -54,7 +54,7 @@ pub enum OpenDisposition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenOptions {
     pub origin: String,
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: Option<u64>,
 }
 
@@ -67,14 +67,14 @@ pub struct OpenResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: u64,
     pub object_store_names: Vec<IndexedDbName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseNameAndVersion {
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: u64,
 }
 

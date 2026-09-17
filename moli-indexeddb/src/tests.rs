@@ -18,6 +18,7 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod database_names;
 mod durability;
 mod index_rename;
 mod record_revision;
@@ -271,7 +272,7 @@ fn seed_database_record(manager: &mut IndexedDbManager, origin: &str, name: &str
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: name.to_owned(),
+            name: name.into(),
             version: None,
         })
         .expect("open should succeed");
@@ -309,7 +310,7 @@ fn open_new_database_creates_upgrade_transaction() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -331,7 +332,7 @@ fn in_memory_manager_does_not_persist_across_reopen() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -358,7 +359,7 @@ fn in_memory_manager_does_not_persist_across_reopen() {
     let reopened = IndexedDbManager::new_in_memory()
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -406,7 +407,7 @@ fn upgrade_transaction_can_create_store_and_persist() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(3),
         })
         .expect("open should succeed");
@@ -435,7 +436,7 @@ fn upgrade_transaction_can_create_store_and_persist() {
         .expect("manager should be recreated")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -452,7 +453,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -507,7 +508,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let reopened = reopened_manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -526,7 +527,7 @@ fn index_key_path_may_be_empty_string() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -560,7 +561,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -595,7 +596,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let reopened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -640,7 +641,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -679,7 +680,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let reopened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("database should reopen");
@@ -705,7 +706,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -778,7 +779,7 @@ fn external_blob_bytes_participate_in_quota_and_rollback() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -837,7 +838,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -911,7 +912,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1157,7 +1158,7 @@ fn readwrite_transaction_can_list_keys() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1202,7 +1203,7 @@ fn mixed_keys_sort_in_indexeddb_order() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1250,7 +1251,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1297,7 +1298,7 @@ fn delete_database_removes_persisted_state() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1321,7 +1322,7 @@ fn delete_database_removes_persisted_state() {
         .expect("manager should reopen")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1343,7 +1344,7 @@ fn databases_lists_committed_name_version_snapshot() {
     let beta = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "beta".to_owned(),
+            name: "beta".into(),
             version: Some(2),
         })
         .expect("beta open should succeed");
@@ -1353,7 +1354,7 @@ fn databases_lists_committed_name_version_snapshot() {
     let alpha = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "alpha".to_owned(),
+            name: "alpha".into(),
             version: None,
         })
         .expect("alpha open should succeed");
@@ -1368,11 +1369,11 @@ fn databases_lists_committed_name_version_snapshot() {
         infos,
         vec![
             DatabaseNameAndVersion {
-                name: "alpha".to_owned(),
+                name: "alpha".into(),
                 version: 1,
             },
             DatabaseNameAndVersion {
-                name: "beta".to_owned(),
+                name: "beta".into(),
                 version: 2,
             },
         ]
@@ -1399,7 +1400,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let first = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first open should succeed");
@@ -1416,7 +1417,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let second = manager
         .open(OpenOptions {
             origin: "https://other.example".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second open should succeed");
@@ -1438,7 +1439,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let cleared = reopened
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("cleared origin open should succeed");
@@ -1453,7 +1454,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let kept = reopened
         .open(OpenOptions {
             origin: "https://other.example".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("other origin open should succeed");
@@ -1468,7 +1469,7 @@ fn readonly_transaction_rejects_writes() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1504,7 +1505,7 @@ fn transaction_scope_is_enforced_per_object_store() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1543,7 +1544,7 @@ fn delete_database_rejects_open_connections() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1571,7 +1572,7 @@ fn aborted_upgrade_transaction_does_not_publish_schema() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(2),
         })
         .expect("open should succeed");
@@ -1592,7 +1593,7 @@ fn aborted_upgrade_transaction_does_not_publish_schema() {
         .expect("manager should reopen")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -1614,7 +1615,7 @@ fn upgrade_can_delete_object_store_before_commit() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1653,7 +1654,7 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let first = manager
         .open(OpenOptions {
             origin: "https://a:b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first open should succeed");
@@ -1673,7 +1674,7 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let second = manager
         .open(OpenOptions {
             origin: "https://a/b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second open should succeed");
@@ -1694,14 +1695,14 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let first = reopened
         .open(OpenOptions {
             origin: "https://a:b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first reopen should succeed");
     let second = reopened
         .open(OpenOptions {
             origin: "https://a/b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second reopen should succeed");
@@ -1730,7 +1731,7 @@ fn failed_open_does_not_block_later_delete_database() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(2),
         })
         .expect("open should succeed");
@@ -1750,7 +1751,7 @@ fn failed_open_does_not_block_later_delete_database() {
     let error = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect_err("lower version open should fail");
@@ -1768,7 +1769,7 @@ fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "key-preview".to_owned(),
+            name: "key-preview".into(),
             version: None,
         })
         .unwrap();
@@ -1841,7 +1842,7 @@ fn auto_increment_rejects_exhausted_generator_range() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
