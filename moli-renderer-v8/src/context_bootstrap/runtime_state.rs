@@ -1895,6 +1895,8 @@ pub(crate) fn finish_context_bootstrap(
         ("AudioBuffer", "AudioBuffer"),
         ("AbortSignal", "AbortSignal"),
         ("AbortController", "AbortController"),
+        ("Observable", "Observable"),
+        ("Subscriber", "Subscriber"),
         ("TextEncoder", "TextEncoder"),
         ("TextDecoder", "TextDecoder"),
         ("ReadableStream", "ReadableStream"),

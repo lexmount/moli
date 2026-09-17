@@ -377,7 +377,7 @@ pub(super) fn timeout_error_value<'s>(
     dom_exception_value(scope, "signal timed out", "TimeoutError")
 }
 
-fn create_signal<'s>(
+pub(crate) fn create_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut super::JsContextHost,
     aborted: bool,

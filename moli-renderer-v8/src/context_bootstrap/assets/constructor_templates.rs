@@ -296,6 +296,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::Observable => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Observable,
+                crate::observable::constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::DomParser => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMParser,
