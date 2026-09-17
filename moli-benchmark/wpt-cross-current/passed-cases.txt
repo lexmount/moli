@@ -9744,6 +9744,7 @@ xhr/open-url-multi-window.htm
 xhr/open-url-worker-origin.htm
 xhr/open-url-worker-simple.htm
 xhr/open-user-password-non-same-origin.htm
+xhr/overridemimetype-blob.html
 xhr/overridemimetype-headers-received-state-force-shiftjis.htm
 xhr/overridemimetype-invalid-mime-type.htm
 xhr/overridemimetype-loading-state.htm

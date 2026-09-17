@@ -24,10 +24,10 @@ pub use data_url::{
 pub use destination::FetchDestination;
 pub use headers::{
     effective_response_mime_essence, effective_response_mime_type, extract_response_mime_essence,
-    normalize_response_blob_mime_type, response_blob_mime_type, response_content_type,
-    response_document_content_type, response_header_value, response_header_values,
-    response_headers_indicate_attachment_download, response_headers_indicate_binary_document,
-    response_headers_indicate_raw_document,
+    extract_response_mime_type, normalize_response_blob_mime_type, response_blob_mime_type,
+    response_content_type, response_document_content_type, response_header_value,
+    response_header_values, response_headers_indicate_attachment_download,
+    response_headers_indicate_binary_document, response_headers_indicate_raw_document,
 };
 pub use media::{MediaMimeSupport, is_media_source_type_supported, media_mime_support};
 pub use parse::{

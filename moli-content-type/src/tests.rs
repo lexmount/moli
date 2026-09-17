@@ -49,6 +49,12 @@ fn replacing_a_mime_parameter_preserves_order_and_quoted_value_serialization() {
         r#"text/plain;title="alpha; \"beta\"";charset=UTF-8;keep=Value"#
     );
     assert!(mime.parameter_mut("missing").is_none());
+    mime.set_parameter("BOUNDARY", "A\";B");
+    mime.set_parameter("CHARSET", "GBK");
+    assert_eq!(
+        mime.to_string(),
+        r#"text/plain;title="alpha; \"beta\"";charset=GBK;keep=Value;boundary="A\";B""#
+    );
 }
 
 #[test]

@@ -3,8 +3,7 @@ use super::super::events::{
 };
 use super::super::*;
 use moli_web_mime::{
-    effective_response_mime_essence, effective_response_mime_type, is_html_document_mime,
-    normalize_response_blob_mime_type,
+    effective_response_mime_essence, extract_response_mime_type, is_html_document_mime,
 };
 
 pub(crate) fn apply_xhr_response(
@@ -450,15 +449,6 @@ fn identity_encoded_content_length(headers: &[(String, String)]) -> Option<u64> 
         .then_some(first)
 }
 
-fn xhr_response_mime_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    headers: &[(String, String)],
-) -> Option<String> {
-    let override_mime = xhr_state_string_property(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT);
-    effective_response_mime_type(headers, override_mime.as_deref())
-}
-
 fn xhr_response_mime_essence(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -582,12 +572,17 @@ fn xhr_response_blob_mime_type(
     xhr: v8::Local<'_, v8::Object>,
     headers: &[(String, String)],
 ) -> String {
-    normalize_response_blob_mime_type(xhr_response_mime_value(scope, xhr, headers).as_deref())
+    // overrideMimeType already stores a parsed and serialized MIME record.
+    // Native response Blobs use that record, not Blob constructor normalization.
+    xhr_state_string_property(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT)
+        .filter(|mime| !mime.is_empty())
+        .or_else(|| extract_response_mime_type(headers).map(|mime| mime.to_string()))
+        .unwrap_or_else(|| "text/xml".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
-    use moli_web_mime::{effective_response_mime_essence, response_blob_mime_type};
+    use moli_web_mime::effective_response_mime_essence;
 
     #[test]
     fn xhr_document_response_mime_uses_shared_effective_essence() {
@@ -603,19 +598,6 @@ mod tests {
         assert_eq!(
             effective_response_mime_essence(&headers, Some("Application/XML")),
             Some("application/xml".to_owned())
-        );
-    }
-
-    #[test]
-    fn xhr_blob_response_mime_uses_shared_blob_normalization() {
-        let headers = vec![(
-            "Content-Type".to_owned(),
-            "Text/Plain; Charset=UTF-8".to_owned(),
-        )];
-
-        assert_eq!(
-            response_blob_mime_type(&headers),
-            "text/plain; charset=utf-8"
         );
     }
 }
