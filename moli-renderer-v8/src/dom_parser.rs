@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::{
     document_runtime::DomHandle,
-    dom::native::{DomHost, NativeDom, NativeNodeId},
+    dom::native::{DomHost, NativeDom},
     parser::{HtmlParser, XmlParser},
     webidl,
 };
@@ -27,9 +27,7 @@ use super::{
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
 const DOM_PARSER_DOCUMENT_HANDLE_SLOT: &str = "__moliDomParserDocumentHandle";
-const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
-const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
-const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
+const XML_PARSER_ERROR_NAMESPACE: &str = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
 
 #[derive(Clone, Copy)]
 pub(super) enum XmlParseErrorBehavior {
@@ -309,102 +307,21 @@ fn materialize_xml_parser_error_document(parsed: NativeDom) -> NativeDom {
         .unwrap_or_else(|| "XML document has no document element".to_owned());
     let mut host = DomHost::from_dom(parsed);
     let document = host.document_handle();
-    let document_element = host
-        .child_handles(document)
-        .find(|handle| host.node(*handle).is_some_and(|node| node.is_element()));
-
-    let parser_error = create_dom_parser_error_element(&mut host, document, &error_detail);
-    if let Some(document_element) = document_element {
-        let first_child = host
-            .node(document_element)
-            .and_then(|node| node.first_child());
-        let _ = host.insert_before(document_element, parser_error, first_child);
-        return host.snapshot_document();
-    }
-
+    // DOMParser's XML error document contains only the error root, even if
+    // the underlying parser recovered a partial tree, doctype or prologue.
     for child in host.child_handles(document).collect::<Vec<_>>() {
         let _ = host.remove_child(document, child);
     }
-    let html = host.create_parser_element_without_attributes_for_document(
-        document,
-        "html".to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    let body = host.create_parser_element_without_attributes_for_document(
-        document,
-        "body".to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    let _ = host.append_child(document, html);
-    let _ = host.append_child(html, body);
-    let _ = host.append_child(body, parser_error);
-    host.snapshot_document()
-}
-
-fn create_dom_parser_error_element(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    error_detail: &str,
-) -> NativeNodeId {
     let parser_error = host.create_parser_element_without_attributes_for_document(
         document,
         "parsererror".to_owned(),
-        HTML_NAMESPACE.to_owned(),
+        XML_PARSER_ERROR_NAMESPACE.to_owned(),
         None,
     );
-    let _ = host.set_attribute(parser_error, "style", PARSER_ERROR_STYLE);
-
-    let heading = create_dom_parser_error_child(host, document, "h3", None);
-    append_dom_parser_error_text(
-        host,
-        document,
-        heading,
-        "This page contains the following errors:",
-    );
-    let detail =
-        create_dom_parser_error_child(host, document, "div", Some(PARSER_ERROR_DETAIL_STYLE));
-    append_dom_parser_error_text(host, document, detail, error_detail);
-    let footer = create_dom_parser_error_child(host, document, "h3", None);
-    append_dom_parser_error_text(
-        host,
-        document,
-        footer,
-        "Below is a rendering of the page up to the first error.",
-    );
-    let _ = host.append_child(parser_error, heading);
+    let detail = host.create_text_node_for_document(document, &error_detail);
     let _ = host.append_child(parser_error, detail);
-    let _ = host.append_child(parser_error, footer);
-    parser_error
-}
-
-fn create_dom_parser_error_child(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    local_name: &str,
-    style: Option<&str>,
-) -> NativeNodeId {
-    let element = host.create_parser_element_without_attributes_for_document(
-        document,
-        local_name.to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    if let Some(style) = style {
-        let _ = host.set_attribute(element, "style", style);
-    }
-    element
-}
-
-fn append_dom_parser_error_text(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    parent: NativeNodeId,
-    text: &str,
-) {
-    let text = host.create_text_node_for_document(document, text);
-    let _ = host.append_child(parent, text);
+    let _ = host.append_child(document, parser_error);
+    host.snapshot_document()
 }
 
 /// Builds a detached HTML document wrapper from raw markup and an explicit document URL.
@@ -625,6 +542,38 @@ mod tests {
                 .is_some()
         })
         .expect("document element")
+    }
+
+    #[test]
+    fn xml_parser_error_document_discards_the_tree_and_preserves_error_text() {
+        let mut parsed = XmlParser.parse(
+            Url::parse("https://example.test/source.xml").unwrap(),
+            "<!DOCTYPE root><!--before--><?before data?><root><child/></root><?after data?>"
+                .to_owned(),
+        );
+        assert!(parsed.parse_errors().is_empty());
+        let detail = "Unexpected <script> & </parsererror> near \"quoted\" text";
+        parsed.push_parse_error(detail.to_owned());
+        let error_document = materialize_xml_parser_error_document(parsed);
+        let root = first_document_element(&error_document);
+        assert_eq!(
+            error_document
+                .child_ids(error_document.document_node_id())
+                .collect::<Vec<_>>(),
+            vec![root]
+        );
+        let element = error_document.node(root).unwrap().as_element().unwrap();
+        assert_eq!(element.local_name(), "parsererror");
+        assert_eq!(element.namespace(), XML_PARSER_ERROR_NAMESPACE);
+        assert_eq!(error_document.text_content(root).as_deref(), Some(detail));
+        let children = error_document.child_ids(root).collect::<Vec<_>>();
+        assert_eq!(children.len(), 1);
+        assert!(error_document.node(children[0]).unwrap().is_text());
+        assert!(
+            error_document
+                .serialize_document()
+                .contains("Unexpected &lt;script&gt; &amp; &lt;/parsererror&gt;")
+        );
     }
 
     #[test]

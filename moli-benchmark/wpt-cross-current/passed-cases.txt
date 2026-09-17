@@ -4357,6 +4357,7 @@ domparsing/DOMParser-parseFromString-url.html
 domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
+domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html
