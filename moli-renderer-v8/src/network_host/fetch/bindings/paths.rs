@@ -164,6 +164,7 @@ pub(super) fn resolve_local_fetch(
     let Some(result) = local_url_response_with_blob_entry(
         &prepared.resolved_url,
         &prepared.method,
+        &prepared.request_headers,
         prepared.blob_url_entry.as_ref(),
     ) else {
         return Ok(None);
