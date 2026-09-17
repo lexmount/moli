@@ -17,6 +17,7 @@ mod opaque_response;
 mod open_validation;
 mod query_realms;
 mod redirect_filter;
+mod response_headers;
 mod response_type;
 mod shadow_dom;
 mod streaming_failure;

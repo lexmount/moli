@@ -3034,7 +3034,7 @@ async fn synchronous_xhr_blocks_send_and_returns_materialized_response() {
         assert_eq!(
             observed,
             format!(
-                r#"{{"events":["readystatechange:1","readystatechange:4","load:7:7:true","loadend:7:7:true"],"readyState":4,"status":200,"statusText":"OK","responseText":"sync-ok","responseURL":"{xhr_url}","contentType":"text/plain; charset=utf-8","allHeaders":"content-type: text/plain; charset=utf-8\r\ncontent-length: 7\r\nconnection: close\r\n"}}"#
+                r#"{{"events":["readystatechange:1","readystatechange:4","load:7:7:true","loadend:7:7:true"],"readyState":4,"status":200,"statusText":"OK","responseText":"sync-ok","responseURL":"{xhr_url}","contentType":"text/plain; charset=utf-8","allHeaders":"connection: close\r\ncontent-length: 7\r\ncontent-type: text/plain; charset=utf-8\r\n"}}"#
             )
         );
         let (records, _, _) = split_network_output_items(network_output);
