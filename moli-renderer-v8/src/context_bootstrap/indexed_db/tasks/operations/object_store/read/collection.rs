@@ -6,7 +6,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_all_req
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     collection: &CollectionRequest,
 ) {
     match scan_object_store_entries(scope, handle, store_name, collection.query.as_ref()) {

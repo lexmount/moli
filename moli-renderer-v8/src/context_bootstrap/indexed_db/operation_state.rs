@@ -1,6 +1,7 @@
 use super::stores::collection::CollectionRequest;
 use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
+use moli_indexeddb::IndexedDbName;
 
 #[derive(Clone)]
 pub(super) enum IndexedDbCursorSource {
@@ -83,14 +84,14 @@ pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
     source: v8::Global<v8::Object>,
     request: v8::Global<v8::Object>,
-    store_name: String,
+    store_name: IndexedDbName,
     kind: IndexedDbTransactionOperation,
 }
 
 pub(super) struct IndexedDbTransactionOperationLocals<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) request: v8::Local<'s, v8::Object>,
-    pub(super) store_name: String,
+    pub(super) store_name: IndexedDbName,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 
@@ -100,7 +101,7 @@ impl IndexedDbPendingTransactionOperation {
         owner: OwnerDispatchScope,
         source: v8::Local<'s, v8::Object>,
         request: v8::Local<'s, v8::Object>,
-        store_name: impl Into<String>,
+        store_name: impl Into<IndexedDbName>,
         kind: IndexedDbTransactionOperation,
     ) -> Self {
         Self {
