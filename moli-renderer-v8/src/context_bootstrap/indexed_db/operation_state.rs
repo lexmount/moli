@@ -2,11 +2,13 @@ use super::stores::collection::CollectionRequest;
 use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
 
+#[derive(Clone)]
 pub(super) enum IndexedDbCursorSource {
     ObjectStore,
     Index(IndexInfo),
 }
 
+#[derive(Clone)]
 pub(super) struct IndexedDbCursorOpenOperation {
     pub(super) source: IndexedDbCursorSource,
     pub(super) query: Option<IdbKeyRangeQuery>,

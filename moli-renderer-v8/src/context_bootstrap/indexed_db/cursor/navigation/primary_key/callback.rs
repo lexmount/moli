@@ -1,4 +1,4 @@
-use super::position::{next_primary_key_cursor_position, target_is_after_current_cursor};
+use super::position::target_is_after_current_cursor;
 use super::*;
 use crate::webidl;
 
@@ -55,8 +55,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_primary_key_
     if !target_is_after_current_cursor(scope, cursor, current, direction, &key, &primary_key) {
         return;
     }
-    let next =
-        next_primary_key_cursor_position(scope, cursor, current, direction, &key, &primary_key);
-    let _ = result::enqueue_cursor_result(scope, cursor, next);
+    let _ = result::enqueue_cursor_result(
+        scope,
+        cursor,
+        CursorIteration::ContinuePrimaryKey(key, primary_key),
+    );
     rv.set_undefined();
 }
