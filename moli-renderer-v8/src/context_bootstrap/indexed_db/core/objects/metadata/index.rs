@@ -16,7 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn index_info_from_store_metadata<'
 pub(in crate::context_bootstrap::indexed_db) fn set_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     info: &IndexInfo,
 ) -> Option<()> {
     set_indexed_db_database_index_metadata(scope, database, store_name, info.clone())?;
@@ -27,7 +27,7 @@ pub(in crate::context_bootstrap::indexed_db) fn set_database_index_metadata<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn remove_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     index_name: &IndexedDbName,
 ) -> Option<()> {
     remove_indexed_db_database_index_metadata(scope, database, store_name, index_name)?;

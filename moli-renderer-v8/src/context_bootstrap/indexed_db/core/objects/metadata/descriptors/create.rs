@@ -22,8 +22,8 @@ struct IndexDescriptorDeclaration<'scope> {
     data_properties,
     enumerable
 )]
-struct ObjectStoreDescriptorDeclaration<'scope, 'value> {
-    name: &'value str,
+struct ObjectStoreDescriptorDeclaration<'scope> {
+    name: v8::Local<'scope, v8::String>,
     key_path: v8::Local<'scope, v8::Value>,
     auto_increment: bool,
 }
@@ -55,15 +55,19 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
         None => v8::null(scope).into(),
     };
     let descriptor = new_null_prototype_object(scope);
-    ObjectStoreDescriptorDeclaration::new(&info.name, key_path, info.auto_increment)
-        .initialize(scope, descriptor)
-        .ok()?;
+    ObjectStoreDescriptorDeclaration::new(
+        idb_name_to_v8(scope, &info.name),
+        key_path,
+        info.auto_increment,
+    )
+    .initialize(scope, descriptor)
+    .ok()?;
     let index_names = if indexes.is_empty() {
         info.index_names.clone()
     } else {
         indexes.iter().map(|index| index.name.clone()).collect()
     };
-    let index_names_list = new_idb_index_name_list(scope, &index_names);
+    let index_names_list = new_idb_name_list(scope, &index_names);
     set_indexed_db_internal_object_property(
         scope,
         descriptor,

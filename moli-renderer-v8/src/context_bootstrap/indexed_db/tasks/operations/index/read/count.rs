@@ -5,7 +5,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_count_request<'s>(
     index: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     query: Option<&IdbKeyRangeQuery>,
 ) {
     let Some(index_info) = index_info_from_index_object(scope, index) else {

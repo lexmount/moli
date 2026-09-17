@@ -408,6 +408,7 @@ struct IndexedDbTransactionLifecycleState {
     pending: u32,
     commit_scheduled: bool,
     deactivation_scheduled: bool,
+    store_names: BTreeSet<IndexedDbName>,
     operations_waiting_for_start: Vec<IndexedDbPendingTransactionOperation>,
     db_key: Option<String>,
 }
@@ -436,6 +437,7 @@ impl IndexedDbTransactionLifecycleState {
             pending: 0,
             commit_scheduled: false,
             deactivation_scheduled: false,
+            store_names: BTreeSet::new(),
             operations_waiting_for_start: Vec::new(),
             db_key,
         }
@@ -446,7 +448,7 @@ impl IndexedDbTransactionLifecycleState {
 pub(super) struct IndexedDbObjectStoreMetadata {
     info: ObjectStoreInfo,
     indexes: BTreeMap<IndexedDbName, IndexInfo>,
-    created_in_upgrade: bool,
+    original_name: Option<IndexedDbName>,
     original_index_names: BTreeMap<IndexedDbName, IndexedDbName>,
 }
 
@@ -457,13 +459,13 @@ impl IndexedDbObjectStoreMetadata {
             .map(|index| (index.name.clone(), index))
             .collect();
         Self {
+            original_name: Some(info.name.clone()),
             info,
             original_index_names: indexes
                 .keys()
                 .map(|name| (name.clone(), name.clone()))
                 .collect(),
             indexes,
-            created_in_upgrade: false,
         }
     }
 
@@ -521,7 +523,7 @@ struct IndexedDbDatabaseLifecycleState {
     database_key: String,
     storage_scope: IndexedDbStorageScope,
     closed: bool,
-    metadata: BTreeMap<String, IndexedDbObjectStoreMetadata>,
+    metadata: BTreeMap<IndexedDbName, IndexedDbObjectStoreMetadata>,
     upgrade_transaction: Option<v8::Global<v8::Value>>,
     upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
 }
@@ -565,7 +567,7 @@ struct IndexedDbObjectStoreLifecycleState {
     wrapper: v8::Weak<v8::Object>,
     transaction: v8::Global<v8::Value>,
     database: v8::Global<v8::Value>,
-    name: String,
+    name: IndexedDbName,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
@@ -1194,7 +1196,7 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
         return;
     };
     let original_name = indexed_db_object_store_metadata(scope, object_store)
-        .filter(|metadata| !metadata.created_in_upgrade)
+        .filter(|metadata| metadata.original_name.is_some())
         .and_then(|metadata| metadata.original_index_names.get(&info.name).cloned());
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     table.borrow_mut().indexes.insert(
@@ -1835,7 +1837,7 @@ pub(super) fn replace_indexed_db_database_metadata<'s>(
 pub(super) fn indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) -> Option<IndexedDbObjectStoreMetadata> {
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
@@ -1857,7 +1859,9 @@ pub(super) fn set_indexed_db_database_store_metadata<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    metadata.created_in_upgrade = database.upgrade_metadata.is_some();
+    if database.upgrade_metadata.is_some() {
+        metadata.original_name = None;
+    }
     database
         .metadata
         .insert(metadata.info.name.clone(), metadata);
@@ -1867,7 +1871,7 @@ pub(super) fn set_indexed_db_database_store_metadata<'s>(
 pub(super) fn remove_indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
@@ -1880,7 +1884,7 @@ pub(super) fn remove_indexed_db_database_store_metadata<'s>(
 pub(super) fn set_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     info: IndexInfo,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
@@ -1894,7 +1898,7 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
 pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     index_name: &IndexedDbName,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
@@ -1946,7 +1950,7 @@ pub(super) fn indexed_db_object_store_database<'s>(
 pub(super) fn indexed_db_object_store_name(
     scope: &mut v8::PinScope<'_, '_>,
     store: v8::Local<'_, v8::Object>,
-) -> Option<String> {
+) -> Option<IndexedDbName> {
     let id = indexed_db_typed_state_id(scope, store)?;
     let table = indexed_db_runtime_state_table_for_object(scope, store);
     table
@@ -2328,12 +2332,18 @@ fn set_indexed_db_typed_transaction_slot_value(
 
 fn create_database_metadata_object_from_typed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    metadata: &BTreeMap<String, IndexedDbObjectStoreMetadata>,
+    metadata: &BTreeMap<IndexedDbName, IndexedDbObjectStoreMetadata>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = new_null_prototype_object(scope);
     for (store_name, store) in metadata {
         let descriptor = create_object_store_descriptor_from_typed(scope, store)?;
-        set_indexed_db_internal_object_property(scope, object, store_name, descriptor.into());
+        let name = idb_name_to_v8(scope, store_name);
+        object.define_own_property(
+            scope,
+            name.into(),
+            descriptor.into(),
+            v8::PropertyAttribute::NONE,
+        )?;
     }
     Some(object)
 }
@@ -2422,7 +2432,7 @@ fn indexed_db_typed_object_store_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => v8_string(scope, &store.name).map(Into::into),
+        INDEXED_DB_OBJECT_STORE_NAME_SLOT => Some(idb_name_to_v8(scope, &store.name).into()),
         INDEXED_DB_OBJECT_STORE_METADATA_SLOT => {
             create_object_store_descriptor_from_typed(scope, &store.metadata).map(Into::into)
         }
@@ -2431,24 +2441,17 @@ fn indexed_db_typed_object_store_slot_value<'s>(
 }
 
 fn set_indexed_db_typed_object_store_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    store: &mut IndexedDbObjectStoreLifecycleState,
+    _scope: &mut v8::PinScope<'_, '_>,
+    _store: &mut IndexedDbObjectStoreLifecycleState,
     key: &str,
-    value: v8::Local<'_, v8::Value>,
+    _value: v8::Local<'_, v8::Value>,
 ) -> bool {
-    match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            store.name = value
-                .to_string(scope)
-                .map(|value| value.to_rust_string_lossy(scope))
-                .unwrap_or_default();
-            true
-        }
-        // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
-        // fall through into V8 private storage and become a second metadata source.
-        INDEXED_DB_OBJECT_STORE_METADATA_SLOT => true,
-        _ => false,
-    }
+    // Schema mutations update typed state atomically. Do not create a second
+    // name or metadata source through legacy private-slot writes.
+    matches!(
+        key,
+        INDEXED_DB_OBJECT_STORE_NAME_SLOT | INDEXED_DB_OBJECT_STORE_METADATA_SLOT
+    )
 }
 
 fn indexed_db_typed_index_slot_value<'s>(
@@ -2516,6 +2519,71 @@ fn set_indexed_db_typed_task_id<'s>(
 ) {
     let id = v8::BigInt::new_from_u64(scope, id.0);
     set_indexed_db_slot_value(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT, id.into());
+}
+
+pub(super) fn indexed_db_database_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> Vec<IndexedDbName> {
+    let id = indexed_db_typed_state_id(scope, database).expect("database id");
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table
+        .borrow()
+        .databases
+        .get(&id)
+        .expect("database state")
+        .metadata
+        .keys()
+        .cloned()
+        .collect()
+}
+
+pub(super) fn set_indexed_db_transaction_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    names: &[IndexedDbName],
+) {
+    let id = indexed_db_typed_state_id(scope, transaction).expect("transaction id");
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow_mut()
+        .transactions
+        .get_mut(&id)
+        .expect("transaction state")
+        .store_names = names.iter().cloned().collect();
+}
+
+pub(super) fn indexed_db_transaction_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Vec<IndexedDbName> {
+    let id = indexed_db_typed_state_id(scope, transaction).expect("transaction id");
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .expect("transaction state")
+        .store_names
+        .iter()
+        .cloned()
+        .collect()
+}
+
+pub(super) fn indexed_db_transaction_contains_store(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    name: &IndexedDbName,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .is_some_and(|state| state.store_names.contains(name))
 }
 
 #[cfg(test)]
@@ -2640,7 +2708,7 @@ mod tests {
     fn object_store_metadata_tracks_index_lifecycle() {
         let mut metadata = IndexedDbObjectStoreMetadata::new(
             ObjectStoreInfo {
-                name: "posts".to_owned(),
+                name: "posts".into(),
                 key_path: None,
                 auto_increment: false,
                 index_names: Vec::new(),

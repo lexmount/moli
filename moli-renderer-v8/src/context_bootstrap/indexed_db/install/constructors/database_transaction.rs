@@ -5,6 +5,8 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBDatabase, enumerable, receiver)]
 struct IdbDatabasePrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_database_object_store_names_getter)]
+    object_store_names: (),
     #[webapi(method, length = 1, callback = idb_database_create_object_store_callback)]
     create_object_store: (),
     #[webapi(method, length = 1, callback = idb_database_delete_object_store_callback)]
@@ -22,6 +24,8 @@ struct IdbDatabasePrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBTransaction, enumerable)]
 struct IdbTransactionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_transaction_object_store_names_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    object_store_names: (),
     #[webapi(method, length = 1, callback = idb_transaction_object_store_callback)]
     object_store: (),
     #[webapi(method, length = 0, callback = idb_transaction_abort_callback)]

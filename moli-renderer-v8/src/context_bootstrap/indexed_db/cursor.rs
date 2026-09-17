@@ -15,6 +15,7 @@ use super::{
     with_indexed_db_manager,
 };
 use crate::webidl;
+use moli_indexeddb::IndexedDbName;
 
 mod mutation;
 mod navigation;
