@@ -51,6 +51,7 @@ pub(crate) struct TransactionState {
     pub(crate) stores: BTreeSet<String>,
     pub(crate) state: TransactionLifecycle,
     pub(crate) working_copy: DatabaseData,
+    pub(crate) record_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
