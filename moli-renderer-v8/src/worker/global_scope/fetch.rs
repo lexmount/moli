@@ -1940,8 +1940,11 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &method)?;
         crate::network_host::validate_request_method_body(&method, body.as_ref())?;
-        let headers = if request_mode == moli_fetch::RequestMode::NoCors {
-            filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors)
+        let headers = if init.headers_present || request_mode == moli_fetch::RequestMode::NoCors {
+            filter_headers_for_guard(
+                &headers,
+                request_headers_guard_for_mode(request_mode.as_ref()),
+            )
         } else {
             headers
         };
@@ -1997,11 +2000,10 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &init.method)?;
         crate::network_host::validate_request_method_body(&init.method, init.body.as_ref())?;
-        let headers = if request_mode == moli_fetch::RequestMode::NoCors {
-            filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
-        } else {
-            init.headers
-        };
+        let headers = filter_headers_for_guard(
+            &init.headers,
+            request_headers_guard_for_mode(request_mode.as_ref()),
+        );
         let credentials_mode = init
             .credentials_mode
             .unwrap_or(RequestCredentialsMode::SameOrigin);
