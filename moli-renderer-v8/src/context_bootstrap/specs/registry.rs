@@ -1664,6 +1664,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::IndexedDb,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::IDBRecord::DESCRIPTOR,
+        kind: ConstructorKind::IndexedDb,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::IDBKeyRange::DESCRIPTOR,
         kind: ConstructorKind::IndexedDb,
     },

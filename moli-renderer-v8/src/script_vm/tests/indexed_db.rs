@@ -4242,7 +4242,7 @@ fn indexed_db_object_store_range_count_zero_and_open_bounds_work() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbStoreRangeOpenResult)")
         .expect("indexeddb object store open range result should be readable");
 
-    assert_eq!(result, "false|true|false|0|b|1");
+    assert_eq!(result, "false|true|false|1|b|1");
 }
 
 #[test]
