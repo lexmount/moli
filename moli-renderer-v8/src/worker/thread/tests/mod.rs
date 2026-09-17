@@ -1529,6 +1529,8 @@ mod abort_signal_statics;
 mod lazy_storage;
 mod lifecycle;
 mod modules;
+mod strict_script_mime;
+
 mod network;
 mod postmessage;
 mod tls;
