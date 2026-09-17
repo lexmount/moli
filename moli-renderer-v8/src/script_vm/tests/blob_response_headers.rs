@@ -56,6 +56,6 @@ async fn blob_url_response_headers_match_bytes_and_type_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 490, "worker={worker}");
+        assert_eq!(checks.len(), 550, "worker={worker}");
     }
 }
