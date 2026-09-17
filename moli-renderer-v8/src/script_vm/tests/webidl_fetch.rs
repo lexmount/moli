@@ -7695,7 +7695,7 @@ async fn headers_for_each_visits_live_entries_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 34, "worker={worker}");
+        assert_eq!(checks.len(), 36, "worker={worker}");
     }
 }
 
