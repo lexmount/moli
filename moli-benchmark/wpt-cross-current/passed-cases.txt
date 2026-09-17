@@ -305,6 +305,7 @@ IndexedDB/idbtransaction_objectStoreNames.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbtransaction_objectStoreNames.any.js?moli-wpt-any=window
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=window
+IndexedDB/idlharness.any.js?moli-wpt-any=window
 IndexedDB/index_sort_order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/index_sort_order.any.js?moli-wpt-any=window
 IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=dedicatedworker
