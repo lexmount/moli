@@ -8,7 +8,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     error: v8::Local<'s, v8::Value>,
 ) {
     restore_indexed_db_upgrade_metadata(scope, transaction);
-    let _ = transaction.set(scope, v8str(scope, "error").into(), error);
+    crate::util::set_private_value(scope, transaction, TRANSACTION_ERROR_SLOT, error);
     set_indexed_db_slot_value(
         scope,
         transaction,

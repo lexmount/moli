@@ -1,24 +1,24 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    IdbTransactionDurability, initialize_indexed_db_event_target,
+    IdbTransactionDurability, TRANSACTION_DB_SLOT, TRANSACTION_ERROR_SLOT, TRANSACTION_MODE_SLOT,
+    initialize_indexed_db_event_target,
 };
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBTransaction,
-    require_prototype,
-    data_properties,
-    enumerable
-)]
+#[webapi(interface = web_api_interfaces::IDBTransaction, require_prototype)]
 struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
+    // Heap-owned references remain observable after dispatch roots are released,
+    // without introducing Rust Global roots for transaction/database cycles.
+    #[webapi(slot = TRANSACTION_DB_SLOT)]
     db: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = TRANSACTION_MODE_SLOT)]
     mode: &'static str,
-    #[webapi(init = "null")]
+    #[webapi(slot = TRANSACTION_ERROR_SLOT, init = "null")]
     error: (),
 }
 
