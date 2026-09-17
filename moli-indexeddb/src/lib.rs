@@ -5,6 +5,8 @@
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
 mod cursor;
+mod name;
+pub use name::IndexedDbName;
 mod error;
 mod key;
 mod manager;
