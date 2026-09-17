@@ -34,7 +34,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_blocked_open_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
     version: Option<u64>,
 ) {
     let context = request
@@ -59,7 +59,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_blocked_delete_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
 ) {
     let context = request
         .get_creation_context(scope)
