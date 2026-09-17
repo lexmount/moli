@@ -15785,6 +15785,7 @@ mod close_watchers;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
+mod fetch_referrer;
 mod fetch_request_guard;
 mod headers_list;
 mod http_fixture;
