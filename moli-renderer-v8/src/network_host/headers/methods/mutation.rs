@@ -1,7 +1,7 @@
 use super::super::store::{
-    HeadersGuard, header_allowed_by_guard, headers_are_immutable, headers_entries, headers_guard,
-    normalized_header_name_or_throw, normalized_header_value_or_throw, normalized_headers_entries,
-    set_headers_entries,
+    header_allowed_by_guard, header_append_allowed_by_guard, headers_are_immutable,
+    headers_entries, headers_guard, normalized_header_name_or_throw,
+    normalized_header_value_or_throw, set_headers_entries,
 };
 use super::*;
 use crate::webidl;
@@ -31,20 +31,6 @@ fn reject_immutable_headers<'s>(
     }
     throw_type_error(scope, "Headers are immutable");
     true
-}
-
-fn candidate_allowed_by_guard(
-    guard: HeadersGuard,
-    target_name: &str,
-    candidate_entries: &[(String, String)],
-) -> bool {
-    if guard != HeadersGuard::RequestNoCors {
-        return true;
-    }
-    normalized_headers_entries(candidate_entries)
-        .into_iter()
-        .filter(|(name, _)| name == target_name)
-        .all(|(name, value)| header_allowed_by_guard(guard, &name, &value))
 }
 
 pub(in crate::network_host::headers) fn headers_set_callback<'s>(
@@ -79,11 +65,7 @@ pub(in crate::network_host::headers) fn headers_set_callback<'s>(
         .position(|(entry_name, _)| *entry_name == lower)
         .unwrap_or(entries.len());
     entries.retain(|(entry_name, _)| *entry_name != lower);
-    let target_name = lower.clone();
     entries.insert(insert_at.min(entries.len()), (lower, value));
-    if !candidate_allowed_by_guard(guard, &target_name, &entries) {
-        return;
-    }
     set_headers_entries(scope, this, &entries);
 }
 
@@ -133,13 +115,10 @@ pub(in crate::network_host::headers) fn headers_append_callback<'s>(
         return;
     };
     let guard = headers_guard(scope, this);
-    if !header_allowed_by_guard(guard, &name, &value) {
-        return;
-    }
     let mut entries = headers_entries(scope, this);
-    entries.push((name.clone(), value));
-    if !candidate_allowed_by_guard(guard, &name, &entries) {
+    if !header_append_allowed_by_guard(guard, &name, &value, &entries) {
         return;
     }
+    entries.push((name, value));
     set_headers_entries(scope, this, &entries);
 }

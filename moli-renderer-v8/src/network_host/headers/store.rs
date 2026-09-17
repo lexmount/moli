@@ -6,7 +6,7 @@ pub(crate) use self::entries::{
     HeadersGuard, filter_headers_for_guard, headers_entries, normalized_headers_entries,
 };
 pub(in crate::network_host::headers) use self::entries::{
-    header_allowed_by_guard, headers_are_immutable, headers_guard,
+    header_allowed_by_guard, header_append_allowed_by_guard, headers_are_immutable, headers_guard,
 };
 pub(in crate::network_host) use self::entries::{mark_headers_immutable, set_headers_entries};
 pub(in crate::network_host::headers) use self::entries::{

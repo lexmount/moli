@@ -306,10 +306,18 @@ mod tests {
             "content-type",
             "text/html"
         ));
-        assert!(!is_no_cors_safelisted_request_header(
+        assert!(is_no_cors_safelisted_request_header(
             "content-type",
             "text/plain;charset=UTF-8, text/plain"
         ));
+        for value in [
+            "text/plain, text/plain",
+            "application/json, text/plain",
+            "text/plain, application/json",
+            "text/plain;charset=\"utf8\", extra",
+        ] {
+            assert!(!is_no_cors_safelisted_request_header("content-type", value));
+        }
         assert!(!is_no_cors_safelisted_request_header("range", "bytes=0-1"));
     }
 

@@ -9,8 +9,8 @@ pub fn parse_mime(input: &str) -> Option<mime::Mime> {
 }
 
 pub fn request_header_content_type_essence(input: &str) -> Option<String> {
-    if input.contains(',') {
-        return None;
-    }
+    // Fetch parses one MIME type here, rather than extracting a type from a
+    // comma-separated response header. Commas invalidate the type/subtype,
+    // but are allowed in parameters.
     mime_essence(input)
 }
