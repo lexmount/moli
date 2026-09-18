@@ -160,8 +160,8 @@ pub(crate) fn register_rethrowing_algorithm<'s>(
 }
 
 /// The producer traces this callback itself. Its private subscription
-/// signal must not add a Rust root that outlives a discarded async iterator.
-pub(crate) fn register_weak_rethrowing_algorithm<'s>(
+/// signal must not add a Rust root that outlives a discarded subscription.
+pub(crate) fn register_weak_algorithm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: ResolvedAbortSignal<'s>,
     algorithm: v8::Local<'s, v8::Function>,
@@ -172,7 +172,21 @@ pub(crate) fn register_weak_rethrowing_algorithm<'s>(
         WEAK_ABORT_ALGORITHM,
         v8::Boolean::new(scope, true).into(),
     );
-    register_rethrowing_algorithm(scope, signal, algorithm)
+    signal.register_algorithm(scope, algorithm)
+}
+
+pub(crate) fn register_weak_rethrowing_algorithm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: ResolvedAbortSignal<'s>,
+    algorithm: v8::Local<'s, v8::Function>,
+) -> bool {
+    crate::util::set_private_value(
+        scope,
+        algorithm.into(),
+        RETHROW_ABORT_ALGORITHM,
+        v8::Boolean::new(scope, true).into(),
+    );
+    register_weak_algorithm(scope, signal, algorithm)
 }
 
 /// Converts the final AddEventListenerOptions member after capture/once/passive.
