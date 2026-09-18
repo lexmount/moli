@@ -31,6 +31,7 @@
       equal(label + " doctype", copy.doctype, null);
       equal(label + " HTML structure", copy.head === null && copy.body === null, true);
       equal(label + " owner", copy.ownerDocument, null);
+      equal(label + " MIME", copy.contentType, source.contentType);
       equal(label + " view", copy.defaultView, null);
       const node = copy.createElement("probe");
       let error = null;
@@ -44,6 +45,7 @@
     equal(name + ": deep identity", deep !== source, true);
     equal(name + ": deep equality", deep.isEqualNode(source), true);
     equal(name + ": deep count", deep.childNodes.length, original.length);
+    equal(name + ": deep MIME", deep.contentType, source.contentType);
     equal(name + ": deep children", Array.from(deep.childNodes).every((child, i) => child !== original[i] && child.ownerDocument === deep), true);
     equal(name + ": source unchanged", source.childNodes.length === original.length && original.every((child, i) => child === source.childNodes[i] && child.parentNode === source), true);
   }
