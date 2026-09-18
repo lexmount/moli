@@ -130,7 +130,8 @@ pub(crate) use registry_clone_retarget::{
 };
 mod registry_install;
 pub(crate) use registry_install::{
-    build_custom_elements_registry_for_window, rebind_materialized_child_custom_elements_registry,
+    build_custom_elements_registry_for_window, custom_elements_registry_for_current_realm,
+    rebind_materialized_child_custom_elements_registry,
 };
 mod registry_runtime;
 pub(crate) use registry_runtime::{
