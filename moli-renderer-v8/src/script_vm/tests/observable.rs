@@ -1,6 +1,153 @@
 use super::*;
 
 #[test]
+fn observable_switch_map_preserves_switch_order_conversion_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.switchMapResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-switch-map.js")
+    ))
+    .expect("Observable.switchMap fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("switchMapResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 170, "{result}");
+}
+
+#[test]
+fn observable_switch_map_preserves_result_conversion_callback_and_cancellation_realms() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.switchMap realm");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.switchMapRealms = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-switch-map-realms.js")
+    ))
+    .expect("Observable.switchMap realms fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("switchMapRealms").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 31, "{result}");
+}
+
+#[test]
+fn observable_switch_map_traces_reentrant_inners_and_releases_replaced_and_closed_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map-gc.test/");
+    vm.eval(r#"
+function makeSwitchSource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+function makeSwitchMapper() {
+  const token = {calls: 0};
+  return {token, callback: value => { token.calls++; return value; }};
+}
+globalThis.switchMapChains = [];
+for (const mode of ['abandoned', 'complete', 'outer-error', 'inner-error', 'abort']) (() => {
+  const outer = makeSwitchSource(), old = makeSwitchSource(), inner = makeSwitchSource(), mapper = makeSwitchMapper();
+  const result = outer.source.switchMap(mapper.callback), ac = new AbortController();
+  const promise = result.toArray(mode === 'abort' ? {signal: ac.signal} : undefined);
+  promise.catch(() => {});
+  outer.subscriber.next(old.source); old.subscriber.next(1);
+  outer.subscriber.next(inner.source); inner.subscriber.next(2);
+  const entry = {mode, templates: [outer.source, old.source, inner.source, result].map(v => new WeakRef(v)),
+    old: new WeakRef(old.subscriber), outer: new WeakRef(outer.subscriber), inner: new WeakRef(inner.subscriber),
+    callbacks: [mapper.callback, mapper.token].map(v => new WeakRef(v))};
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode === 'abort') entry.controller = ac;
+  switchMapChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+switchMapChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+switchMapChains.every(c => c.old.deref() === undefined),
+switchMapChains.every(c => [c.outer, c.inner, ...c.callbacks].every(ref => (ref.deref() !== undefined) === (c.mode !== 'abandoned')))
+])"#).unwrap(), "[true,true,true]");
+    vm.eval(r#"
+for (const c of switchMapChains.filter(c => c.promise)) {
+  c.promise.then(values => { c.correct = c.mode === 'complete' && JSON.stringify(values) === '[1,2]'; }, error => { c.correct = error === c.mode; });
+  const outer = c.outer.deref(), inner = c.inner.deref();
+  if (c.mode === 'complete') { outer.complete(); inner.complete(); }
+  else if (c.mode === 'outer-error') outer.error(c.mode);
+  else if (c.mode === 'inner-error') inner.error(c.mode);
+  else c.controller.abort(c.mode);
+  c.closed = [outer, inner];
+}
+"#).unwrap();
+    assert_eq!(vm.eval("switchMapChains.filter(c => c.promise).every(c => c.correct && c.closed.every(s => !s.active))").unwrap(), "true");
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("switchMapChains.every(c => c.callbacks.every(ref => ref.deref() === undefined))")
+            .unwrap(),
+        "true"
+    );
+    vm.eval(r#"
+globalThis.switchMapDrain = (() => {
+  const outer = makeSwitchSource(), inner = makeSwitchSource(), mapper = makeSwitchMapper();
+  const promise = outer.source.switchMap(mapper.callback).toArray();
+  outer.subscriber.next(inner.source); outer.subscriber.complete();
+  return {promise, outer: new WeakRef(outer.subscriber), inner: new WeakRef(inner.subscriber), callback: new WeakRef(mapper.callback)};
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("switchMapDrain.outer.deref() === undefined && switchMapDrain.inner.deref() !== undefined && switchMapDrain.callback.deref() !== undefined").unwrap(), "true");
+    vm.eval("switchMapDrain.promise.then(v => { switchMapDrain.correct = v.length === 0; }); switchMapDrain.inner.deref().complete();").unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("switchMapDrain.correct && switchMapDrain.inner.deref() === undefined && switchMapDrain.callback.deref() === undefined").unwrap(), "true");
+    vm.eval(r#"
+function makeReentrantSwitchMapper(outer) {
+  return value => {
+    if (value.next) outer.subscriber.next({current: value.next});
+    return value.current;
+  };
+}
+globalThis.reentrantSwitch = (() => {
+  const outer = makeSwitchSource(), first = makeSwitchSource(), second = makeSwitchSource();
+  const promise = outer.source.switchMap(makeReentrantSwitchMapper(outer)).toArray();
+  outer.subscriber.next({current: first.source, next: second.source});
+  return {promise, source: new WeakRef(outer.subscriber), first: new WeakRef(first.subscriber), second: new WeakRef(second.subscriber)};
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("[reentrantSwitch.source, reentrantSwitch.first, reentrantSwitch.second].every(ref => ref.deref() !== undefined)").unwrap(), "true");
+    vm.eval("reentrantSwitch.promise.then(v => { reentrantSwitch.correct = JSON.stringify(v) === '[1,2]'; }); reentrantSwitch.first.deref().next(1); reentrantSwitch.second.deref().next(2); reentrantSwitch.source.deref().complete(); reentrantSwitch.first.deref().complete();").unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("reentrantSwitch.correct && [reentrantSwitch.source, reentrantSwitch.first, reentrantSwitch.second].every(ref => ref.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
+fn observable_switch_map_handles_completion_during_reentrant_mapping() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map-reentrant-complete.test/");
+    assert_eq!(vm.eval(r#"
+JSON.stringify(['mapper', 'conversion'].map(mode => {
+  let source, superseded, completions = 0;
+  new Observable(s => { source = s; }).switchMap(value => {
+    if (value === 2) return [];
+    if (mode === 'mapper') source.next(2);
+    return mode === 'mapper' ? new Observable(s => { superseded = s; }) : {
+      get [Symbol.asyncIterator]() { source.next(2); return undefined; },
+      [Symbol.iterator]() { throw 'inactive conversion must not obtain an iterator'; }
+    };
+  }).subscribe({complete: () => completions++});
+  source.next(1); source.complete();
+  return completions === 1 && (mode === 'conversion' || (!superseded.active && superseded.signal.aborted));
+}))
+"#).unwrap(), "[true,true]");
+}
+
+#[test]
 fn observable_flat_map_preserves_serial_order_conversion_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-flat-map.test/");
     vm.eval(&format!(
