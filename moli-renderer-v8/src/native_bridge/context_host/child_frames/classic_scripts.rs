@@ -99,12 +99,12 @@ impl ChildBrowsingContextEntry {
             .is_executing_parser_script()
     }
 
-    fn push_child_current_script(&mut self, script_handle: DomHandle) {
+    fn push_child_current_script(&mut self, script_handle: Option<DomHandle>) {
         self.classic_script_document_state
             .push_current_script(script_handle);
     }
 
-    fn pop_child_current_script(&mut self, script_handle: DomHandle) {
+    fn pop_child_current_script(&mut self, script_handle: Option<DomHandle>) {
         self.classic_script_document_state
             .pop_current_script(script_handle);
     }
@@ -182,15 +182,20 @@ impl JsContextHost {
     pub(crate) fn push_frame_script_job_current_script(
         &mut self,
         job: &FrameScriptJob,
-    ) -> Option<(DomHandle, DomHandle)> {
+    ) -> Option<(DomHandle, Option<DomHandle>)> {
         let script_handle = job.current_script?;
         let child_handle = self.frame_owner_child_handle_for_script_job(job)?;
+        let script_handle = self
+            .dom_host()
+            .containing_shadow_root(script_handle)
+            .is_none()
+            .then_some(script_handle);
         let entry = self.child_browsing_contexts.get_mut(&child_handle)?;
         entry.push_child_current_script(script_handle);
         Some((child_handle, script_handle))
     }
 
-    pub(crate) fn pop_child_current_script(&mut self, token: (DomHandle, DomHandle)) {
+    pub(crate) fn pop_child_current_script(&mut self, token: (DomHandle, Option<DomHandle>)) {
         let (child_handle, script_handle) = token;
         if let Some(entry) = self.child_browsing_contexts.get_mut(&child_handle) {
             entry.pop_child_current_script(script_handle);

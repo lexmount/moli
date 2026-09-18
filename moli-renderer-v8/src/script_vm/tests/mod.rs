@@ -7075,135 +7075,6 @@ async fn child_document_script_owner_hooks_select_current_realm() {
 }
 
 #[tokio::test]
-async fn child_dynamic_execution_action_requires_materialized_current_realm() {
-    use crate::frame_owner_model::{
-        FrameDocumentTaskOwner, FrameRealmId, PendingChildDynamicDocumentScript,
-    };
-
-    let mut vm = new_storage_test_vm("https://child-dynamic-current-realm.test/");
-
-    vm.eval(
-        r#"
-(() => {
-  const root = document.documentElement || document.appendChild(document.createElement("html"));
-  const body = document.body || root.appendChild(document.createElement("body"));
-  const frame = document.createElement("iframe");
-  body.appendChild(frame);
-})()
-"#,
-    )
-    .expect("child dynamic current-realm setup should evaluate");
-    assert_initial_about_blank_child_completed_synchronously_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    )
-    .await;
-    let child_context_id = materialize_single_child_default_realm_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    );
-    let (child_handle, task_owner, owner_realm_id, child_document_handle) = {
-        let realm = vm
-            .child_frame_realm_store
-            .get(&child_context_id)
-            .expect("child realm record should exist");
-        let snapshot = vm
-            ._context_host
-            .borrow()
-            .frame_owner_current_child_snapshot(realm.child_handle)
-            .expect("child frame should expose a current owner snapshot");
-        (
-            realm.child_handle,
-            FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            ),
-            realm.owner_realm_id,
-            snapshot.document_handle,
-        )
-    };
-    let script_handle = {
-        let mut host = vm._context_host.borrow_mut();
-        let script = host.dom_host_mut().create_element("script");
-        assert_eq!(
-            host.dom_host_mut()
-                .adopt_node(child_document_handle, script),
-            Some(script),
-        );
-        script
-    };
-    let work_without_realm = PendingChildDynamicDocumentScript {
-        child_handle,
-        owner: task_owner,
-        realm_id: None,
-        script_handle,
-        source: "globalThis.__childDynamicMaterializedRealm = true;".to_owned(),
-        script_nonce: Some("captured-nonce".to_owned()),
-        script_integrity: Some("sha256-captured-integrity".to_owned()),
-    };
-
-    let action = vm
-        ._context_host
-        .borrow()
-        .child_dynamic_classic_script_execution_action_for_owner(
-            &work_without_realm,
-            owner_realm_id,
-        )
-        .expect("current dynamic work should materialize an execution action");
-    assert_eq!(action.target().task_owner(), task_owner);
-    assert_eq!(action.target().realm_id(), owner_realm_id);
-    let job = action.into_job();
-    assert_eq!(job.script_nonce.as_deref(), Some("captured-nonce"));
-    assert_eq!(
-        job.script_integrity.as_deref(),
-        Some("sha256-captured-integrity")
-    );
-
-    {
-        let mut host = vm._context_host.borrow_mut();
-        let main_document = host.dom_host().document_handle();
-        assert_eq!(
-            host.dom_host_mut().adopt_node(main_document, script_handle),
-            Some(script_handle)
-        );
-        assert!(
-            host.child_dynamic_classic_script_execution_action_for_owner(
-                &work_without_realm,
-                owner_realm_id,
-            )
-            .is_none(),
-            "adopted work must not execute in its preparation realm"
-        );
-        assert_eq!(
-            host.dom_host_mut()
-                .adopt_node(child_document_handle, script_handle),
-            Some(script_handle)
-        );
-        assert!(
-            host.child_dynamic_classic_script_execution_action_for_owner(
-                &work_without_realm,
-                owner_realm_id,
-            )
-            .is_some(),
-            "moving back before execution must restore eligibility"
-        );
-    }
-
-    let stale_work = PendingChildDynamicDocumentScript {
-        realm_id: Some(FrameRealmId(owner_realm_id.0 + 1)),
-        ..work_without_realm
-    };
-    assert!(
-        vm._context_host
-            .borrow()
-            .child_dynamic_classic_script_execution_action_for_owner(&stale_work, owner_realm_id)
-            .is_none(),
-        "stale dynamic child work must not produce an execution action"
-    );
-}
-
-#[tokio::test]
 async fn function_constructor_frame_script_job_returns_child_realm_function() {
     let mut vm = new_storage_test_vm("https://child-function-job.test/");
 
@@ -15821,6 +15692,7 @@ mod browser_api;
 mod canvas_arguments;
 mod canvas_paths;
 mod canvas_webgl;
+mod child_dynamic_inline_scripts;
 mod close_watchers;
 mod dom_elements;
 mod dom_xhr;

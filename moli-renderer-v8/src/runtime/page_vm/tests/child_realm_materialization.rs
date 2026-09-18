@@ -147,7 +147,7 @@ async fn runtime_realm_inventory_observes_without_materializing_pending_child_re
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn prebootstrapped_child_script_becomes_runnable_only_after_typed_realm_materialization() {
+async fn prebootstrapped_child_inline_script_runs_before_deferred_realm_registration() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/prebootstrapped-child-script").unwrap();
@@ -186,8 +186,8 @@ async fn prebootstrapped_child_script_becomes_runnable_only_after_typed_realm_ma
         );
         assert_eq!(
             page_vm.vm_mut().eval("__prebootstrappedChildScript")?,
-            "pending",
-            "probing a non-head family executor must not consume pre-realm work"
+            "ran:true:script",
+            "inline script execution must finish before deferred realm registration"
         );
 
         let materialization = page_vm
@@ -198,18 +198,18 @@ async fn prebootstrapped_child_script_becomes_runnable_only_after_typed_realm_ma
             PageChildRealmMaterializationTargetEffect::MaterializedCurrentOwnerWithoutDocumentStartScript
         );
         assert!(
-            page_vm
+            !page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::ChildDocumentScriptReady,
                     &loader,
                 )
                 .await?,
-            "the realm-bound script must retain one typed selected Page task"
+            "synchronous inline execution must not leave a second script task"
         );
         assert_eq!(
             page_vm.vm_mut().eval("__prebootstrappedChildScript")?,
             "ran:true:script",
-            "the promoted work must execute in the registered child realm"
+            "realm registration must preserve the synchronous script result"
         );
         assert!(
             page_vm
@@ -222,7 +222,7 @@ async fn prebootstrapped_child_script_becomes_runnable_only_after_typed_realm_ma
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("prebootstrapped child script should wait for typed realm materialization");
+    .expect("prebootstrapped child inline execution should precede realm registration");
 }
 
 #[tokio::test(flavor = "current_thread")]

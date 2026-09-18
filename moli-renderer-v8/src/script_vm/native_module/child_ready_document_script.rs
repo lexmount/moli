@@ -53,9 +53,6 @@ impl<'vm> ChildReadyDocumentScriptOwner<'vm> {
                 }
                 FrameDocumentScriptReadyTaskWork::DocumentScriptExecution(work) => {
                     let work = match *work {
-                        FrameDocumentRealmBoundScriptWork::DynamicClassic(work) => {
-                            PendingChildDocumentScriptExecutionWork::DynamicClassic(work)
-                        }
                         FrameDocumentRealmBoundScriptWork::ExternalClassic(work) => {
                             PendingChildDocumentScriptExecutionWork::ExternalClassic(work)
                         }

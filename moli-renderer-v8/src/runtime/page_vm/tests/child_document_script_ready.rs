@@ -10,10 +10,7 @@ async fn install_child_classic_script_ready_fixture(
   globalThis.__lmChildClassicScriptTaskBoundary = [];
   const frame = document.createElement("iframe");
   frame.id = {frame_id:?};
-  document.body.appendChild(frame);
-  void frame.contentWindow.Function;
-  const script = frame.contentDocument.createElement("script");
-  script.textContent = `
+  frame.srcdoc = `<script>
     parent.__lmChildClassicScriptTaskBoundary.push("script");
     Promise.resolve().then(() => {{
       parent.__lmChildClassicScriptTaskBoundary.push("microtask");
@@ -22,12 +19,18 @@ async fn install_child_classic_script_ready_fixture(
       sibling.srcdoc = "<!doctype html><body>reaction child</body>";
       parent.document.body.appendChild(sibling);
     }});
-  `;
-  frame.contentDocument.body.appendChild(script);
+  <\/script>`;
+  document.body.appendChild(frame);
   return "queued";
 }})()
 "#,
     ))?;
+    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+        page_vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "child parser classic script fixture navigation",
+    )
+    .await;
     run_expected_child_realm_materialization_for_wait(
         page_vm,
         "child classic script task fixture realm",

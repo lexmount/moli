@@ -5878,6 +5878,9 @@ html/browsers/browsing-the-web/navigating-across-documents/javascript-url-query-
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling-dynamic.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-task-queuing.html
+html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location-assign.html
+html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location-href.html
+html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url-with-fragment-fire-load-event.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url-with-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url.html

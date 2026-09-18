@@ -2080,7 +2080,41 @@ pub(super) fn finish_runtime_script_start_candidate(
     host_ptr: *mut JsContextHost,
     candidate: crate::mutation_coordinator::RuntimeScriptStartCandidate,
 ) {
-    let (node, host_script_handle) = candidate.into_parts();
+    let node = candidate.into_node();
+    let Some(owner_document_handle) = runtime.dom_host.owner_document_handle(node) else {
+        return;
+    };
+    if owner_document_handle != runtime.dom_host.document_handle() {
+        start_connected_child_document_script(
+            runtime,
+            scope,
+            host_ptr,
+            node,
+            owner_document_handle,
+        );
+        return;
+    }
+    let wrapper = unsafe { &mut *host_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, host_ptr, node);
+    let Some(wrapper) = wrapper else {
+        return;
+    };
+
+    let host_script_handle = native_bridge::object_string_property(scope, wrapper, "__moliHandle")
+        .unwrap_or_else(|| {
+            let handle = format!("dynamic-script-native-{}", node.index());
+            if let Some(value) = v8::String::new(scope, &handle) {
+                let key = v8str(scope, "__moliHandle");
+                let _ = wrapper.define_own_property(
+                    scope,
+                    key.into(),
+                    value.into(),
+                    v8::PropertyAttribute::DONT_ENUM,
+                );
+            }
+            handle
+        });
     match unsafe { &mut *host_ptr }.plan_and_commit_current_main_runtime_script_start(
         scope,
         node,
@@ -2096,6 +2130,94 @@ pub(super) fn finish_runtime_script_start_candidate(
                 scope.throw_exception(exception);
             }
         }
+    }
+}
+
+fn start_connected_child_document_script(
+    runtime: &mut DocumentRuntime,
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    node: DomHandle,
+    owner_document_handle: DomHandle,
+) {
+    use crate::host::{
+        RuntimeScriptStartDecision, ScriptElementLoader, ScriptElementLoaderOptions,
+    };
+    let (preparation, decision) = ScriptElementLoader::prepare(
+        &mut runtime.dom_host,
+        &runtime.document,
+        node,
+        ScriptElementLoaderOptions::with_scripting_enabled(
+            unsafe { &*host_ptr }.document_scripting_enabled(owner_document_handle),
+        ),
+    )
+    .into_parts();
+    match decision {
+        RuntimeScriptStartDecision::Skip { commit_start, .. } => {
+            if commit_start {
+                let _ = runtime.dom_host.set_script_already_started(node, true);
+            }
+        }
+        RuntimeScriptStartDecision::ExecuteInlineClassic { source } => {
+            if let Err(error) = unsafe { &mut *host_ptr }
+                .execute_child_dynamic_inline_classic_script_on_current_stack(
+                    scope,
+                    owner_document_handle,
+                    node,
+                    source,
+                )
+            {
+                // Script exceptions are reported in the child Window. They do
+                // not escape from the DOM operation that inserted the element.
+                tracing::debug!(%error, "child dynamic inline classic script failed");
+            }
+        }
+        RuntimeScriptStartDecision::Queue {
+            source,
+            kind,
+            mode,
+            source_kind,
+        } => {
+            match unsafe { &mut *host_ptr }
+                .queue_child_dynamic_document_script_for_current_document(
+                    scope,
+                    owner_document_handle,
+                    node,
+                    &preparation,
+                    &source,
+                    kind,
+                    mode,
+                    source_kind,
+                ) {
+                Ok(true) => {}
+                Ok(false) => tracing::debug!(
+                    node = ?node,
+                    owner_document_handle = ?owner_document_handle,
+                    kind = ?kind,
+                    mode = ?mode,
+                    source_kind = ?source_kind,
+                    "child runtime script has no supported current-document queue"
+                ),
+                Err(error) => tracing::warn!(
+                    node = ?node,
+                    owner_document_handle = ?owner_document_handle,
+                    %error,
+                    "failed to prepare child runtime external classic script"
+                ),
+            }
+        }
+        RuntimeScriptStartDecision::RejectExternalImportMap
+        | RuntimeScriptStartDecision::QueueFailed { .. } => {
+            let _ = runtime.dom_host.set_script_already_started(node, true);
+            if !unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node) {
+                tracing::debug!(
+                    node = ?node,
+                    owner_document_handle = ?owner_document_handle,
+                    "child script preparation error route rejected the element task"
+                );
+            }
+        }
+        RuntimeScriptStartDecision::RegisterImportMap { .. } => {}
     }
 }
 
@@ -2236,9 +2358,8 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();
     let started = dom_binding_timing_started();
-    let mutation_result = mutations.apply(
-        scope, host_ptr, dom_host, document, scripts, events, effects, options,
-    );
+    let mutation_result =
+        mutations.apply(scope, host_ptr, dom_host, scripts, events, effects, options);
     if let Some(started) = total_started {
         let total_us = started.elapsed().as_micros();
         if total_us >= 500 {

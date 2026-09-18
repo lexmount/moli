@@ -1599,7 +1599,7 @@ impl JsContextHost {
         self.apply_child_document_write_classic_completion(scope, completion)
     }
 
-    fn execute_child_frame_script_job_on_current_stack(
+    pub(in crate::native_bridge::context_host) fn execute_child_frame_script_job_on_current_stack(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         script_context: v8::Local<'_, v8::Context>,

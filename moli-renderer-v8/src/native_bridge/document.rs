@@ -1417,13 +1417,17 @@ fn current_script_handle_for_document(
     runtime: &JsContextHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
+    if runtime
+        .child_browsing_context_host_for_document_handle(document_handle)
+        .is_some()
+    {
+        // This stack belongs to the execution Document. A script can change
+        // its node document or tree while its currentScript value stays set.
+        return runtime.child_current_script_handle_for_document(document_handle);
+    }
     if let Some(script) = runtime.current_inline_script_handle()
         && current_script_belongs_to_document(runtime, script, document_handle)
     {
-        return current_script_is_visible_for_document(runtime, script, document_handle)
-            .then_some(script);
-    }
-    if let Some(script) = runtime.child_current_script_handle_for_document(document_handle) {
         return current_script_is_visible_for_document(runtime, script, document_handle)
             .then_some(script);
     }

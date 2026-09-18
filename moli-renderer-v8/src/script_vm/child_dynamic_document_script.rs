@@ -5,8 +5,6 @@ use crate::{
         FrameModuleScriptTaskActivity,
     },
     frame_owner_model::{
-        FrameDocumentDynamicClassicExecutionFollowup, FrameDocumentDynamicClassicPrepareFollowup,
-        FrameDocumentDynamicClassicPrepareSkipReason,
         FrameDocumentExternalClassicExecutionFollowup, FrameDocumentExternalClassicExecutionResult,
         FrameDocumentExternalClassicPrepareFollowup, FrameDocumentExternalClassicPrepareSkipReason,
         FrameDocumentExternalClassicScriptExecution, FrameDocumentJavascriptUrlCompletion,
@@ -14,8 +12,8 @@ use crate::{
         FrameDocumentJavascriptUrlPrepareFollowup, FrameDocumentJavascriptUrlPrepareSkipReason,
         FrameDocumentScriptExecutionFollowup, FrameDocumentScriptExecutionResult,
         FrameDocumentScriptExecutionWork, FrameDocumentScriptPrepareFollowup,
-        PendingChildDocumentScriptExecutionWork, PendingChildDynamicDocumentScript,
-        PendingChildExternalClassicDocumentScript, PendingChildJavascriptUrlDocumentScript,
+        PendingChildDocumentScriptExecutionWork, PendingChildExternalClassicDocumentScript,
+        PendingChildJavascriptUrlDocumentScript,
     },
 };
 use std::{future::Future, pin::Pin};
@@ -97,76 +95,6 @@ impl ScriptVmChildDocumentScriptExecutionHooks<'_> {
                 FrameDocumentJavascriptUrlPrepareFollowup::skipped(reason),
             ),
         )
-    }
-
-    fn prepare_dynamic_classic(
-        &mut self,
-        work: PendingChildDynamicDocumentScript,
-    ) -> FrameDocumentScriptExecutionStartReport<FrameDocumentScriptPrepareFollowup> {
-        match self.hooks.select_current_realm(
-            work.child_handle,
-            work.realm_id,
-            work.script_handle,
-            "child_dynamic_classic_ready",
-        ) {
-            ChildDocumentScriptRealmSelection::Current(realm_id) => {
-                let action = self
-                    .hooks
-                    .child_dynamic_classic_script_execution_action_for_owner(&work, realm_id);
-                let Some(action) = action else {
-                    tracing::debug!(
-                        child_handle = ?work.child_handle,
-                        script_handle = ?work.script_handle,
-                        owner = ?work.owner,
-                        realm_id = ?realm_id,
-                        "child dynamic classic script task is stale"
-                    );
-                    return FrameDocumentScriptExecutionStartReport::dropped(
-                        FrameDocumentScriptPrepareFollowup::DynamicClassic(
-                            FrameDocumentDynamicClassicPrepareFollowup::skipped(
-                                FrameDocumentDynamicClassicPrepareSkipReason::ExecutionActionUnavailable,
-                            ),
-                        ),
-                    );
-                };
-                FrameDocumentScriptExecutionStartReport::execute(
-                    FrameDocumentScriptExecutionWork::dynamic_classic(action),
-                    FrameDocumentScriptPrepareFollowup::DynamicClassic(
-                        FrameDocumentDynamicClassicPrepareFollowup::prepared_execution_action(),
-                    ),
-                )
-            }
-            ChildDocumentScriptRealmSelection::RealmMaterializationFailed => {
-                FrameDocumentScriptExecutionStartReport::dropped(
-                    FrameDocumentScriptPrepareFollowup::DynamicClassic(
-                        FrameDocumentDynamicClassicPrepareFollowup::skipped(
-                            FrameDocumentDynamicClassicPrepareSkipReason::RealmMaterializationFailed,
-                        ),
-                    ),
-                )
-            }
-            ChildDocumentScriptRealmSelection::MissingCurrentRealm => {
-                FrameDocumentScriptExecutionStartReport::dropped(
-                    FrameDocumentScriptPrepareFollowup::DynamicClassic(
-                        FrameDocumentDynamicClassicPrepareFollowup::skipped(
-                            FrameDocumentDynamicClassicPrepareSkipReason::MissingCurrentRealm,
-                        ),
-                    ),
-                )
-            }
-            ChildDocumentScriptRealmSelection::StaleRealm { expected, current } => {
-                FrameDocumentScriptExecutionStartReport::dropped(
-                    FrameDocumentScriptPrepareFollowup::DynamicClassic(
-                        FrameDocumentDynamicClassicPrepareFollowup::skipped(
-                            FrameDocumentDynamicClassicPrepareSkipReason::StaleRealm {
-                                expected,
-                                current,
-                            },
-                        ),
-                    ),
-                )
-            }
-        }
     }
 
     fn prepare_external_classic(
@@ -281,32 +209,6 @@ impl ScriptVmChildDocumentScriptExecutionHooks<'_> {
             FrameDocumentScriptPrepareFollowup::ModuleScript(
                 DocumentScriptExecutionOutcome::Progressed,
             ),
-        )
-    }
-
-    fn execute_dynamic_classic(
-        &mut self,
-        action: crate::frame_owner_model::FrameDocumentDynamicClassicScriptExecutionAction,
-    ) -> FrameDocumentScriptExecutionResult {
-        let target = action.target();
-        if let Err(error) = self
-            .hooks
-            .execute_frame_script_job_selected_task_body(action.into_job())
-        {
-            tracing::warn!(
-                error = %error,
-                child_handle = ?target.child_handle(),
-                script_handle = ?target.script_handle(),
-                owner = ?target.owner(),
-                realm_id = ?target.realm_id(),
-                "child dynamic classic script execution failed"
-            );
-            return FrameDocumentScriptExecutionResult::DynamicClassic(
-                FrameDocumentDynamicClassicExecutionFollowup::failed_script_job(),
-            );
-        }
-        FrameDocumentScriptExecutionResult::DynamicClassic(
-            FrameDocumentDynamicClassicExecutionFollowup::completed_script_job(),
         )
     }
 
@@ -457,9 +359,6 @@ impl DocumentScriptExecutionHooks for ScriptVmChildDocumentScriptExecutionHooks<
         work: PendingChildDocumentScriptExecutionWork,
     ) -> FrameDocumentScriptExecutionStartReport<FrameDocumentScriptPrepareFollowup> {
         match work {
-            PendingChildDocumentScriptExecutionWork::DynamicClassic(work) => {
-                self.prepare_dynamic_classic(work)
-            }
             PendingChildDocumentScriptExecutionWork::ExternalClassic(work) => {
                 self.prepare_external_classic(work)
             }
@@ -475,9 +374,6 @@ impl DocumentScriptExecutionHooks for ScriptVmChildDocumentScriptExecutionHooks<
     fn execute_work(&mut self, work: FrameDocumentScriptExecutionWork) -> Self::ExecuteFuture<'_> {
         Box::pin(async move {
             Ok(match work {
-                FrameDocumentScriptExecutionWork::DynamicClassic(action) => {
-                    self.execute_dynamic_classic(*action)
-                }
                 FrameDocumentScriptExecutionWork::ExternalClassic(action) => {
                     self.execute_external_classic(action)
                 }
@@ -498,9 +394,6 @@ impl DocumentScriptExecutionHooks for ScriptVmChildDocumentScriptExecutionHooks<
         execution_result: FrameDocumentScriptExecutionResult,
     ) -> anyhow::Result<FrameDocumentScriptExecutionFollowup> {
         Ok(match execution_result {
-            FrameDocumentScriptExecutionResult::DynamicClassic(followup) => {
-                FrameDocumentScriptExecutionFollowup::DynamicClassic(followup)
-            }
             FrameDocumentScriptExecutionResult::ExternalClassic(result) => {
                 FrameDocumentScriptExecutionFollowup::ExternalClassic(
                     result.into_post_execution_action(),
@@ -522,14 +415,6 @@ impl DocumentScriptExecutionHooks for ScriptVmChildDocumentScriptExecutionHooks<
         followup: FrameDocumentScriptExecutionFollowup,
     ) -> anyhow::Result<ChildDocumentScriptReadyRunOutcome> {
         let (made_progress, activity) = match followup {
-            FrameDocumentScriptExecutionFollowup::DynamicClassic(followup) => (
-                followup.made_progress(),
-                if followup.attempted_script_job() {
-                    ChildDocumentScriptActivity::ScriptOrEvent
-                } else {
-                    ChildDocumentScriptActivity::NoScriptOrEvent
-                },
-            ),
             FrameDocumentScriptExecutionFollowup::ExternalClassic(action) => {
                 let followup = self.apply_external_classic_post_execution(action);
                 (

@@ -6,12 +6,8 @@ mod notifications;
 pub(crate) use notifications::notify_dom_mutation;
 
 use super::{
-    host::{
-        HostDocumentState, HostEventTargetRegistry, HostScriptScheduler,
-        RuntimeScriptStartDecision, ScriptElementLoader, ScriptElementLoaderOptions,
-    },
-    native_bridge::{self, JsContextHost},
-    util::v8str,
+    host::{HostEventTargetRegistry, HostScriptScheduler},
+    native_bridge::JsContextHost,
 };
 
 #[derive(Debug, Default)]
@@ -25,12 +21,11 @@ pub(super) struct MutationCoordinatorApplyResult {
 #[derive(Debug)]
 pub(super) struct RuntimeScriptStartCandidate {
     node: NativeNodeId,
-    host_script_handle: String,
 }
 
 impl RuntimeScriptStartCandidate {
-    pub(super) fn into_parts(self) -> (NativeNodeId, String) {
-        (self.node, self.host_script_handle)
+    pub(super) fn into_node(self) -> NativeNodeId {
+        self.node
     }
 }
 
@@ -177,7 +172,6 @@ impl MutationCoordinator {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         dom_host: &mut DomHost,
-        document: &HostDocumentState,
         _scripts: &mut HostScriptScheduler,
         _events: &mut HostEventTargetRegistry,
         effects: DomMutationEffects,
@@ -261,13 +255,9 @@ impl MutationCoordinator {
             if request.clears_force_async {
                 let _ = dom_host.set_script_force_async(request.handle, false);
             }
-            if let Some(candidate) = self.collect_connected_script_start_candidate(
-                scope,
-                host_ptr,
-                dom_host,
-                request.handle,
-                document,
-            ) {
+            if let Some(candidate) =
+                self.collect_connected_script_start_candidate(dom_host, request.handle)
+            {
                 runtime_script_start_candidates.push(candidate);
             }
         }
@@ -378,139 +368,13 @@ impl MutationCoordinator {
 
     pub(super) fn collect_connected_script_start_candidate(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        dom_host: &mut DomHost,
+        dom_host: &DomHost,
         node: NativeNodeId,
-        document: &HostDocumentState,
     ) -> Option<RuntimeScriptStartCandidate> {
-        if !dom_host
+        dom_host
             .node(node)
             .is_some_and(crate::dom::native::Node::is_script_element)
-        {
-            return None;
-        }
-        let owner_document_handle = dom_host.owner_document_handle(node)?;
-        if owner_document_handle != dom_host.document_handle() {
-            self.start_connected_child_document_script(
-                scope,
-                host_ptr,
-                dom_host,
-                node,
-                owner_document_handle,
-                document,
-            );
-            return None;
-        }
-        let wrapper = unsafe { &mut *host_ptr }
-            .native_bridge_mut()
-            .wrap_handle(scope, host_ptr, node)?;
-
-        let host_script_handle =
-            native_bridge::object_string_property(scope, wrapper, "__moliHandle").unwrap_or_else(
-                || {
-                    let handle = format!("dynamic-script-native-{}", node.index());
-                    if let Some(value) = v8::String::new(scope, &handle) {
-                        let key = v8str(scope, "__moliHandle");
-                        let _ = wrapper.define_own_property(
-                            scope,
-                            key.into(),
-                            value.into(),
-                            v8::PropertyAttribute::DONT_ENUM,
-                        );
-                    }
-                    handle
-                },
-            );
-        Some(RuntimeScriptStartCandidate {
-            node,
-            host_script_handle,
-        })
-    }
-
-    fn start_connected_child_document_script(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        dom_host: &mut DomHost,
-        node: NativeNodeId,
-        owner_document_handle: NativeNodeId,
-        document: &HostDocumentState,
-    ) {
-        let (preparation, decision) = ScriptElementLoader::prepare(
-            dom_host,
-            document,
-            node,
-            ScriptElementLoaderOptions::with_scripting_enabled(
-                unsafe { &*host_ptr }.document_scripting_enabled(owner_document_handle),
-            ),
-        )
-        .into_parts();
-        match decision {
-            RuntimeScriptStartDecision::Skip { commit_start, .. } => {
-                if commit_start {
-                    let _ = dom_host.set_script_already_started(node, true);
-                }
-            }
-            RuntimeScriptStartDecision::ExecuteInlineClassic { source } => {
-                if unsafe { &mut *host_ptr }
-                    .queue_child_dynamic_inline_classic_script_for_current_document(
-                        scope,
-                        owner_document_handle,
-                        node,
-                        source,
-                    )
-                {
-                    let _ = dom_host.set_script_already_started(node, true);
-                }
-            }
-            RuntimeScriptStartDecision::Queue {
-                source,
-                kind,
-                mode,
-                source_kind,
-            } => {
-                match unsafe { &mut *host_ptr }
-                    .queue_child_dynamic_document_script_for_current_document(
-                        scope,
-                        owner_document_handle,
-                        node,
-                        &preparation,
-                        &source,
-                        kind,
-                        mode,
-                        source_kind,
-                    ) {
-                    Ok(true) => {}
-                    Ok(false) => tracing::debug!(
-                        node = ?node,
-                        owner_document_handle = ?owner_document_handle,
-                        kind = ?kind,
-                        mode = ?mode,
-                        source_kind = ?source_kind,
-                        "child runtime script has no supported current-document queue"
-                    ),
-                    Err(error) => tracing::warn!(
-                        node = ?node,
-                        owner_document_handle = ?owner_document_handle,
-                        %error,
-                        "failed to prepare child runtime external classic script"
-                    ),
-                }
-            }
-            RuntimeScriptStartDecision::RejectExternalImportMap
-            | RuntimeScriptStartDecision::QueueFailed { .. } => {
-                let _ = dom_host.set_script_already_started(node, true);
-                if !unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node) {
-                    tracing::debug!(
-                        node = ?node,
-                        owner_document_handle = ?owner_document_handle,
-                        "child script preparation error route rejected the element task"
-                    );
-                }
-            }
-            RuntimeScriptStartDecision::RegisterImportMap { .. } => {}
-        }
+            .then_some(RuntimeScriptStartCandidate { node })
     }
 }
 

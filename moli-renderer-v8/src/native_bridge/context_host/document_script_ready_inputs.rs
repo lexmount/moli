@@ -481,7 +481,6 @@ impl JsContextHost {
             return;
         };
         match *work {
-            FrameDocumentRealmBoundScriptWork::DynamicClassic(_) => {}
             FrameDocumentRealmBoundScriptWork::ExternalClassic(work) => {
                 let _ = self.settle_child_async_classic_script_load_delay(
                     work.child_handle,
