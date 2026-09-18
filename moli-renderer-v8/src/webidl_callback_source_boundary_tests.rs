@@ -32,17 +32,16 @@ struct AllowedDirectCallFile {
 }
 
 const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
+    // Shared strong/weak handle representation for browser-created abort
+    // algorithms. The Window and worker stores still own these handles;
+    // page-supplied abort listeners remain in the typed EventTarget registry.
+    ("abort_signal_route.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
-    // AbortSignal listeners and onabort now use the shared typed EventTarget
-    // registry. These remaining roots own browser-created abort algorithms.
-    ("native_bridge/abort.rs", 1),
-    ("native_bridge/abort/event.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
-    ("worker/abort.rs", 2),
     ("worker/timer_callback.rs", 1),
 ];
 
@@ -77,6 +76,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::JavaScriptEntryPoint,
     ),
     // Browser-created functions, Promise capabilities, and algorithm steps.
+    // Only native-marked algorithms use this direct call to propagate iterator
+    // close errors. Author observers/teardowns still use typed Web IDL callbacks.
+    allowed(
+        "abort_signal_route.rs",
+        1,
+        DirectCallOwner::BrowserAlgorithm,
+    ),
     allowed("blob.rs", 1, DirectCallOwner::BrowserAlgorithm),
     allowed(
         "context_bootstrap/animation_runtime.rs",
