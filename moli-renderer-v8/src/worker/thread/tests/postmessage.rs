@@ -1,6 +1,22 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_observable_transforms_preserve_lazy_sharing_cancellation_and_callback_semantics() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(value => {{ postMessage(value); close(); }});",
+            include_str!("../../../../tests/fixtures/observable-transforms.js")
+        ),
+        "https://observable-transforms.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 201, "{result}");
+}
+
+#[tokio::test]
 async fn worker_observable_predicate_consumers_short_circuit_conversion_reentrancy_and_cancellation()
  {
     ensure_v8();
