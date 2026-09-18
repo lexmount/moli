@@ -132,7 +132,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 }
                 Task::RawChildren(Some(node), depth, inline) => self.raw_node(node, depth, inline),
                 Task::EndRawBlock => {
-                    if !self.raw.ends_with('\n') {
+                    if !self.raw.is_empty() && !self.raw.ends_with('\n') {
                         self.raw.push('\n');
                     }
                 }

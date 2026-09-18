@@ -76,7 +76,10 @@ fn inline_code_breaks_keep_separation_at_code_span_edges() {
             ..Options::default()
         },
     );
-    assert_eq!(result, "before`git ` `status`after");
+    assert_eq!(
+        rendered_html(&result),
+        "<p>before<code>git </code><code>status</code>after</p>\n"
+    );
 }
 
 #[test]
@@ -122,6 +125,29 @@ fn preformatted_examples_keep_inline_values_and_separate_display_lines() {
             "first()\nsecond()",
         ),
         ("<pre>first<br>second</pre>", "first\nsecond"),
+    ] {
+        let result = markdown(source);
+        assert_eq!(
+            rendered_html(&result),
+            format!("<pre><code>{expected}\n</code></pre>\n"),
+            "{source}: {result}"
+        );
+    }
+}
+
+#[test]
+fn empty_wrappers_do_not_add_lines_to_preformatted_examples() {
+    for (source, expected) in [
+        ("<pre><div><!-- note --></div>print(42)</pre>", "print(42)"),
+        (
+            "<pre><section><div></div></section>print(42)</pre>",
+            "print(42)",
+        ),
+        (
+            "<pre>first<div>second</div>third</pre>",
+            "first\nsecond\nthird",
+        ),
+        ("<pre><span>\n</span>print(42)</pre>", "\nprint(42)"),
     ] {
         let result = markdown(source);
         assert_eq!(

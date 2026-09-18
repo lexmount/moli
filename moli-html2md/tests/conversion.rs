@@ -154,7 +154,10 @@ fn keeps_adjacent_code_elements_distinct_and_chooses_safe_delimiters() {
     dom.text(0, " ");
     dom.leaf(0, "code", " ` ");
     dom.text(0, "after");
-    assert_eq!(convert(&dom, 0), "`` a` `` `` `b `` `` ` `` after");
+    assert_eq!(
+        rendered_html(&convert(&dom, 0)),
+        "<p><code>a`</code><code>`b</code> <code>`</code> after</p>\n"
+    );
 }
 
 #[test]

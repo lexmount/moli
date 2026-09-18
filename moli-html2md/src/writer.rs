@@ -176,13 +176,10 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
-        // Each call represents a separate HTML code element. Keep adjacent
-        // elements distinct even when the source has no whitespace between them.
+        // Adjacent code elements have separate HTML nodes but no text between
+        // them. Markdown code spans would merge or need an invented space.
         if self.code.is_some() {
-            self.flush_code();
-            if !text.is_empty() {
-                self.space = true;
-            }
+            self.flush_code_html();
         }
         if preformatted {
             if !text.is_empty() {
@@ -456,6 +453,26 @@ impl<'a> Writer<'a> {
                 self.output.push(' ');
             }
             self.output.push_str(&fence);
+            self.line_digits = None;
+        }
+    }
+
+    fn flush_code_html(&mut self) {
+        if let Some(code) = self.code.take() {
+            self.output.push_str("<code>");
+            for ch in code.chars() {
+                match ch {
+                    '&' => self.output.push_str("&amp;"),
+                    '<' => self.output.push_str("&lt;"),
+                    '>' => self.output.push_str("&gt;"),
+                    '\\' | '`' | '*' | '_' | '[' | ']' | '|' | '~' => {
+                        self.output.push('\\');
+                        self.output.push(ch);
+                    }
+                    _ => self.output.push(ch),
+                }
+            }
+            self.output.push_str("</code>");
             self.line_digits = None;
         }
     }
