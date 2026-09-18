@@ -225,8 +225,8 @@ impl<'s> ResolvedAbortSignal<'s> {
     }
 
     /// The producer traces this callback itself. Its private subscription
-    /// signal must not add a Rust root that outlives a discarded async iterator.
-    pub(crate) fn register_weak_rethrowing_algorithm(
+    /// signal must not add a Rust root that outlives a discarded subscription.
+    pub(crate) fn register_weak_algorithm(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         algorithm: v8::Local<'s, v8::Function>,
@@ -237,7 +237,21 @@ impl<'s> ResolvedAbortSignal<'s> {
             WEAK_ABORT_ALGORITHM,
             v8::Boolean::new(scope, true).into(),
         );
-        self.register_rethrowing_algorithm(scope, algorithm)
+        self.register_algorithm(scope, algorithm)
+    }
+
+    pub(crate) fn register_weak_rethrowing_algorithm(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        algorithm: v8::Local<'s, v8::Function>,
+    ) -> bool {
+        crate::util::set_private_value(
+            scope,
+            algorithm.into(),
+            RETHROW_ABORT_ALGORITHM,
+            v8::Boolean::new(scope, true).into(),
+        );
+        self.register_weak_algorithm(scope, algorithm)
     }
 
     pub(crate) fn unregister_algorithm(
