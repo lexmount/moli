@@ -484,8 +484,7 @@ impl DocumentRuntime {
         let parser_connected = parser_bridge.map(|bridge| {
             let input_context = bridge
                 .insertion_controller()
-                .input_session()
-                .enter_pending_context();
+                .with_parser_stream(crate::parser::DocumentStream::enter_script_input_context);
             ParserConnectedScriptContext {
                 bridge,
                 _input_context: input_context,

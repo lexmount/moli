@@ -1263,63 +1263,44 @@ impl DocumentRuntime {
         }
     }
 
+    fn append_blocked_document_write_input(
+        parser_bridge: &ParserConnectedScriptBridge,
+        html: &str,
+    ) {
+        let controller = parser_bridge.insertion_controller();
+        let input = controller.input_session();
+        if !input.append_to_current_script_input(html) {
+            // A script-created parser can also receive writes from its caller
+            // outside parser-connected execution. Its insertion point is EOF.
+            controller.with_parser_stream(|stream| stream.append_to_end(html.to_owned()));
+        }
+        input.enqueue_script_input_preload_html(html.to_owned());
+    }
+
     fn append_to_pending_document_write_external_script_load(&mut self, html: &str) -> bool {
-        let Some(pending) = self.pending_document_write_external_script_load.as_mut() else {
+        let Some(pending) = self.pending_document_write_external_script_load.as_ref() else {
             return false;
         };
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
+        Self::append_blocked_document_write_input(&pending.insertion.parser_bridge, html);
         true
     }
 
     fn append_to_pending_document_write_stylesheet_blocked_script(&mut self, html: &str) -> bool {
         let Some(pending) = self
             .pending_document_write_stylesheet_blocked_script
-            .as_mut()
+            .as_ref()
         else {
             return false;
         };
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
+        Self::append_blocked_document_write_input(&pending.insertion.parser_bridge, html);
         true
     }
 
     fn append_to_pending_document_write_stylesheet_parser_pause(&mut self, html: &str) -> bool {
-        let Some(pending) = self.pending_document_write_stylesheet_parser_pause.as_mut() else {
+        let Some(pending) = self.pending_document_write_stylesheet_parser_pause.as_ref() else {
             return false;
         };
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
+        Self::append_blocked_document_write_input(&pending.insertion.parser_bridge, html);
         true
     }
 
