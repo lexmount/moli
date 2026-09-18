@@ -4554,6 +4554,7 @@ async fn webdriver_classic_activate_element_by_handle(
         Err(error) => Err(classic_error_from_devtools_error(error)),
     };
     let mut activation_dispatched = false;
+    let mut pointer_press_completed = false;
     let operation = async {
         let preparation = preparation?;
         match preparation.get("status").and_then(Value::as_str) {
@@ -4598,6 +4599,9 @@ async fn webdriver_classic_activate_element_by_handle(
                         .await;
                     if !matches!(result, Ok(DevToolsCommandResult::Empty)) {
                         break;
+                    }
+                    if phase == 1 {
+                        pointer_press_completed = true;
                     }
                 }
                 Ok(result)
@@ -4675,7 +4679,18 @@ async fn webdriver_classic_activate_element_by_handle(
         // Chromium references:
         // chrome/test/chromedriver/element_commands.cc (ExecuteClickElement)
         // chrome/test/chromedriver/window_commands.cc (ExecuteWindowCommand)
-        Err(error) if activation_dispatched && error.message == "Renderer attachment changed" => {
+        // A completed mousedown can replace the Page before the queued
+        // mouseup is admitted. The page-bound guard then rejects that phase
+        // before dispatch, rather than losing the renderer response. Both
+        // outcomes must leave the successor untouched. Require a completed
+        // pointer press so preflight/option stale handles remain errors.
+        Err(error)
+            if activation_dispatched
+                && (error.message == "Renderer attachment changed"
+                    || (pointer_press_completed
+                        && error.kind == DevToolsErrorKind::NoSuchNode
+                        && error.message == "DOM reference belongs to a replaced Page")) =>
+        {
             post_click_navigation
         }
         Err(error) => Err(classic_error_from_devtools_error(error)),

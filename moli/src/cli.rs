@@ -4,17 +4,6 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 pub use moli_cookie_import::{ChromeCryptoKey, ImportIncludes};
 use regex::Regex;
 
-const DUMP_MODES: &[&str] = &[
-    "json",
-    "html",
-    "markdown",
-    "screenshot",
-    "screenshot_full",
-    "pdf",
-    "semantic_tree",
-    "semantic_tree_text",
-];
-
 pub const DEFAULT_REDIRECT_WAIT_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,7 +177,13 @@ pub struct FetchArgs {
     #[arg(long, value_enum, value_delimiter = ',')]
     pub strip_mode: Vec<StripModeChoice>,
 
-    #[arg(long, value_enum, default_value = "done")]
+    #[arg(
+        long = "wait",
+        alias = "wait-until",
+        value_name = "WAIT",
+        value_enum,
+        default_value = "done"
+    )]
     pub wait_until: FetchWaitUntil,
 
     /// Minimum milliseconds from fetch start to allow an executable 3xx-5xx
@@ -445,7 +440,8 @@ pub struct ServeArgs {
 
     /// Set the screencast interval in milliseconds (default: 1000). Requires --layout.
     #[arg(
-        long,
+        long = "screencast-interval-ms",
+        alias = "screencast-interval",
         value_name = "MILLISECONDS",
         value_parser = clap::value_parser!(u32).range(1..),
         requires = "layout"
@@ -695,11 +691,16 @@ pub enum DumpFormat {
     // Stable machine-readable output for scrapling-style integrations.
     Json,
     Html,
+    #[value(alias = "md")]
     Markdown,
+    #[value(alias = "png")]
     Screenshot,
+    #[value(alias = "png_full")]
     ScreenshotFull,
     Pdf,
+    #[value(alias = "semtree")]
     SemanticTree,
+    #[value(alias = "semtree_text")]
     SemanticTreeText,
 }
 
@@ -765,7 +766,7 @@ fn normalize_dump_flag(args: &mut Vec<OsString>) {
         .map(|arg| arg.to_string_lossy().into_owned());
     let next_is_valid_dump_mode = next
         .as_deref()
-        .is_some_and(|candidate| DUMP_MODES.contains(&candidate));
+        .is_some_and(|candidate| DumpFormat::from_str(candidate, false).is_ok());
 
     if !next_is_valid_dump_mode {
         args.insert(index + 1, OsString::from("html"));

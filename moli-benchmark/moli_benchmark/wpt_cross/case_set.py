@@ -395,6 +395,14 @@ SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = t
     for prefix in ("/fetch/api/resources/", "../resources/")
     for name in ("stash-put.py", "stash-take.py", "infinite-slow-response.py")
 )
+SUPPORTED_FETCH_RANGE_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(
+        rf"(?<![A-Za-z0-9_./-]){re.escape(prefix + name)}"
+        rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    )
+    for prefix in ("/fetch/range/resources/", "resources/", "./resources/")
+    for name in ("long-wav.py", "stash-take.py")
+)
 SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(
         rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
@@ -788,6 +796,8 @@ def _supported_wptserve_handler_references(
         supported += _script_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.rsplit("/", 1)[0] == "fetch/api/abort":
         supported += SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None and rel.rsplit("/", 1)[0] == "fetch/range":
+        supported += SUPPORTED_FETCH_RANGE_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("wasm/webapi/"):
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None:

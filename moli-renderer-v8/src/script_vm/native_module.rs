@@ -5053,6 +5053,7 @@ fn module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {
 
 #[cfg(test)]
 mod tests {
+    mod constructor_preservation;
     use std::pin::pin;
 
     use super::{

@@ -1072,7 +1072,6 @@ pub(crate) struct JsContextHost {
     workers: HashMap<DedicatedWorkerId, WorkerConnectionState>,
     next_websocket_id: u64,
     websockets: HashMap<u64, WebSocketConnectionState>,
-    synchronous_xhr_request_counts: HashMap<String, u32>,
     page_context_cancel_rx: RendererPageContextCancelReceiver,
     layout_metric_trace: RefCell<LayoutMetricTrace>,
     layout_rect_cache: RefCell<HashMap<DomHandle, (u64, ClientRect)>>,

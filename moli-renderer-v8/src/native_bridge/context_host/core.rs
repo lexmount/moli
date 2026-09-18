@@ -453,7 +453,6 @@ impl JsContextHost {
             workers: HashMap::new(),
             next_websocket_id: 1,
             websockets: HashMap::new(),
-            synchronous_xhr_request_counts: HashMap::new(),
             page_context_cancel_rx,
             layout_metric_trace: RefCell::default(),
             layout_rect_cache: RefCell::default(),
@@ -1381,17 +1380,6 @@ impl JsContextHost {
     pub(crate) fn end_mutation_observer_delivery(&mut self) {
         self.mutation_observer_delivery_depth =
             self.mutation_observer_delivery_depth.saturating_sub(1);
-    }
-
-    pub(crate) fn allow_synchronous_xhr_request(&mut self, url: &Url) -> bool {
-        const MAX_SYNC_XHR_REQUESTS_PER_URL: u32 = 32;
-
-        let count = self
-            .synchronous_xhr_request_counts
-            .entry(url.as_str().to_owned())
-            .or_insert(0);
-        *count = count.saturating_add(1);
-        *count <= MAX_SYNC_XHR_REQUESTS_PER_URL
     }
 
     pub(crate) fn page_context_cancel_receiver(&self) -> RendererPageContextCancelReceiver {
