@@ -245,9 +245,12 @@ fn materialize_uninitialized_interface<'s>(
                 metadata.name
             ));
         }
-        if !constructor_prototype
-            .set_prototype(scope, parent_prototype.into())
-            .unwrap_or(false)
+        // Window's immutable chain includes its named properties object between
+        // Window.prototype and EventTarget.prototype, installed by the templates.
+        if metadata.name != "Window"
+            && !constructor_prototype
+                .set_prototype(scope, parent_prototype.into())
+                .unwrap_or(false)
         {
             return Err(anyhow!(
                 "failed to link `{}.prototype` inheritance",
