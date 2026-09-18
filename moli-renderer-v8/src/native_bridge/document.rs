@@ -1740,13 +1740,13 @@ struct DocumentPrototypeMethodsDeclaration {
     import_node: (),
     #[webapi(method = "adoptNode", length = 1, callback = node_adopt_node_callback)]
     adopt_node: (),
-    #[webapi(method, length = 0, callback = node_document_write_callback)]
+    #[webapi(method, length = 0, callback = node_document_write_callback, receiver = web_api_interfaces::Document::is_instance)]
     write: (),
-    #[webapi(method, length = 0, callback = node_document_writeln_callback)]
+    #[webapi(method, length = 0, callback = node_document_writeln_callback, receiver = web_api_interfaces::Document::is_instance)]
     writeln: (),
-    #[webapi(method, length = 0, callback = node_document_open_callback)]
+    #[webapi(method, length = 0, callback = node_document_open_callback, receiver = web_api_interfaces::Document::is_instance)]
     open: (),
-    #[webapi(method, length = 0, callback = node_document_close_callback)]
+    #[webapi(method, length = 0, callback = node_document_close_callback, receiver = web_api_interfaces::Document::is_instance)]
     close: (),
     #[webapi(method = "execCommand", length = 1, callback = node_document_exec_command_callback)]
     exec_command: (),

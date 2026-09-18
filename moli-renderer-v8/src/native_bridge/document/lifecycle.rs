@@ -86,13 +86,19 @@ fn node_document_write_or_writeln_callback<'s>(
         let Some(value) = v8_string(scope, &html) else {
             return;
         };
-        let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
-        let Some(compliant) = crate::context_bootstrap::trusted_html_string_or_throw(
+        let context = crate::native_bridge::node_relevant_context(scope, args.this())
+            .unwrap_or_else(|| scope.get_current_context());
+        let global = context.global(scope);
+        let requirements = unsafe { &*runtime_ptr }
+            .trusted_types_for_script_requirements_for_global(scope, global);
+        let Some(compliant) = crate::context_bootstrap::trusted_type_string_or_throw(
             scope,
             value.into(),
+            crate::context_bootstrap::TrustedTypeKind::Html,
             requirements,
             sink,
             api_name,
+            Some(global),
         ) else {
             return;
         };
@@ -117,6 +123,19 @@ fn node_document_write_or_writeln_callback<'s>(
             11,
             "The object is in an invalid state.",
         );
+        return;
+    }
+    if let Some(child_handle) =
+        unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+    {
+        unsafe { &mut *runtime_ptr }.write_child_document_stream(
+            scope,
+            runtime_ptr,
+            child_handle,
+            handle,
+            html,
+        );
+        rv.set_undefined();
         return;
     }
     if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
@@ -252,6 +271,18 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             rv.set(args.this().into());
             return;
         }
+        if let Some(child_handle) =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+        {
+            let _ = JsContextHost::begin_child_document_stream_replacement(
+                scope,
+                runtime_ptr,
+                child_handle,
+                handle,
+            );
+            rv.set(args.this().into());
+            return;
+        }
         if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
             unsafe { &mut *runtime_ptr }.prepare_windowless_document_replacement(
                 scope,
@@ -337,12 +368,26 @@ impl JsContextHost {
     }
 }
 
-fn redirect_document_open_to_window_open(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+fn redirect_document_open_to_window_open<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
     let document = args.this();
+    if let Ok((runtime_ptr, document_handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, document)
+        && let Some(child_handle) = unsafe { &*runtime_ptr }
+            .child_browsing_context_host_for_document_handle(document_handle)
+    {
+        unsafe { &mut *runtime_ptr }.redirect_child_document_open_to_window_open(
+            scope,
+            child_handle,
+            document,
+            args,
+            rv,
+        );
+        return;
+    }
     let Some(default_view_value) = document.get(scope, v8str(scope, "defaultView").into()) else {
         return;
     };
@@ -394,6 +439,18 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
                 11,
                 "The object is in an invalid state.",
             );
+            return;
+        }
+        if let Some(child_handle) =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+        {
+            unsafe { &mut *runtime_ptr }.close_child_document_stream(
+                scope,
+                runtime_ptr,
+                child_handle,
+                handle,
+            );
+            rv.set_undefined();
             return;
         }
         if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
