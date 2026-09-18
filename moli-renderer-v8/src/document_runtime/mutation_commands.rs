@@ -2259,11 +2259,7 @@ pub(super) fn prepare_runtime_mutation_effects(
     let meta_refresh_candidates = if document_followups_deferred_to_parser_owner {
         Vec::new()
     } else {
-        super::meta_refresh::meta_refresh_navigations_from_mutation(
-            dom_host,
-            effects,
-            document_url,
-        )
+        super::meta_refresh::meta_refresh_navigations_from_mutation(dom_host, effects, document_url)
     };
     let inline_style_attribute_csp_mutations = if options.check_inline_style_csp {
         effects
