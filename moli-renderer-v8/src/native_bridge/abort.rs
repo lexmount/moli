@@ -39,7 +39,7 @@ struct AbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
@@ -203,7 +203,9 @@ impl AbortStore {
         };
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(crate::abort_signal_route::AbortAlgorithm::new(
+                scope, algorithm,
+            ));
         true
     }
 
@@ -220,8 +222,9 @@ impl AbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
@@ -296,7 +299,9 @@ impl AbortStore {
             }
         }
         for (signal_id, signal) in signals_to_abort {
-            self.run_abort_steps(scope, host, signal, signal_id, reason);
+            if !self.run_abort_steps(scope, host, signal, signal_id, reason) {
+                return;
+            }
         }
     }
 
@@ -307,13 +312,15 @@ impl AbortStore {
         signal: v8::Local<'s, v8::Object>,
         signal_id: u32,
         reason: v8::Local<'s, v8::Value>,
-    ) {
+    ) -> bool {
         let Some(state) = self.signal_state_mut(signal_id) else {
-            return;
+            return true;
         };
         let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
         let linked_target_listeners = std::mem::take(&mut state.linked_target_listeners);
-        event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms);
+        if !event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms) {
+            return false;
+        }
         for linked in linked_target_listeners {
             host.remove_registered_event_listener_by_id(
                 linked.target,
@@ -324,6 +331,7 @@ impl AbortStore {
         }
         // Dispatch reads the shared listener registry after all abort algorithms.
         abort_signal_events::dispatch_abort(scope, signal);
+        true
     }
 
     fn set_signal_sources(

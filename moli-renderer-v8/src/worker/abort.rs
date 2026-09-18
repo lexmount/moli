@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
-use crate::exception_reporting::invoke_callback;
+use crate::abort_signal_route::{AbortAlgorithm, invoke_abort_algorithm};
 use crate::util::{get_private_value, set_private_value, v8str};
 use crate::webidl;
 
@@ -29,7 +29,7 @@ pub(super) struct WorkerAbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<AbortAlgorithm>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
@@ -178,7 +178,7 @@ impl WorkerAbortStore {
         };
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(AbortAlgorithm::new(scope, algorithm));
         true
     }
 
@@ -195,8 +195,9 @@ impl WorkerAbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
@@ -275,7 +276,9 @@ fn abort_worker_signal<'s>(
         signals_to_abort
     };
     for (signal_id, signal) in signals_to_abort {
-        run_worker_abort_steps(store, scope, signal, signal_id, reason);
+        if !run_worker_abort_steps(store, scope, signal, signal_id, reason) {
+            return;
+        }
     }
 }
 
@@ -285,36 +288,44 @@ fn run_worker_abort_steps<'s>(
     signal: v8::Local<'s, v8::Object>,
     signal_id: u32,
     reason: v8::Local<'s, v8::Value>,
-) {
+) -> bool {
     let abort_algorithms = {
         let mut store = store.borrow_mut();
         let Some(state) = store.signal_state_mut(signal_id) else {
-            return;
+            return true;
         };
         std::mem::take(&mut state.abort_algorithms)
     };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
-    invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms);
+    if !invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms) {
+        return false;
+    }
     // Dispatch reads the shared listener registry after all abort algorithms.
     abort_signal_events::dispatch_abort(scope, signal);
+    true
 }
 
 fn invoke_worker_abort_algorithms<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
-) {
+    abort_algorithms: Vec<AbortAlgorithm>,
+) -> bool {
     for algorithm in abort_algorithms {
-        let algorithm = v8::Local::new(scope, &algorithm);
-        let _ = invoke_callback(
+        let Some(algorithm) = algorithm.prepare(scope) else {
+            continue;
+        };
+        if !invoke_abort_algorithm(
             scope,
             "Worker AbortSignal abort algorithm",
             algorithm,
-            signal.into(),
-            &[reason],
-        );
+            signal,
+            reason,
+        ) {
+            return false;
+        }
     }
+    true
 }
 
 fn create_signal<'s>(
