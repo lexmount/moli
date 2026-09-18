@@ -2008,17 +2008,10 @@ impl JsContextHost {
         let Some(document_handle) = self.dom_host().owner_document_handle(handle) else {
             return CustomElementRegistryAssociation::Null;
         };
-        if let Some(child_handle) =
-            self.child_browsing_context_host_for_document_handle(document_handle)
-        {
-            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                child_handle,
-            ));
+        if handle != document_handle {
+            return self.effective_custom_element_registry_association(document_handle);
         }
-        if document_handle == self.dom_host().document_handle() {
-            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global);
-        }
-        CustomElementRegistryAssociation::Null
+        self.default_custom_element_registry_association_for_document(document_handle)
     }
 
     fn normalize_explicit_custom_element_registry_association(
@@ -2037,8 +2030,11 @@ impl JsContextHost {
         let Some(document_handle) = self.dom_host().owner_document_handle(handle) else {
             return association;
         };
-        let owner_default =
-            self.default_custom_element_registry_association_for_document(document_handle);
+        let owner_default = if handle == document_handle {
+            self.default_custom_element_registry_association_for_document(document_handle)
+        } else {
+            self.effective_custom_element_registry_association(document_handle)
+        };
         if owner_default
             == CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global)
         {
@@ -2099,6 +2095,15 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Value>> {
         match self.effective_custom_element_registry_association(handle) {
             CustomElementRegistryAssociation::Null => Some(v8::null(scope).into()),
+            CustomElementRegistryAssociation::Registry(key) if key.is_document_default_backed() => {
+                let document_handle = self.dom_host().owner_document_handle(handle)?;
+                let host_ptr = self as *mut Self;
+                let document = self.bridge.wrap_handle(scope, host_ptr, document_handle)?;
+                let context = document.get_creation_context(scope)?;
+                let scope = &mut v8::ContextScope::new(scope, context);
+                self.custom_element_registry_object_for_key(scope, key)
+                    .map(Into::into)
+            }
             CustomElementRegistryAssociation::Registry(key) => self
                 .custom_element_registry_object_for_key(scope, key)
                 .map(Into::into),
@@ -2112,18 +2117,14 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Object>> {
         match key {
             CustomElementRegistryKey::Global => {
-                let global = scope.get_current_context().global(scope);
-                global
-                    .get(scope, crate::util::v8str(scope, "customElements").into())
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                crate::custom_elements::custom_elements_registry_for_current_realm(scope, None).ok()
             }
             CustomElementRegistryKey::Child(handle) => {
-                let window = self
-                    .child_browsing_context_window_wrapper(scope, handle)
-                    .or_else(|| self.cached_detached_iframe_content_window(scope, handle))?;
-                window
-                    .get(scope, crate::util::v8str(scope, "customElements").into())
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                crate::custom_elements::custom_elements_registry_for_current_realm(
+                    scope,
+                    Some(handle),
+                )
+                .ok()
             }
             CustomElementRegistryKey::Scoped(id) => {
                 let registry = self
