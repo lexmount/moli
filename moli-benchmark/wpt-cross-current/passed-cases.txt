@@ -4073,6 +4073,9 @@ dom/observable/tentative/observable-some.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-some.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-take.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-take.any.js?moli-wpt-any=window
+dom/observable/tentative/observable-takeUntil.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-takeUntil.any.js?moli-wpt-any=window
+dom/observable/tentative/observable-takeUntil.window.js?moli-wpt-script=window
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=window
 dom/ranges/Range-adopt-test.html
