@@ -1310,9 +1310,14 @@ fn unsigned_long_long(value: f64) -> u64 {
     if !value.is_finite() || value == 0.0 {
         return 0;
     }
-    let integer = value.trunc();
-    let wrapped = integer.rem_euclid(2f64.powi(64));
-    wrapped as u64
+    // Adding 2^64 to a small negative remainder in f64 loses its low bits.
+    // Convert the magnitude first, then perform the sign wrap exactly in u64.
+    let magnitude = (value.trunc().abs() % 2f64.powi(64)) as u64;
+    if value.is_sign_negative() {
+        magnitude.wrapping_neg()
+    } else {
+        magnitude
+    }
 }
 
 fn enforce_range_unsigned_long_long(value: f64, context: Context) -> Result<u64, WebIdlError> {
@@ -1420,6 +1425,26 @@ mod tests {
         assert_eq!(unsigned_long_long(f64::INFINITY), 0);
         assert_eq!(unsigned_long_long(-1.0), u64::MAX);
         assert_eq!(unsigned_long_long(1.9), 1);
+    }
+
+    #[test]
+    fn unsigned_long_long_preserves_low_bits_when_wrapping_negative_values() {
+        for (value, expected) in [
+            (-0.9, 0),
+            (-2.0, u64::MAX - 1),
+            (-3.9, u64::MAX - 2),
+            (-1025.0, u64::MAX - 1024),
+            (-2047.0, u64::MAX - 2046),
+            (-2f64.powi(63), 1 << 63),
+            (-2f64.powi(64) + 2048.0, 2048),
+            (-2f64.powi(64), 0),
+            (-2f64.powi(64) - 4096.0, u64::MAX - 4095),
+            (2f64.powi(64) - 2048.0, u64::MAX - 2047),
+            (2f64.powi(64), 0),
+            (2f64.powi(64) + 4096.0, 4096),
+        ] {
+            assert_eq!(unsigned_long_long(value), expected, "{value}");
+        }
     }
 
     #[test]
