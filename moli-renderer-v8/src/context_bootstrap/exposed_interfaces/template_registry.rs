@@ -235,7 +235,17 @@ impl ExposedInterfaceTemplateRegistry {
         }
         let template = build_profiled_exposed_interface_template(scope, spec, self.profile)?;
         if let Some(parent) = parent {
-            template.inherit(parent);
+            if metadata.name == "Window" {
+                parent.prototype_template(scope).set_immutable_proto();
+                let named_properties =
+                    crate::context_bootstrap::window_template::window_named_properties_template(
+                        scope, parent,
+                    );
+                template.inherit(named_properties);
+                template.prototype_template(scope).set_immutable_proto();
+            } else {
+                template.inherit(parent);
+            }
         }
         Ok(template)
     }
