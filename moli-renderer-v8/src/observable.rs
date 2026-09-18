@@ -4,10 +4,12 @@
 //! Window/worker owners.
 
 mod callbacks;
+mod collect;
 mod event_target;
 mod first;
 mod from;
 mod observer;
+mod promise;
 mod state;
 
 pub(crate) use event_target::event_target_when;
@@ -27,6 +29,10 @@ struct ObservablePrototype {
     subscribe: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
+    #[webapi(method, length = 0, returns_promise, callback = collect::last)]
+    last: (),
+    #[webapi(method = "toArray", length = 0, returns_promise, callback = collect::to_array)]
+    to_array: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -220,6 +226,12 @@ fn subscribe_internal<'s>(
     let mut observers = list(scope, subscriber, OBSERVERS);
     observers.push(observer);
     set_list(scope, subscriber, OBSERVERS, &observers);
+    let native = observer::is_native(scope, observer);
+    if native {
+        // Pending native Promise observers keep their producer reachable even
+        // when no cancellation callback provides the reference to Subscriber.
+        set_private_value(scope, observer, observer::SUBSCRIBER, subscriber.into());
+    }
     if let Some(signal) = signal {
         if signal.is_aborted(scope) {
             if fresh {
@@ -239,7 +251,7 @@ fn subscribe_internal<'s>(
                 .expect("Observable abort algorithm should allocate");
             set_private_value(scope, observer, INPUT_SIGNAL, signal.value().into());
             set_private_value(scope, observer, ABORT_ALGORITHM, algorithm.into());
-            if observer::is_native(scope, observer) {
+            if native {
                 // Native observers trace their private cancellation callback.
                 // The internal signal must not root an abandoned subscription.
                 signal.register_weak_rethrowing_algorithm(scope, algorithm);
