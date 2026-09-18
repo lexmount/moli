@@ -59,8 +59,28 @@
         check(Object.getOwnPropertyDescriptor(wp, named.id) === undefined, label + ' shadowed descriptor absent');
       } finally { delete w.EventTarget.prototype[named.id]; }
       check(w[named.id] === named, label + ' name restored after deletion');
+      for (const key of [named.id, 'missing', 0, Symbol.toStringTag, Symbol('missing')]) {
+        check(!Reflect.defineProperty(wp, key, {}), label + ' named properties reject definition');
+        check(!Reflect.deleteProperty(wp, key), label + ' named properties reject deletion');
+        check(!Reflect.set(wp, key, 9), label + ' named properties reject direct write');
+      }
+      const receiver = Object.create(wp);
+      check(Reflect.set(wp, named.id, 42, receiver), label + ' different receiver write succeeds');
+      check(Object.hasOwn(receiver, named.id) && receiver[named.id] === 42, label + ' different receiver gets own property');
+      check(wp[named.id] === named, label + ' receiver write preserves named value');
     } finally { named.remove(); }
-
+    const key = Symbol('inherited setter');
+    let received;
+    Object.defineProperty(w.EventTarget.prototype, key, {
+      configurable: true, set(value) { received = [this, value]; }
+    });
+    try {
+      check(Reflect.set(wp, key, 7), label + ' inherited setter called directly');
+      check(received[0] === wp && received[1] === 7, label + ' direct setter receiver');
+      const receiver = {};
+      check(Reflect.set(wp, key, 8, receiver), label + ' inherited setter called with receiver');
+      check(received[0] === receiver && received[1] === 8, label + ' supplied setter receiver');
+    } finally { delete w.EventTarget.prototype[key]; }
   };
   try {
     probe(window, 'main');
