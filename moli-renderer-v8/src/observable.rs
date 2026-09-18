@@ -5,6 +5,7 @@
 
 mod callbacks;
 mod collect;
+mod consume;
 mod event_target;
 mod first;
 mod from;
@@ -33,6 +34,10 @@ struct ObservablePrototype {
     last: (),
     #[webapi(method = "toArray", length = 0, returns_promise, callback = collect::to_array)]
     to_array: (),
+    #[webapi(method = "forEach", length = 1, returns_promise, callback = consume::for_each)]
+    for_each: (),
+    #[webapi(method, length = 1, returns_promise, callback = consume::reduce)]
+    reduce: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
