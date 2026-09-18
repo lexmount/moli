@@ -4313,6 +4313,7 @@ dom/observable/tentative/observable-first.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-forEach.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-forEach.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-forEach.window.js?moli-wpt-script=window
+dom/observable/tentative/observable-inspect.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-inspect.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-last.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-last.any.js?moli-wpt-any=window
@@ -9441,6 +9442,7 @@ webidl/ecmascript-binding/constructors.html
 webidl/ecmascript-binding/default-iterator-object.html
 webidl/ecmascript-binding/default-toJSON-cross-realm.html
 webidl/ecmascript-binding/es-exceptions/exceptions.html
+webidl/ecmascript-binding/global-immutable-prototype.any.js?moli-wpt-any=dedicatedworker
 webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html
 webidl/ecmascript-binding/has-instance.html
 webidl/ecmascript-binding/interface-object-set-receiver.html

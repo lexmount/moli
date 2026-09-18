@@ -239,59 +239,61 @@ async fn service_worker_global_scope_does_not_expose_close() {
 }
 
 #[tokio::test]
-async fn service_worker_global_prototype_chain_is_complete_and_immutable() {
+async fn worker_global_prototype_chains_inherit_event_target_and_are_immutable() {
     ensure_v8();
-    let (bootstrap_tx, mut bootstrap_rx) =
-        tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
-    let handle = spawn_test_worker_with_options(
-        WorkerSpawnOptions::new(
-            r#"
-            const chain = [];
-            for (let value = self; value !== null; value = Object.getPrototypeOf(value)) {
-                chain.push(value);
-            }
-            const expected = [
-                self,
-                ServiceWorkerGlobalScope.prototype,
-                WorkerGlobalScope.prototype,
-                EventTarget.prototype,
-                Object.prototype,
-            ];
-            if (chain.length !== expected.length ||
-                chain.some((value, index) => value !== expected[index])) {
-                throw new Error("service worker global prototype chain is incomplete");
-            }
-            for (const value of chain) {
-                const original = Object.getPrototypeOf(value);
-                if (Reflect.setPrototypeOf(value, {}) ||
-                    Object.getPrototypeOf(value) !== original ||
-                    !Reflect.setPrototypeOf(value, original)) {
-                    throw new Error("service worker global prototype chain is mutable");
-                }
-                if (!Object.isExtensible(value)) {
-                    throw new Error("immutable prototype object must remain extensible");
-                }
-            }
-            "#
-            .to_owned(),
-            "https://example.test/app/immutable-prototype-sw.js".to_owned(),
-        )
-        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
-            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
-            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
-        })
-        .with_bootstrap_completion_sender(bootstrap_tx),
-    );
-
-    let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
-        .await
-        .expect("timed out waiting for immutable service worker bootstrap")
-        .expect("service worker bootstrap channel closed");
-    bootstrap
-        .result
-        .expect("service worker global prototype chain should be complete and immutable");
-    handle.terminate_and_join();
+    let script_url = url::Url::parse("https://example.test/app/worker-prototypes.js").unwrap();
+    let fixture = include_str!("../../../../tests/fixtures/worker-global-prototypes.js");
+    for (interface, kind) in [
+        (
+            "DedicatedWorkerGlobalScope",
+            WorkerGlobalKind::Dedicated {
+                name: String::new(),
+            },
+        ),
+        (
+            "SharedWorkerGlobalScope",
+            WorkerGlobalKind::Shared {
+                name: String::new(),
+                storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(
+                    &script_url,
+                    None,
+                ),
+            },
+        ),
+        (
+            "ServiceWorkerGlobalScope",
+            WorkerGlobalKind::Service {
+                registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+            },
+        ),
+    ] {
+        let (bootstrap_tx, mut bootstrap_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
+        let handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                format!(
+                    r#"
+                    const result = ({fixture})({interface:?});
+                    if (result.checks !== 54 || result.failures.length) {{
+                        throw new Error(JSON.stringify(result));
+                    }}
+                    "#
+                ),
+                script_url.to_string(),
+            )
+            .with_global_kind(kind)
+            .with_bootstrap_completion_sender(bootstrap_tx),
+        );
+        let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv()).await;
+        handle.terminate_and_join();
+        bootstrap
+            .expect("timed out waiting for worker prototype checks")
+            .expect("worker bootstrap channel closed")
+            .result
+            .unwrap_or_else(|error| panic!("{interface} prototype checks failed: {error:?}"));
+    }
 }
 
 #[tokio::test]

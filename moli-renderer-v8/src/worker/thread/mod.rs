@@ -91,7 +91,7 @@ use super::global_scope::{
     fail_pending_worker_xhr_response, fulfill_pending_worker_csp_report,
     fulfill_pending_worker_fetch, fulfill_pending_worker_fetch_response,
     fulfill_pending_worker_xhr, fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    prepare_service_worker_global_scope_templates, service_worker_fetch_handler_type,
+    prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
@@ -1769,26 +1769,22 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         *isolate_handle.lock() = Some(scope.thread_safe_handle());
-        let service_worker_templates =
-            if matches!(state.borrow().global_kind, WorkerGlobalKind::Service { .. }) {
-                match prepare_service_worker_global_scope_templates(scope) {
-                    Ok(templates) => Some(templates),
-                    Err(error) => {
-                        tracing::error!(
-                            url = %script_url,
-                            error = %error,
-                            "failed to prepare service worker global templates"
-                        );
-                        bootstrap_completion
-                            .mark_install_global_failure(&script_url, error.to_string());
-                        install_global_failed = true;
-                        None
-                    }
+        let worker_templates =
+            match prepare_worker_global_scope_templates(scope, &state.borrow().global_kind) {
+                Ok(templates) => Some(templates),
+                Err(error) => {
+                    tracing::error!(
+                        url = %script_url,
+                        error = %error,
+                        "failed to prepare worker global templates"
+                    );
+                    bootstrap_completion
+                        .mark_install_global_failure(&script_url, error.to_string());
+                    install_global_failed = true;
+                    None
                 }
-            } else {
-                None
             };
-        let global_template = service_worker_templates
+        let global_template = worker_templates
             .as_ref()
             .map(|templates| templates.global_template(scope));
         let ctx = v8::Context::new(
@@ -1817,12 +1813,9 @@ async fn worker_main(
         let scope = &mut v8::ContextScope::new(scope, ctx);
         let global = ctx.global(scope);
         if !install_global_failed {
-            if let Err(e) = install_worker_global_scope(
-                scope,
-                global,
-                state.clone(),
-                service_worker_templates.as_ref(),
-            ) {
+            if let Err(e) =
+                install_worker_global_scope(scope, global, state.clone(), worker_templates.as_ref())
+            {
                 tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
                 bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
                 install_global_failed = true;

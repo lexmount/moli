@@ -3100,7 +3100,7 @@ pub(super) fn install_worker_global_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     state: Rc<RefCell<WorkerGlobalState>>,
-    service_worker_templates: Option<&PreparedServiceWorkerGlobalScopeTemplates>,
+    worker_templates: Option<&PreparedWorkerGlobalScopeTemplates>,
 ) -> Result<()> {
     // Store state pointer as an external on the global so callbacks can find it.
     let state_ptr = Rc::into_raw(state.clone()) as *mut c_void;
@@ -3127,23 +3127,8 @@ pub(super) fn install_worker_global_scope<'s>(
     )
     .initialize(scope, global)
     .map_err(|error| anyhow!("failed to initialize worker global bootstrap properties: {error}"))?;
-    install_worker_global_scope_constructors(
-        scope,
-        global,
-        &global_kind,
-        service_worker_templates,
-    )?;
-    let realm_kind = match &global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker
-        }
-        super::thread::WorkerGlobalKind::Shared { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::SharedWorker
-        }
-        super::thread::WorkerGlobalKind::Service { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::ServiceWorker
-        }
-    };
+    install_worker_global_scope_constructors(scope, global, &global_kind, worker_templates)?;
+    let (_, realm_kind) = worker_global_scope_interface(&global_kind);
     crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
         scope,
         global,
@@ -5822,38 +5807,64 @@ fn worker_create_image_bitmap_callback<'s>(
     rv.set(promise.into());
 }
 
-pub(super) struct PreparedServiceWorkerGlobalScopeTemplates {
+pub(super) struct PreparedWorkerGlobalScopeTemplates {
+    event_target: v8::Global<v8::FunctionTemplate>,
     worker: v8::Global<v8::FunctionTemplate>,
-    service_worker: v8::Global<v8::FunctionTemplate>,
+    specific_worker: v8::Global<v8::FunctionTemplate>,
 }
 
-impl PreparedServiceWorkerGlobalScopeTemplates {
+impl PreparedWorkerGlobalScopeTemplates {
     pub(super) fn global_template<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_, ()>,
     ) -> v8::Local<'s, v8::ObjectTemplate> {
-        v8::Local::new(scope, &self.service_worker).instance_template(scope)
+        v8::Local::new(scope, &self.specific_worker).instance_template(scope)
     }
 }
 
-pub(super) fn prepare_service_worker_global_scope_templates<'s>(
+fn worker_global_scope_interface(
+    global_kind: &super::thread::WorkerGlobalKind,
+) -> (
+    &'static str,
+    crate::context_bootstrap::exposed_interfaces::RealmKind,
+) {
+    use crate::context_bootstrap::exposed_interfaces::RealmKind;
+    match global_kind {
+        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+            ("DedicatedWorkerGlobalScope", RealmKind::DedicatedWorker)
+        }
+        super::thread::WorkerGlobalKind::Shared { .. } => {
+            ("SharedWorkerGlobalScope", RealmKind::SharedWorker)
+        }
+        super::thread::WorkerGlobalKind::Service { .. } => {
+            ("ServiceWorkerGlobalScope", RealmKind::ServiceWorker)
+        }
+    }
+}
+
+pub(super) fn prepare_worker_global_scope_templates<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
-) -> Result<PreparedServiceWorkerGlobalScopeTemplates> {
+    global_kind: &super::thread::WorkerGlobalKind,
+) -> Result<PreparedWorkerGlobalScopeTemplates> {
+    let (interface, realm_kind) = worker_global_scope_interface(global_kind);
     let event_target =
-        crate::context_bootstrap::prepare_service_worker_event_target_template(scope)?;
+        crate::context_bootstrap::prepare_worker_event_target_template(scope, realm_kind)?;
+    // Every object in a [Global] object's prototype chain has an immutable
+    // prototype. Install the inherited templates before creating the context.
     event_target.prototype_template(scope).set_immutable_proto();
 
     let worker = worker_global_scope_template(scope, "WorkerGlobalScope");
     worker.inherit(event_target);
-    let service_worker = worker_global_scope_template(scope, "ServiceWorkerGlobalScope");
-    service_worker.inherit(worker);
-    service_worker
+    let specific_worker = worker_global_scope_template(scope, interface);
+    specific_worker.inherit(worker);
+    specific_worker
         .instance_template(scope)
         .set_immutable_proto();
 
-    Ok(PreparedServiceWorkerGlobalScopeTemplates {
+    Ok(PreparedWorkerGlobalScopeTemplates {
+        event_target: v8::Global::new(scope, event_target),
         worker: v8::Global::new(scope, worker),
-        service_worker: v8::Global::new(scope, service_worker),
+        specific_worker: v8::Global::new(scope, specific_worker),
     })
 }
 
@@ -5872,124 +5883,66 @@ fn install_worker_global_scope_constructors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
-    service_worker_templates: Option<&PreparedServiceWorkerGlobalScopeTemplates>,
+    worker_templates: Option<&PreparedWorkerGlobalScopeTemplates>,
 ) -> Result<()> {
-    let interface = match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => "DedicatedWorkerGlobalScope",
-        super::thread::WorkerGlobalKind::Shared { .. } => "SharedWorkerGlobalScope",
-        super::thread::WorkerGlobalKind::Service { .. } => "ServiceWorkerGlobalScope",
-    };
+    let (interface, _) = worker_global_scope_interface(global_kind);
     web_api_interfaces::initialize(scope, global, interface)?;
-
-    if matches!(global_kind, super::thread::WorkerGlobalKind::Service { .. }) {
-        let templates = service_worker_templates.ok_or_else(|| {
-            anyhow!(
-                "service worker global scope templates were not prepared before context creation"
-            )
-        })?;
-        return install_prepared_service_worker_global_constructor(scope, global, templates);
-    }
-
-    let worker_ctor = worker_scope_constructor(scope, "WorkerGlobalScope")?;
-    let worker_proto = constructor_prototype(scope, worker_ctor, "WorkerGlobalScope")?;
-    set_worker_to_string_tag(scope, worker_proto, "WorkerGlobalScope");
-    WorkerGlobalScopeConstructorGlobalDeclaration::new(worker_ctor)
-        .initialize(scope, global)
-        .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope global: {error}"))?;
-    match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
-            install_dedicated_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
-        }
-        super::thread::WorkerGlobalKind::Shared { .. } => {
-            install_shared_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
-        }
-        super::thread::WorkerGlobalKind::Service { .. } => unreachable!(),
-    }
-    Ok(())
-}
-
-fn install_dedicated_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    worker_ctor: v8::Local<'s, v8::Function>,
-    worker_proto: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let dedicated_ctor = worker_scope_constructor(scope, "DedicatedWorkerGlobalScope")?;
-    let dedicated_proto =
-        constructor_prototype(scope, dedicated_ctor, "DedicatedWorkerGlobalScope")?;
-    let _ = dedicated_proto.set_prototype(scope, worker_proto.into());
-    let _ = dedicated_ctor.set_prototype(scope, worker_ctor.into());
-    set_worker_to_string_tag(scope, dedicated_proto, "DedicatedWorkerGlobalScope");
-    DedicatedWorkerGlobalMethodsDeclaration::default()
-        .initialize(scope, dedicated_proto)
-        .map_err(|error| {
-            anyhow!("failed to initialize DedicatedWorkerGlobalScope methods: {error}")
-        })?;
-    DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(dedicated_ctor)
-        .initialize(scope, global)
-        .map_err(|error| {
-            anyhow!("failed to initialize DedicatedWorkerGlobalScope global: {error}")
-        })?;
-    let _ = global.set_prototype(scope, dedicated_proto.into());
-    Ok(())
-}
-
-fn install_shared_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    worker_ctor: v8::Local<'s, v8::Function>,
-    worker_proto: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let shared_ctor = worker_scope_constructor(scope, "SharedWorkerGlobalScope")?;
-    let shared_proto = constructor_prototype(scope, shared_ctor, "SharedWorkerGlobalScope")?;
-    let _ = shared_proto.set_prototype(scope, worker_proto.into());
-    let _ = shared_ctor.set_prototype(scope, worker_ctor.into());
-    set_worker_to_string_tag(scope, shared_proto, "SharedWorkerGlobalScope");
-    SharedWorkerGlobalMethodsDeclaration::default()
-        .initialize(scope, shared_proto)
-        .map_err(|error| {
-            anyhow!("failed to initialize SharedWorkerGlobalScope methods: {error}")
-        })?;
-    SharedWorkerGlobalScopeConstructorGlobalDeclaration::new(shared_ctor)
-        .initialize(scope, global)
-        .map_err(|error| anyhow!("failed to initialize SharedWorkerGlobalScope global: {error}"))?;
-    let _ = global.set_prototype(scope, shared_proto.into());
-    Ok(())
-}
-
-fn install_prepared_service_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    templates: &PreparedServiceWorkerGlobalScopeTemplates,
-) -> Result<()> {
+    let templates = worker_templates.ok_or_else(|| {
+        anyhow!("worker global scope templates were not prepared before context creation")
+    })?;
+    let event_target_template = v8::Local::new(scope, &templates.event_target);
+    let event_target_ctor = event_target_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to instantiate worker EventTarget constructor"))?;
     let worker_template = v8::Local::new(scope, &templates.worker);
     let worker_ctor = worker_template
         .get_function(scope)
         .ok_or_else(|| anyhow!("failed to instantiate WorkerGlobalScope constructor"))?;
+    worker_ctor
+        .set_prototype(scope, event_target_ctor.into())
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to inherit worker EventTarget constructor"))?;
     let worker_proto = constructor_prototype(scope, worker_ctor, "WorkerGlobalScope")?;
     set_worker_to_string_tag(scope, worker_proto, "WorkerGlobalScope");
     WorkerGlobalScopeConstructorGlobalDeclaration::new(worker_ctor)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope global: {error}"))?;
 
-    let service_template = v8::Local::new(scope, &templates.service_worker);
-    let service_ctor = service_template
+    let specific_template = v8::Local::new(scope, &templates.specific_worker);
+    let specific_ctor = specific_template
         .get_function(scope)
-        .ok_or_else(|| anyhow!("failed to instantiate ServiceWorkerGlobalScope constructor"))?;
-    let service_proto = constructor_prototype(scope, service_ctor, "ServiceWorkerGlobalScope")?;
-    set_worker_to_string_tag(scope, service_proto, "ServiceWorkerGlobalScope");
-    ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(service_ctor)
-        .initialize(scope, global)
-        .map_err(|error| {
-            anyhow!("failed to initialize ServiceWorkerGlobalScope global: {error}")
-        })?;
-    ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
+        .ok_or_else(|| anyhow!("failed to instantiate {interface} constructor"))?;
+    specific_ctor
+        .set_prototype(scope, worker_ctor.into())
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to inherit {interface} constructor"))?;
+    let specific_proto = constructor_prototype(scope, specific_ctor, interface)?;
+    set_worker_to_string_tag(scope, specific_proto, interface);
+    match global_kind {
+        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+            DedicatedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
+            DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
+        }
+        super::thread::WorkerGlobalKind::Shared { .. } => {
+            SharedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
+            SharedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
+        }
+        super::thread::WorkerGlobalKind::Service { .. } => {
+            ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
+            ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
+        }
+    }
     if !global
         .get_prototype(scope)
-        .is_some_and(|prototype| prototype.strict_equals(service_proto.into()))
+        .is_some_and(|prototype| prototype.strict_equals(specific_proto.into()))
     {
         return Err(anyhow!(
-            "service worker global template did not install ServiceWorkerGlobalScope.prototype"
+            "worker global template did not install {interface}.prototype"
         ));
     }
     Ok(())
