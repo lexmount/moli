@@ -241,9 +241,13 @@ content-security-policy/script-src/script-src-trusted_types_eval_with_report_onl
 content-security-policy/script-src/script-src-trusted_types_eval_with_require_trusted_types_eval.html
 content-security-policy/script-src/script-src-trusted_types_eval_without_require_trusted_types_eval.html
 content-security-policy/script-src/script-src-wildcards-disallowed.html
+content-security-policy/script-src/scripthash-allowed.sub.html
+content-security-policy/script-src/scripthash-base64url-converts-to-base64.sub.html
 content-security-policy/script-src/scripthash-basic-blocked-error-event.html
+content-security-policy/script-src/scripthash-case-insensitive.sub.html
 content-security-policy/script-src/scripthash-changed-1.html
 content-security-policy/script-src/scripthash-changed-2.html
+content-security-policy/script-src/scripthash-default-src.sub.html
 content-security-policy/script-src/scriptnonce-changed-1.html
 content-security-policy/script-src/scriptnonce-changed-2.html
 content-security-policy/securitypolicyviolation/blockeduri-eval.html
