@@ -4539,6 +4539,8 @@ dom/observable/tentative/observable-constructor.window.js?moli-wpt-script=window
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-event-target.window.js?moli-wpt-script=window
+dom/observable/tentative/observable-first.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-first.any.js?moli-wpt-any=window
 dom/ranges/Range-adopt-test.html
 dom/ranges/Range-attributes.html
 dom/ranges/Range-cloneContents.html
