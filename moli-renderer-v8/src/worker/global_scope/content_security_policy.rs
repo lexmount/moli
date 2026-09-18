@@ -455,3 +455,13 @@ pub(in crate::worker) fn dispatch_worker_csp_violation_event_for_state<'s>(
         scope, state, violation,
     );
 }
+
+pub(crate) fn worker_allows_wasm_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    worker_allows_compilation_by_csp(
+        scope,
+        crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval,
+        None,
+    )
+}
