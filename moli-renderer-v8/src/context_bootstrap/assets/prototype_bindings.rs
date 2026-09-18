@@ -111,7 +111,7 @@ struct CssStyleDeclarationTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLDocument, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDocument, enumerable, receiver = web_api_interfaces::Document::is_instance)]
 struct HtmlDocumentTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "location",

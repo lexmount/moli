@@ -17,7 +17,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentViewTransitionTemplateDeclaration {
     #[webapi(
         method = "startViewTransition",

@@ -306,7 +306,7 @@ struct EventTargetTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentEventTemplateMethodsDeclaration {
     #[webapi(method = "createEvent", length = 1, callback = document_create_event_callback)]
     create_event: (),
