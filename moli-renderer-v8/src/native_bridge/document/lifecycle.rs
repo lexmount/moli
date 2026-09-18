@@ -172,8 +172,9 @@ fn node_document_write_or_writeln_callback<'s>(
         return;
     }
     if implicit_replacement_session {
+        let entry_document = runtime.document_open_entry_document(scope);
         clear_window_event_handlers(scope);
-        JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
+        JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
     }
     let _ = unsafe { &mut *runtime_ptr }.write_html(scope, runtime_ptr, handle, &html);
     rv.set_undefined();
@@ -274,11 +275,13 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         if let Some(child_handle) =
             unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
         {
+            let entry_document = unsafe { &*runtime_ptr }.document_open_entry_document(scope);
             let _ = JsContextHost::begin_child_document_stream_replacement(
                 scope,
                 runtime_ptr,
                 child_handle,
                 handle,
+                entry_document,
             );
             rv.set(args.this().into());
             return;
@@ -294,8 +297,9 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         }
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
+            let entry_document = runtime.document_open_entry_document(scope);
             clear_window_event_handlers(scope);
-            JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
+            JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
         }
     }
     rv.set(args.this().into());
@@ -310,6 +314,47 @@ fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge) fn document_open_entry_document(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<DomHandle> {
+        if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+            return self.lightweight_popup_document_handle(popup_id);
+        }
+        // Borrowed methods execute in their callee realm. HTML instead uses
+        // the Window that entered this script or microtask.
+        let context = scope.get_entered_or_microtask_context();
+        let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+        if !std::ptr::eq(host_ptr, self) {
+            return None;
+        }
+        let window = context.global(scope);
+        if let Some(document) = crate::util::get_private_value(
+            scope,
+            window,
+            crate::context_bootstrap::WINDOW_DOCUMENT_SLOT,
+        )
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            let (document_host, handle) =
+                node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
+            return std::ptr::eq(document_host, self).then_some(handle);
+        }
+        Some(self.document_handle())
+    }
+
+    pub(in crate::native_bridge) fn document_open_replacement_url(
+        &self,
+        document: DomHandle,
+        entry_document: DomHandle,
+    ) -> url::Url {
+        let mut url = self.document_url_for_handle(entry_document);
+        if document != entry_document {
+            url.set_fragment(None);
+        }
+        url
+    }
+
     fn prepare_windowless_document_replacement(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -328,6 +373,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
+        entry_document: Option<DomHandle>,
     ) {
         let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
         Self::dispatch_document_open_descendant_frame_unload_lifecycle(
@@ -347,8 +393,32 @@ impl JsContextHost {
                 document_handle,
             );
         });
-        if unsafe { &*host_ptr }.current_main_document_task_owner() == owner {
-            Self::open_root_document(scope, host_ptr);
+        if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
+            return;
+        }
+        let replacement_url =
+            entry_document.map(|entry| unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry));
+        let url_changed = replacement_url
+            .as_ref()
+            .is_some_and(|url| url != unsafe { &mut *host_ptr }.document_url());
+        if let Some(url) = replacement_url.as_ref() {
+            unsafe { &mut *host_ptr }.set_document_url(url.clone());
+        }
+        Self::open_root_document(scope, host_ptr);
+        if let Some(url) = replacement_url
+            && let Some(window) =
+                super::document_associated_window_for_handle(scope, host_ptr, document_handle)
+        {
+            // Entry-change listeners can synchronously change the URL again.
+            // Publish this change first so their later handoffs remain last.
+            if url_changed {
+                unsafe { &mut *host_ptr }.record_same_document_navigation(
+                    &url,
+                    "historyApi",
+                    moli_page_types::SameDocumentHistoryUpdate::Replace,
+                );
+            }
+            crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
         }
     }
 
@@ -362,7 +432,7 @@ impl JsContextHost {
     ) {
         let document_handle = unsafe { &*host_ptr }.document_handle();
         clear_window_event_handlers(scope);
-        Self::prepare_root_document_replacement(scope, host_ptr, document_handle);
+        Self::prepare_root_document_replacement(scope, host_ptr, document_handle, None);
         let _ = unsafe { &mut *host_ptr }.write_html(scope, host_ptr, document_handle, html);
         unsafe { &mut *host_ptr }.close_document(scope, host_ptr);
     }

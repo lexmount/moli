@@ -414,6 +414,72 @@ async fn set_document_content_preserves_history_length_and_state() {
     server.abort();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn document_open_keeps_reentrant_history_url_in_frame_tree() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route(
+                "/history",
+                axum::routing::get(|| async {
+                    axum::response::Html(
+                        "<!doctype html><body><iframe src='/source#entry'></iframe>",
+                    )
+                }),
+            )
+            .route(
+                "/source",
+                axum::routing::get(|| async { axum::response::Html("<!doctype html><body>entry") }),
+            );
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    for child_entry in [false, true] {
+        let mut ctx = TestContext::new();
+        install_document_content_test_page(&mut ctx, &format!("http://{addr}/history")).await;
+        ctx.process_async(json!({
+            "id": 17,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "returnByValue": true,
+                "awaitPromise": true,
+                "expression": format!(r#"new Promise(resolve => {{
+                  navigation.addEventListener('currententrychange', () => {{
+                    history.replaceState({{after: true}}, '', '/after-open');
+                  }}, {{once: true}});
+                  const source = {child_entry} ? document.querySelector('iframe').contentWindow : window;
+                  source.finishOpen = resolve;
+                  source.targetDocument = document;
+                  source.setTimeout(source.Function(`
+                    const finish = finishOpen, target = targetDocument;
+                    target.open();
+                    target.write('<!doctype html><body>replacement');
+                    target.close();
+                    finish(target.URL);
+                  `), 0);
+                }})"#),
+            },
+        }))
+        .await;
+        wait_until_scheduler_message(
+            &mut ctx,
+            "document.open reentrant history response",
+            |message| message["id"] == json!(17) && message["sessionId"] == json!("SID-1"),
+        )
+        .await;
+        let response = take_response_by_id(&mut ctx, 17);
+        let expected = json!(format!("http://{addr}/after-open"));
+        assert_eq!(
+            response["result"]["result"]["value"], expected,
+            "{response:?}"
+        );
+        assert_eq!(frame_tree(&mut ctx, 18).await["frame"]["url"], expected);
+    }
+    server.abort();
+}
+
 // Ported from WPT opening-the-input-stream/mutation-observer.window.js and
 // verified against Chromium's Page.setDocumentContent path. Unlike a bare
 // document.open(), SetContent also exposes the parser's subsequent additions.

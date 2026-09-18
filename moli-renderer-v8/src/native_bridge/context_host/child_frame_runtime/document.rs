@@ -299,11 +299,13 @@ impl JsContextHost {
                     }
                 }
             } else {
+                let entry_document = host.document_open_entry_document(scope);
                 let Some(context) = host.begin_child_document_stream_replacement(
                     scope,
                     host_ptr,
                     child_handle,
                     document_handle,
+                    entry_document,
                 ) else {
                     return;
                 };
@@ -421,6 +423,7 @@ impl JsContextHost {
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
+        entry_document: Option<DomHandle>,
     ) -> Option<v8::Local<'s, v8::Context>> {
         if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
             != Some(document_handle)
@@ -490,8 +493,24 @@ impl JsContextHost {
         {
             return None;
         }
-        let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
-        let document_base_url = unsafe { &*host_ptr }.document_base_url_for_handle(document_handle);
+        let previous_url = unsafe { &mut *host_ptr }.document_url_for_handle(document_handle);
+        let replacement_url = entry_document
+            .filter(|_| unsafe { &mut *host_ptr }.child_browsing_context_is_live(child_handle))
+            .map(|entry| unsafe { &mut *host_ptr }.document_open_replacement_url(document_handle, entry));
+        let document_url = replacement_url.as_ref().unwrap_or(&previous_url).clone();
+        let document_base_url = if replacement_url.is_some() {
+            if document_url == previous_url {
+                unsafe { &mut *host_ptr }.dom_host()
+                    .node(document_handle)?
+                    .as_document()?
+                    .fallback_base_url()
+                    .clone()
+            } else {
+                document_url.clone()
+            }
+        } else {
+            unsafe { &mut *host_ptr }.document_base_url_for_handle(document_handle)
+        };
         let replacement_plan = unsafe { &mut *host_ptr }
             .frame_owner_store
             .plan_child_document_open_replacement(
@@ -551,6 +570,9 @@ impl JsContextHost {
                     return None;
                 }
                 let host = unsafe { &mut *host_ptr };
+                if replacement_url.is_some() {
+                    host.set_dom_document_url_for_handle(document_handle, document_url.clone());
+                }
                 host.cancel_child_meta_refresh_navigation(child_handle);
                 host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
                 host.retire_image_state_for_document(document_handle);
@@ -587,7 +609,7 @@ impl JsContextHost {
                     child_handle,
                     current_owner.document_owner(),
                     document_handle,
-                    document_url,
+                    document_url.clone(),
                 );
                 host.note_child_frame_load_started_for_parent(child_handle);
                 host.queue_child_frame_document_opened_event(child_handle);
@@ -601,6 +623,19 @@ impl JsContextHost {
                 );
                 Some(current_owner)
             })?;
+        if unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+            != Some(current_owner)
+        {
+            return None;
+        }
+        if replacement_url.is_some() {
+            let window = script_context.global(scope);
+            crate::context_bootstrap::update_history_for_document_open(
+                scope,
+                window,
+                &document_url,
+            );
+        }
         (unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
             == Some(current_owner))
         .then_some(script_context)
@@ -624,6 +659,7 @@ impl JsContextHost {
             host_ptr,
             child_handle,
             document_handle,
+            None,
         ) else {
             return false;
         };
