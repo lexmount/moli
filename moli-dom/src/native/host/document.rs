@@ -969,6 +969,25 @@ impl DomHost {
             .map(Document::quirks_mode)
     }
 
+    pub fn set_document_character_set_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        character_set: &str,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.character_set() == character_set {
+            return false;
+        }
+        document.set_character_set(character_set);
+        self.record_mutation(MutationScope::LocalState);
+        true
+    }
+
     pub fn document_scripting_enabled_for_handle(
         &self,
         document_handle: DomHandle,

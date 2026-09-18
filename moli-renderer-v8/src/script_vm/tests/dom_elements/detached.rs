@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn document_clones_preserve_internal_metadata_and_url_resolution() {
+    let mut vm = new_storage_test_vm("https://document-clone-metadata.test/path/page.html");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let document = crate::dom_parser::parse_detached_html_document_from_source_with_encoding(
+            scope,
+            url::Url::parse("https://document-clone-metadata.test/encoded/source.html").unwrap(),
+            "<p>caf\u{e9}</p>",
+            Some("windows-1252"),
+        )
+        .expect("encoded detached document");
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(
+                scope,
+                crate::util::v8str(scope, "encodedDocument").into(),
+                document.into()
+            ),
+            Some(true)
+        );
+        Ok(())
+    })
+    .expect("encoded Document setup");
+    let fixture = include_str!("../../../../tests/fixtures/document-clone-metadata.js");
+    let result = vm
+        .eval(&format!(
+            "JSON.stringify(({fixture})([['encoded HTML', encodedDocument]]))"
+        ))
+        .expect("Document clone metadata probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 662);
+}
+
+#[test]
+fn live_document_clones_snapshot_encoding_independently_of_the_active_document() {
+    let mut vm = new_storage_test_vm("https://document-clone-encoding.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+    vm.eval("globalThis.clonedDocuments = [document.cloneNode(), document.cloneNode(true)];")
+        .expect("live document clones");
+    vm.document_runtime.set_document_character_set("UTF-8");
+    let result = vm
+        .eval(
+            r#"JSON.stringify(clonedDocuments.map(doc => {
+            const link = doc.createElement('a');
+            link.href = 'https://document-clone-encoding.test/?ä';
+            return [doc.characterSet, doc.cloneNode().characterSet, link.href];
+        }))"#,
+        )
+        .expect("cloned encoding should be independent of the active document");
+    assert_eq!(
+        result,
+        r#"[["windows-1252","windows-1252","https://document-clone-encoding.test/?%E4"],["windows-1252","windows-1252","https://document-clone-encoding.test/?%E4"]]"#
+    );
+}
+
+#[test]
 fn detached_document_shallow_clones_are_empty_and_accept_a_new_root() {
     let mut vm = new_storage_test_vm("https://document-shallow-clone.test/");
     let fixture = include_str!("../../../../tests/fixtures/document-shallow-clone.js");

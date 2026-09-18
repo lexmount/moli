@@ -13,7 +13,8 @@ pub(in crate::native_bridge::document) use character_data::{
     build_detached_text_object,
 };
 pub(in crate::native_bridge::document) use documents::{
-    build_detached_document_object, build_detached_html_document_object,
+    build_detached_document_clone_shell, build_detached_document_object,
+    build_detached_html_document_object,
 };
 pub(crate) use documents::{
     build_detached_document_object_from_dom_host,
