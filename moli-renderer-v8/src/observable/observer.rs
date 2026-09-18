@@ -1,8 +1,8 @@
 //! Internal observer steps share notification ordering with script observers,
 //! while script callbacks keep their typed Web IDL invocation boundary.
 
-use super::{callbacks, collect, consume, first, invoke_and_report, state::*};
-use crate::util::get_private_value;
+use super::{callbacks, collect, consume, first, invoke_and_report, state::*, transform};
+use crate::util::{get_private_value, set_private_value};
 
 pub(super) const NATIVE_KIND: &str = "__moliObservableNativeObserver";
 pub(super) const FIRST: i32 = 1;
@@ -13,7 +13,32 @@ pub(super) const REDUCE: i32 = 5;
 pub(super) const SOME: i32 = 6;
 pub(super) const EVERY: i32 = 7;
 pub(super) const FIND: i32 = 8;
+pub(super) const MAP: i32 = 9;
+pub(super) const FILTER: i32 = 10;
 pub(super) const SUBSCRIBER: &str = "__moliObservableNativeSubscriber";
+const INDEX: &str = "__moliObservableCallbackIndex";
+
+pub(super) fn index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> u64 {
+    get_private_value(scope, observer, INDEX)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .map_or(0, |value| value.u64_value().0)
+}
+
+pub(super) fn increment_index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) {
+    let next = index(scope, observer).wrapping_add(1);
+    set_private_value(
+        scope,
+        observer,
+        INDEX,
+        v8::BigInt::new_from_u64(scope, next).into(),
+    );
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum Notification<'s> {
@@ -53,6 +78,7 @@ pub(super) fn notify<'s>(
                 FOR_EACH | REDUCE | SOME | EVERY | FIND => {
                     consume::notify(scope, observer, notification, kind);
                 }
+                MAP | FILTER => transform::notify(scope, observer, notification, kind),
                 _ => unreachable!("unknown native Observable observer"),
             }
             let exception = scope.exception();
