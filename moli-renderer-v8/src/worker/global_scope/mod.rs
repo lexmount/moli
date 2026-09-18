@@ -169,6 +169,7 @@ pub(super) use content_security_policy::{
     dispatch_worker_csp_violation_event, dispatch_worker_csp_violation_event_for_state,
 };
 pub(crate) use content_security_policy::{
+    worker_allows_wasm_code_generation_by_csp,
     dispatch_worker_trusted_types_sink_violation_event, worker_allows_eval_code_generation_by_csp,
     worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
     worker_trusted_types_for_script_requirements,

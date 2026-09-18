@@ -937,29 +937,26 @@ pub(super) fn worker_content_security_policy_violation(
     )
 }
 
-pub(super) fn worker_eval_content_security_policy_violation(
+pub(super) fn worker_compilation_content_security_policy_violations(
     state: &WorkerGlobalState,
     protected_url: &Url,
-    allow_trusted_types_eval: bool,
+    kind: ContentSecurityPolicyNonUrlKind,
     source: Option<&str>,
     disposition: ContentSecurityPolicyDisposition,
-) -> Option<ContentSecurityPolicyUrlViolation> {
-    let kind = if allow_trusted_types_eval {
-        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
-    } else {
-        ContentSecurityPolicyNonUrlKind::Eval
-    };
-    worker_policies(state, disposition).find_map(|(policy, report_uri_enabled)| {
-        content_security_policy_non_url_violation_with_source(
-            policy,
-            worker_policy_url(state, protected_url),
-            kind,
-            source,
-            disposition,
-            &state.content_security_reporting_endpoints,
-        )
-        .map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
-    })
+) -> Vec<ContentSecurityPolicyUrlViolation> {
+    worker_policies(state, disposition)
+        .filter_map(|(policy, report_uri_enabled)| {
+            content_security_policy_non_url_violation_with_source(
+                policy,
+                worker_policy_url(state, protected_url),
+                kind,
+                source,
+                disposition,
+                &state.content_security_reporting_endpoints,
+            )
+            .map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+        })
+        .collect()
 }
 
 fn worker_url_policy_violation(
@@ -1210,32 +1207,6 @@ pub(crate) fn dispatch_worker_trusted_types_sink_violation_event(
     self::dispatch_worker_trusted_types_sink_violation_event_for_state(scope, &state, sink, sample);
 }
 
-pub(super) fn worker_compilation_content_security_policy_violations(
-    state: &WorkerGlobalState,
-    protected_url: &Url,
-    kind: crate::content_security_policy::ContentSecurityPolicyNonUrlKind,
-    source: Option<&str>,
-    disposition: ContentSecurityPolicyDisposition,
-) -> Vec<ContentSecurityPolicyUrlViolation> {
-    let policies = match disposition {
-        ContentSecurityPolicyDisposition::Enforce => &state.content_security_policies,
-        ContentSecurityPolicyDisposition::Report => &state.content_security_report_only_policies,
-    };
-    policies
-        .iter()
-        .filter_map(|policy| {
-            crate::content_security_policy::content_security_policy_non_url_violation_with_source(
-                policy,
-                protected_url,
-                kind,
-                source,
-                disposition,
-                &state.content_security_reporting_endpoints,
-            )
-        })
-        .collect()
-}
-
 pub(crate) fn worker_allows_eval_code_generation_by_csp(
     scope: &mut v8::PinScope<'_, '_>,
     allow_trusted_types_eval: bool,
@@ -1312,4 +1283,14 @@ pub(in crate::worker) fn dispatch_worker_csp_violation_event_for_state<'s>(
     self::dispatch_worker_content_security_policy_violation_event_for_state(
         scope, state, violation,
     );
+}
+
+pub(crate) fn worker_allows_wasm_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    worker_allows_compilation_by_csp(
+        scope,
+        crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval,
+        None,
+    )
 }
