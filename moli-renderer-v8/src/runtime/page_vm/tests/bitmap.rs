@@ -171,7 +171,7 @@ async fn bitmap_task_uses_child_intrinsics_and_retires_when_the_child_window_is_
         'scheduled'
         "#)?;
         run_expected_child_realm_materialization_for_wait(&mut page_vm, "child bitmap realm").await;
-        assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader).await?);
+        assert!(!page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader).await?, "inline execution must not leave a queued script task");
         run_ready_bitmap_task(&mut page_vm).await?;
         assert_eq!(page_vm.vm_mut().eval("JSON.stringify(bitmapChildOutcome)")?, "[3,4,true]");
         assert!(page_vm.vm().has_pending_bitmap_tasks());
