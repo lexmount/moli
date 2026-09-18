@@ -38,6 +38,12 @@ struct ObservablePrototype {
     for_each: (),
     #[webapi(method, length = 1, returns_promise, callback = consume::reduce)]
     reduce: (),
+    #[webapi(method, length = 1, returns_promise, callback = consume::some)]
+    some: (),
+    #[webapi(method, length = 1, returns_promise, callback = consume::every)]
+    every: (),
+    #[webapi(method, length = 1, returns_promise, callback = consume::find)]
+    find: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

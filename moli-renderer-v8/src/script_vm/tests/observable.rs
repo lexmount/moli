@@ -1,6 +1,136 @@
 use super::*;
 
 #[test]
+fn observable_predicate_consumers_short_circuit_conversion_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-predicates.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.predicateResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-predicate-consumers.js")
+    ))
+    .expect("Observable predicate consumers fixture should evaluate");
+    let result = vm.eval("predicateResult").unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 302, "{result}");
+}
+
+#[test]
+fn observable_predicate_consumers_preserve_callback_promise_and_abort_reason_realms() {
+    let mut vm = new_storage_test_vm("https://observable-predicate-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable predicate consumer realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const predicate = child.Function('value', 'index', 'globalThis.predicateThis = this; return value === 5;');
+  for (const name of ['some', 'every', 'find']) {
+    const method = child.Observable.prototype[name];
+    const promise = method.call(Observable.from([5]), predicate);
+    checks.push(promise instanceof child.Promise, !(promise instanceof Promise));
+    checks.push(await promise === (name === 'find' ? 5 : true), child.predicateThis === child);
+    const local = Observable.prototype[name].call(child.Observable.from([7]), () => true);
+    checks.push(local instanceof Promise, !(local instanceof child.Promise), await local === (name === 'find' ? 7 : true));
+    const invalid = method.call({}, () => true);
+    checks.push(invalid instanceof child.Promise);
+    await invalid.catch(e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError)));
+    const marker = new child.Error('predicate');
+    await method.call(Observable.from([1]), () => { throw marker; }).catch(e => checks.push(e === marker, e instanceof child.Error));
+    const badCallback = method.call(Observable.from([1]), {});
+    checks.push(badCallback instanceof child.Promise);
+    await badCallback.catch(e => checks.push(e instanceof child.TypeError));
+    let subscriber;
+    await method.call(new Observable(s => { subscriber = s; s.next(1); }), () => name !== 'every');
+    checks.push(subscriber.signal.reason instanceof child.DOMException, !(subscriber.signal.reason instanceof DOMException));
+  }
+  globalThis.predicateRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let result: Vec<bool> = serde_json::from_str(&vm.eval("predicateRealms").unwrap()).unwrap();
+    assert_eq!(result.len(), 48);
+    assert!(result.iter().all(|value| *value), "{result:?}");
+}
+
+#[test]
+fn observable_predicate_consumers_trace_pending_and_release_cancelled_or_decided_callbacks() {
+    let mut vm = new_storage_test_vm("https://observable-predicate-gc.test/");
+    vm.eval(r#"
+globalThis.keptPredicates = [];
+globalThis.abandonedPredicates = [];
+for (const name of ['some', 'every', 'find']) {
+  for (const kept of [false, true]) (() => {
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; }), token = {}, predicate = () => token;
+    const promise = source[name](predicate);
+    const refs = {source: new WeakRef(source), subscriber: new WeakRef(subscriber), predicate: new WeakRef(predicate), token: new WeakRef(token)};
+    if (kept) keptPredicates.push({name, promise, refs}); else abandonedPredicates.push(refs);
+  })();
+}
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+abandonedPredicates.every(refs => Object.values(refs).every(ref => ref.deref() === undefined)),
+keptPredicates.every(c => c.refs.source.deref() === undefined && c.refs.subscriber.deref() !== undefined && c.refs.predicate.deref() !== undefined && c.refs.token.deref() !== undefined)
+])"#).unwrap(), "[true,true]");
+    vm.eval(
+        r#"
+for (const c of keptPredicates) {
+  c.promise.then(value => { c.correct = value === (c.name === 'find' ? 7 : true); });
+  c.refs.subscriber.deref().next(7); c.refs.subscriber.deref().complete(); delete c.promise;
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("keptPredicates.every(c => c.correct)").unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("keptPredicates.every(c => Object.values(c.refs).every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval(r#"
+globalThis.cancelledPredicates = [];
+globalThis.sharedPredicates = [];
+for (const name of ['some', 'every', 'find']) {
+  (() => {
+    const ac = new AbortController(), token = {}, predicate = () => token;
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; });
+    const promise = source[name](predicate, {signal: ac.signal});
+    promise.catch(() => {}); ac.abort('cancelled');
+    cancelledPredicates.push({promise, signal: ac.signal, refs: [new WeakRef(token), new WeakRef(predicate), new WeakRef(subscriber)]});
+  })();
+  (() => {
+    let subscriber;
+    const token = {}, predicate = () => token && name !== 'every';
+    const source = new Observable(s => { subscriber = s; });
+    const all = source.toArray(), promise = source[name](predicate);
+    subscriber.next(1);
+    sharedPredicates.push({subscriber, all, promise, refs: [new WeakRef(token), new WeakRef(predicate)]});
+  })();
+}
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("cancelledPredicates.every(c => c.refs.every(ref => ref.deref() === undefined))")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(vm.eval("sharedPredicates.every(c => c.subscriber.active && c.refs.every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval("sharedPredicates.forEach(c => c.subscriber.complete()); sharedPredicates = [];")
+        .unwrap();
+}
+
+#[test]
 fn observable_callback_consumers_conversion_reentrancy_cancellation_and_exception_identity() {
     let mut vm = new_storage_test_vm("https://observable-consumers.test/");
     vm.eval(&format!(
