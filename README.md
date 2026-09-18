@@ -336,12 +336,21 @@ for the full results.
   <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
+The chart's success-rate axis comes from the
+[four-engine report](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/four-engine-report-20260812.md):
+**Moli 0.1.1 passed 1,556 of 1,928 tasks (80.71%)**, with three attempts per task
+and all three required to pass. The memory axis comes from a separate resource
+experiment, so the two axes use different task populations.
+
 Kitesurf is a remote service, so its CPU, memory, and process counts cannot be
 measured. The resource comparison therefore covers only the four local
-engines. A separate 557-task run includes only work completed by all four.
-Moli's median CPU time per task was **100.6 ms** and its median peak memory was
-**92 MiB**; Chrome recorded **687 ms** and **697 MiB**, respectively. Moli used
-about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
+engines. That experiment selected **557 tasks with five attempts per task**.
+Its resource medians use the **1,045 task-attempt pairs that passed all four
+engines**, measuring warm engine process trees; cold starts are reported
+separately. Moli's median CPU time per sampled attempt was **100.6 ms** and its
+median peak PSS was **92 MiB**; Chrome recorded **687 ms** and **697 MiB**,
+respectively. Within this shared-success subset, Moli used about 15% of Chrome's
+CPU time and 13% of its peak PSS. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
 
