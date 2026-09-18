@@ -299,10 +299,28 @@ impl AbortStore {
                 signals_to_abort.push((dependent_signal_id, v8::Local::new(scope, signal)));
             }
         }
+        // Complete the dependency snapshot even if a source's IteratorClose
+        // throws. Dependents were already marked aborted and cannot be retried.
+        let mut first_error = None;
         for (signal_id, signal) in signals_to_abort {
-            if !self.run_abort_steps(scope, host, signal, signal_id, reason) {
-                return;
+            let error = {
+                v8::tc_scope!(let scope, scope);
+                if self.run_abort_steps(scope, host, signal, signal_id, reason) {
+                    None
+                } else {
+                    let Some(error) = scope.exception() else {
+                        return;
+                    };
+                    scope.reset();
+                    Some(error)
+                }
+            };
+            if first_error.is_none() {
+                first_error = error;
             }
+        }
+        if let Some(error) = first_error {
+            scope.throw_exception(error);
         }
     }
 
