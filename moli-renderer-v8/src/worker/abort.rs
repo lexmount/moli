@@ -595,20 +595,21 @@ pub(crate) fn worker_abort_signal_any_callback<'s>(
     let Some(parsed) = webidl::parse_args::<abort_signal::AnyArgs<'s>>(scope, &args) else {
         return;
     };
-    let Some(store) = worker_abort_store(scope) else {
+    if let Some(signal) = new_worker_dependent_abort_signal(scope, &parsed.signals) {
+        rv.set(signal.into());
+    } else {
         rv.set_null();
-        return;
-    };
-    let Some(signal) = create_signal(scope, &mut store.borrow_mut(), false, None) else {
-        rv.set_null();
-        return;
-    };
-    let Some(composite_signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
-        rv.set_null();
-        return;
-    };
-    let signals = parsed.signals;
-    for source_signal in &signals {
+    }
+}
+
+pub(crate) fn new_worker_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signals: &[v8::Local<'s, v8::Object>],
+) -> Option<v8::Local<'s, v8::Object>> {
+    let store = worker_abort_store(scope)?;
+    let signal = create_signal(scope, &mut store.borrow_mut(), false, None)?;
+    let composite_signal_id = WorkerAbortStore::signal_id_from_object(scope, signal)?;
+    for source_signal in signals {
         let Some(source_signal_id) = WorkerAbortStore::signal_id_from_object(scope, *source_signal)
         else {
             continue;
@@ -623,16 +624,15 @@ pub(crate) fn worker_abort_signal_any_callback<'s>(
             continue;
         };
         abort_worker_signal(&store, scope, signal, reason);
-        rv.set(signal.into());
-        return;
+        return Some(signal);
     }
     store.borrow_mut().set_signal_sources(
         composite_signal_id,
         signals
-            .into_iter()
-            .filter_map(|signal| WorkerAbortStore::signal_id_from_object(scope, signal)),
+            .iter()
+            .filter_map(|signal| WorkerAbortStore::signal_id_from_object(scope, *signal)),
     );
-    rv.set(signal.into());
+    Some(signal)
 }
 
 pub(crate) fn worker_abort_signal_aborted_getter_function<'s>(
