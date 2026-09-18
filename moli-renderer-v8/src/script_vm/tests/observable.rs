@@ -1,6 +1,157 @@
 use super::*;
 
 #[test]
+fn observable_transforms_preserve_lazy_sharing_cancellation_and_callback_semantics() {
+    let mut vm = new_storage_test_vm("https://observable-transforms.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.transformResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-transforms.js")
+    ))
+    .expect("Observable transform fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("transformResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 201, "{result}");
+}
+
+#[test]
+fn observable_transforms_preserve_result_callback_and_exception_realms() {
+    let mut vm = new_storage_test_vm("https://observable-transform-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable transform realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const callback = child.Function('value', 'index', 'globalThis.transformThis = this; return value;');
+  for (const name of ['map', 'filter']) {
+    const method = child.Observable.prototype[name];
+    delete child.transformThis;
+    let starts = 0;
+    const source = new Observable(s => { starts++; s.next(1); s.complete(); });
+    const result = method.call(source, callback);
+    checks.push(result instanceof child.Observable, !(result instanceof Observable), Object.getPrototypeOf(result) === child.Observable.prototype);
+    checks.push(child.transformThis === undefined, starts === 0);
+    const values = await result.toArray();
+    checks.push(child.transformThis === child, values instanceof child.Array, values[0] === 1);
+    const local = Observable.prototype[name].call(child.Observable.from([2]), value => value);
+    checks.push(local instanceof Observable, !(local instanceof child.Observable));
+    const localValues = await local.toArray();
+    checks.push(localValues instanceof Array, localValues[0] === 2);
+    try { method.call({}, callback); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+    try { method.call(source, {}); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+    const marker = new child.Error('transform');
+    method.call(source, () => { throw marker; }).subscribe({error: e => checks.push(e === marker, e instanceof child.Error)});
+    const invalidInvocation = child.Function('return class Callback {};')();
+    method.call(source, invalidInvocation).subscribe({error: e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError))});
+  }
+  globalThis.transformRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let result: Vec<bool> = serde_json::from_str(&vm.eval("transformRealms").unwrap()).unwrap();
+    assert_eq!(result.len(), 40);
+    assert!(result.iter().all(|value| *value), "{result:?}");
+}
+
+#[test]
+fn observable_transform_graphs_trace_live_upstreams_without_rooting_abandoned_chains() {
+    let mut vm = new_storage_test_vm("https://observable-transform-gc.test/");
+    vm.eval(r#"
+globalThis.keptTransforms = [];
+globalThis.abandonedTransforms = [];
+for (const name of ['map', 'filter']) for (const depth of [1, 3]) {
+  for (const kept of [false, true]) (() => {
+    let subscriber;
+    const token = {}, callback = value => token && (name === 'map' ? value + 1 : true);
+    const source = new Observable(s => { subscriber = s; });
+    const templates = [new WeakRef(source)];
+    let transformed = source;
+    for (let i = 0; i < depth; i++) { transformed = transformed[name](callback); templates.push(new WeakRef(transformed)); }
+    const promise = transformed.toArray();
+    const refs = {subscriber: new WeakRef(subscriber), callback: new WeakRef(callback), token: new WeakRef(token)};
+    const entry = {name, depth, templates, refs};
+    if (kept) keptTransforms.push({...entry, promise}); else abandonedTransforms.push(entry);
+  })();
+}
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+abandonedTransforms.every(c => [...c.templates, ...Object.values(c.refs)].every(ref => ref.deref() === undefined)),
+keptTransforms.every(c => c.templates.every(ref => ref.deref() === undefined)),
+keptTransforms.every(c => Object.values(c.refs).every(ref => ref.deref() !== undefined))
+])"#).unwrap(), "[true,true,true]");
+    vm.eval(r#"
+for (const c of keptTransforms) {
+  c.promise.then(values => { c.correct = values.length === 1 && values[0] === (c.name === 'map' ? 3 + c.depth : 3); });
+  c.refs.subscriber.deref().next(3); c.refs.subscriber.deref().complete(); delete c.promise;
+}
+"#).unwrap();
+    assert_eq!(
+        vm.eval("keptTransforms.every(c => c.correct)").unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("keptTransforms.every(c => Object.values(c.refs).every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval(r#"
+globalThis.cancelledTransforms = [];
+for (const name of ['map', 'filter']) (() => {
+  const ac = new AbortController(), token = {}, callback = value => token && value;
+  let subscriber;
+  const source = new Observable(s => { subscriber = s; });
+  const promise = source[name](callback)[name](callback).toArray({signal: ac.signal});
+  promise.catch(() => {}); ac.abort('cancelled');
+  cancelledTransforms.push({promise, signal: ac.signal, subscriber, refs: [new WeakRef(token), new WeakRef(callback)]});
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("cancelledTransforms.every(c => !c.subscriber.active && c.refs.every(ref => ref.deref() === undefined))").unwrap(), "true");
+}
+
+#[test]
+fn observable_preaborted_subscribers_do_not_retain_observers_or_transform_callbacks() {
+    let mut vm = new_storage_test_vm("https://observable-preabort-gc.test/");
+    vm.eval(
+        r#"
+globalThis.preabortedSubscribers = [];
+globalThis.preabortedCallbacks = [];
+for (const name of ['subscribe', 'map', 'filter']) (() => {
+  const token = {}, callback = () => token;
+  const source = new Observable(s => preabortedSubscribers.push(s));
+  const options = {signal: AbortSignal.abort('pre-aborted')};
+  if (name === 'subscribe') source.subscribe(callback, options);
+  else source[name](callback).subscribe({}, options);
+  preabortedCallbacks.push(new WeakRef(token), new WeakRef(callback));
+})();
+"#,
+    )
+    .unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(vm.eval("preabortedSubscribers.length === 3 && preabortedSubscribers.every(s => !s.active && s.signal.reason === 'pre-aborted')").unwrap(), "true");
+    assert_eq!(
+        vm.eval("preabortedCallbacks.every(ref => ref.deref() === undefined)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn observable_predicate_consumers_short_circuit_conversion_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-predicates.test/");
     vm.eval(&format!(
