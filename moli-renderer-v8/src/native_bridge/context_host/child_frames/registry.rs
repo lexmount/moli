@@ -557,6 +557,7 @@ impl JsContextHost {
                 None
             }
             None => {
+                let document_handle = self.child_browsing_context_document_handle(handle);
                 self.cancel_child_meta_refresh_navigation(handle);
                 self.clear_pending_child_document_loads_for_handle(handle);
                 self.unregister_service_worker_child_client(handle);
@@ -564,7 +565,14 @@ impl JsContextHost {
                 self.remove_child_browsing_context_entry(handle);
                 self.detach_child_frame_owner_and_wake_parent(handle);
                 self.clear_live_child_window_proxy_records(handle);
-                self.clear_custom_element_registry_associations_for_child_context(handle);
+                if let Some(document_handle) = document_handle {
+                    self.set_custom_element_registry_association(
+                        document_handle,
+                        CustomElementRegistryAssociation::Registry(
+                            CustomElementRegistryKey::Child(handle),
+                        ),
+                    );
+                }
                 self.child_custom_elements.remove(&handle);
                 self.clear_child_window_event_listeners(handle);
                 self.close_broadcast_channels_for_child_context(handle);
@@ -711,7 +719,9 @@ impl JsContextHost {
                 self.queue_child_frame_detachment_event(frame_id);
             }
             self.clear_live_child_window_proxy_records(handle);
-            self.clear_custom_element_registry_associations_for_child_context(handle);
+            // Registry associations belong to retained DOM nodes, not to the
+            // execution context being retired. Snapshot the document default
+            // before subsequent lookups can no longer infer it from the frame.
             if let Some(document_handle) = document_handle_before_drop {
                 self.set_custom_element_registry_association(
                     document_handle,
@@ -796,25 +806,15 @@ impl JsContextHost {
         for handle in stale_shared_worker_client_handles {
             self.disconnect_shared_worker_clients_for_child_context(handle);
         }
-        let mut stale_registry_context_handles = self
+        let stale_registry_context_handles = self
             .child_browsing_context_document_handles
             .keys()
             .chain(self.child_custom_elements.keys())
             .copied()
             .filter(|handle| !live_handles.contains(handle))
             .collect::<HashSet<_>>();
-        for association in self.custom_element_registry_associations.values() {
-            if let CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                handle,
-            )) = association
-                && !live_handles.contains(handle)
-            {
-                stale_registry_context_handles.insert(*handle);
-            }
-        }
         for handle in stale_registry_context_handles {
             let document_handle = self.child_browsing_context_document_handle(handle);
-            self.clear_custom_element_registry_associations_for_child_context(handle);
             if let Some(document_handle) = document_handle {
                 self.set_custom_element_registry_association(
                     document_handle,

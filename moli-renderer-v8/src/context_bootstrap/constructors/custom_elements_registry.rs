@@ -373,7 +373,7 @@ pub(in crate::context_bootstrap) fn custom_elements_initialize_callback<'s>(
         scope.throw_exception(exception);
         return;
     };
-    if !custom_elements::registry_association_matches_document_default(
+    if !custom_elements::registry_association_matches_document(
         unsafe { &*host_ptr },
         root_document,
         registry_association,

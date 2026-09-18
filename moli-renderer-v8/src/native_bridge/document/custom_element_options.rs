@@ -12,7 +12,7 @@ pub(in crate::native_bridge) fn validate_registry_association_for_document(
     let Some(registry_association) = registry_association else {
         return true;
     };
-    if custom_elements::registry_association_matches_document_default(
+    if custom_elements::registry_association_matches_document(
         unsafe { &*runtime_ptr },
         document_handle,
         registry_association,
