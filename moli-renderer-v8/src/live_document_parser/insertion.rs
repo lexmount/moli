@@ -51,9 +51,15 @@ impl ParserInsertionHandle {
             .enqueue_script_input_html(chunk);
     }
 
-    pub(crate) fn append_to_current_inserted_input(&self, chunk: &str) -> bool {
+    pub(crate) fn enter_script_input_context(&self) -> moli_parser::ParserInputContext {
         self.controller
-            .with_parser_stream(|stream| stream.append_to_current_inserted_input(chunk))
+            .with_parser_stream(crate::parser::DocumentStream::enter_script_input_context)
+    }
+
+    pub(crate) fn append_to_current_script_input(&self, chunk: &str) -> bool {
+        self.controller
+            .input_session()
+            .append_to_current_script_input(chunk)
     }
 
     pub(crate) fn append_at_current_insertion_point(&self, chunk: &str) {
