@@ -1,6 +1,130 @@
 use super::*;
 
 #[test]
+fn observable_collect_values_abort_order_and_native_promise_observers() {
+    let mut vm = new_storage_test_vm("https://observable-collect.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.collectResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-collect.js")
+    ))
+    .expect("Observable collection fixture should evaluate");
+    let result = vm
+        .eval("collectResult")
+        .expect("Observable collection fixture should settle");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 110, "{result}");
+}
+
+#[test]
+fn observable_collect_uses_callee_promise_array_and_error_realms() {
+    let mut vm = new_storage_test_vm("https://observable-collect-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable collection realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  for (const name of ['last', 'toArray']) {
+    const method = child.Observable.prototype[name];
+    const promise = method.call(Observable.from([4, 5]));
+    checks.push(promise instanceof child.Promise, !(promise instanceof Promise));
+    const value = await promise;
+    checks.push(name === 'last' ? value === 5 : value instanceof child.Array && !(value instanceof Array) && value[1] === 5);
+    const invalid = method.call({});
+    checks.push(invalid instanceof child.Promise);
+    await invalid.catch(e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError)));
+    const ac = new AbortController(), marker = {};
+    const pending = method.call(new Observable(() => {}), {signal: ac.signal});
+    ac.abort(marker);
+    await pending.catch(e => checks.push(e === marker));
+    const local = Observable.prototype[name].call(child.Observable.from([7]));
+    checks.push(local instanceof Promise, !(local instanceof child.Promise));
+    const result = await local;
+    checks.push(name === 'last' ? result === 7 : result instanceof Array && !(result instanceof child.Array) && result[0] === 7);
+  }
+  await child.Observable.prototype.last.call(Observable.from([])).catch(e => checks.push(e instanceof child.RangeError, !(e instanceof RangeError)));
+  globalThis.collectRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let result = vm.eval("collectRealms").unwrap();
+    let result: Vec<bool> = serde_json::from_str(&result).unwrap();
+    assert_eq!(result.len(), 22);
+    assert!(result.iter().all(|value| *value), "{result:?}");
+}
+
+#[test]
+fn observable_collect_traces_pending_values_and_releases_them_after_completion_or_abort() {
+    let mut vm = new_storage_test_vm("https://observable-collect-gc.test/");
+    vm.eval(r#"
+globalThis.collectCases = [];
+globalThis.abandonedCollect = [];
+for (const mode of ['last', 'toArray']) {
+  (() => {
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; });
+    const promise = source[mode](), value = {};
+    subscriber.next(value);
+    abandonedCollect.push([new WeakRef(source), new WeakRef(subscriber), new WeakRef(promise), new WeakRef(value)]);
+  })();
+  (() => {
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; });
+    const promise = source[mode](), first = {}, second = {};
+    subscriber.next(first); subscriber.next(second);
+    collectCases.push({mode, promise, source: new WeakRef(source), subscriber: new WeakRef(subscriber), first: new WeakRef(first), second: new WeakRef(second)});
+  })();
+}
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+abandonedCollect.every(refs => refs.every(ref => ref.deref() === undefined)),
+collectCases.every(c => c.source.deref() === undefined && c.subscriber.deref() !== undefined && c.second.deref() !== undefined),
+collectCases[0].first.deref() === undefined, collectCases[1].first.deref() !== undefined
+])"#).unwrap(), "[true,true,true,true]");
+    vm.eval(r#"
+for (const c of collectCases) {
+  c.promise.then(value => { c.correct = c.mode === 'last' ? value === c.second.deref() : value[0] === c.first.deref() && value[1] === c.second.deref(); });
+  c.subscriber.deref().complete();
+  delete c.promise;
+}
+"#).unwrap();
+    assert_eq!(
+        vm.eval("collectCases.every(c => c.correct)").unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("collectCases.every(c => c.subscriber.deref() === undefined && c.first.deref() === undefined && c.second.deref() === undefined)").unwrap(), "true");
+    vm.eval(r#"
+globalThis.cancelledCollect = [];
+for (const mode of ['last', 'toArray']) {
+  (() => {
+    const ac = new AbortController();
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; });
+    const promise = source[mode]({signal: ac.signal}), value = {};
+    subscriber.next(value);
+    promise.catch(() => {});
+    ac.abort('cancelled');
+    cancelledCollect.push({promise, value: new WeakRef(value), subscriber: new WeakRef(subscriber), signal: ac.signal});
+  })();
+}
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("cancelledCollect.every(c => c.value.deref() === undefined && c.subscriber.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
 fn observable_first_promises_cancellation_reentrancy_and_native_observers() {
     let mut vm = new_storage_test_vm("https://observable-first.test/");
     vm.eval(&format!(
