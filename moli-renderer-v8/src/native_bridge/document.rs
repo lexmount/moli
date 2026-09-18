@@ -1171,10 +1171,6 @@ fn document_ready_state_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if let Some(ready_state) = detached_state_string(scope, receiver, "readyState") {
-        set_document_string_return_value(scope, &mut rv, &ready_state);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;

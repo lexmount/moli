@@ -139,6 +139,7 @@ fn set_detached_document_parse_metadata<'s>(
     document: v8::Local<'s, v8::Object>,
     quirks_mode: selectors::matching::QuirksMode,
     character_set: &str,
+    allow_declarative_shadow_roots: bool,
 ) -> Option<()> {
     let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
         "BackCompat"
@@ -161,6 +162,10 @@ fn set_detached_document_parse_metadata<'s>(
     let dom_host = unsafe { &mut *runtime_ptr }.dom_host_mut();
     dom_host.set_document_quirks_mode_for_handle(handle, quirks_mode);
     dom_host.set_document_character_set_for_handle(handle, character_set);
+    dom_host.set_document_allow_declarative_shadow_roots_for_handle(
+        handle,
+        allow_declarative_shadow_roots,
+    );
     Some(())
 }
 
@@ -184,11 +189,18 @@ pub(in crate::native_bridge::document) fn build_detached_document_clone_shell<'s
     let content_type = document.content_type().to_owned();
     let quirks_mode = document.quirks_mode();
     let character_set = document.character_set().to_owned();
+    let allow_declarative_shadow_roots = document.allow_declarative_shadow_roots();
 
     // Start with an empty, inert Document. Only the metadata required by the
     // DOM cloning algorithm is inherited, before any cloned children are added.
     let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false)?;
-    set_detached_document_parse_metadata(scope, cloned, quirks_mode, &character_set)?;
+    set_detached_document_parse_metadata(
+        scope,
+        cloned,
+        quirks_mode,
+        &character_set,
+        allow_declarative_shadow_roots,
+    )?;
     inherit_detached_document_origin(scope, cloned, source);
     Some(cloned)
 }
@@ -273,8 +285,15 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     let scripting_enabled = parsed.dom().document()?.scripting_enabled();
     let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
     let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
+    let allow_declarative_shadow_roots = parsed.dom().document()?.allow_declarative_shadow_roots();
     let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
-    set_detached_document_parse_metadata(scope, document, quirks_mode, character_set)?;
+    set_detached_document_parse_metadata(
+        scope,
+        document,
+        quirks_mode,
+        character_set,
+        allow_declarative_shadow_roots,
+    )?;
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
 }

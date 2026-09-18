@@ -207,6 +207,8 @@ impl JsContextHost {
         // observe them. Keep the generic detached/initial-empty default complete.
         self.dom_host_mut()
             .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
+        self.dom_host_mut()
+            .set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         let _ = self
             .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
         let document_url = self.document_url_for_handle(document_handle);

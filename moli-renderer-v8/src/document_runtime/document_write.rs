@@ -22,6 +22,9 @@ use moli_parser::{
 use std::collections::HashSet;
 use tracing::debug;
 
+mod windowless;
+pub(super) use windowless::WindowlessDocumentParserState;
+
 struct DocumentWriteParserPumpStep {
     outcome: ParserPumpOutcome,
 }
@@ -49,6 +52,7 @@ struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
 #[derive(Clone, Copy)]
 enum DocumentWriteParserMutationTarget {
     LiveDocument,
+    WindowlessDocument { owner_document: DomHandle },
     DetachedFragment { owner_document: DomHandle },
 }
 
@@ -56,7 +60,8 @@ impl DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn owner_document_handle(&self) -> DomHandle {
         match self.target {
             DocumentWriteParserMutationTarget::LiveDocument => self.runtime.document_handle(),
-            DocumentWriteParserMutationTarget::DetachedFragment { owner_document } => {
+            DocumentWriteParserMutationTarget::WindowlessDocument { owner_document }
+            | DocumentWriteParserMutationTarget::DetachedFragment { owner_document } => {
                 owner_document
             }
         }
@@ -71,7 +76,10 @@ impl LiveDocumentParserOwner for DocumentWriteParserMutationOwner<'_, '_, '_> {}
 
 impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
-        if !self.targets_live_document() {
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+        ) {
             return;
         }
         self.runtime
@@ -183,7 +191,10 @@ impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
 
 impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
-        if !self.targets_live_document() {
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+        ) {
             let _ = mutation
                 .apply_to_detached_dom_host(self.runtime.dom_host_mut_for_active_parser_step());
             return;
@@ -236,10 +247,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         // new body/frameset Window attributes when they are added, even if the
         // fragment is never connected. Existing attributes must not reactivate
         // an event handler that script has cleared through its IDL property.
-        let window_handlers = if !self.targets_live_document()
-            && self.runtime.dom_host().node(node_id).is_some_and(|node| {
-                node.is_html_element_named("body") || node.is_html_element_named("frameset")
-            }) {
+        let window_handlers = if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedFragment { .. }
+        ) && self.runtime.dom_host().node(node_id).is_some_and(|node| {
+            node.is_html_element_named("body") || node.is_html_element_named("frameset")
+        }) {
             attrs
                 .iter()
                 .filter(|attr| {
@@ -334,6 +347,17 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         if self.targets_live_document() {
             self.runtime
                 .set_html_quirks_mode_for_parser_in_live_dom_host(quirks_mode);
+        } else if let DocumentWriteParserMutationTarget::WindowlessDocument { owner_document } =
+            self.target
+        {
+            let quirks_mode = match quirks_mode {
+                QuirksMode::NoQuirks => selectors::matching::QuirksMode::NoQuirks,
+                QuirksMode::LimitedQuirks => selectors::matching::QuirksMode::LimitedQuirks,
+                QuirksMode::Quirks => selectors::matching::QuirksMode::Quirks,
+            };
+            self.runtime
+                .dom_host_mut()
+                .set_document_quirks_mode_for_handle(owner_document, quirks_mode);
         }
     }
 
