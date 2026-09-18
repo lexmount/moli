@@ -130,6 +130,33 @@ async fn render_page_dump_default_html_uses_renderer_live_serialize() -> Result<
 }
 
 #[tokio::test]
+async fn strip_ui_keeps_content_inside_details() -> Result<()> {
+    let (_browser, mut page, http_server) = load_page(
+        "<!doctype html><html><body><nav>Menu</nav><main><details><summary>Product details</summary><p>Critical product description</p></details></main></body></html>",
+    )
+    .await?;
+    let rendered = render_page_dump_with_options_async(
+        &mut page,
+        DumpFormat::Markdown,
+        StripOptions {
+            js: false,
+            css: false,
+            ui: true,
+        },
+        false,
+        false,
+        false,
+        None,
+    )
+    .await?;
+    assert!(!rendered.contains("Menu"));
+    assert!(rendered.contains("Product details"));
+    assert!(rendered.contains("Critical product description"));
+    http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn render_page_dump_postprocessed_html_uses_renderer_live_dump() -> Result<()> {
     let (_browser, mut page, http_server) = load_page(
             r#"<!doctype html><html><body><script>window.old=true;</script><main id="target" style="color:red" onclick="old()">old</main></body></html>"#,

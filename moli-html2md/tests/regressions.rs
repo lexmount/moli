@@ -145,6 +145,74 @@ fn normal_code_moves_unicode_boundary_spaces_outside_delimiters() {
 }
 
 #[test]
+fn adjacent_code_elements_keep_distinct_values() {
+    let html = "<div><code>name</code><code>string</code></div>";
+    assert_eq!(
+        rendered_html(&markdown(html, false)),
+        "<p><code>name</code><code>string</code></p>\n"
+    );
+    assert_eq!(
+        markdown("<code>first</code>suffix<code>second</code>", false),
+        "`first`suffix`second`"
+    );
+}
+
+#[test]
+fn empty_code_between_values_does_not_join_or_invent_code_text() {
+    for empty in ["<code></code>", "<code><!-- source note --></code>"] {
+        let source = format!("<code>name</code>{empty}<code>string</code>");
+        for preformatted in [false, true] {
+            let result = markdown(&source, preformatted);
+            assert_eq!(
+                rendered_html(&result),
+                "<p><code>name</code><code>string</code></p>\n",
+                "{source}, preformatted={preformatted}: {result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn neighboring_code_values_keep_their_text_and_node_boundaries() {
+    for (source, preformatted, expected) in [
+        (
+            "<code>git </code><code>status</code>",
+            true,
+            "<p><code>git </code><code>status</code></p>\n",
+        ),
+        (
+            "<code>--</code><code>help</code>",
+            false,
+            "<p><code>--</code><code>help</code></p>\n",
+        ),
+        (
+            "<code>*[x]|</code><code>name</code>",
+            false,
+            "<p><code>*[x]|</code><code>name</code></p>\n",
+        ),
+        (
+            "<code>first</code><code></code><code>second</code>",
+            true,
+            "<p><code>first</code><code>second</code></p>\n",
+        ),
+    ] {
+        let result = markdown(source, preformatted);
+        assert_eq!(rendered_html(&result), expected, "{source}: {result}");
+    }
+}
+
+#[test]
+fn preformatted_block_children_keep_text_boundaries() {
+    let html = "<pre><div>ts</div><div><code>function identity() {}</code></div></pre>";
+    let output = markdown(html, false);
+    assert_eq!(output, "```\nts\nfunction identity() {}\n```");
+    assert_eq!(
+        rendered_html(&output),
+        "<pre><code>ts\nfunction identity() {}\n</code></pre>\n"
+    );
+}
+
+#[test]
 fn attribute_newlines_remove_indentation_without_joining_words() {
     for separator in ["\n ", "\r\n\t", "\n  \n \t  "] {
         let html = format!("<a href='/a' title='first{separator}second'>link</a>");
@@ -222,6 +290,22 @@ fn images_without_sources_do_not_emit_placeholder_markdown() {
         "a<img src='' alt='label'>b",
     ] {
         assert_eq!(markdown(html, false), "ab");
+    }
+}
+
+#[test]
+fn embedded_image_references_survive_regardless_of_pixel_content() {
+    for src in [
+        "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20720%20960'%3E%3C/svg%3E",
+        "data:image/svg+xml,%3Csvg%20style='background:red'%20width='32'%20height='32'/%3E",
+        "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==",
+        "data:image/gif;base64,R0lGODdhAQABAIEAAP8AAAAAAAAAAAAAACwAAAAAAQABAAAIBAABBAQAOw==",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
+    ] {
+        let html = format!("<img alt='Status image' src=\"{src}\">");
+        assert!(markdown(&html, false).contains(src), "{src}");
+        let responsive = format!("<picture><source srcset='/status-2x.png 2x'>{html}</picture>");
+        assert!(markdown(&responsive, false).contains(src), "{responsive}");
     }
 }
 
