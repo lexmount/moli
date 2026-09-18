@@ -1,6 +1,103 @@
 use super::*;
 
 #[test]
+fn observable_from_iterables_promises_cancellation_and_exception_timing() {
+    let mut vm = new_storage_test_vm("https://observable-from.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.fromResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-from.js")
+    ))
+    .expect("Observable.from fixture should evaluate");
+    let result = vm
+        .eval("fromResult")
+        .expect("Observable.from fixture should settle");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 80, "{result}");
+}
+
+#[test]
+fn observable_from_inputs_and_abandoned_iterators_are_collectible() {
+    let mut vm = new_storage_test_vm("https://observable-from-gc.test/");
+    vm.eval(r#"
+(() => {
+  const input = [7];
+  globalThis.weakFromInput = new WeakRef(input);
+  globalThis.keptFrom = Observable.from(input);
+})();
+(() => {
+  const captured = {}, iterator = {next: () => new Promise(() => {})};
+  globalThis.weakFromObserver = new WeakRef(captured);
+  globalThis.weakFromIterator = new WeakRef(iterator);
+  Observable.from({[Symbol.asyncIterator]: () => iterator}).subscribe(() => captured);
+})();
+(() => {
+  const captured = {}, iterator = {next: () => new Promise(resolve => { globalThis.resolveFrom = resolve; })};
+  globalThis.weakLiveFromObserver = new WeakRef(captured);
+  globalThis.weakLiveFromIterator = new WeakRef(iterator);
+  Observable.from({[Symbol.asyncIterator]: () => iterator}).subscribe(() => captured);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+weakFromInput.deref() !== undefined,
+weakFromObserver.deref() === undefined, weakFromIterator.deref() === undefined,
+weakLiveFromObserver.deref() !== undefined, weakLiveFromIterator.deref() !== undefined
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true,true]"
+    );
+    vm.eval("delete globalThis.keptFrom; resolveFrom({done:true}); delete globalThis.resolveFrom;")
+        .unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+weakFromInput.deref() === undefined,
+weakLiveFromObserver.deref() === undefined, weakLiveFromIterator.deref() === undefined
+])"#
+        )
+        .unwrap(),
+        "[true,true,true]"
+    );
+}
+
+#[test]
+fn observable_from_uses_callee_realm_and_preserves_foreign_observables() {
+    let mut vm = new_storage_test_vm("https://observable-from-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.from realm");
+    assert_eq!(vm.eval(r#"
+JSON.stringify((() => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const native = new child.Observable(() => {});
+  Object.defineProperty(native, Symbol.asyncIterator, {get() { throw 1; }});
+  checks.push(Observable.from(native) === native, child.Observable.from(native) === native);
+  const source = child.Observable.from([1]);
+  checks.push(source instanceof child.Observable, !(source instanceof Observable));
+  try { child.Observable.from(1); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+  const input = {[Symbol.iterator]() { return null; }};
+  child.Observable.from(input).subscribe({error(e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }});
+  return checks;
+})())
+"#).unwrap(), "[true,true,true,true,true,true,true,true]");
+}
+
+#[test]
 fn observable_event_target_listener_lifecycle_and_dom_propagation() {
     let mut vm = new_storage_test_vm("https://observable-events.test/");
     vm.eval("document.appendChild(document.createElement('html')); document.documentElement.appendChild(document.createElement('body'));").unwrap();
