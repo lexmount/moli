@@ -168,7 +168,12 @@ pub(in crate::native_bridge) fn bridge_detached_document_ready_state_callback<'a
         rv.set_empty_string();
         return;
     };
-    let value = detached_document_state_string(scope, document, "readyState", "complete");
+    let value =
+        crate::native_bridge::document::document_receiver_runtime_and_handle(scope, document)
+            .map(|(runtime_ptr, handle)| {
+                unsafe { &*runtime_ptr }.document_ready_state_for_handle(handle)
+            })
+            .unwrap_or_else(|| "complete".to_owned());
     set_string_return_value(scope, &mut rv, &value);
 }
 
@@ -272,7 +277,20 @@ pub(in crate::native_bridge) fn bridge_detached_document_compat_mode_callback<'a
 ) {
     let compat_mode = v8::Local::<v8::Object>::try_from(args.get(0))
         .ok()
-        .map(|document| detached_document_state_string(scope, document, "compatMode", "CSS1Compat"))
+        .and_then(|document| {
+            crate::native_bridge::document::document_receiver_runtime_and_handle(scope, document)
+        })
+        .map(|(runtime_ptr, handle)| {
+            let quirks = unsafe { &*runtime_ptr }
+                .dom_host()
+                .document_quirks_mode_for_handle(handle);
+            if quirks == Some(selectors::matching::QuirksMode::Quirks) {
+                "BackCompat"
+            } else {
+                "CSS1Compat"
+            }
+            .to_owned()
+        })
         .unwrap_or_else(|| "CSS1Compat".to_owned());
     set_string_return_value(scope, &mut rv, &compat_mode);
 }
