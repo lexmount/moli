@@ -984,6 +984,15 @@ fn shadow_root_onslotchange_runs_for_bubbled_slotchange() {
   document.body.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = '<slot name="slot1"></slot>';
+  const descriptor = Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'onslotchange');
+  if (descriptor.get.call(shadow) !== null) throw new Error('initial shadow handler');
+  for (const receiver of [{}, host, document, Object.create(shadow), new Proxy(shadow, {})]) {
+    for (const accessor of [descriptor.get, descriptor.set]) {
+      let error;
+      try { accessor.call(receiver, () => {}); } catch (caught) { error = caught; }
+      if (!(error instanceof TypeError)) throw new Error('ShadowRoot receiver check');
+    }
+  }
   const slottable = document.createElement('span');
   slottable.slot = 'slot1';
   globalThis.__shadowRootOnslotchangeCount = 0;
