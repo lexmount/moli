@@ -1154,43 +1154,6 @@ def _url_host_literal(hostname: str) -> str:
     return hostname
 
 
-def _asis_response_parts(body: bytes) -> tuple[int, bytes, list[tuple[str, str]]] | None:
-    """Parse the small raw HTTP ``.asis`` fixtures used by legacy WPT cases."""
-
-    separator = b"\r\n\r\n" if b"\r\n\r\n" in body else b"\n\n"
-    if separator not in body:
-        return None
-    header_block, response_body = body.split(separator, 1)
-    lines = header_block.replace(b"\r\n", b"\n").split(b"\n")
-    if not lines:
-        return None
-    status_line = lines[0].decode("ascii", errors="replace").strip()
-    status_parts = status_line.split(None, 2)
-    if len(status_parts) < 2 or not status_parts[0].startswith("HTTP/"):
-        return None
-    try:
-        status_code = int(status_parts[1])
-    except ValueError:
-        return None
-    if not 100 <= status_code <= 599:
-        return None
-    headers: list[tuple[str, str]] = []
-    for raw_line in lines[1:]:
-        line = raw_line.decode("latin-1").strip()
-        if not line:
-            continue
-        name, separator, value = line.partition(":")
-        if not separator:
-            continue
-        header_name = name.strip()
-        header_value = value.strip()
-        if header_name.lower() in {"content-length", "transfer-encoding"}:
-            continue
-        if _valid_static_response_header(header_name, header_value):
-            headers.append((header_name, header_value))
-    return status_code, response_body, headers
-
-
 def _static_response_headers(
     file_path: Path,
     query: str,
@@ -1906,7 +1869,8 @@ def _make_handler(
             if path in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
                 return
-            pipe_status_code = _pipe_response_status(parsed.query)
+            # wptserve writes .asis files directly before pipelines run.
+            pipe_status_code = None if path.endswith(".asis") else _pipe_response_status(parsed.query)
             if path == "/reporting/resources/report.py":
                 self._serve_csp_report(parsed.query, emit_body=emit_body)
                 return
@@ -2042,6 +2006,17 @@ def _make_handler(
                 body = file_path.read_bytes()
             except OSError:
                 self.send_error(500)
+                return
+            if file_path.suffix == ".asis":
+                # Preserve the entire wire response, including missing header
+                # terminators, duplicate framing fields and malformed bytes.
+                # Like wptserve's AsIsHandler, bypass generated headers, HEAD
+                # body suppression, sidecars, substitution and response pipes.
+                self.close_connection = True
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             if is_any_js_window_wrapper:
                 self._send_bytes(
@@ -2219,21 +2194,6 @@ def _make_handler(
                     status_code=pipe_status_code or 200,
                 )
                 return
-            if file_path.suffix == ".asis":
-                parts = _asis_response_parts(body)
-                if parts is not None:
-                    status_code, body, headers = parts
-                    self._send_bytes(
-                        "application/octet-stream",
-                        body,
-                        emit_body=emit_body,
-                        extra_headers=[
-                            *headers,
-                            *static_headers(),
-                        ],
-                        status_code=pipe_status_code or status_code,
-                    )
-                    return
             mime, _ = mimetypes.guess_type(str(file_path))
             if mime is None:
                 mime = "application/octet-stream"

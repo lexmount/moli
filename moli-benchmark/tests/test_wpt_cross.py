@@ -117,7 +117,6 @@ from moli_benchmark.wpt_cross.server import (
     WptFixtureServer,
     ResultsStore,
     _apply_header_operations,
-    _asis_response_parts,
     _any_js_window_wrapper,
     _bench_report_bridge,
     _content_security_policy_resource_response,
@@ -5045,40 +5044,6 @@ test(() => {}, "ok");
         self.assertIn(b"export const importedModules", body)
         self.assertIn(("Content-Type", "text/javascript"), headers)
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
-
-    def test_fixture_server_parses_asis_response_parts(self) -> None:
-        self.assertEqual(
-            _asis_response_parts(
-                b"HTTP/1.1 200 OK\n"
-                b"Content-Type: text/plain\n"
-                b"Access-Control-Allow-Origin: *\n"
-                b"Content-Length: 999\n"
-                b"\n"
-                b"FAIL"
-            ),
-            (
-                200,
-                b"FAIL",
-                [
-                    ("Content-Type", "text/plain"),
-                    ("Access-Control-Allow-Origin", "*"),
-                ],
-            ),
-        )
-
-    def test_fixture_server_preserves_raw_asis_header_bytes(self) -> None:
-        parts = _asis_response_parts(
-            b"HTTP/1.1 200 OK\n"
-            b"X-Custom-Header-Bytes: \xe2\x80\xa6\n"
-            b"\n"
-            b"OK"
-        )
-
-        self.assertIsNotNone(parts)
-        _status, _body, headers = parts
-        self.assertIn(("X-Custom-Header-Bytes", "\xe2\x80\xa6"), headers)
-        for _name, value in headers:
-            value.encode("latin-1")
 
     def test_fixture_server_preserves_raw_sidecar_header_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
