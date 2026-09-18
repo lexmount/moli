@@ -276,7 +276,7 @@ async fn worker_global_prototype_chains_inherit_event_target_and_are_immutable()
                 format!(
                     r#"
                     const result = ({fixture})({interface:?});
-                    if (result.checks !== 46 || result.failures.length) {{
+                    if (result.checks !== 61 || result.failures.length) {{
                         throw new Error(JSON.stringify(result));
                     }}
                     "#
