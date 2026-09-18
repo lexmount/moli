@@ -4,6 +4,7 @@
 //! Window/worker owners.
 
 mod callbacks;
+mod catch;
 mod collect;
 mod consume;
 mod event_target;
@@ -52,6 +53,8 @@ struct ObservablePrototype {
     inspect: (),
     #[webapi(method, length = 1, callback = finally::finally)]
     finally: (),
+    #[webapi(method, length = 1, callback = catch::catch)]
+    catch: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
     #[webapi(method, length = 0, returns_promise, callback = collect::last)]
@@ -326,6 +329,7 @@ fn subscribe_internal<'s>(
             && !finally::subscribe(scope, observable, subscriber)
             && !flat_map::subscribe(scope, observable, subscriber)
             && !switch_map::subscribe(scope, observable, subscriber)
+            && !catch::subscribe(scope, observable, subscriber)
         {
             event_target::subscribe(scope, observable, subscriber);
         }
