@@ -107,6 +107,32 @@ fn pre_keeps_raw_text_and_line_endings() {
 }
 
 #[test]
+fn preformatted_examples_keep_inline_values_and_separate_display_lines() {
+    for (source, expected) in [
+        (
+            "<pre>const answer = <output>42</output>;</pre>",
+            "const answer = 42;",
+        ),
+        (
+            "<pre><h3>TypeScript</h3><code>function identity() {}</code></pre>",
+            "TypeScript\nfunction identity() {}",
+        ),
+        (
+            "<pre><ol><li>first()</li><li>second()</li></ol></pre>",
+            "first()\nsecond()",
+        ),
+        ("<pre>first<br>second</pre>", "first\nsecond"),
+    ] {
+        let result = markdown(source);
+        assert_eq!(
+            rendered_html(&result),
+            format!("<pre><code>{expected}\n</code></pre>\n"),
+            "{source}: {result}"
+        );
+    }
+}
+
+#[test]
 fn nested_emphasis_closes_with_markdown_before_a_word() {
     for (html, expected, expected_html) in [
         (

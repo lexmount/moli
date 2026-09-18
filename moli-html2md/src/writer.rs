@@ -171,6 +171,11 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code_with_edges(&mut self, text: &str, preformatted: bool) {
+        // An empty element has no visible edge. Keep the pending code until
+        // the next visible text or element decides whether it needs a gap.
+        if text.is_empty() {
+            return;
+        }
         // Each call represents a separate HTML code element. Keep adjacent
         // elements distinct even when the source has no whitespace between them.
         if self.code.is_some() {

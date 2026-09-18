@@ -159,6 +159,21 @@ fn adjacent_code_elements_keep_distinct_values() {
 }
 
 #[test]
+fn empty_code_between_values_does_not_join_or_invent_code_text() {
+    for empty in ["<code></code>", "<code><!-- source note --></code>"] {
+        let source = format!("<code>name</code>{empty}<code>string</code>");
+        for preformatted in [false, true] {
+            let result = markdown(&source, preformatted);
+            assert_eq!(
+                rendered_html(&result),
+                "<p><code>name</code> <code>string</code></p>\n",
+                "{source}, preformatted={preformatted}: {result}"
+            );
+        }
+    }
+}
+
+#[test]
 fn preformatted_block_children_keep_text_boundaries() {
     let html = "<pre><div>ts</div><div><code>function identity() {}</code></div></pre>";
     let output = markdown(html, false);
