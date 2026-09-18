@@ -937,29 +937,26 @@ pub(super) fn worker_content_security_policy_violation(
     )
 }
 
-pub(super) fn worker_eval_content_security_policy_violation(
+pub(super) fn worker_compilation_content_security_policy_violations(
     state: &WorkerGlobalState,
     protected_url: &Url,
-    allow_trusted_types_eval: bool,
+    kind: ContentSecurityPolicyNonUrlKind,
     source: Option<&str>,
     disposition: ContentSecurityPolicyDisposition,
-) -> Option<ContentSecurityPolicyUrlViolation> {
-    let kind = if allow_trusted_types_eval {
-        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
-    } else {
-        ContentSecurityPolicyNonUrlKind::Eval
-    };
-    worker_policies(state, disposition).find_map(|(policy, report_uri_enabled)| {
-        content_security_policy_non_url_violation_with_source(
-            policy,
-            worker_policy_url(state, protected_url),
-            kind,
-            source,
-            disposition,
-            &state.content_security_reporting_endpoints,
-        )
-        .map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
-    })
+) -> Vec<ContentSecurityPolicyUrlViolation> {
+    worker_policies(state, disposition)
+        .filter_map(|(policy, report_uri_enabled)| {
+            content_security_policy_non_url_violation_with_source(
+                policy,
+                worker_policy_url(state, protected_url),
+                kind,
+                source,
+                disposition,
+                &state.content_security_reporting_endpoints,
+            )
+            .map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+        })
+        .collect()
 }
 
 fn worker_url_policy_violation(

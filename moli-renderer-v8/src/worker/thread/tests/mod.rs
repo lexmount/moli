@@ -1540,4 +1540,5 @@ mod postmessage;
 mod synthetic_exceptions;
 mod tls;
 mod trusted_types_reporting;
+mod wasm_csp;
 mod xhr_failure;
