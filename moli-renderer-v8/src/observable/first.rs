@@ -1,16 +1,8 @@
 use super::{
     observer::{self, Notification},
-    promise, signal_arg,
-    state::object_slot,
-    subscribe_internal,
+    promise, signal_arg, subscribe_internal,
 };
-use crate::{
-    abort_signal_route::ResolvedAbortSignal,
-    util::{set_private_value, v8str},
-    webidl,
-};
-
-const CONTROLLER_SIGNAL: &str = "__moliObservableFirstControllerSignal";
+use crate::{abort_signal_route::ResolvedAbortSignal, util::v8str, webidl};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Observable.first")]
@@ -32,29 +24,11 @@ pub(super) fn first<'s>(
     };
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
-    let Some(controller) = ResolvedAbortSignal::new(scope) else {
+    let Some((observer, signal)) =
+        promise::new_controlled_observer(scope, observer::FIRST, resolver, parsed.signal)
+    else {
         return;
     };
-    let mut sources = vec![controller];
-    sources.extend(parsed.signal);
-    let Some(signal) = ResolvedAbortSignal::dependent(scope, &sources) else {
-        return;
-    };
-    let Some(observer) = promise::new_observer(
-        scope,
-        observer::FIRST,
-        resolver,
-        Some(signal),
-        parsed.signal.is_some(),
-    ) else {
-        return;
-    };
-    set_private_value(
-        scope,
-        observer,
-        CONTROLLER_SIGNAL,
-        controller.value().into(),
-    );
     subscribe_internal(scope, args.this(), observer, Some(signal));
 }
 
@@ -70,12 +44,7 @@ pub(super) fn notify<'s>(
             }
             // Abort after resolving, including when a then getter reenters
             // next(). This removes just this observer from a shared producer.
-            if let Some(signal) = object_slot(scope, observer, CONTROLLER_SIGNAL)
-                .and_then(|signal| ResolvedAbortSignal::resolve(scope, signal))
-            {
-                let reason = crate::native_bridge::abort::abort_error_value(scope);
-                signal.abort(scope, reason);
-            }
+            promise::abort_controller(scope, observer, v8::undefined(scope).into());
         }
         Notification::Error(error) => {
             if let Some(resolver) = promise::start_settlement(scope, observer) {
