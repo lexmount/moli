@@ -84,6 +84,37 @@ fn cross_realm_dom_bindings_reject_incompatible_receivers_in_their_own_realm() {
 }
 
 #[test]
+fn document_metadata_view_focus_and_state_validate_native_receivers() {
+    let mut vm = new_storage_test_vm("https://document-receivers.test/");
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const frame = document.createElement('iframe');
+frame.id = 'document-receiver-child';
+root.appendChild(frame);
+"#,
+    )
+    .expect("receiver test child should be created");
+    materialize_single_child_default_realm_for_test(&mut vm, "Document receiver child realm");
+
+    let fixture = include_str!("../../../../tests/fixtures/document-receivers.js");
+    vm.eval(&format!(
+        "{fixture}\ndocumentReceiverProbe().then(value => {{ globalThis.documentReceiverResult = value; }}, error => {{ globalThis.documentReceiverResult = {{error: String(error.stack || error)}}; }});"
+    )).expect("Document receiver probe should start");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(documentReceiverResult)").unwrap()).unwrap();
+    let checks = result["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{result}"));
+    let failures: Vec<_> = checks
+        .iter()
+        .filter(|check| check["pass"] != true)
+        .collect();
+    assert_eq!(result["state"], "pass", "{failures:?}");
+    assert_eq!(checks.len(), 111);
+}
+
+#[test]
 fn document_compat_mode_reflects_parser_quirks_mode() {
     let cases = [
         (

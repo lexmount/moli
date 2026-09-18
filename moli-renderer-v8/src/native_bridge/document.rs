@@ -302,7 +302,7 @@ pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
@@ -325,7 +325,7 @@ struct DocumentMetadataPrototypeDeclaration {
         getter = document_last_modified_getter_function
     )]
     last_modified: (),
-    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = web_api_interfaces::Document::is_instance)]
+    #[webapi(accessor_property, getter = document_referrer_getter_function)]
     referrer: (),
 }
 
@@ -356,7 +356,7 @@ struct DocumentStructurePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentViewPrototypeDeclaration {
     #[webapi(
         accessor_property = "defaultView",
@@ -366,7 +366,7 @@ struct DocumentViewPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentFocusPrototypeDeclaration {
     #[webapi(
         accessor_property = "activeElement",
@@ -376,7 +376,7 @@ struct DocumentFocusPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentStatePrototypeDeclaration {
     #[webapi(
         accessor_property,
