@@ -6842,3 +6842,6 @@ async fn windowless_media_tasks_use_their_documents_owning_window() -> Result<()
     assert_eq!(value["value"], "true");
     Ok(())
 }
+
+#[path = "scripts/document_write_insertion.rs"]
+mod document_write_insertion;
