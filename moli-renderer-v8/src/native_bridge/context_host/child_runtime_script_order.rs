@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::frame_owner_model::{
         DocumentId, FrameDocumentRealmBoundScriptWork, FrameSchedulerLaneId, LocalWindowId,
-        PendingChildDynamicDocumentScript,
+        PendingChildExternalClassicDocumentScript,
     };
 
     fn owner(document: u64) -> FrameDocumentTaskOwner {
@@ -144,14 +144,15 @@ mod tests {
     }
 
     fn work(owner: FrameDocumentTaskOwner, node: DomHandle) -> FrameDocumentScriptReadyTaskWork {
-        FrameDocumentRealmBoundScriptWork::DynamicClassic(PendingChildDynamicDocumentScript {
+        FrameDocumentRealmBoundScriptWork::ExternalClassic(PendingChildExternalClassicDocumentScript {
             child_handle: DomHandle::new(1),
             owner,
             realm_id: Some(FrameRealmId(2)),
             script_handle: node,
-            source: String::new(),
-            script_nonce: None,
-            script_integrity: None,
+            load_delay: crate::frame_owner_model::ChildDocumentAsyncClassicScriptLoadDelay::AlreadyUnblocked,
+            source_result: Ok(String::new()),
+            script_url: url::Url::parse("https://child-script-order.test/script.js").unwrap(),
+            script_base_url: url::Url::parse("https://child-script-order.test/").unwrap(),
         })
         .into()
     }
