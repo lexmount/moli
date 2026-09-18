@@ -6172,3 +6172,5 @@ fn panicking_fetch_runtime_owner_drop_does_not_replace_an_outer_unwind() {
         "Drop during unwind must log the owner panic once without panicking"
     );
 }
+
+mod range_encoding;
