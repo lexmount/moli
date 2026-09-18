@@ -195,11 +195,11 @@ pub(crate) unsafe extern "C" fn wasm_code_generation_check_callback(
     _source: v8::Local<'_, v8::String>,
 ) -> bool {
     v8::callback_scope!(unsafe scope, context);
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        return host.allows_wasm_code_generation_by_csp(scope);
-    }
-    crate::worker::worker_allows_wasm_code_generation_by_csp(scope).unwrap_or(true)
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return crate::worker::worker_allows_wasm_code_generation_by_csp(scope).unwrap_or(true);
+    };
+    let host = unsafe { &mut *host_ptr };
+    host.allows_wasm_code_generation_by_csp(scope)
 }
 
 pub(crate) fn string_code_generation_check_callback<'s>(
