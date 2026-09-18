@@ -2108,11 +2108,15 @@ impl ParserStreamHtmlTreeSinkTarget {
         allow_declarative_shadow_roots: bool,
         scripting_enabled: bool,
     ) -> Self {
-        let dom_host = DomHost::from_dom(NativeDom::new_html_with_scripting(
+        let mut dom_host = DomHost::from_dom(NativeDom::new_html_with_scripting(
             final_url.clone(),
             scripting_enabled,
         ));
         let document_handle = dom_host.document_handle();
+        dom_host.set_document_allow_declarative_shadow_roots_for_handle(
+            document_handle,
+            allow_declarative_shadow_roots,
+        );
         Self {
             owned_dom_host: Some(dom_host),
             parser_root_handle: Some(document_handle),
@@ -3697,9 +3701,18 @@ pub(super) fn new_live_document_root_html_tree_sink_stream(
     final_url: Url,
     document_handle: NativeNodeId,
     scripting_enabled: bool,
+    allow_declarative_shadow_roots: bool,
 ) -> HtmlTreeSinkStream {
     HtmlTreeSinkStream::from_target_with_scripting(
-        ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle),
+        if allow_declarative_shadow_roots {
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle)
+        } else {
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root_with_declarative_shadow_roots(
+                final_url,
+                document_handle,
+                false,
+            )
+        },
         scripting_enabled,
     )
 }

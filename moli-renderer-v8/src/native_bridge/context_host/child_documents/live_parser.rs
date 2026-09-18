@@ -1778,6 +1778,8 @@ impl JsContextHost {
         let document_handle = self
             .dom_host_mut()
             .create_detached_html_document_with_url(document_url);
+        self.dom_host_mut()
+            .set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         if let Some(content_type) = content_type {
             let _ = self.set_dom_document_content_type_for_handle(document_handle, content_type);
         }

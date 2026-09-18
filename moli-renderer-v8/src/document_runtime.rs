@@ -777,6 +777,7 @@ pub(super) struct DocumentRuntime {
     destructive_write_counters: destructive_writes::DocumentWriteCounters,
     document_unload_counters: destructive_writes::DocumentWriteCounters,
     root_document_parser: Option<DocumentParserSession>,
+    windowless_document_parsers: HashMap<DomHandle, document_write::WindowlessDocumentParserState>,
     post_parse_schedule_invalidated: bool,
     stylesheet_lifecycle: StylesheetLifecycleState,
     main_parser_continuation: main_parser_continuation::MainParserContinuationState,

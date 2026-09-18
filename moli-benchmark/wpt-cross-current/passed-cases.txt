@@ -4421,6 +4421,7 @@ dom/nodes/Node-childNodes-cache-2.html
 dom/nodes/Node-childNodes-cache.html
 dom/nodes/Node-childNodes.html
 dom/nodes/Node-cloneNode-XMLDocument.html
+dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.js?moli-wpt-script=window
 dom/nodes/Node-cloneNode-document-with-doctype.html
 dom/nodes/Node-cloneNode-on-inactive-document-crash.html
 dom/nodes/Node-cloneNode-svg.html
