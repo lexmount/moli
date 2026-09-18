@@ -143,6 +143,25 @@ jobs:
       - name: Run full workspace tests
         run: cargo nextest run --workspace --profile ci
 
+  windows-browser-profile:
+    name: Windows browser profile
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $toolchain = (Get-Content rust-toolchain -Raw).Trim()
+          rustup toolchain install $toolchain --profile minimal --no-self-update
+
+      - name: Test browser profile persistence on Windows
+        run: cargo test --locked -p moli-browser-profile
+
   python-harness-tests:
     name: Python harness tests
     runs-on: ubuntu-latest

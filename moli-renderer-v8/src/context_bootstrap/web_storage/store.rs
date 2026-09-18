@@ -910,7 +910,7 @@ fn persist_json_web_storage(path: &Path, areas: &SerializedWebStorageAreas) -> R
     let bytes =
         serde_json::to_vec_pretty(&file).context("failed to serialize localStorage store")?;
 
-    moli_browser_profile::write_file_atomically(path, &bytes, "localStorage store")
+    moli_browser_profile::write_profile_file(path, &bytes, "localStorage store")
 }
 
 #[cfg(test)]

@@ -318,7 +318,7 @@ fn persist_json_service_worker_resource_store(
     };
     let bytes = serde_json::to_vec_pretty(&file)
         .context("failed to serialize Service Worker resource store")?;
-    moli_browser_profile::write_file_atomically(path, &bytes, "Service Worker resource store")
+    moli_browser_profile::write_profile_file(path, &bytes, "Service Worker resource store")
 }
 
 #[derive(Debug, Serialize, Deserialize)]

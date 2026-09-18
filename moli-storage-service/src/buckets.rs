@@ -2145,7 +2145,7 @@ fn save_storage_bucket_cache_file(
     };
     let bytes = serde_json::to_vec_pretty(&json)
         .context("failed to serialize StorageBucket CacheStorage")?;
-    moli_browser_profile::write_file_atomically(path, &bytes, "StorageBucket CacheStorage file")
+    moli_browser_profile::write_profile_file(path, &bytes, "StorageBucket CacheStorage file")
 }
 
 impl JsonStorageBucketBackend {
@@ -2285,7 +2285,7 @@ impl JsonStorageBucketBackend {
         };
         let bytes =
             serde_json::to_vec_pretty(&json).context("failed to serialize storage bucket store")?;
-        moli_browser_profile::write_file_atomically(&self.path, &bytes, "storage bucket store")
+        moli_browser_profile::write_profile_file(&self.path, &bytes, "storage bucket store")
     }
 
     fn migrate_legacy_implicit_default_cache_storage(&mut self) -> bool {

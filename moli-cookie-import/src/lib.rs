@@ -161,7 +161,7 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
     };
     let storage = storage::prepare(partition.local_storage_path(), imported_storage)?;
     if let Some(bytes) = storage {
-        moli_browser_profile::write_file_atomically(
+        moli_browser_profile::write_profile_file(
             partition.local_storage_path(),
             &bytes,
             "localStorage import",
