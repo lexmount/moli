@@ -370,6 +370,9 @@ pub(crate) fn abort_signal<'s>(
     let Some(signals) = signals else {
         return;
     };
+    // Complete the snapshot even if IteratorClose throws: every dependent
+    // is already marked aborted and cannot be retried.
+    let mut first_error = None;
     for (signal_id, signal) in signals {
         let dispatch = unsafe { &mut *host_ptr }
             .native_bridge_mut()
@@ -378,19 +381,34 @@ pub(crate) fn abort_signal<'s>(
         let Some(dispatch) = dispatch else {
             continue;
         };
-        if !event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms) {
-            return;
+        let error = {
+            v8::tc_scope!(let scope, scope);
+            if event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms) {
+                for linked in dispatch.linked_target_listeners {
+                    unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
+                        linked.target,
+                        &linked.event_type,
+                        linked.callback_id,
+                        linked.capture,
+                    );
+                }
+                // Snapshot listeners after earlier signals and abort algorithms.
+                abort_signal_events::dispatch_abort(scope, signal);
+                None
+            } else {
+                let Some(error) = scope.exception() else {
+                    return;
+                };
+                scope.reset();
+                Some(error)
+            }
+        };
+        if first_error.is_none() {
+            first_error = error;
         }
-        for linked in dispatch.linked_target_listeners {
-            unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
-                linked.target,
-                &linked.event_type,
-                linked.callback_id,
-                linked.capture,
-            );
-        }
-        // Snapshot listeners after earlier signals and abort algorithms.
-        abort_signal_events::dispatch_abort(scope, signal);
+    }
+    if let Some(error) = first_error {
+        scope.throw_exception(error);
     }
 }
 
