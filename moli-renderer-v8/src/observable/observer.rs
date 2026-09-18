@@ -1,13 +1,15 @@
 //! Internal observer steps share notification ordering with script observers,
 //! while script callbacks keep their typed Web IDL invocation boundary.
 
-use super::{callbacks, collect, first, invoke_and_report, state::*};
+use super::{callbacks, collect, consume, first, invoke_and_report, state::*};
 use crate::util::get_private_value;
 
 pub(super) const NATIVE_KIND: &str = "__moliObservableNativeObserver";
 pub(super) const FIRST: i32 = 1;
 pub(super) const LAST: i32 = 2;
 pub(super) const TO_ARRAY: i32 = 3;
+pub(super) const FOR_EACH: i32 = 4;
+pub(super) const REDUCE: i32 = 5;
 pub(super) const SUBSCRIBER: &str = "__moliObservableNativeSubscriber";
 
 #[derive(Clone, Copy)]
@@ -45,6 +47,7 @@ pub(super) fn notify<'s>(
             match kind {
                 FIRST => first::notify(scope, observer, notification),
                 LAST | TO_ARRAY => collect::notify(scope, observer, notification, kind),
+                FOR_EACH | REDUCE => consume::notify(scope, observer, notification, kind),
                 _ => unreachable!("unknown native Observable observer"),
             }
             let exception = scope.exception();
