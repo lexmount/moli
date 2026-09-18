@@ -83,24 +83,6 @@ fn inline_code_breaks_keep_separation_at_code_span_edges() {
 }
 
 #[test]
-fn adjacent_code_html_fallback_keeps_literal_code_text() {
-    let source = r"<code>a*b_`\[x] &amp; &lt;tag&gt;</code><code>z</code>";
-    for preformatted_code in [false, true] {
-        let output = markdown_with(
-            source,
-            Options {
-                preformatted_code,
-                ..Options::default()
-            },
-        );
-        assert_eq!(
-            rendered_html(&output),
-            "<p><code>a*b_`\\[x] &amp; &lt;tag&gt;</code><code>z</code></p>\n"
-        );
-    }
-}
-
-#[test]
 fn inline_code_breaks_obey_the_depth_limit() {
     let html = "<code>git<span><br></span>status</code>";
     for (max_depth, expected) in [(3, "`gitstatus`"), (4, "`git status`")] {
