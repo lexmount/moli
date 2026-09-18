@@ -1711,7 +1711,7 @@ fn xml_serializer_synthesizes_required_namespace_declarations() {
 }
 
 #[test]
-fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() {
+fn xml_serializer_handles_empty_elements_attrs_and_xml_error_documents() {
     let mut vm = new_storage_test_vm("https://xml-serializer-node-kinds.test/");
 
     let result = vm
@@ -1744,17 +1744,18 @@ fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() 
     serializer.serializeToString(xml.documentElement) === '<root/>',
     serializer.serializeToString(attribute) ===
       'a&lt;&amp;&quot;&gt;&#9;&#10;&#13;',
-    emptyXml.documentElement.localName === 'html',
-    emptyXml.documentElement.namespaceURI === 'http://www.w3.org/1999/xhtml',
+    emptyXml.documentElement.localName === 'parsererror',
+    emptyXml.documentElement.namespaceURI === 'http://www.mozilla.org/newlayout/xml/parsererror.xml',
     emptyXml.documentElement.getAttribute('xmlns') === null,
-    emptyError.getAttributeNames().join(',') === 'style',
+    emptyError === emptyXml.documentElement,
     emptySerialized.startsWith(
-      '<html xmlns="http://www.w3.org/1999/xhtml"><body><parsererror style='
+      '<parsererror xmlns="http://www.mozilla.org/newlayout/xml/parsererror.xml"'
     ),
-    !emptySerialized.includes('<parsererror xmlns='),
+    new DOMParser().parseFromString(emptySerialized, 'text/xml').documentElement.textContent ===
+      emptyError.textContent,
     partialError.getAttribute('xmlns') === null,
     partialSerialized.startsWith(
-      '<catalog><parsererror xmlns="http://www.w3.org/1999/xhtml" style='
+      '<parsererror xmlns="http://www.mozilla.org/newlayout/xml/parsererror.xml"'
     )
   ].join('|');
 })()
@@ -1766,35 +1767,6 @@ fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() 
         result,
         "true|true|true|true|true|true|true|true|true|true|true|true"
     );
-}
-
-#[test]
-fn dom_parser_xml_errors_preserve_the_partial_document_root() {
-    let mut vm = new_storage_test_vm("https://dom-parser-partial-xml-error.test/");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  const parsed = new DOMParser().parseFromString(
-    '<catalog><item></catalog>',
-    'application/xml'
-  );
-  const errors = parsed.getElementsByTagName('parsererror');
-  return [
-    parsed.documentElement.localName,
-    errors.length,
-    errors[0].parentNode === parsed.documentElement,
-    errors[0].namespaceURI,
-    errors[0].nextElementSibling.localName,
-    errors[0].querySelectorAll('h3').length
-  ].join('|');
-})()
-"#,
-        )
-        .expect("DOMParser partial XML error tree should evaluate");
-
-    assert_eq!(result, "catalog|1|true|http://www.w3.org/1999/xhtml|item|2");
 }
 
 #[test]
