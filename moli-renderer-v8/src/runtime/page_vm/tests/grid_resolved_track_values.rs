@@ -10,6 +10,13 @@ async fn computed_style_refreshes_used_grid_tracks_after_style_mutation() {
             Vec::new(),
             Url::parse("https://example.com/grid-used-track-cssom.html")?,
         );
+        // Keep CSSOM and screenshot viewports equal so pass counts isolate style invalidation.
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 400,
+            inner_height: 300,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
         page_vm.vm_mut().eval(
             r#"
 document.head.innerHTML = `<style>

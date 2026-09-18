@@ -111,7 +111,10 @@ impl DocumentRuntime {
     ) {
         self.assert_active_parser_document_incarnation();
         self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
-        let mut owner = RuntimeParserMutationEffects { runtime: self, options };
+        let mut owner = RuntimeParserMutationEffects {
+            runtime: self,
+            options,
+        };
         apply_parser_mutation_effects(scope, host_ptr, &mut owner, &effects);
     }
 
@@ -853,7 +856,8 @@ impl ParserMutationEffectsOwner for RuntimeParserMutationEffects<'_> {
     }
 
     fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
-        self.runtime.ensure_parser_custom_element_reaction_queue(host_ptr);
+        self.runtime
+            .ensure_parser_custom_element_reaction_queue(host_ptr);
     }
 
     fn finish_parser_mutation_effects(
