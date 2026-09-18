@@ -45,6 +45,7 @@ pub(in crate::script_vm) struct ChildParserScriptNestingScope {
     context_host: Rc<RefCell<JsContextHost>>,
     child_handle: DomHandle,
     owner: FrameDocumentTaskOwner,
+    _input_context: Option<moli_parser::ParserInputContext>,
 }
 
 impl Drop for ChildParserScriptNestingScope {
@@ -69,10 +70,18 @@ impl<'vm> ChildDocumentScriptOwnerHooks<'vm> {
         let entered = context_host
             .borrow_mut()
             .enter_child_parser_script_nesting(child_handle, owner);
+        let input_context = entered
+            .then(|| {
+                context_host
+                    .borrow()
+                    .enter_child_parser_script_input_context(child_handle, owner)
+            })
+            .flatten();
         entered.then_some(ChildParserScriptNestingScope {
             context_host,
             child_handle,
             owner,
+            _input_context: input_context,
         })
     }
 
