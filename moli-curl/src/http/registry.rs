@@ -264,6 +264,9 @@ impl<H: Handler, C> HttpRegistry<H, C> {
                 enqueue_existing_pending_job(&mut self.pending, pending);
             }
             Err(error) => {
+                // DNS failure is terminal while the easy handle still resides
+                // outside the Multi. Do not requeue it: that would let curl
+                // resolve or connect independently of the failed shared lookup.
                 let CurlPendingJob {
                     transfer_id, job, ..
                 } = pending;
@@ -531,7 +534,7 @@ mod tests {
             context: label.to_owned(),
             origin,
             deadline: None,
-            dns_resolution: CurlDnsResolution::curl_managed(),
+            dns_resolution: CurlDnsResolution::no_shared_resolution(),
             priority,
             label: label.to_owned(),
         }

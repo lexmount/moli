@@ -186,3 +186,62 @@ async fn websocket_tls_credentials_apply_inside_http_connect_tunnel() {
     )));
     proxy.await.unwrap();
 }
+
+#[tokio::test]
+async fn websocket_uses_https_proxy_with_shared_dns_and_proxy_hostname_tls() {
+    let fixture = TlsWebSocketFixture::new();
+    let (url, server) = fixture.spawn(false).await;
+    let (proxy_url, observation, proxy) =
+        spawn_https_connect_proxy(fixture.server_acceptor(false)).await;
+    let mut context = tls_context(fixture.tls_config());
+    context.http_proxy = Some(proxy_url);
+
+    exercise_tls_connection(url.clone(), context, true).await;
+    assert_eq!(
+        server.await.unwrap().unwrap(),
+        std::slice::from_ref(&fixture.client_certificate)
+    );
+    let observed = timeout(Duration::from_secs(5), observation)
+        .await
+        .unwrap()
+        .unwrap();
+    let target = Url::parse(&url).unwrap();
+    assert!(observed.request.starts_with(&format!(
+        "CONNECT localhost:{} HTTP/1.1\r\n",
+        target.port().unwrap()
+    )));
+    assert_eq!(observed.server_name.as_deref(), Some("localhost"));
+    assert!(
+        observed.client_certificates.is_empty(),
+        "origin client identity must not be sent to the HTTPS proxy"
+    );
+    proxy.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn websocket_https_proxy_rejects_the_wrong_proxy_hostname() {
+    let fixture = TlsWebSocketFixture::new();
+    let (proxy_url, _observation, proxy) =
+        spawn_https_connect_proxy(fixture.server_acceptor(false)).await;
+    let mut proxy_url = Url::parse(&proxy_url).unwrap();
+    proxy_url.set_host(Some("127.0.0.1")).unwrap();
+    let mut context = tls_context(fixture.tls_config());
+    context.http_proxy = Some(proxy_url.to_string());
+    let (events, mut receiver) = mpsc::channel(32);
+
+    let _connection = spawn_standalone_connection(
+        502,
+        "ws://websocket-target.invalid/socket".to_owned(),
+        Vec::new(),
+        context,
+        events,
+    );
+    let message = recv_handshake_failure_events(&mut receiver).await;
+    let message = message.to_ascii_lowercase();
+    assert!(
+        message.contains("certificate") || message.contains("ssl"),
+        "unexpected HTTPS proxy TLS error: {message}"
+    );
+    let proxy_error = proxy.await.unwrap().unwrap_err();
+    assert!(proxy_error.contains("HTTPS proxy"), "{proxy_error}");
+}

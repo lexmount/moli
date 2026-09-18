@@ -77,6 +77,12 @@ async fn cssom_root_client_size_remains_in_layout_viewport_space_under_zoom() {
             Vec::new(),
             Url::parse("https://example.com/cssom-root-zoom-client-size.html")?,
         );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 800,
+            inner_height: 600,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
         page_vm.vm_mut().eval(
             r#"
 document.documentElement.style.zoom='2';

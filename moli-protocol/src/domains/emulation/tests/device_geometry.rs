@@ -27,6 +27,67 @@ async fn set_metrics(ctx: &mut TestContext, extra: serde_json::Value) {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn device_metrics_screen_only_changes_refresh_geometry() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    evaluate(
+        &mut ctx,
+        r#"
+        document.head.innerHTML = `<style>
+            body { margin: 0 }
+            #target { width: 100px; height: 100px }
+            @media (device-width: 1280px), (device-height: 720px) {
+                #target { width: 200px }
+            }
+        </style>`;
+        document.body.innerHTML = '<div id=target></div>';
+        undefined
+        "#,
+    )
+    .await;
+
+    for (screen_width, screen_height, expected_width) in [
+        (1920, 1080, 100),
+        (1280, 1080, 200),
+        (1280, 1080, 200),
+        (1920, 1080, 100),
+        (1920, 720, 200),
+        (1920, 1080, 100),
+    ] {
+        set_metrics(
+            &mut ctx,
+            json!({
+                "width": 800, "height": 600,
+                "screenWidth": screen_width, "screenHeight": screen_height
+            }),
+        )
+        .await;
+        assert_eq!(
+            evaluate(
+                &mut ctx,
+                r#"[
+                    innerWidth, innerHeight, devicePixelRatio, screen.width, screen.height,
+                    document.getElementById('target').getBoundingClientRect().width,
+                    document.elementFromPoint(150, 20)?.id === 'target',
+                    document.elementsFromPoint(150, 20).some(element => element.id === 'target')
+                ]"#
+            )
+            .await,
+            json!([
+                800,
+                600,
+                1,
+                screen_width,
+                screen_height,
+                expected_width,
+                expected_width == 200,
+                expected_width == 200
+            ]),
+        );
+    }
+}
+
 fn unsupported_modes() -> [(&'static str, serde_json::Value); 7] {
     [
         ("mobile=true", json!({"mobile": true})),

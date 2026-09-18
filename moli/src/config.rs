@@ -6,7 +6,9 @@ use moli_core::{
     page::{SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceResponseWaitCriteria},
     runtime::BrowserConfig,
 };
-use moli_fetch::{FetchConfig, WebBotAuthProfile, WebBotAuthSigner};
+use moli_fetch::{
+    FetchConfig, WebBotAuthProfile, WebBotAuthSigner, validate_http_host_resolve_entries,
+};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -189,7 +191,7 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     config.fetch.cookie_files = common.cookie_file.clone();
     config.browser.fetch_mut().set_network_blocking(
         common.block_private_networks,
-        parse_block_cidrs(common.block_cidrs.as_deref()),
+        parse_block_cidrs(common.block_cidrs.as_deref())?,
     );
     config
         .browser
@@ -254,35 +256,19 @@ fn configure_web_bot_auth(fetch: &mut FetchConfig, common: &CommonArgs) -> Resul
     Ok(())
 }
 
-fn validate_http_host_resolve_entries(entries: &[String]) -> Result<()> {
-    for entry in entries {
-        validate_http_host_resolve_entry(entry)?;
-    }
-    Ok(())
-}
+fn parse_block_cidrs(raw: Option<&str>) -> Result<Vec<AnyIpCidr>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
 
-fn validate_http_host_resolve_entry(entry: &str) -> Result<()> {
-    let mut parts = entry.splitn(3, ':');
-    let host = parts.next().unwrap_or_default();
-    let port = parts.next().unwrap_or_default();
-    let address = parts.next().unwrap_or_default();
-
-    if host.is_empty() || port.is_empty() || address.is_empty() {
-        bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
-    }
-    port.parse::<u16>()
-        .with_context(|| format!("invalid --http-host-resolve port in `{entry}`"))?;
-    Ok(())
-}
-
-fn parse_block_cidrs(raw: Option<&str>) -> Vec<AnyIpCidr> {
-    raw.into_iter()
-        .flat_map(|value| value.split(','))
-        .filter_map(|item| {
-            let trimmed = item.trim();
-            (!trimmed.is_empty())
-                .then(|| AnyIpCidr::from_str(trimmed).ok())
-                .flatten()
+    raw.split(',')
+        .map(|item| {
+            let item = item.trim();
+            if item.is_empty() {
+                bail!("invalid --block-cidrs entry: CIDR must not be empty");
+            }
+            AnyIpCidr::from_str(item)
+                .with_context(|| format!("invalid --block-cidrs entry `{item}`"))
         })
         .collect()
 }

@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NetworkTraceConfigSummary {
     pub(crate) explicit_http_proxy: bool,
-    pub(crate) libcurl_env_proxy_fallback: bool,
+    pub(crate) env_proxy_fallback: bool,
     pub(crate) http_no_proxy: bool,
     pub(crate) proxy_bearer_token: bool,
     pub(crate) tls_verify_host: bool,
@@ -38,7 +38,7 @@ impl From<&FetchConfig> for NetworkTraceConfigSummary {
     fn from(config: &FetchConfig) -> Self {
         Self {
             explicit_http_proxy: config.http_proxy().is_some(),
-            libcurl_env_proxy_fallback: config.http_proxy().is_none(),
+            env_proxy_fallback: config.http_proxy().is_none(),
             http_no_proxy: config.http_no_proxy().is_some(),
             proxy_bearer_token: config.proxy_bearer_token().is_some(),
             tls_verify_host: config.tls_verify_host(),
@@ -276,7 +276,7 @@ pub(crate) fn render_http_error_network_trace(
 fn render_config_summary(config: &NetworkTraceConfigSummary) -> Value {
     json!({
         "explicit_http_proxy": config.explicit_http_proxy,
-        "libcurl_env_proxy_fallback": config.libcurl_env_proxy_fallback,
+        "env_proxy_fallback": config.env_proxy_fallback,
         "http_no_proxy": config.http_no_proxy,
         "proxy_bearer_token": config.proxy_bearer_token,
         "tls_verify_host": config.tls_verify_host,
@@ -1138,7 +1138,7 @@ mod tests {
     fn trace_config_summary_reports_proxy_state_without_sensitive_values() {
         let summary = NetworkTraceConfigSummary {
             explicit_http_proxy: true,
-            libcurl_env_proxy_fallback: false,
+            env_proxy_fallback: false,
             http_no_proxy: true,
             proxy_bearer_token: true,
             tls_verify_host: false,
@@ -1160,7 +1160,7 @@ mod tests {
         let rendered = render_config_summary(&summary);
 
         assert_eq!(rendered["explicit_http_proxy"], true);
-        assert_eq!(rendered["libcurl_env_proxy_fallback"], false);
+        assert_eq!(rendered["env_proxy_fallback"], false);
         assert_eq!(rendered["http_no_proxy"], true);
         assert_eq!(rendered["proxy_bearer_token"], true);
         assert_eq!(rendered["tls_verify_host"], false);
@@ -1178,7 +1178,7 @@ mod tests {
     fn http_error_network_trace_includes_config_and_auth_diagnostics() -> anyhow::Result<()> {
         let config = NetworkTraceConfigSummary {
             explicit_http_proxy: false,
-            libcurl_env_proxy_fallback: true,
+            env_proxy_fallback: true,
             http_no_proxy: false,
             proxy_bearer_token: false,
             tls_verify_host: true,
@@ -1207,7 +1207,7 @@ mod tests {
             Some(&config),
         );
 
-        assert_eq!(trace["config"]["libcurl_env_proxy_fallback"], true);
+        assert_eq!(trace["config"]["env_proxy_fallback"], true);
         assert_eq!(trace["main_document"]["status"], 401);
         assert_eq!(
             trace["main_document"]["diagnostics"]["server_auth_schemes"][0],

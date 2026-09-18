@@ -39,7 +39,8 @@ use crate::{
 
 use self::support::{
     EmptyHttpHttpsUpgradeServer, Http2ProtocolFallbackServer, ScriptedH2Server, ScriptedHttpServer,
-    ScriptedHttps11Server, ScriptedResponse, unique_test_cache_dir, wait_for_runtime_owner_count,
+    ScriptedHttps11Server, ScriptedResponse, spawn_socks4_proxy, spawn_socks5_proxy,
+    unique_test_cache_dir, wait_for_runtime_owner_count,
 };
 
 const ENV_PROXY_CHILD_TEST: &str = "MOLI_FETCH_ENV_PROXY_CHILD";
@@ -1900,6 +1901,253 @@ fn fetch_client_rejects_private_network_targets() {
 }
 
 #[test]
+fn fetch_client_checks_the_shared_dns_answer_for_domains() {
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(String::new()));
+    config.set_network_blocking(true, vec![]);
+
+    let error = fetch_with_config_for_test(&config, Request::get("http://localhost/").unwrap())
+        .expect_err("the shared localhost DNS answer must be rejected before curl connects");
+    let error_chain = format!("{error:#}");
+
+    assert!(
+        error_chain.contains("blocked private network address"),
+        "unexpected error: {error_chain}"
+    );
+}
+
+#[test]
+fn fetch_client_allows_proxy_resolved_target_under_address_policy() {
+    let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("proxied-private-target")]);
+    let proxy_port = Url::parse(&proxy.origin())
+        .unwrap()
+        .port()
+        .expect("proxy URL should include a port");
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(format!("http://localhost:{proxy_port}")));
+    config.set_network_blocking(true, vec![]);
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get("http://127.0.0.1/proxy-resolved-target").unwrap(),
+    )
+    .expect("the trusted proxy owns request-target DNS and address admission");
+
+    assert_eq!(response.body_text(), "proxied-private-target");
+    assert_eq!(proxy.hits(), 1);
+    proxy.shutdown();
+}
+
+#[test]
+fn fetch_client_uses_host_resolve_for_proxy_endpoint() {
+    let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("fixed-proxy")]);
+    let proxy_port = Url::parse(&proxy.origin())
+        .unwrap()
+        .port()
+        .expect("proxy URL should include a port");
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(format!("http://proxy.invalid:{proxy_port}")));
+    config.set_http_host_resolve(vec![format!(
+        "proxy.invalid:{proxy_port}:127.0.0.2,127.0.0.1"
+    )]);
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get("http://remote-target.invalid/through-fixed-proxy").unwrap(),
+    )
+    .expect("a fixed proxy endpoint must bypass DNS without fixing the remote target");
+
+    assert_eq!(response.body_text(), "fixed-proxy");
+    assert_eq!(proxy.hits(), 1);
+    proxy.shutdown();
+}
+
+#[test]
+fn fetch_client_sends_bearer_auth_only_as_http_proxy_header() {
+    let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("authenticated-proxy")]);
+    let mut config = FetchConfig::default();
+    config.set_proxy_options(Some(proxy.origin()), Some("proxy-token".to_owned()));
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get("http://proxy-auth-target.invalid/path").unwrap(),
+    )
+    .expect("HTTP proxy should receive bearer authentication");
+    let requests = proxy.requests();
+
+    assert_eq!(response.body_text(), "authenticated-proxy");
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].contains("\r\nProxy-Authorization: Bearer proxy-token\r\n"),
+        "unexpected proxy request: {:?}",
+        requests[0]
+    );
+    proxy.shutdown();
+}
+
+#[test]
+fn fetch_client_rejects_host_resolve_for_remote_proxy_target() {
+    let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("unexpected")]);
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(proxy.origin()));
+    config.set_http_host_resolve(vec!["target.invalid:80:127.0.0.1".to_owned()]);
+
+    let error = fetch_with_config_for_test(
+        &config,
+        Request::get("http://target.invalid/ignored-override").unwrap(),
+    )
+    .expect_err("a remote-DNS proxy cannot honor a target host-resolve override");
+
+    assert!(error.to_string().contains("would be ignored"), "{error:#}");
+    assert_eq!(proxy.hits(), 0);
+    proxy.shutdown();
+}
+
+#[test]
+fn fetch_client_rejects_http_header_auth_for_socks_proxy() {
+    let mut config = FetchConfig::default();
+    config.set_proxy_options(
+        Some("socks5://127.0.0.1:1".to_owned()),
+        Some("proxy-token".to_owned()),
+    );
+
+    let error = fetch_with_config_for_test(
+        &config,
+        Request::get("http://target.invalid/through-socks").unwrap(),
+    )
+    .expect_err("SOCKS proxy authentication must not use an HTTP header");
+
+    let error_chain = format!("{error:#}");
+    assert!(
+        error_chain.contains("Proxy-Authorization headers require an HTTP(S) proxy"),
+        "{error_chain}"
+    );
+}
+
+#[test]
+fn fetch_client_socks5_sends_target_hostname_to_proxy() {
+    let upstream = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("through-socks")]);
+    let upstream_url = Url::parse(&upstream.origin()).unwrap();
+    let upstream_port = upstream_url
+        .port()
+        .expect("upstream URL should include a port");
+    let upstream_addr = format!("127.0.0.1:{upstream_port}")
+        .parse()
+        .expect("upstream socket address");
+    let (proxy_url, request_rx, proxy) = spawn_socks5_proxy(upstream_addr);
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(proxy_url));
+    config.set_http_no_proxy(Some(String::new()));
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get(&format!(
+            "http://http-target.invalid:{upstream_port}/through-socks"
+        ))
+        .unwrap(),
+    )
+    .expect("socks5 must use remote DNS and relay the HTTP request");
+    let (requested_host, requested_port) = request_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("SOCKS request should arrive");
+    proxy.join().expect("fetch SOCKS proxy should finish");
+
+    assert_eq!(response.body_text(), "through-socks");
+    assert_eq!(requested_host, "http-target.invalid");
+    assert_eq!(requested_port, upstream_port);
+    upstream.shutdown();
+}
+
+#[test]
+fn fetch_client_socks4_sends_target_hostname_to_proxy() {
+    let upstream = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("through-socks4")]);
+    let upstream_url = Url::parse(&upstream.origin()).unwrap();
+    let upstream_port = upstream_url
+        .port()
+        .expect("upstream URL should include a port");
+    let upstream_addr = format!("127.0.0.1:{upstream_port}")
+        .parse()
+        .expect("upstream socket address");
+    let (proxy_url, request_rx, proxy) = spawn_socks4_proxy(upstream_addr);
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(proxy_url));
+    config.set_http_no_proxy(Some(String::new()));
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get(&format!(
+            "http://http-socks4-target.invalid:{upstream_port}/through-socks4"
+        ))
+        .unwrap(),
+    )
+    .expect("socks4 must use remote DNS and relay the HTTP request");
+    let (requested_host, requested_port) = request_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("SOCKS4 request should arrive");
+    proxy.join().expect("fetch SOCKS4 proxy should finish");
+
+    assert_eq!(response.body_text(), "through-socks4");
+    assert_eq!(requested_host, "http-socks4-target.invalid");
+    assert_eq!(requested_port, upstream_port);
+    upstream.shutdown();
+}
+
+#[test]
+fn fetch_redirect_reselects_direct_or_proxy_endpoint_per_hop() {
+    let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("redirected-through-proxy")]);
+    let proxy_port = Url::parse(&proxy.origin())
+        .unwrap()
+        .port()
+        .expect("proxy URL should include a port");
+    let direct = ScriptedHttpServer::spawn(vec![
+        ScriptedResponse::status(302, "Found")
+            .with_header("Location", "http://redirect-target.invalid/final"),
+    ]);
+    let direct_url = Url::parse(&direct.url()).unwrap();
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(format!("http://localhost:{proxy_port}")));
+    config.set_http_no_proxy(Some("127.0.0.1".to_owned()));
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get(direct_url.as_str())
+            .unwrap()
+            .with_follow_redirects(true),
+    )
+    .expect("redirect should switch from direct origin DNS to proxy endpoint DNS");
+
+    assert_eq!(response.body_text(), "redirected-through-proxy");
+    assert_eq!(direct.hits(), 1);
+    assert_eq!(proxy.hits(), 1);
+    direct.shutdown();
+    proxy.shutdown();
+}
+
+#[test]
+fn fetch_client_applies_selected_no_proxy_route_to_curl() {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("direct")]);
+    let port = Url::parse(&server.url())
+        .unwrap()
+        .port()
+        .expect("scripted server URL should include a port");
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some("http://127.0.0.1:1".to_owned()));
+    config.set_http_no_proxy(Some("localhost".to_owned()));
+
+    let response = fetch_with_config_for_test(
+        &config,
+        Request::get(&format!("http://localhost:{port}/direct")).unwrap(),
+    )
+    .expect(
+        "the selected direct route must use shared origin DNS and disable curl proxy evaluation",
+    );
+
+    assert_eq!(response.body_text(), "direct");
+    assert_eq!(server.hits(), 1);
+    server.shutdown();
+}
+
+#[test]
 fn fetch_client_rejects_private_network_targets_via_host_resolve_override() {
     let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("should-not-be-reached")]);
     let port = Url::parse(&server.url())
@@ -1986,12 +2234,14 @@ fn fetch_client_rejects_http_bad_ports_before_network_io() {
 }
 
 #[test]
-fn fetch_client_preserves_libcurl_env_proxy_fallback() {
+fn fetch_client_preserves_env_proxy_fallback() {
     let proxy = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("proxied-env")]);
-    let proxy_origin = proxy.origin();
+    let mut proxy_url = Url::parse(&proxy.origin()).unwrap();
+    proxy_url.set_host(Some("localhost")).unwrap();
+    let proxy_origin = proxy_url.to_string();
     let output = Command::new(std::env::current_exe().expect("test binary path"))
         .arg("--exact")
-        .arg("tests::env_proxy_child_uses_libcurl_env_proxy_fallback")
+        .arg("tests::env_proxy_child_uses_selected_env_proxy_route")
         .arg("--ignored")
         .arg("--nocapture")
         .env(ENV_PROXY_CHILD_TEST, "1")
@@ -2026,8 +2276,8 @@ fn fetch_client_preserves_libcurl_env_proxy_fallback() {
 }
 
 #[test]
-#[ignore = "spawned by fetch_client_preserves_libcurl_env_proxy_fallback"]
-fn env_proxy_child_uses_libcurl_env_proxy_fallback() -> Result<()> {
+#[ignore = "spawned by fetch_client_preserves_env_proxy_fallback"]
+fn env_proxy_child_uses_selected_env_proxy_route() -> Result<()> {
     if std::env::var_os(ENV_PROXY_CHILD_TEST).is_none() {
         return Ok(());
     }

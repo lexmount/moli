@@ -498,7 +498,8 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     }))
     .await;
     ctx.expect_result(36_402, json!({}), Some("SID-1"));
-    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
+    // The Runtime.enable helper clears collected events. Consume the child
+    // navigation first, even when it finishes during the preceding commands.
     wait_until_message(
         &mut ctx,
         "SID-1",
@@ -509,6 +510,7 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
         },
     )
     .await;
+    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
 
     ctx.process_async(json!({
         "id": 36_404,

@@ -389,7 +389,7 @@ async fn render_page_dump_async_includes_network_trace_config_summary() -> Resul
             trace_network: true,
             network_trace_config: Some(crate::network_trace::NetworkTraceConfigSummary {
                 explicit_http_proxy: true,
-                libcurl_env_proxy_fallback: false,
+                env_proxy_fallback: false,
                 http_no_proxy: true,
                 proxy_bearer_token: true,
                 tls_verify_host: true,
@@ -414,10 +414,7 @@ async fn render_page_dump_async_includes_network_trace_config_summary() -> Resul
     let payload: Value = serde_json::from_str(&rendered)?;
 
     assert_eq!(payload["network"]["config"]["explicit_http_proxy"], true);
-    assert_eq!(
-        payload["network"]["config"]["libcurl_env_proxy_fallback"],
-        false
-    );
+    assert_eq!(payload["network"]["config"]["env_proxy_fallback"], false);
     assert_eq!(payload["network"]["config"]["proxy_bearer_token"], true);
     assert_eq!(payload["network"]["config"]["connect_timeout_ms"], 2500);
     http_server.abort();

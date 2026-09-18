@@ -7,3 +7,4 @@ infrastructure/expected-fail/user-prompt.html?type=confirm
 infrastructure/expected-fail/user-prompt.html?type=confirm&wait
 infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
+shadow-dom/declarative/gethtml.html

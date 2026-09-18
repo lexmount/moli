@@ -153,7 +153,7 @@ mod tests {
             context: label.to_owned(),
             origin,
             deadline: None,
-            dns_resolution: CurlDnsResolution::curl_managed(),
+            dns_resolution: CurlDnsResolution::no_shared_resolution(),
             priority,
             label: label.to_owned(),
         }

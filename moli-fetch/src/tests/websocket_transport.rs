@@ -31,3 +31,41 @@ async fn websocket_connector_follows_fetch_owner_lifetime() -> Result<()> {
     server.shutdown();
     Ok(())
 }
+
+#[test]
+fn websocket_connector_inherits_private_network_policy() {
+    let mut config = FetchConfig::default();
+    config.set_network_blocking(true, Vec::new());
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+
+    let error = client
+        .handle()
+        .websocket_connector()
+        .connect(CurlWebSocketRequest::new(
+            "ws://127.0.0.1/private".to_owned(),
+        ))
+        .expect_err("a WebSocket IP literal must use the fetch address policy");
+
+    assert!(
+        error
+            .to_string()
+            .contains("blocked private network address `127.0.0.1`")
+    );
+}
+
+#[test]
+fn websocket_connector_applies_blocked_cidr_to_fixed_direct_target() {
+    let mut config = FetchConfig::default();
+    config.set_network_blocking(false, vec!["198.18.0.0/15".parse().unwrap()]);
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+    let mut request = CurlWebSocketRequest::new("ws://example.test/socket".to_owned());
+    request.resolve_entries = vec!["example.test:80:198.18.0.1".to_owned()];
+
+    let error = client
+        .handle()
+        .websocket_connector()
+        .connect(request)
+        .expect_err("a fixed WebSocket target in a blocked CIDR must be rejected");
+
+    assert!(error.to_string().contains("matches `198.18.0.0/15`"));
+}

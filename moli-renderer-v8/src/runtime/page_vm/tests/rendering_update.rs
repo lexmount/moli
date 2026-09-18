@@ -11,6 +11,74 @@ use crate::page_task_queue::{
 };
 use crate::script_vm::MainDocumentLifecycleBody;
 
+#[tokio::test(flavor = "current_thread")]
+async fn interactive_geometry_refreshes_after_dom_insertion_without_screenshot() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/dynamic-button.html")?,
+        );
+        page_vm
+            .vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page_vm.vm_mut().eval(
+            "document.body.innerHTML = '<button id=first style=\"width:40px;height:20px\">first</button>'; 'ready'",
+        )?;
+        let first_width: f64 = page_vm
+            .vm_mut()
+            .eval("document.getElementById('first').getBoundingClientRect().width")?
+            .parse()?;
+        assert!(first_width > 0.0);
+        let first_publish = page_vm.vm().layout_snapshot_cache_observability_for_test().2;
+
+        page_vm.vm_mut().eval(
+            "document.body.insertAdjacentHTML('beforeend', '<button id=added style=\"width:60px;height:20px\">add</button>'); 'inserted'",
+        )?;
+        let added_width: f64 = page_vm
+            .vm_mut()
+            .eval("document.getElementById('added').getBoundingClientRect().width")?
+            .parse()?;
+        assert!(added_width > 0.0, "new DOM geometry must not use the old tree");
+        let dom_publish = page_vm.vm().layout_snapshot_cache_observability_for_test().2;
+        assert_eq!(dom_publish, first_publish + 1);
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('added').getBoundingClientRect().width")?;
+        assert_eq!(page_vm.vm().layout_snapshot_cache_observability_for_test().2, dom_publish);
+
+        page_vm.vm_mut().eval(
+            "document.body.insertAdjacentHTML('beforeend', '<button id=offset style=\"width:50px;height:20px\">offset</button>'); 'inserted'",
+        )?;
+        let offset_width: i32 = page_vm
+            .vm_mut()
+            .eval("document.getElementById('offset').offsetWidth")?
+            .parse()?;
+        assert!(offset_width > 0, "box metrics must use the new DOM tree");
+        let metrics_publish = page_vm.vm().layout_snapshot_cache_observability_for_test().2;
+        assert_eq!(metrics_publish, dom_publish + 1);
+
+        page_vm.vm_mut().eval(
+            "document.body.insertAdjacentHTML('beforeend', '<button id=cdp style=\"width:70px;height:20px\">cdp</button>'); 'inserted'",
+        )?;
+        let handle = page_vm
+            .vm()
+            .element_handle_by_id_for_test("cdp")
+            .expect("new CDP target");
+        let rect = page_vm
+            .vm_mut()
+            .client_rect_for_live_node_handle(handle)?
+            .expect("new CDP target should have geometry");
+        assert!(rect.width > 0.0);
+        assert_eq!(page_vm.vm().layout_snapshot_cache_observability_for_test().2, metrics_publish + 1);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("interactive geometry should refresh only after a DOM mutation");
+}
+
 fn viewport_screencast_request(
     known_visual_state: Option<crate::runtime::RendererVisualStateToken>,
 ) -> crate::runtime::RendererCaptureScreencastFrameRequest {
@@ -211,10 +279,11 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
                 source: transformed,
             },
         ]);
+        let viewport = moli_layout::LayoutViewport::new(320, 200, 1.0);
         let first = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-            moli_layout::LayoutViewport::new(320, 200, 1.0),
+            viewport,
             &batch,
         )?;
         let after_first = page_vm.vm().layout_pass_observability_for_test();
@@ -310,7 +379,7 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
 
         let snapshot = page_vm
             .vm_mut()
-            .screenshot_layout_snapshot(moli_layout::LayoutViewport::new(320, 200, 1.0))?
+            .screenshot_layout_snapshot(viewport)?
             .expect("current document screenshot layout");
         let after_screenshot = page_vm.vm().layout_pass_observability_for_test();
         let cache_after_screenshot = page_vm
@@ -358,7 +427,7 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
         let third = moli_layout::GeometryProvider::answer(
             page_vm.vm_mut(),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-            moli_layout::LayoutViewport::new(320, 200, 1.0),
+            viewport,
             &batch,
         )?;
         let after_third = page_vm.vm().layout_pass_observability_for_test();
@@ -1884,6 +1953,60 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn float_line_clearance_respects_pre_and_nowrap() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/float-nowrap.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.case{position:absolute;top:0;width:200px;height:120px;font:16px/20px monospace}
+.float{float:left;width:60px;height:80px}
+p{margin:0;width:200px}
+#pre{left:0;white-space:pre}
+#nowrap{left:240px;white-space:nowrap}
+#wrap{left:480px;white-space:normal}
+.atom{display:inline-block;width:240px;height:24px;vertical-align:top}
+</style>`;
+document.body.innerHTML = `<div class=case id=pre><div class=float></div><p>abcdefghijabcdefghij  <br>abcdefghijabcdefghij</p></div><div class=case id=nowrap><div class=float></div><p><span class=atom></span></p></div><div class=case id=wrap><div class=float></div><p><span class=atom></span></p></div>`;
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(['pre','nowrap','wrap'].map(id=>{
+const c=document.getElementById(id), p=c.querySelector('p');
+const r=c.getBoundingClientRect(), t=(p.querySelector('span')||p).getBoundingClientRect();
+return [t.x-r.x,t.y-r.y,p.getBoundingClientRect().height];
+}))"#,
+        )?;
+        let geometry: Vec<[f32; 3]> = serde_json::from_str(&geometry)?;
+        // Chromium: pre/nowrap content stays beside the float and overflows;
+        // a wrapping paragraph moves its oversized atom below the float.
+        for (actual, expected) in geometry.iter().zip([
+            [0.0, 0.0, 40.0],
+            [60.0, 0.0, 24.0],
+            [0.0, 80.0, 104.0],
+        ]) {
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "expected {expected}, got {actual}; geometry={geometry:?}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("float nowrap fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_auto_width_inline_formatting_contexts_shrink_to_fit() {
     run_page_vm_async_test(async move {
         let loader =
@@ -2941,6 +3064,299 @@ async fn screenshot_preserves_table_cell_dimension_hints_and_avatar_columns() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn table_cell_absolute_descendants_use_final_geometry() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-absolute.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().eval(r#"
+document.head.innerHTML = `<style>
+body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
+td { padding:0;font-size:0;line-height:0;vertical-align:top }
+</style>`;
+document.body.innerHTML = `<table><tr>
+<td id=cell style="position:relative">
+  <div style="height:10px"></div><div id=inflow style="height:50%"></div>
+  <div id=percent style="position:absolute;top:0;left:0;height:50%;width:10px"></div>
+  <div id=fill style="position:absolute;inset:0"></div>
+</td><td><div id=tall style="height:100px"></div></td>
+</tr></table>`;
+"#)?;
+        for height in [100, 160, 100] {
+            page.vm_mut().eval(&format!("document.getElementById('tall').style.height='{height}px'"))?;
+            for _ in 0..2 {
+                page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?.expect("table root");
+                let actual = page.vm_mut().eval(r#"
+['cell','inflow','percent','fill'].map(id => document.getElementById(id).getBoundingClientRect().height).join('|')
+"#)?;
+                assert_eq!(actual, format!("{height}|0|{}|{height}", height / 2),
+                    "absolute descendants use the final cell box; normal-flow percentages remain indefinite");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("table cell absolute layout should match Chromium");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn table_cell_nested_percentage_baseline_reaches_parent_measurement() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-nested-baseline.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().eval(r#"
+document.head.innerHTML = `<style>
+body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
+td { padding:0;font-size:0;line-height:0;vertical-align:baseline }
+</style>`;
+document.body.innerHTML = `<table id=outer><tr><td>
+<table id=inner style="width:100px"><tr>
+  <td id=cell style="height:100px"><div id=percent style="height:50%;width:10px"></div></td>
+  <td><div id=peer style="height:20px;width:10px"></div></td>
+</tr></table>
+</td><td><span id=reference style="display:inline-block;height:50px;width:10px"></span></td></tr></table>`;
+"#)?;
+        for height in [100, 160, 100] {
+            page.vm_mut().eval(&format!("document.getElementById('cell').style.height='{height}px'"))?;
+            for _ in 0..2 {
+                page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?.expect("nested table root");
+                let actual = page.vm_mut().eval(r#"(() => {
+const rect = id => document.getElementById(id).getBoundingClientRect();
+const outer = rect('outer');
+return [outer.height,rect('inner').height,rect('percent').height,
+        rect('peer').y-outer.y,rect('reference').y-outer.y].join('|');
+})()"#)?;
+                assert_eq!(actual, format!("{height}|{height}|{}|{}|{}", height / 2, height / 2 - 20, height / 2 - 50),
+                    "outer row measurement must use the nested table's final percentage-dependent baseline");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("nested percentage baseline should match Chromium");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn table_cell_synthetic_baselines_ignore_positioned_overflow() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-flow-baseline.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().eval(r#"
+document.head.innerHTML = `<style>
+body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
+td { padding:0;font-size:0;line-height:0;vertical-align:baseline }
+</style>`;
+document.body.innerHTML = `<table><tr>
+<td id=cell style="height:100px;position:relative">
+  <div id=content style="height:10px;width:10px"></div>
+  <div id=overlay style="position:absolute;inset:0"></div>
+</td><td><span id=peer style="display:inline-block;height:20px;width:10px"></span></td>
+</tr></table>`;
+"#)?;
+        for relative in [false, true, false] {
+            for height in [100, 160, 100] {
+                page.vm_mut().eval(&format!(r#"
+document.getElementById('cell').style.height='{height}px';
+document.getElementById('overlay').style.display='{}';
+document.getElementById('content').style.cssText='height:10px;width:10px;{}';
+"#, if relative { "none" } else { "block" }, if relative { "position:relative;top:50%" } else { "" }))?;
+                for _ in 0..2 {
+                    page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?.expect("table root");
+                    let actual = page.vm_mut().eval(r#"
+['cell','peer','content','overlay'].map(id => {
+  const r=document.getElementById(id).getBoundingClientRect(); return [r.y,r.height].join(',');
+}).join('|')
+"#)?;
+                    let content_y = 10 + if relative { height / 2 } else { 0 };
+                    let overlay_height = if relative { 0 } else { height };
+                    assert_eq!(actual, format!("0,{height}|0,20|{content_y},10|0,{overlay_height}"),
+                        "relative={relative}: synthetic baselines use normal-flow geometry, while positioned descendants retain final cell geometry");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("positioned overflow must not move adjacent cell baselines");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn table_cell_vertical_alignment_includes_floats() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-float-alignment.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().eval(r#"
+document.head.innerHTML = `<style>
+body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
+td { padding:0;font-size:0;line-height:0 }
+</style>`;
+document.body.innerHTML = `<table><tr>
+<td id=cell style="position:relative">
+  <div id=float style="float:left;width:10px;height:30px"></div>
+  <div id=block style="margin-left:15px;width:10px;height:20px"></div>
+  <div id=overlay style="position:absolute;inset:0"></div>
+</td><td><div id=tall></div></td></tr></table>`;
+"#)?;
+        for align in ["middle", "bottom"] {
+            for mixed in [false, true] {
+                for padding in [0, 5] {
+                    for height in [100, 160, 100] {
+                        page.vm_mut().eval(&format!(r#"
+document.getElementById('cell').style.cssText='position:relative;vertical-align:{align};padding:{padding}px';
+document.getElementById('block').style.display='{}';
+document.getElementById('tall').style.height='{height}px';
+"#, if mixed { "block" } else { "none" }))?;
+                        for _ in 0..2 {
+                            page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?.expect("table root");
+                            let actual = page.vm_mut().eval(r#"
+['cell','float','block','overlay'].map(id => {
+  const r=document.getElementById(id).getBoundingClientRect(); return [r.y,r.height].join(',');
+}).join('|')
+"#)?;
+                            let free = height - 2 * padding - 30;
+                            let y = padding + if align == "middle" { free / 2 } else { free };
+                            let block = if mixed { format!("{y},20") } else { "0,0".to_owned() };
+                            assert_eq!(actual, format!("0,{height}|{y},30|{block}|0,{height}"),
+                                "{align}, mixed={mixed}, padding={padding}: align floats and normal flow together without shifting the absolute overlay");
+                        }
+                    }
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("table-cell vertical alignment must include floats");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_table_row_heights_match_chromium() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/table-row-heights.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        let fixture = include_str!("../../../../tests/fixtures/table-row-heights.html");
+        page.vm_mut().eval(&format!("document.open();document.write({});document.close()", serde_json::to_string(fixture)?))?;
+        page.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page.vm_mut().eval("if (!cases.length) buildTableRowHeightCases()")?;
+        let expected: serde_json::Value = serde_json::from_str(include_str!("../../../../tests/fixtures/table-row-heights.chromium.json"))?;
+        let mut failures = Vec::new();
+        for phase in 0..3 {
+            page.vm_mut().eval(&format!("setTableRowHeightPhase({phase})"))?;
+            // Both initial layout and a repeated read must agree with the oracle.
+            for read in 0..2 {
+                page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?.expect("table layout root");
+                let actual: serde_json::Value = serde_json::from_str(&page.vm_mut().eval("JSON.stringify(collectTableRowHeights())")?)?;
+                let actual = actual.as_array().unwrap();
+                let expected_cases = expected["phases"][phase].as_array().unwrap();
+                assert_eq!(actual.len(), expected_cases.len());
+                for (actual, expected) in actual.iter().zip(expected_cases) {
+                    assert_eq!(actual["name"], expected["name"]);
+                    let name = actual["name"].as_str().unwrap();
+                    let actual_rects = actual["rects"].as_array().unwrap();
+                    let expected_rects = expected["rects"].as_array().unwrap();
+                    assert_eq!(actual_rects.len(), expected_rects.len());
+                    for (index, (actual, expected)) in actual_rects.iter().zip(expected_rects).enumerate() {
+                        if (0..4).any(|axis| (actual[axis].as_f64().unwrap() - expected[axis].as_f64().unwrap()).abs() > 0.05) {
+                            failures.push(format!("phase {phase}, read {read}, {name}, rect {index}: {actual} != {expected}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} table geometry differences:\n{}", failures.len(), failures.join("\n"));
+        // Check that final percentage-dependent baseline alignment reaches
+        // paint as well as CSSOM, including a subsequent group-height change.
+        page.vm_mut().eval(r#"
+            for (const {name,owner} of cases) owner.style.display = name === 'percent-baseline' ? 'block' : 'none';
+            const paintedCase = cases.find(c => c.name === 'percent-baseline').owner;
+            paintedCase.querySelectorAll('td > div')[0].style.background = 'rgb(255,0,0)';
+            paintedCase.querySelectorAll('td > div')[1].style.background = 'rgb(0,255,0)';
+        "#)?;
+        for height in [120u32, 160] {
+            page.vm_mut().eval(&format!("paintedCase.querySelector('tbody').style.height = '{height}px'"))?;
+            let snapshot = page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 200, 1.0))?.expect("painted table root");
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            for (x, y, color) in [(5, height / 4, [255, 0, 0, 255]), (105, height / 2 - 10, [0, 255, 0, 255])] {
+                let offset = ((y * image.width + x) * 4) as usize;
+                assert_eq!(&image.rgba[offset..offset + 4], color, "group height {height}, pixel ({x}, {y})");
+            }
+        }
+        page.vm_mut().eval(r#"
+            paintedCase.style.display = 'none';
+            const borderedCase = cases.find(c => c.name === 'empty-groups-collapsed').owner;
+            borderedCase.style.display = 'block';
+            borderedCase.querySelector('thead').style.height = '80px';
+            borderedCase.querySelector('tfoot').style.height = '80px';
+        "#)?;
+        let snapshot = page.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 200, 1.0))?.expect("collapsed table root");
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        for (x, y) in [(100, 1), (100, 187), (1, 100)] {
+            let offset = ((y * image.width + x) * 4) as usize;
+            assert_eq!(&image.rgba[offset..offset + 4], [0, 0, 255, 255], "collapsed border at ({x}, {y})");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("table row heights should match Chromium");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_recascades_table_part_dimension_hints() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-part-dimensions.html")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        let fixture = include_str!("../../../../tests/fixtures/table-part-dimensions.html");
+        page.vm_mut().eval(&format!(
+            "document.open();document.write({});document.close()",
+            serde_json::to_string(fixture)?,
+        ))?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        for phase in 0..4 {
+            page.vm_mut()
+                .eval(&format!("setTablePartDimensionPhase({phase})"))?;
+            page.vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+                .expect("table-part dimension fixture must retain a layout root");
+            let checks: serde_json::Value = serde_json::from_str(
+                &page
+                    .vm_mut()
+                    .eval("JSON.stringify(collectTablePartDimensionChecks())")?,
+            )?;
+            let checks = checks.as_array().expect("table-part dimension checks");
+            assert_eq!(checks.len(), 71);
+            let failures: Vec<_> = checks
+                .iter()
+                .filter(|check| check["actual"] != check["expected"])
+                .collect();
+            assert!(failures.is_empty(), "phase {phase}: {failures:#?}");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table-part dimensions should recascade and resize tables");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recascades_nearest_table_cell_presentation_style() {
     run_page_vm_async_test(async move {
         let loader =
@@ -3055,6 +3471,12 @@ async fn screenshot_applies_legacy_table_width_spacing_and_colors() {
             Vec::new(),
             Url::parse("https://example.com/table-presentation-style.html")?,
         );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 200,
+            inner_height: 100,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
         page_vm.vm_mut().eval(
             r##"
 document.head.innerHTML = `<style>

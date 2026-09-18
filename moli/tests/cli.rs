@@ -1369,6 +1369,78 @@ fn app_config_rejects_invalid_http_host_resolve_entry() {
 }
 
 #[test]
+fn app_config_rejects_prefixed_http_host_resolve_entries() {
+    for entry in [
+        "+web-platform.test:8443:127.0.0.1",
+        "-web-platform.test:8443",
+        "-web-platform.test:8443:127.0.0.1",
+    ] {
+        let option = format!("--http-host-resolve={entry}");
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "serve",
+            option.as_str(),
+        ]))
+        .unwrap();
+
+        let error = AppConfig::from_cli(&cli).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support `+` or `-` prefixes"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
+fn app_config_applies_block_cidrs() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "serve",
+        "--block-cidrs",
+        "198.18.0.0/15, 2001:db8::/32",
+    ]))
+    .unwrap();
+
+    let config = AppConfig::from_cli(&cli).unwrap();
+    let block_cidrs: Vec<_> = config
+        .browser
+        .fetch()
+        .block_cidrs()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(block_cidrs, ["198.18.0.0/15", "2001:db8::/32"]);
+}
+
+#[test]
+fn app_config_rejects_invalid_block_cidrs() {
+    for (value, expected) in [
+        (
+            "198.18.0.0/15,not-a-cidr,203.0.113.0/24",
+            "invalid --block-cidrs entry `not-a-cidr`",
+        ),
+        (
+            "198.18.0.0/15,,203.0.113.0/24",
+            "invalid --block-cidrs entry: CIDR must not be empty",
+        ),
+        ("", "invalid --block-cidrs entry: CIDR must not be empty"),
+    ] {
+        let option = format!("--block-cidrs={value}");
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "serve",
+            option.as_str(),
+        ]))
+        .unwrap();
+
+        let error = AppConfig::from_cli(&cli).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error:#}");
+    }
+}
+
+#[test]
 fn removed_cookie_cache_flag_is_rejected() {
     let error = Cli::try_parse_from(normalize_args_for_compat([
         "moli",

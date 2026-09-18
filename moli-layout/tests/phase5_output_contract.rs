@@ -974,7 +974,10 @@ fn fixed_inline_font() -> (ResolvedLayoutStyle, DocumentLayoutServices) {
 
 #[test]
 fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
-    const TEXT: &str = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+    const TEXT: &str = concat!(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa ",
+        "supercalifragilisticexpialidocious",
+    );
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
@@ -1017,12 +1020,12 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert_eq!(feedback.metrics.numeric_layout_pass_count, 2);
     assert_eq!(
         feedback.element_metrics_for_source(1).unwrap().client_size,
-        moli_layout::LayoutSize::new(85.0, 40.0),
+        moli_layout::LayoutSize::new(85.0, 25.0),
     );
     let scroller_box = feedback.source_output(1).unwrap().principal_box.unwrap();
     let extent = feedback.scroll_extent(scroller_box).unwrap();
     assert!(extent.vertical_scrollbar.is_some());
-    assert!(extent.horizontal_scrollbar.is_none());
+    assert!(extent.horizontal_scrollbar.is_some());
     let feedback_text = feedback.text_range_rects(3, 0..TEXT.encode_utf16().count());
     assert!(
         !feedback_text.is_empty(),
@@ -1059,7 +1062,8 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert!(
         feedback_text
             .iter()
-            .all(|quad| quad.points.iter().all(|point| point.x <= 85.0))
+            .any(|quad| quad.points.iter().any(|point| point.x > 85.0)),
+        "the unbreakable final word should retain horizontal overflow"
     );
 }
 

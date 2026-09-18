@@ -813,12 +813,14 @@ pub(crate) fn measure_inline_lines(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    float_line_clearances: &[f32],
 ) -> InlineLineMetrics {
     resolve_inline_lines(
         context,
         layout,
         atomic_baseline_ascents,
         structural_edge_contributions,
+        float_line_clearances,
         None,
     )
 }
@@ -828,6 +830,7 @@ pub(crate) fn build_inline_line_placements(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    float_line_clearances: &[f32],
 ) -> (Vec<InlineLinePlacement>, InlineLineMetrics) {
     let mut placements = Vec::with_capacity(layout.lines().len());
     let metrics = resolve_inline_lines(
@@ -835,6 +838,7 @@ pub(crate) fn build_inline_line_placements(
         layout,
         atomic_baseline_ascents,
         structural_edge_contributions,
+        float_line_clearances,
         Some(&mut placements),
     );
     (placements, metrics)
@@ -845,6 +849,7 @@ fn resolve_inline_lines(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    float_line_clearances: &[f32],
     mut placements: Option<&mut Vec<InlineLinePlacement>>,
 ) -> InlineLineMetrics {
     let mut result = InlineLineMetrics::default();
@@ -1098,6 +1103,16 @@ fn resolve_inline_lines(
             root_bounds.unwrap_or(fallback_root_bounds)
         };
         let line_height = bounds.height();
+        if !phantom {
+            // CSS baseline adjustment can remove phantom lines or change line
+            // heights. Keep float avoidance as a minimum top, so neither that
+            // adjustment nor Parley's height sum discards the clearance.
+            let clearance = float_line_clearances
+                .get(line_index)
+                .copied()
+                .unwrap_or(0.0);
+            preceding_adjustment += (clearance - raw_top - preceding_adjustment).max(0.0);
+        }
         let root_baseline = raw_top + preceding_adjustment - bounds.top;
 
         if !phantom {
@@ -1166,7 +1181,15 @@ fn resolve_inline_lines(
                 box_block_placements,
             });
         }
-        preceding_adjustment += line_height - (raw_bottom - raw_top);
+        // Parley already excludes an empty terminal line from layout.height().
+        // Do not subtract its inherited metrics again after an oversized atom
+        // has forced an emergency break at the end of the paragraph.
+        let measured_height = if line_index + 1 == layout.len() && line.is_empty() {
+            0.0
+        } else {
+            raw_bottom - raw_top
+        };
+        preceding_adjustment += line_height - measured_height;
         unadjusted_line_top += metrics.line_height.max(0.0);
     }
 
@@ -2333,10 +2356,11 @@ impl InlineNormalizer {
         vertical_align: InlineVerticalAlign,
     ) {
         self.flush_pending_carriage_return();
-        if matches!(
-            role,
-            InlineObjectRole::Atomic | InlineObjectRole::Float | InlineObjectRole::OutOfFlow
-        ) {
+        // Absolutely positioned descendants do not interrupt CSS whitespace
+        // collapsing or make an otherwise empty line non-empty.
+        // In particular, a hidden loading hint before an inline button must
+        // not preserve a leading space and create an extra line beside a float.
+        if matches!(role, InlineObjectRole::Atomic | InlineObjectRole::Float) {
             self.flush_pending();
             self.line_has_content = true;
         }
@@ -2721,9 +2745,9 @@ mod tests {
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         };
-        let summary = measure_inline_lines(&context, &layout, &[], &[]);
+        let summary = measure_inline_lines(&context, &layout, &[], &[], &[]);
         let (placements, materialized_summary) =
-            build_inline_line_placements(&context, &layout, &[], &[]);
+            build_inline_line_placements(&context, &layout, &[], &[], &[]);
 
         assert_eq!(summary, materialized_summary);
         assert_eq!(placements.len(), layout.lines().len());

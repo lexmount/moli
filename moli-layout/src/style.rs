@@ -1598,6 +1598,8 @@ impl ResolvedLayoutStyle {
     pub fn force_layout_display(&mut self, display: LayoutDisplay) {
         self.display = display;
         self.taffy.display = taffy_display(display);
+        self.taffy.item_is_table =
+            matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
     }
 
     /// Returns the computed CSS font size sampled for this pass.
@@ -2027,6 +2029,7 @@ impl ResolvedLayoutStyle {
             computed: parent.computed.clone(),
             taffy: Style {
                 display: taffy_display(display),
+                item_is_table: matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable),
                 ..Style::default()
             },
             preferred_aspect_ratio: PreferredAspectRatio::Auto,

@@ -1,0 +1,128 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; font: 0/0 sans-serif; }
+  table { border-spacing: 0; }
+  td { padding: 0; }
+  .dimension-owner { position: absolute; width: 200px; height: 120px; }
+  .dimension { display: block; padding: 0; border: 0; margin: 0; }
+  .author-dimension { width: 80px; height: 40px; }
+</style>
+<body>
+<script>
+  // All four phases were checked against Chrome/147.0.7709.0.
+  // Block display isolates the hint's cascade/zero semantics from table layout's
+  // minimum content sizes. The native tables below test the resulting geometry.
+  // Blink's HTMLTableColElement also inherits height from HTMLTablePartElement.
+  const dimensions = [
+    {tag:'table', fixed:[48,32], percentage:[50,60], zero:[200,0], mutated:[96,64]},
+    {tag:'col', fixed:[48,32], percentage:[50,60], zero:[0,0], mutated:[96,64]},
+    {tag:'colgroup', fixed:[48,32], percentage:[50,60], zero:[0,0], mutated:[96,64]},
+    {tag:'thead', fixed:[200,32], percentage:[200,60], zero:[200,0], mutated:[200,64]},
+    {tag:'tbody', fixed:[200,32], percentage:[200,60], zero:[200,0], mutated:[200,64]},
+    {tag:'tfoot', fixed:[200,32], percentage:[200,60], zero:[200,0], mutated:[200,64]},
+    {tag:'tr', fixed:[200,32], percentage:[200,60], zero:[200,0], mutated:[200,64]},
+  ];
+  const cases = [
+    {id:'fixed', width:'48', height:'32'},
+    {id:'percentage', width:'25%', height:'50%'},
+    {id:'zero', width:'0', height:'0'},
+    {id:'zero-percent', width:'0%', height:'0%'},
+    {id:'missing'},
+    {id:'relative', width:'10*', height:'10*'},
+    {id:'namespaced', width:'48', height:'32', namespace:'urn:dimension-test'},
+    {id:'author', width:'48', height:'32', className:'author-dimension'},
+    {id:'inline-auto', width:'48', height:'32', style:'width:auto;height:auto'},
+  ];
+  const checks = [];
+  const mutations = [];
+  for (const dimension of dimensions) {
+    for (const test of cases) {
+      const owner = document.createElement('div');
+      owner.className = 'dimension-owner';
+      const element = document.createElement(dimension.tag);
+      element.className = `dimension ${test.className || ''}`;
+      element.style.cssText = test.style || '';
+      for (const name of ['width','height']) {
+        if (test[name] !== undefined) element.setAttributeNS(test.namespace || null, name, test[name]);
+      }
+      const content = document.createElement('div');
+      content.style.cssText = 'width:10px;height:8px';
+      element.append(content);
+      owner.append(element);
+      document.body.append(owner);
+      const expected = test.id === 'author' ? [80,40]
+        : (dimension[test.id === 'zero-percent' ? 'zero' : test.id] || [200,8]);
+      checks.push({id:`${dimension.tag}-${test.id}`, element,
+        expected: test.id === 'fixed'
+          ? [expected, dimension.mutated, [200,8], dimension.zero]
+          : [expected, expected, expected, expected]});
+      if (test.id === 'fixed' || test.id === 'author') {
+        mutations.push({element, names:['width','height']});
+      }
+    }
+  }
+
+  // Native table, row and row-group hints constrain actual row geometry.
+  // Zero/removal preserves the content minimum (Chromium 147 oracle).
+  for (const tag of ['table','thead','tbody','tfoot','tr']) {
+    const table = document.createElement('table');
+    table.style.width = '200px';
+    const section = document.createElement(['thead','tbody','tfoot'].includes(tag) ? tag : 'tbody');
+    const row = document.createElement('tr');
+    row.innerHTML = '<td><div style="width:10px;height:8px"></div></td>';
+    section.append(row);
+    table.append(section);
+    const element = tag === 'table' ? table : tag === 'tr' ? row : section;
+    element.setAttribute('height','32');
+    document.body.append(table);
+    const check = {id:`native-${tag}`, element:row,
+      expected:[[200,32],[200,64],[200,8],[200,8]]};
+    checks.push(check);
+    mutations.push({element, names:['height']});
+  }
+
+  // Exercise spanning col/colgroup boxes and a group with explicit columns.
+  // In fixed layout, the latter's width does not override its children's widths.
+  // Removing the hint redistributes space; width=0 retains a zero-width column.
+  for (const variant of ['col','colgroup','colgroup-children']) {
+    const table = document.createElement('table');
+    table.style.cssText = 'width:240px;table-layout:fixed';
+    table.innerHTML = variant === 'col'
+      ? '<colgroup><col span="2" width="48"><col></colgroup>'
+      : variant === 'colgroup'
+        ? '<colgroup span="2" width="48"></colgroup><colgroup><col></colgroup>'
+        : '<colgroup width="48"><col><col></colgroup><colgroup><col></colgroup>';
+    const element = table.querySelector(variant === 'col' ? 'col' : 'colgroup');
+    const body = document.createElement('tbody');
+    body.innerHTML = '<tr style="height:8px"><td></td><td></td><td></td></tr>';
+    table.append(body);
+    document.body.append(table);
+    checks.push({id:`native-${variant}`, cells:Array.from(table.rows[0].cells),
+      expected:variant === 'colgroup-children'
+        ? [[80,80,80],[80,80,80],[80,80,80],[80,80,80]]
+        : [[48,48,144],[96,96,48],[80,80,80],[0,0,240]]});
+    mutations.push({element, names:['width']});
+  }
+
+  let dimensionPhase = 0;
+  function setTablePartDimensionPhase(phase) {
+    dimensionPhase = phase;
+    for (const {element, names} of mutations) {
+      for (const name of names) {
+        if (phase === 1) element.setAttribute(name, name === 'width' ? '96' : '64');
+        else if (phase === 2) element.removeAttribute(name);
+        else if (phase === 3) element.setAttribute(name, '0');
+      }
+    }
+  }
+  function collectTablePartDimensionChecks() {
+    return checks.map(check => {
+      const rect = check.element && check.element.getBoundingClientRect();
+      return {id:check.id,
+        actual:check.cells ? check.cells.map(cell => cell.getBoundingClientRect().width)
+          : [rect.width,rect.height],
+        expected:check.expected[dimensionPhase]};
+    });
+  }
+</script>

@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -13,6 +13,128 @@ use std::{
 
 use crate::FetchClientHandle;
 use parking_lot::Mutex;
+
+pub(super) fn spawn_socks5_proxy(
+    upstream_addr: std::net::SocketAddr,
+) -> (
+    String,
+    std_mpsc::Receiver<(String, u16)>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fetch SOCKS proxy");
+    let addr = listener.local_addr().expect("fetch SOCKS proxy address");
+    let (request_tx, request_rx) = std_mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut client, _) = listener.accept().expect("accept fetch SOCKS client");
+        let mut greeting = [0u8; 2];
+        client
+            .read_exact(&mut greeting)
+            .expect("read fetch SOCKS greeting");
+        assert_eq!(greeting[0], 5);
+        let mut methods = vec![0; usize::from(greeting[1])];
+        client
+            .read_exact(&mut methods)
+            .expect("read fetch SOCKS methods");
+        assert!(methods.contains(&0), "SOCKS client must offer no-auth");
+        client
+            .write_all(&[5, 0])
+            .expect("write fetch SOCKS method selection");
+
+        let mut request_head = [0u8; 4];
+        client
+            .read_exact(&mut request_head)
+            .expect("read fetch SOCKS request head");
+        assert_eq!(&request_head[..3], &[5, 1, 0]);
+        let host = match request_head[3] {
+            3 => {
+                let mut length = [0u8; 1];
+                client
+                    .read_exact(&mut length)
+                    .expect("read fetch SOCKS domain length");
+                let mut domain = vec![0; usize::from(length[0])];
+                client
+                    .read_exact(&mut domain)
+                    .expect("read fetch SOCKS domain");
+                String::from_utf8(domain).expect("fetch SOCKS domain should be UTF-8")
+            }
+            atyp => panic!("SOCKS5 must send a domain target, got address type {atyp}"),
+        };
+        let mut port = [0u8; 2];
+        client
+            .read_exact(&mut port)
+            .expect("read fetch SOCKS target port");
+        let port = u16::from_be_bytes(port);
+        let _ = request_tx.send((host, port));
+
+        let upstream = TcpStream::connect(upstream_addr).expect("connect fetch SOCKS upstream");
+        client
+            .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+            .expect("write fetch SOCKS success response");
+        relay_proxy_streams(client, upstream);
+    });
+    (format!("socks5://{addr}"), request_rx, handle)
+}
+
+pub(super) fn spawn_socks4_proxy(
+    upstream_addr: std::net::SocketAddr,
+) -> (
+    String,
+    std_mpsc::Receiver<(String, u16)>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fetch SOCKS4 proxy");
+    let addr = listener.local_addr().expect("fetch SOCKS4 proxy address");
+    let (request_tx, request_rx) = std_mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut client, _) = listener.accept().expect("accept fetch SOCKS4 client");
+        let mut request_head = [0u8; 8];
+        client
+            .read_exact(&mut request_head)
+            .expect("read fetch SOCKS4 request head");
+        assert_eq!(&request_head[..2], &[4, 1]);
+        assert_eq!(&request_head[4..7], &[0, 0, 0]);
+        assert_ne!(request_head[7], 0, "SOCKS4a must use a synthetic IP");
+        let port = u16::from_be_bytes([request_head[2], request_head[3]]);
+        let _user_id = read_socks4_string(&mut client, "user id");
+        let domain = read_socks4_string(&mut client, "domain");
+        let host = String::from_utf8(domain).expect("fetch SOCKS4 domain should be UTF-8");
+        let _ = request_tx.send((host, port));
+
+        let upstream = TcpStream::connect(upstream_addr).expect("connect fetch SOCKS4 upstream");
+        client
+            .write_all(&[0, 0x5a, 0, 0, 0, 0, 0, 0])
+            .expect("write fetch SOCKS4 success response");
+        relay_proxy_streams(client, upstream);
+    });
+    (format!("socks4://{addr}"), request_rx, handle)
+}
+
+fn read_socks4_string(stream: &mut TcpStream, label: &str) -> Vec<u8> {
+    let mut value = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream
+            .read_exact(&mut byte)
+            .unwrap_or_else(|error| panic!("read fetch SOCKS4 {label}: {error}"));
+        if byte[0] == 0 {
+            return value;
+        }
+        assert!(value.len() < 255, "fetch SOCKS4 {label} is too long");
+        value.push(byte[0]);
+    }
+}
+
+fn relay_proxy_streams(mut client: TcpStream, mut upstream: TcpStream) {
+    let mut client_read = client.try_clone().expect("clone fetch proxy client");
+    let mut upstream_write = upstream.try_clone().expect("clone fetch proxy upstream");
+    let upload = thread::spawn(move || {
+        let _ = std::io::copy(&mut client_read, &mut upstream_write);
+    });
+    let _ = std::io::copy(&mut upstream, &mut client);
+    let _ = client.shutdown(std::net::Shutdown::Both);
+    let _ = upstream.shutdown(std::net::Shutdown::Both);
+    let _ = upload.join();
+}
 
 pub(super) struct ScriptedH2Server {
     addr: std::net::SocketAddr,

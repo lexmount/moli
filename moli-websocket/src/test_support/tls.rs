@@ -135,11 +135,7 @@ impl TlsWebSocketFixture {
         }
     }
 
-    /// Echoes until a clean WebSocket close and returns the actual TLS peer chain.
-    pub async fn spawn(
-        &self,
-        require_identity: bool,
-    ) -> (String, JoinHandle<Result<Vec<Vec<u8>>, String>>) {
+    pub fn server_acceptor(&self, require_identity: bool) -> tokio_rustls::TlsAcceptor {
         let verifier = WebPkiClientVerifier::builder(Arc::new(self.roots.clone()));
         let verifier = if require_identity {
             verifier
@@ -153,7 +149,15 @@ impl TlsWebSocketFixture {
                 self.server_key.clone_key().into(),
             )
             .unwrap();
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        tokio_rustls::TlsAcceptor::from(Arc::new(config))
+    }
+
+    /// Echoes until a clean WebSocket close and returns the actual TLS peer chain.
+    pub async fn spawn(
+        &self,
+        require_identity: bool,
+    ) -> (String, JoinHandle<Result<Vec<Vec<u8>>, String>>) {
+        let acceptor = self.server_acceptor(require_identity);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let task = tokio::spawn(async move {

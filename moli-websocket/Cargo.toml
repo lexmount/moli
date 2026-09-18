@@ -11,7 +11,6 @@ test-support = ["dep:rcgen", "dep:openssl", "dep:tokio-tungstenite", "dep:tokio-
 base64 = "0.22"
 moli-curl = { path = "../moli-curl" }
 moli-crypto = { path = "../moli-crypto" }
-moli-dns-resolver = { path = "../moli-dns-resolver" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
 http = "1"
 moli-url = { path = "../moli-url" }

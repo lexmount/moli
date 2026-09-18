@@ -75,6 +75,12 @@ async fn computed_size_held_getters_observe_grid_sampling_without_dom_mutation()
 async fn computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand() {
     run_page_vm_async_test(async move {
         let mut page = page_with_size_fixture(GRID)?;
+        page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 320,
+            inner_height: 240,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
         page.vm_mut()
             .eval("globalThis.held=getComputedStyle(document.getElementById('target'));'held'")?;
         assert_eq!(

@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use cidr::AnyIpCidr;
 use moli_browser_profile::{BrowserIdentityProfile, DEFAULT_ACCEPT_LANGUAGE};
-use moli_curl::CurlTlsConfig;
+use moli_curl::{CurlTlsConfig, NetworkAddressPolicy};
 
 use crate::WebBotAuthSigner;
 
@@ -295,6 +295,10 @@ impl FetchConfig {
 
     pub fn block_cidrs(&self) -> &[AnyIpCidr] {
         &self.block_cidrs
+    }
+
+    pub(crate) fn network_address_policy(&self) -> NetworkAddressPolicy {
+        NetworkAddressPolicy::new(self.block_private_networks, self.block_cidrs.clone())
     }
 }
 

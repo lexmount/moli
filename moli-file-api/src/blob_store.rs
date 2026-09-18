@@ -57,7 +57,6 @@ pub struct BlobStore<OwnerId, PartitionId, AccessKey = ()> {
     blobs: Mutex<BlobEntries<OwnerId, PartitionId>>,
     next_blob_id: AtomicU64,
     object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey>>>,
-    next_object_url_id: AtomicU64,
 }
 
 impl<OwnerId, PartitionId, AccessKey> Default for BlobStore<OwnerId, PartitionId, AccessKey> {
@@ -66,7 +65,6 @@ impl<OwnerId, PartitionId, AccessKey> Default for BlobStore<OwnerId, PartitionId
             blobs: Mutex::default(),
             next_blob_id: AtomicU64::new(1),
             object_urls: Mutex::default(),
-            next_object_url_id: AtomicU64::new(1),
         }
     }
 }
@@ -87,12 +85,7 @@ where
         let blob_id = self.next_blob_id.fetch_add(1, Ordering::Relaxed).max(1);
         let mut blobs = self.blobs.lock();
         let uuid = loop {
-            let mut random_bytes = [0_u8; 16];
-            getrandom::fill(&mut random_bytes)
-                .expect("OS randomness must be available for Blob DevTools UUIDs");
-            let candidate = UuidBuilder::from_random_bytes(random_bytes)
-                .into_uuid()
-                .to_string();
+            let candidate = random_uuid();
             if !blobs.ids_by_uuid.contains_key(&candidate) {
                 break candidate;
             }
@@ -186,12 +179,14 @@ where
         access_key: Option<AccessKey>,
     ) -> Option<String> {
         self.retain_blob_object_url_ref(blob_id)?;
-        let object_url_id = self
-            .next_object_url_id
-            .fetch_add(1, Ordering::Relaxed)
-            .max(1);
-        let object_url = format!("blob:{origin}/{object_url_id}");
-        self.object_urls.lock().insert(
+        let mut object_urls = self.object_urls.lock();
+        let object_url = loop {
+            let candidate = format!("blob:{origin}/{}", random_uuid());
+            if !object_urls.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        object_urls.insert(
             object_url.clone(),
             ObjectUrlState {
                 owner_id,
@@ -327,6 +322,14 @@ where
     }
 }
 
+fn random_uuid() -> String {
+    let mut random_bytes = [0_u8; 16];
+    getrandom::fill(&mut random_bytes).expect("OS randomness must be available for Blob UUIDs");
+    UuidBuilder::from_random_bytes(random_bytes)
+        .into_uuid()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +380,17 @@ mod tests {
         let url = store
             .create_object_url(Some(1), blob_id, "https://example.test")
             .expect("object url");
+        let other_url = store
+            .create_object_url(Some(1), blob_id, "https://example.test")
+            .expect("second object url for the same Blob");
+        assert_ne!(url, other_url);
+        for object_url in [&url, &other_url] {
+            let id = object_url
+                .strip_prefix("blob:https://example.test/")
+                .unwrap();
+            let uuid = uuid::Uuid::parse_str(id).expect("object URLs use UUID identifiers");
+            assert_eq!(uuid.get_version_num(), 4);
+        }
 
         store.release_blob_wrapper_ref(blob_id);
         assert_eq!(
@@ -385,6 +399,13 @@ mod tests {
         );
 
         assert!(store.revoke_object_url(&url));
+        assert!(store.object_url_bytes_and_type(&url).is_none());
+        assert_eq!(
+            store.object_url_bytes_and_type(&other_url),
+            Some((b"hello".to_vec(), "text/plain".to_owned()))
+        );
+
+        assert!(store.revoke_object_url(&other_url));
         assert!(store.blob_bytes(blob_id).is_none());
     }
 

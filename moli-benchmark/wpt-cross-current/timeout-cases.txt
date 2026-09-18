@@ -1,6 +1,7 @@
 IndexedDB/idbfactory-databases-opaque-origin.html
 IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
 IndexedDB/idbfactory-open-opaque-origin.html
+compression/compression-large-flush-output.any.js?moli-wpt-any=window
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
 content-security-policy/embedded-enforcement/change-csp-attribute-and-history-navigation.html
@@ -29,6 +30,7 @@ content-security-policy/xslt/document-function-blocked.html
 content-security-policy/xslt/xsltprocessor-include-blocked.html
 cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
+css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-flexbox/inline-flex-column-image-load.html
 css/css-values/dynamic-viewport-units-rule-cache.html
 css/css-variables/variable-animation-from-to.html
@@ -60,7 +62,6 @@ fetch/api/policies/referrer-origin-service-worker.https.html
 fetch/api/policies/referrer-origin-when-cross-origin-service-worker.https.html
 fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/nested-focus-within-iframe-focus-event.html
-html/browsers/browsing-the-web/history-traversal/api-availability.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
@@ -201,6 +202,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
@@ -268,7 +270,6 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
-service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window

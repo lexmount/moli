@@ -986,7 +986,11 @@ impl moli_layout::GeometryProvider for ScriptVm {
     ) -> Result<moli_layout::LayoutAnswers<Self::NodeId>, moli_layout::LayoutError> {
         let needs_refresh = {
             let context_host = self._context_host.borrow();
-            !context_host.can_answer_layout_from_snapshot(context_host.document_handle())
+            !context_host.can_answer_layout_from_snapshot(
+                context_host.document_handle(),
+                reason,
+                viewport,
+            )
         };
         if needs_refresh {
             self.reconcile_document_web_fonts_for_layout();

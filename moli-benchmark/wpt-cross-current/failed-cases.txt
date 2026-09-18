@@ -22,6 +22,7 @@ content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
@@ -51,7 +52,6 @@ css/css-cascade/all-prop-revert-layer-noop.html?include=2
 css/css-cascade/all-prop-revert-layer-noop.html?include=4
 css/css-cascade/all-prop-revert-layer-noop.html?include=5
 css/css-cascade/all-prop-revert-noop.html?include=2
-css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-cascade/all-prop-revert-noop.html?include=5
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
@@ -342,10 +342,6 @@ css/css-flexbox/flexbox_rtl-direction.html
 css/css-flexbox/flexbox_rtl-flow-reverse.html
 css/css-flexbox/flexbox_rtl-flow.html
 css/css-flexbox/flexbox_rtl-order.html
-css/css-flexbox/flexbox_stf-table-caption.html
-css/css-flexbox/flexbox_stf-table-cell.html
-css/css-flexbox/flexbox_stf-table-row-group.html
-css/css-flexbox/flexbox_stf-table-row.html
 css/css-flexbox/flexbox_stf-table-singleline-2.html
 css/css-flexbox/flexbox_visibility-collapse-line-wrapping.html
 css/css-flexbox/flexbox_visibility-collapse.html
@@ -428,11 +424,8 @@ css/css-flexbox/svg-root-as-flex-item-003.html
 css/css-flexbox/svg-root-as-flex-item-004.html
 css/css-flexbox/svg-root-as-flex-item-005.html
 css/css-flexbox/table-as-item-fixed-min-width-3.html
-css/css-flexbox/table-as-item-flex-cross-size.html
 css/css-flexbox/table-as-item-large-intrinsic-size.html
-css/css-flexbox/table-as-item-stretch-cross-size-2.html
 css/css-flexbox/table-as-item-stretch-cross-size-5.html
-css/css-flexbox/table-as-item-stretch-cross-size.html
 css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-descriptor-updates-2.html
 css/css-font-loading/fontface-load-in-modal-dialog.html
@@ -521,6 +514,7 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
+css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -807,8 +801,6 @@ css/css-grid/alignment/self-baseline/grid-self-baseline-vertical-rl-006.html
 css/css-grid/alignment/self-baseline/grid-self-baseline-vertical-rl-007.html
 css/css-grid/computed-grid-column.html
 css/css-grid/firefox-bug-1881495.html
-css/css-grid/grid-definition/fr-unit-with-percentage.html
-css/css-grid/grid-definition/fr-unit.html
 css/css-grid/grid-definition/grid-auto-repeat-aspect-ratio-001.html
 css/css-grid/grid-definition/grid-auto-repeat-aspect-ratio-002.html
 css/css-grid/grid-definition/grid-auto-repeat-max-size-002.html
@@ -1471,8 +1463,6 @@ css/css-grid/grid-lanes/track-sizing/row-track-sizing-003.html
 css/css-grid/grid-lanes/track-sizing/row-track-sizing-004.html
 css/css-grid/grid-lanes/track-sizing/row-track-sizing-005.html
 css/css-grid/grid-layout-properties.html
-css/css-grid/grid-model/display-grid.html
-css/css-grid/grid-model/display-inline-grid.html
 css/css-grid/grid-model/grid-areas-overflowing-grid-container-001.html
 css/css-grid/grid-model/grid-areas-overflowing-grid-container-002.html
 css/css-grid/grid-model/grid-areas-overflowing-grid-container-003.html
@@ -3530,6 +3520,7 @@ service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
+service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/synced-state.https.html
 service-workers/service-worker/unregister-then-register-new-script.https.html
 service-workers/service-worker/unregister-then-register.https.html
@@ -3753,7 +3744,6 @@ webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
 workers/WorkerNavigator_platform.htm
-workers/modules/dedicated-worker-import-csp.html
 workers/semantics/encodings/003.html
 workers/semantics/encodings/004.html
 workers/semantics/structured-clone/dedicated.html
@@ -3786,5 +3776,4 @@ xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/status-async.htm
 xhr/status-basic.htm
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expired value before load fires
 xml/xml-prolog-accepted-versions.html

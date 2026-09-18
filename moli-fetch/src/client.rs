@@ -182,6 +182,10 @@ impl FetchClientHandle {
         self.config.http_proxy()
     }
 
+    pub fn http_host_resolve(&self) -> &[String] {
+        self.config.http_host_resolve()
+    }
+
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.config.http_no_proxy()
     }

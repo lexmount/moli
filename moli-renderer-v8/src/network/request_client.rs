@@ -963,6 +963,10 @@ impl ResourceRequestClient {
         self.resource_runtime.client().http_proxy()
     }
 
+    pub fn http_host_resolve(&self) -> &[String] {
+        self.resource_runtime.client().http_host_resolve()
+    }
+
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.resource_runtime.client().http_no_proxy()
     }

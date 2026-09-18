@@ -59,6 +59,9 @@ impl JsContextHost {
             extra_headers: self.extra_http_headers.clone(),
             http_proxy: loader.and_then(|loader| loader.http_proxy().map(ToOwned::to_owned)),
             http_no_proxy: loader.and_then(|loader| loader.http_no_proxy().map(ToOwned::to_owned)),
+            http_host_resolve: loader
+                .map(|loader| loader.http_host_resolve().to_vec())
+                .unwrap_or_default(),
             proxy_bearer_token: loader
                 .and_then(|loader| loader.proxy_bearer_token().map(ToOwned::to_owned)),
             tls: loader

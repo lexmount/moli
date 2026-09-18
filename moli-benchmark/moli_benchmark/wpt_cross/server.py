@@ -73,10 +73,13 @@ DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 XHR_RESPONSE_RESOURCE_PATHS = {
+    "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/echo-headers.py",
     "/xhr/resources/corsenabled.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
     "/fetch/api/resources/stash-take.py",
@@ -85,6 +88,11 @@ FETCH_ABORT_RESOURCE_PATHS = {
 LINK_STYLESHEET_COUNTER_PATH = (
     "/html/semantics/document-metadata/the-link-element/stylesheet.py"
 )
+JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
+JSON_LOAD_ERROR_PATH = (
+    "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
+)
+
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
@@ -1069,6 +1077,38 @@ def _wpt_delay_seconds(query: str) -> float | None:
     return delay_ms / 1_000.0
 
 
+def _xhr_inspect_headers_fixture_response(
+    query: str, raw_headers: list[tuple[str, str]]
+) -> tuple[list[tuple[str, str]], bytes]:
+    """Model xhr/resources/inspect-headers.py's raw header filtering."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    filter_value = params.get("filter_value", [""])[0].encode("latin-1")
+    filter_name = params.get("filter_name", [""])[0].encode("latin-1").lower()
+    parts = []
+    for raw_name, raw_value in raw_headers:
+        name, value = raw_name.encode("latin-1"), raw_value.encode("latin-1")
+        if filter_value:
+            if value == filter_value:
+                parts.append(name + b",")
+        elif name.lower() == filter_name:
+            parts.append(name + b": " + value + b"\n")
+    headers = []
+    if "cors" in params:
+        headers.extend([
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Credentials", "true"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
+            ("Access-Control-Allow-Headers", "x-test, x-foo"),
+            (
+                "Access-Control-Expose-Headers",
+                "x-request-method, x-request-content-type, x-request-query, "
+                "x-request-content-length",
+            ),
+        ])
+    headers.append(("content-type", "text/plain"))
+    return headers, b"".join(parts)
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1574,6 +1614,7 @@ class FetchStash:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[uuid.UUID, str] = {}
+        self._counts: dict[tuple[str, uuid.UUID], int] = {}
 
     def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
         parsed_key = uuid.UUID(key)
@@ -1581,6 +1622,14 @@ class FetchStash:
             if not overwrite and parsed_key in self._values:
                 raise ValueError("Tried to overwrite existing shared stash value")
             self._values[parsed_key] = value
+
+    def increment(self, key: str, *, path: str) -> int:
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            value = int(self._counts.get(parsed_key, 0)) + 1
+            self._counts[parsed_key] = value
+            return value
+
 
     def take(self, key: str) -> str | None:
         parsed_key = uuid.UUID(key)
@@ -1608,6 +1657,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1635,6 +1686,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1683,6 +1736,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1705,6 +1760,13 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
+            if unquote(urlparse(self.path).path) in {
+                "/xhr/resources/inspect-headers.py", "/xhr/resources/echo-headers.py",
+            }:
+                self._serve_xhr_response_resource()
+                return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
@@ -1831,6 +1893,8 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_empty_location_resource(emit_body=emit_body):
+                return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
             parsed = urlparse(self.path)
@@ -1868,6 +1932,14 @@ def _make_handler(
                 return
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
+                return
+            if path == JSON_LOAD_ERROR_PATH:
+                self._serve_script_load_error_events(
+                    parsed.query, emit_body=emit_body, json_module=True,
+                )
+                return
+            if path == JSON_THEN_JS_PATH:
+                self._serve_json_then_js(parsed.query, emit_body=emit_body)
                 return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
@@ -2361,6 +2433,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
+                return self._serve_empty_location_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             raise AttributeError(name)
@@ -2426,6 +2500,19 @@ def _make_handler(
             self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
                              status_code=status, status_text=reason)
 
+        def _serve_empty_location_resource(self, *, emit_body: bool = True) -> bool:
+            if unquote(urlparse(self.path).path) != FETCH_EMPTY_LOCATION_PATH:
+                return False
+            # The upstream handler ignores request data and responds immediately.
+            # Close the connection so an unfinished upload is never another request.
+            self.close_connection = True
+            self._send_bytes(
+                None, b"", emit_body=emit_body, status_code=302,
+                extra_headers=[("Connection", "close"), ("Location", "")],
+                cache_control=None,
+            )
+            return True
+
         def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2435,7 +2522,16 @@ def _make_handler(
                 self._serve_xhr_cors_echo(parsed, emit_body=emit_body)
                 return True
             try:
-                if path == "/xhr/resources/status.py":
+                if path == "/xhr/resources/inspect-headers.py":
+                    status, reason, content_type = 200, None, None
+                    headers, body = _xhr_inspect_headers_fixture_response(
+                        parsed.query, list(self.headers.raw_items()),
+                    )
+                elif path == "/xhr/resources/echo-headers.py":
+                    status, reason, content_type = 200, None, "text/plain"
+                    headers = []
+                    body = str(self.headers).encode("utf-8")
+                elif path == "/xhr/resources/status.py":
                     status, reason, content_type, body = _fetch_status_response(parsed.query)
                     headers = [("X-Request-Method", self.command)]
                 else:
@@ -2577,19 +2673,39 @@ def _make_handler(
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 
-        def _serve_script_load_error_events(self, query: str, *, emit_body: bool) -> None:
+        def _serve_json_then_js(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            try:
+                count = fetch_stash.increment(params["key"][0], path=JSON_THEN_JS_PATH)
+            except (KeyError, ValueError):
+                self.send_error(400, "Not enough parameters")
+                return
+            if count == 1:
+                content_type, body = "text/json", b'{"hello": "world"}'
+            else:
+                content_type, body = "application/javascript", b"export default 'hello';"
+            self._send_bytes(content_type, body, emit_body=emit_body, cache_control=None)
+
+
+        def _serve_script_load_error_events(
+            self, query: str, *, emit_body: bool, json_module: bool = False,
+        ) -> None:
             params = parse_qs(query, keep_blank_values=True)
             test = params.get("test", [""])[0]
             if re.fullmatch(r"[a-zA-Z0-9_]+", test) is None:
-                self.send_error(400)
+                self.send_error(500 if json_module else 400)
                 return
             if "_load" in test:
                 status = 200
-                body = f'"use strict"; {test}.executed = true;'
+                prefix = 'import "./module.json" with { type: "json"};' if json_module else '"use strict";'
+                body = f'{prefix} {test}.executed = true;'
             else:
-                status = 404
+                # The JSON fixture serves a valid module whose dependency
+                # fetch fails; the classic fixture itself returns 404.
+                status = 200 if json_module else 404
+                prefix = 'import "./not_found.json" with { type: "json"};' if json_module else '"use strict";'
                 body = (
-                    f'"use strict"; {test}.test.step(function() {{ '
+                    f'{prefix} {test}.test.step(function() {{ '
                     'assert_unreached("404 script should not be executed"); });'
                 )
             self._send_bytes(

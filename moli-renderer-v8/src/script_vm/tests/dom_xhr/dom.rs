@@ -2422,7 +2422,7 @@ fn parser_coalesced_text_notifies_main_and_child_mutation_observers() {
     );
 }
 #[test]
-fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
+fn point_queries_refresh_geometry_only_when_viewport_changes() {
     use moli_layout::{
         GeometryProvider, LayoutFlushReason, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
         LayoutQueryBatch, LayoutViewport,
@@ -2457,7 +2457,13 @@ fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
             point: LayoutPoint::new(150.0, 20.0),
         },
     ]);
-    for (width, expect_hit) in [(320, true), (100, false), (320, true)] {
+    for (width, expect_hit, expected_passes) in [
+        (320, true, 1),
+        (320, true, 1),
+        (100, false, 2),
+        (100, false, 2),
+        (320, true, 3),
+    ] {
         let answers = GeometryProvider::answer(
             &mut *vm,
             LayoutFlushReason::HitTest,
@@ -2485,9 +2491,255 @@ fn point_queries_use_current_viewport_bounds_with_reused_geometry() {
         assert_eq!(position.is_some(), expect_hit);
         assert_eq!(
             vm.layout_pass_observability_for_test().1,
-            before + 1,
-            "cold queries still prepare layout; later viewport checks reuse it"
+            before + expected_passes,
+            "viewport changes refresh geometry; same-viewport queries reuse it"
         );
+    }
+}
+
+#[test]
+fn point_queries_refresh_geometry_when_viewport_expands() {
+    use moli_layout::{
+        GeometryProvider, LayoutFlushReason, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
+        LayoutQueryBatch, LayoutViewport,
+    };
+
+    for (initial_size, expanded_size, point) in [
+        ((100, 200), (320, 200), LayoutPoint::new(150.0, 20.0)),
+        ((320, 100), (320, 200), LayoutPoint::new(20.0, 150.0)),
+        ((320, 100), (100, 200), LayoutPoint::new(20.0, 150.0)),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://point-query-viewport-expansion.test/",
+            "<html><body style='margin:0'><div style='width:300px;height:300px'></div></body></html>",
+        );
+        let before = vm.layout_pass_observability_for_test().1;
+        let batch = LayoutQueryBatch::new(vec![
+            LayoutQuery::HitTest {
+                point,
+                ignore_pointer_events_none: false,
+            },
+            LayoutQuery::HitTestAll {
+                point,
+                ignore_pointer_events_none: false,
+            },
+            LayoutQuery::CaretPosition { point },
+        ]);
+        for ((width, height), expect_hit, expected_passes) in [
+            (initial_size, false, 1),
+            (expanded_size, true, 2),
+            (expanded_size, true, 2),
+        ] {
+            let answers = GeometryProvider::answer(
+                &mut *vm,
+                LayoutFlushReason::HitTest,
+                LayoutViewport::new(width, height, 1.0),
+                &batch,
+            )
+            .expect("point query batch after viewport expansion");
+            assert_eq!(
+                matches!(answers.answers[0], LayoutQueryAnswer::HitTest(Some(_))),
+                expect_hit,
+                "point {point:?} in {width}x{height} after {initial_size:?}"
+            );
+            let LayoutQueryAnswer::HitTestAll(hits) = &answers.answers[1] else {
+                panic!("expected hit list")
+            };
+            assert_eq!(!hits.is_empty(), expect_hit);
+            let LayoutQueryAnswer::CaretPosition(position) = &answers.answers[2] else {
+                panic!("expected caret position")
+            };
+            assert_eq!(position.is_some(), expect_hit);
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + expected_passes,
+                "expansion must rebuild once; repeated queries reuse the expanded tree"
+            );
+        }
+    }
+}
+
+#[test]
+fn document_point_queries_refresh_responsive_geometry_after_viewport_resize() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-point-query-viewport-expansion.test/",
+        "<html><body style='margin:0'><div id='target' style='width:50vw;height:100px'></div></body></html>",
+    );
+    let before = vm.layout_pass_observability_for_test().1;
+    let mut completed_passes = before;
+    for (width, expected, expected_passes) in [
+        (100, "[false,false,50]", 1),
+        (320, "[true,true,160]", 2),
+        (100, "[false,false,50]", 3),
+        (320, "[true,true,160]", 4),
+        (320, "[true,true,160]", 4),
+    ] {
+        vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: width,
+            inner_height: 200,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))
+        .expect("point query viewport should update");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            completed_passes,
+            "changing the viewport alone must not trigger layout"
+        );
+        let result = vm
+            .eval(
+                r#"JSON.stringify([
+                    document.elementFromPoint(75, 20)?.id === 'target',
+                    document.elementsFromPoint(75, 20).some(element => element.id === 'target'),
+                    document.getElementById('target').getBoundingClientRect().width
+                ])"#,
+            )
+            .expect("document point queries after viewport resize");
+        assert_eq!(result, expected, "viewport width {width}");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            before + expected_passes,
+            "both expanding and shrinking refresh the viewport-dependent geometry"
+        );
+        completed_passes = before + expected_passes;
+    }
+}
+
+#[test]
+fn geometry_queries_refresh_after_screen_and_resolution_environment_changes() {
+    // Exercise each entry point without first warming the other layout mode.
+    for hit_test in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://geometry-screen-environment.test/",
+            r#"<html><head><style>
+                body { margin: 0 }
+                #target { width: 100px; height: 100px }
+                @media (device-width: 1280px), (device-height: 720px), (resolution: 2dppx) {
+                    #target { width: 200px }
+                }
+            </style></head><body><div id=target></div></body></html>"#,
+        );
+        let mut surface = crate::protocol_types::ViewportSurface {
+            inner_width: 800,
+            inner_height: 600,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        };
+        let before = vm.layout_pass_observability_for_test().1;
+        for (screen_width, screen_height, dpr, expected_width, expected_passes) in [
+            (1920, 1080, 1.0, 100, 1),
+            (1280, 1080, 1.0, 200, 2),
+            (1280, 1080, 1.0, 200, 2),
+            (1920, 1080, 1.0, 100, 3),
+            (1920, 720, 1.0, 200, 4),
+            (1920, 720, 1.0, 200, 4),
+            (1920, 1080, 1.0, 100, 5),
+            (1920, 1080, 2.0, 200, 6),
+            (1920, 1080, 2.0, 200, 6),
+            (1920, 1080, 1.0, 100, 7),
+        ] {
+            surface.screen_width = screen_width;
+            surface.screen_height = screen_height;
+            surface.device_pixel_ratio = dpr;
+            // Moving the window changes the surface but not the style environment.
+            surface.window_x += 1;
+            let passes = vm.layout_pass_observability_for_test().1;
+            let cache = vm.layout_snapshot_cache_observability_for_test();
+            vm.set_viewport_surface(Some(surface))
+                .expect("screen environment should update");
+            assert_eq!(vm.layout_snapshot_cache_observability_for_test(), cache);
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                passes,
+                "an environment update alone must not trigger layout"
+            );
+            let result = vm
+                .eval(if hit_test {
+                    r#"JSON.stringify([
+                        document.elementFromPoint(150, 20)?.id === 'target',
+                        document.elementsFromPoint(150, 20).some(element => element.id === 'target'),
+                        document.getElementById('target').getBoundingClientRect().width
+                    ])"#
+                } else {
+                    "String(document.getElementById('target').getBoundingClientRect().width)"
+                })
+                .expect("geometry query after screen environment update");
+            let hit = expected_width == 200;
+            let expected = if hit_test {
+                format!("[{hit},{hit},{expected_width}]")
+            } else {
+                expected_width.to_string()
+            };
+            assert_eq!(
+                result, expected,
+                "screen {screen_width}x{screen_height}, DPR {dpr}"
+            );
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + expected_passes,
+                "screen/resolution changes refresh once; unchanged style inputs reuse the tree"
+            );
+        }
+    }
+}
+
+#[test]
+fn geometry_queries_refresh_after_media_environment_changes() {
+    use crate::protocol_types::EmulatedMediaOverrides;
+
+    for overrides in [
+        EmulatedMediaOverrides {
+            media: Some("print".to_owned()),
+            ..Default::default()
+        },
+        EmulatedMediaOverrides {
+            color_scheme: Some("dark".to_owned()),
+            ..Default::default()
+        },
+        EmulatedMediaOverrides {
+            reduced_motion: Some("reduce".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://geometry-media-environment.test/",
+            r#"<html><head><style>
+                body { margin: 0 }
+                #target { width: 100px; height: 100px }
+                @media print, (prefers-color-scheme: dark), (prefers-reduced-motion: reduce) {
+                    #target { width: 200px }
+                }
+            </style></head><body><div id=target></div></body></html>"#,
+        );
+        let defaults = EmulatedMediaOverrides::default();
+        let before = vm.layout_pass_observability_for_test().1;
+        for (environment, expected_width, expected_passes) in [
+            (&defaults, 100, 1),
+            (&overrides, 200, 2),
+            (&overrides, 200, 2),
+            (&defaults, 100, 3),
+        ] {
+            let passes = vm.layout_pass_observability_for_test().1;
+            vm.set_emulated_media(environment);
+            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            let result = vm
+                .eval(
+                    r#"JSON.stringify([
+                        document.elementFromPoint(150, 20)?.id === 'target',
+                        document.getElementById('target').getBoundingClientRect().width
+                    ])"#,
+                )
+                .expect("geometry query after media environment update");
+            assert_eq!(
+                result,
+                format!("[{},{}]", expected_width == 200, expected_width)
+            );
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + expected_passes,
+                "media changes refresh once; repeated queries reuse the new environment"
+            );
+        }
     }
 }
 
@@ -8393,6 +8645,13 @@ fn inner_text_refreshes_new_sources_on_demand_without_waiting_for_paint() {
         "https://inner-text-latest-layout.test/",
         "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
     );
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 320,
+        inner_height: 200,
+        device_pixel_ratio: 1.0,
+        ..Default::default()
+    }))
+    .expect("innerText viewport should match the paint layout");
     let passes_before = vm.layout_pass_observability_for_test().1;
     let cache_before = vm.layout_snapshot_cache_observability_for_test();
 

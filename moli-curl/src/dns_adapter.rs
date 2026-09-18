@@ -8,41 +8,89 @@ use curl::{
 };
 use moli_dns_resolver::{DnsCachePartition, DnsLookupResult, DnsResolverService, DnsTarget};
 
+use crate::NetworkAddressPolicy;
+
 /// Curl-side policy for DNS ownership before a transfer enters the multi set.
 ///
-/// `origin == None` means curl owns name resolution. `Some` means the transfer
+/// `endpoint == None` means no shared endpoint lookup is required. The configured
+/// curl handle may already have a fixed address, use an IP literal or proxy, or
+/// deliberately retain libcurl's resolver behavior. `Some` means the transfer
 /// must first wait in [`CurlDnsOwnerResidence`]. After that residence installs
-/// the exact address list with `CURLOPT_RESOLVE`, this object transitions back
-/// to curl-managed so a requeued transfer cannot resolve twice.
+/// the exact address list with `CURLOPT_RESOLVE`, the shared lookup is consumed
+/// so a requeued transfer cannot resolve twice.
 #[derive(Debug)]
 pub struct CurlDnsResolution {
-    origin: Option<Box<CurlDnsOriginResolution>>,
+    endpoint: Option<Box<CurlDnsEndpointResolution>>,
 }
 
 #[derive(Debug)]
-struct CurlDnsOriginResolution {
+struct CurlDnsEndpointResolution {
     target: DnsTarget,
     /// Existing caller-provided `CURLOPT_RESOLVE` entries that must remain
-    /// installed when the generated origin answer is added.
+    /// installed when the generated endpoint answer is added.
     static_entries: Vec<String>,
+    address_policy: NetworkAddressPolicy,
+    policy_target: String,
 }
 
 impl CurlDnsResolution {
-    pub fn curl_managed() -> Self {
-        Self { origin: None }
+    /// Creates a policy that does not request Moli's shared endpoint resolver.
+    ///
+    /// This keeps `moli-curl` transport-neutral: callers may use an IP literal,
+    /// preconfigure `CURLOPT_RESOLVE`, delegate the target to a proxy, or retain
+    /// libcurl's resolver behavior.
+    pub fn no_shared_resolution() -> Self {
+        Self { endpoint: None }
     }
 
-    pub fn resolve_origin(target: DnsTarget, static_entries: Vec<String>) -> Self {
+    #[deprecated(
+        note = "use `no_shared_resolution`; no shared lookup does not necessarily mean curl performs DNS"
+    )]
+    pub fn curl_managed() -> Self {
+        Self::no_shared_resolution()
+    }
+
+    pub fn resolve_endpoint(target: DnsTarget, static_entries: Vec<String>) -> Self {
+        let policy_target = format!("{}:{}", target.host(), target.port());
         Self {
-            origin: Some(Box::new(CurlDnsOriginResolution {
+            endpoint: Some(Box::new(CurlDnsEndpointResolution {
                 target,
                 static_entries,
+                address_policy: NetworkAddressPolicy::default(),
+                policy_target,
             })),
         }
     }
 
+    #[deprecated(note = "use `resolve_endpoint`; shared DNS may resolve a proxy endpoint")]
+    pub fn resolve_origin(target: DnsTarget, static_entries: Vec<String>) -> Self {
+        Self::resolve_endpoint(target, static_entries)
+    }
+
+    /// Applies address admission to the shared-resolver result before it is
+    /// installed on curl. The target text is retained for actionable errors.
+    pub fn with_network_address_policy(
+        mut self,
+        address_policy: NetworkAddressPolicy,
+        policy_target: impl Into<String>,
+    ) -> Self {
+        self.set_network_address_policy(address_policy, policy_target);
+        self
+    }
+
+    pub(crate) fn set_network_address_policy(
+        &mut self,
+        address_policy: NetworkAddressPolicy,
+        policy_target: impl Into<String>,
+    ) {
+        if let Some(resolution) = self.endpoint.as_mut() {
+            resolution.address_policy = address_policy;
+            resolution.policy_target = policy_target.into();
+        }
+    }
+
     pub(crate) fn target(&self) -> Option<&DnsTarget> {
-        self.origin.as_ref().map(|resolution| &resolution.target)
+        self.endpoint.as_ref().map(|resolution| &resolution.target)
     }
 
     /// Installs a successful shared-resolver answer and consumes that policy.
@@ -51,9 +99,15 @@ impl CurlDnsResolution {
         easy: &mut Easy2<H>,
         addresses: &[IpAddr],
     ) -> Result<()> {
-        let Some(resolution) = self.origin.as_ref() else {
+        let Some(resolution) = self.endpoint.as_ref() else {
             return Ok(());
         };
+        resolution
+            .address_policy
+            .check_addresses(addresses, &resolution.policy_target)?;
+        // Preserve the complete checked answer. Filtering forbidden addresses
+        // would change curl's selection/fallback semantics, while resolving a
+        // second time would reopen the DNS-rebinding TOCTOU window.
         let mut resolve = List::new();
         for entry in &resolution.static_entries {
             resolve
@@ -78,7 +132,10 @@ impl CurlDnsResolution {
         })?;
         easy.resolve(resolve)
             .context("failed to install shared DNS result on curl request")?;
-        self.origin = None;
+        // CURLOPT_RESOLVE entries without `+` are permanent for this easy
+        // handle. Consuming the endpoint also prevents a requeued job from
+        // issuing a second lookup before it enters curl.
+        self.endpoint = None;
         Ok(())
     }
 }
@@ -247,16 +304,44 @@ mod tests {
     }
 
     #[test]
-    fn installed_origin_transitions_back_to_curl_managed() {
+    fn installed_endpoint_consumes_shared_resolution() {
         let target = DnsTarget::new("example.test", 443);
-        let mut policy = CurlDnsResolution::resolve_origin(target.clone(), Vec::new());
+        let mut policy = CurlDnsResolution::resolve_endpoint(target.clone(), Vec::new());
         let mut easy = Easy2::new(TestHandler);
 
         assert_eq!(policy.target(), Some(&target));
         policy
             .install(&mut easy, &[IpAddr::from([127, 0, 0, 1])])
-            .expect("resolved origin should install on curl");
+            .expect("resolved endpoint should install on curl");
         assert_eq!(policy.target(), None);
+    }
+
+    #[test]
+    fn blocked_address_prevents_installing_the_complete_dns_answer() {
+        let target = DnsTarget::new("example.test", 443);
+        let mut resolution = CurlDnsResolution::resolve_endpoint(target.clone(), Vec::new())
+            .with_network_address_policy(
+                NetworkAddressPolicy::new(true, Vec::new()),
+                "https://example.test/",
+            );
+        let mut easy = Easy2::new(TestHandler);
+
+        let error = resolution
+            .install(
+                &mut easy,
+                &[
+                    IpAddr::from([93, 184, 216, 34]),
+                    IpAddr::from([127, 0, 0, 1]),
+                ],
+            )
+            .expect_err("one private answer must reject the complete DNS result");
+
+        assert!(error.to_string().contains("127.0.0.1"));
+        assert_eq!(
+            resolution.target(),
+            Some(&target),
+            "a rejected answer must never transition to an installed state"
+        );
     }
 
     #[test]

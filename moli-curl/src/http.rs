@@ -45,9 +45,10 @@ pub struct CurlMultiJob<H: Handler, C> {
     pub deadline: Option<Instant>,
     /// DNS ownership chosen by the caller before this transfer enters curl.
     ///
-    /// A curl-managed policy preserves libcurl's resolver behavior. A shared
-    /// origin policy parks the transfer outside the curl multi handle set until
-    /// the bounded system resolver publishes an answer.
+    /// A no-shared-resolution policy leaves the already configured curl handle
+    /// in charge of routing; it may need no DNS lookup at all. A shared-endpoint
+    /// policy parks the transfer outside the curl multi handle set until the
+    /// bounded system resolver publishes an answer.
     pub dns_resolution: CurlDnsResolution,
     /// Higher values start before lower values when jobs are queued.
     pub priority: u8,

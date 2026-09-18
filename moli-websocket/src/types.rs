@@ -5,6 +5,7 @@ pub struct ConnectOptions {
     pub extra_headers: Vec<(String, String)>,
     pub http_proxy: Option<String>,
     pub http_no_proxy: Option<String>,
+    pub http_host_resolve: Vec<String>,
     pub proxy_bearer_token: Option<String>,
     pub tls: moli_curl::CurlTlsConfig,
     pub cookie_header: Option<String>,

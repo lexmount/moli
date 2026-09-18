@@ -9271,6 +9271,9 @@ async fn nested_worker_unhandled_error_routes_through_parent_worker_onerror() {
 #[tokio::test]
 async fn nested_worker_script_load_failure_is_async_error_event() {
     ensure_v8();
+    // Produce a network failure locally instead of depending on DNS failure
+    // timing for example.test to deliver the asynchronous error event.
+    let (base_url, server) = spawn_connection_drop_http_server("/missing-child.js").await;
     let mut handle = spawn_worker(
         r#"
         let result = "not-run";
@@ -9293,7 +9296,7 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
         }
         "#
         .into(),
-        "http://example.test/parent.js".into(),
+        format!("{base_url}/parent.js"),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -9302,8 +9305,14 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"http://example.test/missing-child.js"}"#
+        format!(
+            r#"{{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"{base_url}/missing-child.js"}}"#
+        )
     );
+    timeout(TIMEOUT, server)
+        .await
+        .expect("timed out waiting for nested worker script request")
+        .expect("nested worker script server should finish");
 }
 
 #[tokio::test]

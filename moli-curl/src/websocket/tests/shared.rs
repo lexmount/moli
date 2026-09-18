@@ -56,7 +56,7 @@ fn request(url: &str, handler: HttpCapture, timeout: Duration) -> CurlMultiJob<H
             port: url.port_or_known_default(),
         }),
         deadline: Some(std::time::Instant::now() + timeout),
-        dns_resolution: CurlDnsResolution::curl_managed(),
+        dns_resolution: CurlDnsResolution::no_shared_resolution(),
         priority: 1,
         label: "mixed test".to_owned(),
     }

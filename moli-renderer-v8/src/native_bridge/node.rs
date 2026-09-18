@@ -1344,12 +1344,15 @@ pub(crate) fn node_relevant_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Context>> {
-    node_runtime_and_handle_from_object(scope, object)
-        .ok()
-        .and_then(|(runtime_ptr, handle)| {
-            node_owner_document_relevant_context(scope, runtime_ptr, handle)
-        })
-        .or_else(|| object.get_creation_context(scope))
+    // Wrappers are created in their owning realm. In particular an isolated
+    // world's Document must not resolve back to the frame's default context.
+    object.get_creation_context(scope).or_else(|| {
+        node_runtime_and_handle_from_object(scope, object)
+            .ok()
+            .and_then(|(runtime_ptr, handle)| {
+                node_owner_document_relevant_context(scope, runtime_ptr, handle)
+            })
+    })
 }
 
 pub(super) fn node_arg_handle(

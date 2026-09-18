@@ -45,7 +45,7 @@ use crate::runtime::{
 };
 use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
-    utf16_previous_scalar_boundary, utf16_units,
+    utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
 };
 
 fn related_target_value<'s>(
@@ -2161,25 +2161,20 @@ impl ScriptVm {
             if target.is_text_control && matches!(key_lower.as_str(), "backspace" | "delete") {
                 let value_units = utf16_units(&text_control_value(runtime, handle));
                 let (start, end) = current_selection_range(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 let (from, to) = if start != end {
                     (start, end)
+                } else if key_lower == "backspace" {
+                    (
+                        utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
+                        start,
+                    )
                 } else {
-                    let caret = if start == 0 {
-                        0
-                    } else {
-                        utf16_next_scalar_boundary(&value_units, start as usize - 1) as u32
-                    };
-                    if key_lower == "backspace" {
-                        (
-                            utf16_previous_scalar_boundary(&value_units, caret as usize) as u32,
-                            caret,
-                        )
-                    } else {
-                        (
-                            caret,
-                            utf16_next_scalar_boundary(&value_units, caret as usize) as u32,
-                        )
-                    }
+                    (
+                        start,
+                        utf16_next_scalar_boundary(&value_units, start as usize) as u32,
+                    )
                 };
                 if from == to {
                     return Ok(input_dispatch_outcome(true));
@@ -2236,6 +2231,8 @@ impl ScriptVm {
                 let value_units = utf16_units(&text_control_value(runtime, handle));
                 let value_len = value_units.len() as u32;
                 let (start, end, direction) = current_selection_state(runtime, handle);
+                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
                 if shift {
                     let (anchor, focus) = match direction.as_str() {
                         "backward" => (end, start),
@@ -2253,6 +2250,14 @@ impl ScriptVm {
                         "end" => value_len,
                         _ => focus,
                     };
+                    if next_focus == focus
+                        && matches!(
+                            key_lower.as_str(),
+                            "arrowleft" | "left" | "arrowright" | "right"
+                        )
+                    {
+                        return Ok(input_dispatch_outcome(true));
+                    }
                     let (next_start, next_end, next_direction) = if next_focus < anchor {
                         (next_focus, anchor, "backward")
                     } else if next_focus > anchor {
@@ -2289,6 +2294,15 @@ impl ScriptVm {
                     "end" => value_len,
                     _ => end,
                 };
+                if start == end
+                    && caret == start
+                    && matches!(
+                        key_lower.as_str(),
+                        "arrowleft" | "left" | "arrowright" | "right"
+                    )
+                {
+                    return Ok(input_dispatch_outcome(true));
+                }
                 let _ = text_control_set_selection_range_internal(
                     scope,
                     runtime_ptr,

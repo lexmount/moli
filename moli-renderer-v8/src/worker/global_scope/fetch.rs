@@ -1302,6 +1302,7 @@ pub(crate) fn register_worker_websocket<'s>(
             .request_client()
             .http_no_proxy()
             .map(ToOwned::to_owned),
+        http_host_resolve: loader.request_client().http_host_resolve().to_vec(),
         proxy_bearer_token: loader
             .request_client()
             .proxy_bearer_token()

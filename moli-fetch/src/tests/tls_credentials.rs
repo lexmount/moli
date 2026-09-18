@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use moli_cookie_jar::new_shared_browser_cookie_store;
 use parking_lot::Mutex;
 use rcgen::{
@@ -12,6 +12,7 @@ use tokio::{
     net::TcpListener,
     sync::oneshot,
     task::{JoinHandle, JoinSet},
+    time::{Duration, timeout},
 };
 use tokio_rustls::{
     TlsAcceptor,
@@ -120,6 +121,85 @@ struct TlsServer {
     url: Url,
     requests: Arc<Mutex<Vec<ObservedRequest>>>,
     task: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+struct ObservedHttpsProxyRequest {
+    request_head: String,
+    server_name: Option<String>,
+    client_certificates: Vec<CertificateDer<'static>>,
+}
+
+struct HttpsProxy {
+    url: String,
+    task: Option<JoinHandle<Result<ObservedHttpsProxyRequest>>>,
+}
+
+impl HttpsProxy {
+    async fn spawn(credentials: &TlsCredentials) -> Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let acceptor = credentials.acceptor.clone();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut stream = acceptor.accept(stream).await?;
+            let server_name = stream.get_ref().1.server_name().map(str::to_owned);
+            let client_certificates = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .unwrap_or_default()
+                .to_vec();
+            let mut request_head = Vec::new();
+            while !request_head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                if stream.read(&mut byte).await? == 0 {
+                    bail!("HTTPS proxy client closed before completing its request");
+                }
+                request_head.push(byte[0]);
+                if request_head.len() > 64 * 1024 {
+                    bail!("HTTPS proxy request headers are too large");
+                }
+            }
+            let body = b"through-https-proxy";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            stream.write_all(body).await?;
+            stream.flush().await?;
+            Ok(ObservedHttpsProxyRequest {
+                request_head: String::from_utf8(request_head)?,
+                server_name,
+                client_certificates,
+            })
+        });
+        Ok(Self {
+            url: format!("https://localhost:{port}"),
+            task: Some(task),
+        })
+    }
+
+    async fn finish(mut self) -> Result<ObservedHttpsProxyRequest> {
+        let task = self
+            .task
+            .take()
+            .expect("HTTPS proxy task should be present");
+        timeout(Duration::from_secs(5), task).await??
+    }
+}
+
+impl Drop for HttpsProxy {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl TlsServer {
@@ -233,6 +313,39 @@ impl Transport {
         assert_eq!(body, "ok");
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn https_proxy_uses_shared_dns_and_proxy_hostname_tls() -> Result<()> {
+    let credentials = TlsCredentials::new()?;
+    let proxy = HttpsProxy::spawn(&credentials).await?;
+    let mut config = credentials.fetch_config();
+    config.set_http_proxy(Some(proxy.url.clone()));
+    config.set_http_no_proxy(Some(String::new()));
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+
+    let response = client
+        .fetch(Request::get(
+            "http://fetch-target.invalid/through-https-proxy",
+        )?)
+        .await?;
+    assert_eq!(response.body_text(), "through-https-proxy");
+    assert!(client.shutdown().is_clean());
+
+    let observed = proxy.finish().await?;
+    assert_eq!(observed.server_name.as_deref(), Some("localhost"));
+    assert!(
+        observed
+            .request_head
+            .starts_with("GET http://fetch-target.invalid/through-https-proxy HTTP/1.1\r\n"),
+        "unexpected HTTPS proxy request: {:?}",
+        observed.request_head
+    );
+    assert!(
+        observed.client_certificates.is_empty(),
+        "origin client identity must not be sent to the HTTPS proxy"
+    );
+    Ok(())
 }
 
 #[tokio::test]

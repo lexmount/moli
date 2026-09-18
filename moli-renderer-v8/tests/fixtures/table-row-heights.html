@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+html,body { margin:0; padding:0; }
+/* The CDP Chromium oracle uses --hide-scrollbars. Keep the numeric fixtures
+   independent of the host's classic/overlay scrollbar configuration. */
+* { scrollbar-width:none; }
+.case { position:absolute; left:0; top:0; width:240px; height:240px; }
+table { border-spacing:0; width:200px; table-layout:fixed; }
+td,th { padding:0; border:0; font-size:0; line-height:0; }
+</style>
+<script>
+// Font-independent geometry corpus. The adjacent JSON is recorded by
+// scripts/table-row-height-chromium-differential.py, not calculated by Moli.
+const row = (height, style='') => `<tr style="${style}"><td><div style="height:${height}px;width:10px"></div></td></tr>`;
+const cases = [];
+function add(name, contents, tableStyle='', ownerStyle='', wrapperStyle='') {
+  const owner = document.createElement('div');
+  owner.className = 'case';
+  owner.style.cssText += ownerStyle;
+  owner.innerHTML = `<div class="wrapper"><table style="${tableStyle}">${contents}</table><div class="after" style="height:3px"></div></div>`;
+  owner.querySelector('.wrapper').style.cssText = wrapperStyle;
+  document.body.append(owner);
+  cases.push({name, owner});
+}
+function addMarkup(name, markup, ownerStyle='') {
+  const owner = document.createElement('div');
+  owner.className = 'case';
+  owner.style.fontSize = '0';
+  owner.style.lineHeight = '0';
+  owner.style.cssText += ownerStyle;
+  owner.innerHTML = markup;
+  document.body.append(owner);
+  cases.push({name, owner});
+}
+function buildTableRowHeightCases() {
+  for (const tag of ['thead','tbody','tfoot']) {
+    add(`${tag}-fixed`, `<${tag} height="80">${row(10)}${row(30)}</${tag}>`);
+    add(`${tag}-minimum`, `<${tag} style="height:20px">${row(10)}${row(30)}</${tag}>`);
+  }
+  add('fixed-and-auto-rows', `<tbody style="height:80px">${row(10,'height:10px')}${row(30)}</tbody>`);
+  add('empty-rows', '<tbody style="height:90px"><tr><td></td></tr><tr><td></td></tr><tr><td></td></tr></tbody>');
+  add('empty-and-fixed', `<tbody style="height:80px">${row(10,'height:10px')}<tr><td></td></tr></tbody>`);
+  add('group-order', `<tfoot style="height:10px">${row(5)}</tfoot><tbody>${row(20)}</tbody><thead style="height:20px">${row(5)}</thead>`, 'height:100px');
+  add('multiple-bodies', `<tbody style="height:30px">${row(10)}</tbody><tbody>${row(20)}${row(10)}</tbody>`, 'height:120px');
+  add('fixed-bodies', `<tbody style="height:30px">${row(10)}</tbody><tbody style="height:60px">${row(20)}</tbody>`, 'height:180px');
+  add('percentage-groups', `<thead style="height:50%">${row(10)}</thead><tbody style="height:50%">${row(60)}</tbody><tfoot style="height:50%">${row(10)}</tfoot>`, 'height:100px');
+  add('percentage-rows', `<tbody>${row(10,'height:25%')}${row(10,'height:50%')}${row(10)}</tbody>`, 'height:120px');
+  add('percentage-overflow', `<tbody>${row(10,'height:80%')}${row(10,'height:80%')}${row(10)}</tbody>`, 'height:100px');
+  add('percentage-fixed-group', `<tbody style="height:100px">${row(10,'height:60%')}${row(10)}</tbody>`);
+  add('percentage-auto-table', `<tbody style="height:70%">${row(10,'height:60%')}${row(30)}</tbody>`);
+  add('percentage-table', `<tbody style="height:60%">${row(10)}</tbody><tbody>${row(10)}</tbody>`, 'height:50%');
+  add('minimum-table', `<tbody>${row(10)}${row(30)}</tbody>`, 'min-height:100px');
+  add('rowspan-auto', '<tbody><tr><td rowspan="2"><div style="height:80px"></div></td><td><div style="height:10px"></div></td></tr><tr><td><div style="height:30px"></div></td></tr></tbody>');
+  add('rowspan-group', '<tbody style="height:120px"><tr><td rowspan="2"><div style="height:80px"></div></td><td><div style="height:10px"></div></td></tr><tr><td><div style="height:30px"></div></td></tr></tbody>');
+  add('rowspan-empty', '<tbody><tr><td rowspan="3" style="height:90px"></td><td></td></tr><tr><td></td></tr><tr><td></td></tr></tbody>');
+  add('rowspan-zero', '<tbody style="height:80px"><tr><td rowspan="0"><div style="height:50px"></div></td><td></td></tr><tr><td></td></tr></tbody><tbody><tr><td><div style="height:10px"></div></td></tr></tbody>');
+  add('rowspan-crossed', '<tbody style="height:160px"><tr><td rowspan="2" style="height:80px"></td><td></td></tr><tr><td rowspan="2" style="height:100px"></td></tr><tr><td></td></tr></tbody>');
+  add('spacing', `<tbody style="height:80px">${row(10)}${row(30)}</tbody><tbody>${row(10)}</tbody>`, 'height:140px;border-spacing:3px 5px;border:2px solid;padding:4px');
+  add('collapsed', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, 'border-collapse:collapse;border:4px solid');
+  add('caption', `<caption style="height:20px"></caption><tbody style="height:80px">${row(10)}${row(30)}</tbody>`);
+  for (const kind of ['auto','table','group','row','cell']) {
+    add(`percent-child-${kind}`, `<tbody style="${kind==='group'?'height:100px':''}"><tr style="${kind==='row'?'height:100px':''}"><td style="${kind==='cell'?'height:100px':''}"><div style="height:50%;width:10px"><div style="height:10px"></div></div></td></tr></tbody>`, kind==='table'?'height:100px':'');
+  }
+  add('cell-percentage', '<tbody><tr><td style="height:70%"><div style="height:10px"></div></td></tr><tr><td><div style="height:10px"></div></td></tr></tbody>', 'height:100px');
+  add('alignment', '<tbody style="height:100px"><tr><td style="vertical-align:top"><div style="height:10px"></div></td><td style="vertical-align:middle"><div style="height:20px"></div></td><td style="vertical-align:bottom"><div style="height:30px"></div></td></tr></tbody>');
+  add('baseline', '<tbody style="height:80px"><tr><td style="vertical-align:baseline;padding-bottom:20px"><span style="display:inline-block;width:10px;height:10px"></span></td><td style="vertical-align:baseline"><span style="display:inline-block;width:10px;height:30px"></span></td></tr></tbody>');
+  add('nested', '<tbody style="height:100px"><tr><td><table style="width:100px"><tbody style="height:60px"><tr><td><div style="height:10px"></div></td></tr></tbody></table></td></tr></tbody>');
+  add('flex-parent', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, '', 'display:flex;align-items:flex-start');
+  add('grid-parent', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, '', 'display:grid;align-items:start');
+  add('wrapping', '<tbody style="height:80px"><tr><td><span style="display:inline-block;width:80px;height:20px"></span><span style="display:inline-block;width:80px;height:20px"></span></td><td><div style="height:10px"></div></td></tr></tbody>');
+  add('percentage-definite-table', `<tbody style="height:60%">${row(10)}</tbody><tbody>${row(10)}</tbody>`, 'height:50%', '', 'height:100%');
+  add('flex-direct-table', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, 'flex:1', '', 'display:flex;flex-direction:column;height:160px');
+  add('grid-direct-table', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, '', '', 'display:grid;grid-template-rows:1fr 3px;height:160px');
+  add('caption-flex', `<caption style="height:20px"></caption><tbody style="height:80px">${row(10)}${row(30)}</tbody>`, 'flex:1', '', 'display:flex;flex-direction:column;height:160px');
+  add('empty-groups', `<thead style="height:80px"></thead><tbody>${row(20)}</tbody><tfoot style="height:80px"></tfoot>`);
+  add('empty-table', '<tbody style="height:80px"></tbody>', 'height:100px');
+  add('empty-table-spacing', '<tbody style="height:80px"></tbody>', 'height:100px;border-spacing:3px 5px');
+  add('empty-groups-spacing', `<colgroup><col></colgroup><thead style="height:80px"></thead><tbody>${row(20)}</tbody><tfoot style="height:80px"></tfoot>`, 'border-spacing:3px 5px');
+  add('empty-groups-spacing-fixed', `<thead style="height:80px"></thead><tbody>${row(20)}</tbody><tfoot style="height:80px"></tfoot>`, 'height:300px;border-spacing:3px 5px');
+  add('empty-groups-collapsed', `<thead style="height:80px"></thead><tbody>${row(20)}</tbody><tfoot style="height:80px"></tfoot>`, 'border-collapse:collapse;border:4px solid rgb(0,0,255)');
+  add('content-box-table', `<tbody>${row(10)}${row(30)}</tbody>`, 'height:100px;box-sizing:content-box;padding:4px;border:2px solid;border-spacing:3px 5px');
+  for (const kind of ['auto','table','cell']) {
+    add(`percent-scroll-${kind}`, `<tbody><tr><td style="${kind==='cell'?'height:100px':''}"><div style="height:100%;overflow:auto"><div style="height:200px"></div></div></td></tr></tbody>`, kind==='table'?'height:100px':'');
+  }
+  add('percent-baseline', '<tbody><tr><td style="height:100px;vertical-align:baseline"><div style="height:50%;width:10px"></div></td><td style="vertical-align:baseline"><div style="height:20px;width:10px"></div></td></tr></tbody>');
+  add('cell-padding', '<tbody style="height:100px"><tr><td style="height:40px;padding:10px;box-sizing:content-box"><div style="height:10px"></div></td><td style="padding:5%;vertical-align:bottom"><div style="height:10px"></div></td></tr></tbody>');
+  add('rtl', `<tbody style="height:80px">${row(10)}${row(30)}</tbody>`, 'direction:rtl');
+  add('percentage-padding-spacing', '<tbody><tr><td style="padding:10%"><div style="height:10px;width:10px"></div></td></tr></tbody>', 'border-spacing:10px;border:5px solid;box-sizing:border-box');
+  for (const direction of ['row', 'column']) {
+    addMarkup(`caption-inflexible-${direction}`, `<div style="display:table;box-sizing:content-box;border:10px solid;width:80px;height:50px;flex:0 0 ${direction==='row'?80:50}px"><div style="display:table-caption;height:10px;border:10px solid"></div></div>`, `display:flex;flex-direction:${direction};align-items:flex-start`);
+  }
+  addMarkup('caption-no-grow', '<table style="height:90px"><caption style="height:10px"></caption><tbody><tr><td></td></tr></tbody></table>', 'display:flex;flex-direction:column;align-items:flex-start');
+  addMarkup('nested-anonymous-baseline', '<div style="display:table"><div style="display:table-row"><div style="display:table-cell;vertical-align:baseline"><span style="display:inline-block;width:20px;height:20px"></span></div><div style="display:table-row"><span style="display:inline-block;width:20px;height:10px"></span></div></div><div style="display:table-row"><div style="display:table-row-group"><span style="display:inline-block;width:20px;height:10px"></span></div><div style="display:table-cell;vertical-align:baseline"><span style="display:inline-block;width:20px;height:20px"></span></div></div></div>');
+  const twoLines = '<span style="display:inline-block;width:20px;height:10px"></span>'.repeat(2);
+  // Absolute positioning measures the same nested table before final layout;
+  // a size-only cache hit must not replace its first baseline with its bottom.
+  addMarkup('nested-table-baselines', '<div style="position:absolute;width:40px">' + ['table', 'inline-table'].map(display => `<div style="display:table-row"><div style="display:table-cell;width:20px">${twoLines}</div><span style="display:${display};width:20px">${twoLines}</span></div>`).join('') + '</div>', 'position:relative');
+  addMarkup('anonymous-caption-minimum', '<div style="width:120px"><div style="display:table-cell"><span style="display:inline-block;width:20px;height:10px"></span></div><div style="display:table-caption;caption-side:bottom"><span style="display:inline-block;width:100px;height:40px"></span></div></div>');
+  addMarkup('nested-empty-group', '<div style="display:table"><div style="display:table-row"><div style="display:table-row-group;height:16px;width:16px"></div><div style="display:table-cell"><span style="display:inline-block;width:20px;height:20px"></span></div></div><div style="display:table-row"><div style="display:table-cell"><span style="display:inline-block;width:20px;height:20px"></span></div><div style="display:table-cell"><span style="display:inline-block;width:20px;height:20px"></span></div></div></div>');
+  for (const {owner} of cases) {
+    for (const el of owner.querySelectorAll('table,thead,tbody,tfoot,tr,td,th,caption')) {
+      el.dataset.originalHeight = el.style.height;
+    }
+  }
+}
+function setTableRowHeightPhase(phase) {
+  for (const {owner} of cases) {
+    owner.style.height = phase===1 ? '320px' : '240px';
+    const table = owner.querySelector('table');
+    if (table) table.style.width = phase===1 ? '160px' : '200px';
+    for (const el of owner.querySelectorAll('thead,tbody,tfoot')) {
+      if (phase===1) el.style.height = '96px';
+      else if (phase===2) { el.style.height = 'auto'; el.removeAttribute('height'); }
+      else el.style.height = el.dataset.originalHeight;
+    }
+  }
+}
+function collectTableRowHeights() {
+  return cases.map(({name,owner}) => ({name, rects:Array.from(owner.querySelectorAll('*'), el => {
+    const r = el.getBoundingClientRect();
+    return [r.x,r.y,r.width,r.height];
+  })}));
+}
+</script>
+<body onload="buildTableRowHeightCases()"></body>

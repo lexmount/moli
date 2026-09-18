@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "moli"
-version = "1.1.7"
+version = "1.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -2587,6 +2587,7 @@ name = "moli-curl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cidr",
  "crossbeam-channel",
  "curl",
  "moli-dns-resolver",
@@ -3421,7 +3422,6 @@ dependencies = [
  "http",
  "moli-crypto",
  "moli-curl",
- "moli-dns-resolver",
  "moli-url",
  "openssl",
  "rcgen",
@@ -5155,7 +5155,7 @@ dependencies = [
 [[package]]
 name = "taffy"
 version = "0.13.0"
-source = "git+https://github.com/ldm0/taffy?rev=71bc149ce5358406cdabba66da853ceb11ac74ee#71bc149ce5358406cdabba66da853ceb11ac74ee"
+source = "git+https://github.com/ldm0/taffy?rev=645bf5a49df607a8bff34ec90c5343901d04f10e#645bf5a49df607a8bff34ec90c5343901d04f10e"
 dependencies = [
  "arrayvec",
  "serde",

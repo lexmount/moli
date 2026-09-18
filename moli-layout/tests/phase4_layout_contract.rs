@@ -662,6 +662,107 @@ fn left_float_restricts_inline_slots_and_clear_moves_the_next_block_below_it() {
 }
 
 #[test]
+fn atomic_inline_content_moves_to_the_first_float_slot_that_fits() {
+    // Chromium oracle: a full-width inline button in a normal-flow form
+    // following a full-width float belongs below that float. Smaller buttons
+    // can stay alongside it, or move only as far as the first wider segment.
+    for (left, right, atom_width, expected_x, expected_y) in [
+        (Some((200.0, 80.0)), None, 200.0, 0.0, 80.0),
+        (None, Some((200.0, 80.0)), 200.0, 0.0, 80.0),
+        (Some((120.0, 80.0)), None, 120.0, 0.0, 80.0),
+        (Some((60.0, 80.0)), None, 100.0, 60.0, 0.0),
+        (None, Some((60.0, 80.0)), 100.0, 0.0, 0.0),
+        (Some((120.0, 40.0)), Some((60.0, 80.0)), 80.0, 0.0, 40.0),
+        (Some((120.0, 40.0)), Some((60.0, 80.0)), 160.0, 0.0, 80.0),
+        (Some((60.0, 80.0)), Some((120.0, 40.0)), 80.0, 60.0, 40.0),
+        (Some((60.0, 80.0)), None, 240.0, 0.0, 80.0),
+        (None, None, 240.0, 0.0, 0.0),
+    ] {
+        let source = Source(vec![
+            Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+            Node::element(
+                "container",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![2, 3, 4],
+            ),
+            Node::element("left", "div", LayoutElementCategory::Generic, None, vec![]),
+            Node::element("right", "div", LayoutElementCategory::Generic, None, vec![]),
+            Node::element(
+                "form",
+                "form",
+                LayoutElementCategory::Generic,
+                None,
+                vec![5, 7, 6],
+            ),
+            Node::element(
+                "loading-hint",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                vec![8],
+            ),
+            Node::element("atom", "span", LayoutElementCategory::Generic, None, vec![]),
+            Node::text("space", " "),
+            Node::element(
+                "screenreader-hint",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                vec![9],
+            ),
+            Node::text("loading", "Loading"),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            sized(LayoutDisplay::Block, 400.0, 200.0, PaintColor::TRANSPARENT),
+        );
+        for (id, color) in [(1, YELLOW), (4, GREEN)] {
+            styles.primary.insert(
+                id,
+                style(LayoutDisplay::Block, color)
+                    .tap_taffy(|s| s.size.width = Dimension::length(200.0))
+                    .with_text_metrics(16.0, 20.0),
+            );
+        }
+        for (id, size, direction) in [(2, left, Float::Left), (3, right, Float::Right)] {
+            styles.primary.insert(
+                id,
+                size.map_or_else(
+                    || style(LayoutDisplay::None, PaintColor::TRANSPARENT),
+                    |(width, height)| {
+                        sized(LayoutDisplay::Block, width, height, BLUE)
+                            .with_float(direction, Clear::None)
+                    },
+                ),
+            );
+        }
+        styles
+            .primary
+            .insert(5, style(LayoutDisplay::Inline, PaintColor::TRANSPARENT));
+        styles.primary.insert(
+            6,
+            sized(LayoutDisplay::InlineBlock, atom_width, 24.0, RED)
+                .with_inline_alignment(moli_layout::LayoutInlineAlignment::Top),
+        );
+        styles.primary.insert(
+            8,
+            sized(LayoutDisplay::Block, 1.0, 1.0, PaintColor::TRANSPARENT)
+                .with_position(LayoutPosition::Absolute),
+        );
+        let snapshot = render(&source, &mut styles, 400, 200);
+        let atom = rect(&snapshot, RED);
+        assert_close(atom.x, expected_x);
+        assert_close(atom.y, expected_y);
+        assert_close(atom.width, atom_width);
+        assert_close(rect(&snapshot, GREEN).height, expected_y + 24.0);
+        assert_close(rect(&snapshot, YELLOW).height, expected_y + 24.0);
+    }
+}
+
+#[test]
 fn intrinsic_inline_probes_clamp_widths_consumed_by_margins_beside_floats() {
     // A grid/flex intrinsic probe can give the paragraph a known width of
     // `container_width - 40px`. Parley's float-aware breaker must still get
@@ -1466,6 +1567,21 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
     let fallback_news = rect(&fallback, RED);
     let fallback_hao = rect(&fallback, GREEN);
     let fallback_more = rect(&fallback, BLUE);
+    let glyph_baselines = fallback
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            moli_layout::PaintFragment::GlyphRun(run) => run.glyphs.first().map(|glyph| {
+                run.transform
+                    .map_point(moli_layout::LayoutPoint::new(glyph.x, glyph.y))
+                    .y
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(glyph_baselines.len(), 3);
+    assert_close(glyph_baselines[0], fallback_more.bottom());
+    assert_close(glyph_baselines[1], fallback_more.bottom());
     assert_close(fallback_news.y, fallback_hao.y);
     assert!(fallback_news.y > news.y);
     assert_close(fallback_more.y, more.y);

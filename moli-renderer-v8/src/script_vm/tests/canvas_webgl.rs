@@ -660,6 +660,66 @@ fn canvas_text_metrics_uses_the_context_realm() {
 }
 
 #[test]
+fn canvas_text_metrics_keep_the_isolated_world_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://text-metrics-isolated.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    vm.eval(
+        r#"
+        globalThis.frame = document.body.appendChild(document.createElement("iframe"));
+        frame.contentDocument.body.innerHTML = "<canvas id='shared-canvas'></canvas>";
+    "#,
+    )
+    .expect("child canvas should initialize");
+    let child_context_id =
+        materialize_single_child_default_realm_for_test(&mut vm, "isolated canvas setup");
+    let frame_id = vm
+        .child_default_frame_id_for_execution_context_id(child_context_id)
+        .expect("child frame id should exist");
+    let isolated_context_id = vm
+        .create_isolated_world_for_frame(&frame_id, "canvas-utility", false)
+        .expect("isolated world should initialize");
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated_context_id,
+            r#"
+            (() => {
+              TextMetrics.prototype.isolatedMarker = true;
+              const canvases = [
+                document.getElementById("shared-canvas"),
+                document.createElement("canvas"),
+                new OffscreenCanvas(10, 10),
+              ];
+              return canvases.every(canvas => {
+                const metrics = canvas.getContext("2d").measureText("Hello");
+                return Object.getPrototypeOf(metrics) === TextMetrics.prototype &&
+                    metrics.isolatedMarker === true && metrics.width > 0;
+              });
+            })()
+            "#,
+        )
+        .expect("TextMetrics should keep the canvas wrapper's isolated realm"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const child = frame.contentWindow;
+              const canvas = child.document.getElementById("shared-canvas");
+              const metrics = canvas.getContext("2d").measureText("Hello");
+              return Object.getPrototypeOf(metrics) === child.TextMetrics.prototype &&
+                  metrics.isolatedMarker === undefined && metrics.width > 0;
+            })()
+            "#,
+        )
+        .expect("default-world TextMetrics should keep separate prototypes"),
+        "true"
+    );
+}
+
+#[test]
 fn html_canvas_linear_gradient_surface_is_available_for_fingerprinting_scripts() {
     let mut vm = new_storage_test_vm("https://canvas-linear-gradient-surface.test/");
 

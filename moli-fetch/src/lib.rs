@@ -15,6 +15,7 @@ mod error;
 mod fetch_url_list;
 mod headers;
 mod network_fetch_result;
+mod proxy;
 mod proxy_connect;
 mod referrer_policy;
 mod request;
@@ -49,8 +50,8 @@ pub use headers::{
     is_forbidden_response_header_name, is_no_cors_safelisted_request_header,
 };
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
-pub use moli_curl::CurlTlsConfig;
 pub use moli_curl::websocket::CurlWebSocketConnector;
+pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};
 pub use moli_web_bot_auth::{WebBotAuthProfile, WebBotAuthSigner};
 pub use network_fetch_result::{
     NetworkExchangeObservation, NetworkFetchFailureContext, NetworkFetchFailureRequestContext,

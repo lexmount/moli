@@ -142,6 +142,8 @@ impl WebSocketRegistry {
                 });
             match result {
                 Ok(()) => self.start(pending, multi),
+                // As with HTTP, a failed lookup or address-policy check ends
+                // the request before Session::attach can add curl to Multi.
                 Err(error) => pending.io.finish(Err(error)),
             }
         }

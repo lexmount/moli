@@ -109,7 +109,7 @@ fn request(
             context: (),
             origin: None,
             deadline: Some(Instant::now() + Duration::from_secs(10)),
-            dns_resolution: CurlDnsResolution::curl_managed(),
+            dns_resolution: CurlDnsResolution::no_shared_resolution(),
             priority: 1,
             label: "owner probe HTTP".into(),
         })

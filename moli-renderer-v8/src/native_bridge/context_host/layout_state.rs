@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
 
-use super::layout_snapshot::LatestLayoutTreeCache;
+use super::layout_snapshot::{LatestLayoutTreeCache, LayoutEnvironment};
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
@@ -133,8 +133,9 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        environment: LayoutEnvironment,
     ) {
-        self.latest_layout.publish(document, tree);
+        self.latest_layout.publish(document, tree, environment);
         self.latest_layout_is_dirty = false;
     }
 
@@ -146,6 +147,10 @@ impl DocumentLayoutState {
     /// geometry queries to reuse answers from before a layout input changed.
     pub(super) fn mark_latest_layout_dirty(&mut self) {
         self.latest_layout_is_dirty = true;
+    }
+
+    pub(super) fn latest_layout_matches_environment(&self, environment: LayoutEnvironment) -> bool {
+        self.latest_layout.matches_environment(environment)
     }
 
     pub(super) fn clear_latest_layout(&mut self) {

@@ -179,17 +179,34 @@ fn append_html_table_presentation_declarations(
 ) {
     let native = element.element();
     let local_name = native.local_name();
-    // Table-cell dimensions are presentation hints, just like table width.
+    let is_cell = matches!(local_name, "td" | "th");
+    let is_column = matches!(local_name, "col" | "colgroup");
+    // Table dimensions are presentation hints, including column-group widths.
     // Keep them in the cascade so author CSS can override them and the table
     // algorithm receives the same constraints as an authored CSS length.
-    if matches!(local_name, "table" | "td" | "th")
+    // Table/cell widths ignore zero; column widths preserve it.
+    if (local_name == "table" || is_cell || is_column)
         && let Some(width) = native
             .attribute_ns("", "width")
-            .and_then(|value| parse_html_dimension(value, true, false))
+            .and_then(|value| parse_html_dimension(value, true, is_column))
     {
         use style::values::generics::length::Size;
         block.push(
             PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(width))),
+            Importance::Normal,
+        );
+    }
+
+    // Only cell heights ignore zero. Blink also maps height on col/colgroup
+    // through HTMLTablePartElement, observable when their display is changed.
+    if (matches!(local_name, "table" | "thead" | "tbody" | "tfoot" | "tr") || is_cell || is_column)
+        && let Some(height) = native
+            .attribute_ns("", "height")
+            .and_then(|value| parse_html_dimension(value, true, !is_cell))
+    {
+        use style::values::generics::length::Size;
+        block.push(
+            PropertyDeclaration::Height(Size::LengthPercentage(NonNegative(height))),
             Importance::Normal,
         );
     }
@@ -232,17 +249,7 @@ fn append_html_table_presentation_declarations(
         append_html_table_part_alignment_declarations(element, block);
     }
 
-    if matches!(local_name, "td" | "th") {
-        if let Some(height) = native
-            .attribute_ns("", "height")
-            .and_then(|value| parse_html_dimension(value, true, false))
-        {
-            use style::values::generics::length::Size;
-            block.push(
-                PropertyDeclaration::Height(Size::LengthPercentage(NonNegative(height))),
-                Importance::Normal,
-            );
-        }
+    if is_cell {
         append_html_table_cell_padding_declarations(element, block);
     }
 }

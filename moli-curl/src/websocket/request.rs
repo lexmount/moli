@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use curl::easy::{Easy2, Handler, HttpVersion, InfoType, List, WsOptions};
 
 use super::CurlWebSocketRequest;
@@ -82,15 +82,41 @@ pub(super) fn configure(request: &CurlWebSocketRequest) -> Result<Easy2<Handshak
     // The caller selects the client identity carried by this connection request.
     request.tls.configure(&mut easy, true)?;
     easy.proxy(request.proxy.as_deref().unwrap_or(""))?;
+    if request.proxy.as_deref().is_some_and(proxy_uses_https_tls) {
+        request.tls.configure_https_proxy(&mut easy)?;
+    }
     // The browser has already applied no_proxy; do not evaluate environment policy twice.
     easy.noproxy("")?;
-    easy.http_proxy_tunnel(request.proxy.is_some())?;
+    easy.http_proxy_tunnel(request.proxy.as_deref().is_some_and(proxy_uses_http_tunnel))?;
     easy.separate_proxy_headers(true)?;
+    if !request.resolve_entries.is_empty() {
+        let mut resolve = List::new();
+        for entry in &request.resolve_entries {
+            resolve
+                .append(entry)
+                .with_context(|| anyhow!("failed to build curl host resolve entry `{entry}`"))?;
+        }
+        easy.resolve(resolve)
+            .context("failed to configure curl host resolve overrides")?;
+    }
     easy.http_headers(headers(&request.headers)?)?;
     easy.proxy_headers(headers(&request.proxy_headers)?)?;
     // Capture HeaderOut through our handler; never print debug or credentials.
     easy.verbose(true)?;
     Ok(easy)
+}
+
+fn proxy_uses_http_tunnel(proxy: &str) -> bool {
+    let Some((scheme, _)) = proxy.split_once("://") else {
+        return true;
+    };
+    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+}
+
+fn proxy_uses_https_tls(proxy: &str) -> bool {
+    proxy
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
 }
 
 fn headers(entries: &[(String, String)]) -> Result<List> {

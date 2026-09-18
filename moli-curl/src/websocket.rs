@@ -46,6 +46,8 @@ pub struct CurlWebSocketRequest {
     pub proxy: Option<String>,
     pub proxy_headers: Vec<(String, String)>,
     pub tls: CurlTlsConfig,
+    /// Permanent `CURLOPT_RESOLVE` entries selected by the high-level route.
+    pub resolve_entries: Vec<String>,
     pub dns_resolution: CurlDnsResolution,
     pub handshake_timeout: Duration,
 }
@@ -58,7 +60,8 @@ impl CurlWebSocketRequest {
             proxy: None,
             proxy_headers: Vec::new(),
             tls: CurlTlsConfig::default(),
-            dns_resolution: CurlDnsResolution::curl_managed(),
+            resolve_entries: Vec::new(),
+            dns_resolution: CurlDnsResolution::no_shared_resolution(),
             handshake_timeout: Duration::from_secs(30),
         }
     }

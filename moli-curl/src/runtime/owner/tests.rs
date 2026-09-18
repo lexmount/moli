@@ -40,7 +40,7 @@ fn request(
             port: Some(address.port()),
         }),
         deadline,
-        dns_resolution: CurlDnsResolution::curl_managed(),
+        dns_resolution: CurlDnsResolution::no_shared_resolution(),
         priority: 1,
         label: path.to_owned(),
     }

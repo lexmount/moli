@@ -33,6 +33,9 @@ use crate::{
     world::InlineStaticPosition,
 };
 
+mod measurement;
+use measurement::FullMeasurementTree;
+
 pub(crate) struct PreparedWorldLayout {
     positioned_static_sources: Vec<PositionedStaticSource>,
     numeric_unrounded_layouts: Vec<Layout>,
@@ -107,7 +110,7 @@ impl PreparedWorldLayout {
                 let id = LayoutBoxId::from_index(index);
                 self.feedback_invalidation_marks[index] = true;
                 invalidated.push(id);
-                world.boxes[index].cache.clear();
+                world.boxes[index].clear_layout_caches();
             }
         } else {
             self.feedback_invalidation_worklist
@@ -118,7 +121,7 @@ impl PreparedWorldLayout {
                 }
                 self.feedback_invalidation_marks[id.index()] = true;
                 invalidated.push(id);
-                world.boxes[id.index()].cache.clear();
+                world.boxes[id.index()].clear_layout_caches();
                 self.feedback_invalidation_worklist
                     .extend(world.boxes[id.index()].layout_children.iter().copied());
             }
@@ -129,7 +132,7 @@ impl PreparedWorldLayout {
                     if !self.feedback_invalidation_marks[id.index()] {
                         self.feedback_invalidation_marks[id.index()] = true;
                         invalidated.push(id);
-                        world.boxes[id.index()].cache.clear();
+                        world.boxes[id.index()].clear_layout_caches();
                     }
                     ancestor = world.boxes[id.index()].layout_parent;
                 }
@@ -156,7 +159,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     for layout_box in &mut world.boxes {
-        layout_box.cache.clear();
+        layout_box.clear_layout_caches();
         layout_box.unrounded_layout = Layout::with_order(0);
         layout_box.final_layout = Layout::with_order(0);
         layout_box.layout_parent = None;
@@ -1691,6 +1694,31 @@ where
         if self.should_hide(node_id, inputs) {
             return compute_hidden_layout(self, node_id);
         }
+        let style = &self.boxes[LayoutBoxId::from_taffy(node_id).index()].style;
+        if inputs.run_mode == RunMode::ComputeSize
+            && style.taffy.item_is_table
+            && inputs.axis != taffy::RequestedAxis::from(style.writing_mode().inline_axis())
+        {
+            // The compact intrinsic-size cache drops baselines. Table
+            // measurement needs the complete result, without final fragments.
+            let id = LayoutBoxId::from_taffy(node_id);
+            if let Some(output) = self.boxes[id.index()]
+                .table_measure_cache
+                .as_mut()
+                .and_then(|cache| cache.get(inputs))
+            {
+                return output;
+            }
+            let output = self.compute_child_layout_uncached(node_id, inputs, None);
+            self.boxes[id.index()]
+                .table_measure_cache
+                .get_or_insert_with(Default::default)
+                .store(inputs, output);
+            return output;
+        }
+        if self.measure_baselines && inputs.run_mode == RunMode::ComputeSize {
+            return self.compute_child_layout_uncached(node_id, inputs, None);
+        }
         compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
             world.compute_child_layout_uncached(node_id, inputs, None)
         })
@@ -1730,9 +1758,7 @@ where
         if self.is_viewport_taffy_node(node_id) {
             self.viewport_layout.cache.clear();
         } else {
-            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
-                .cache
-                .clear();
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()].clear_layout_caches();
         }
     }
 }
@@ -1756,6 +1782,25 @@ where
 
     fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_> {
         self.get_core_container_style(child_node_id)
+    }
+
+    fn get_block_percentage_resolution_height(
+        &self,
+        node_id: NodeId,
+        height: Option<f32>,
+    ) -> Option<f32> {
+        match self.table_cell_percentage_height {
+            Some((cell, false)) if cell.to_taffy() == node_id => None,
+            _ => height,
+        }
+    }
+
+    fn block_alignment_includes_floats(&self, node_id: NodeId) -> bool {
+        !self.is_viewport_taffy_node(node_id)
+            && matches!(
+                self.boxes[LayoutBoxId::from_taffy(node_id).index()].kind,
+                LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
+            )
     }
 
     fn compute_block_child_layout(
@@ -1885,6 +1930,19 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Obtain baselines and content bounds without publishing numeric or paint layout.
+    pub(crate) fn measure_complete_layout(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+    ) -> LayoutOutput {
+        debug_assert_eq!(inputs.run_mode, RunMode::ComputeSize);
+        let previous = std::mem::replace(&mut self.measure_baselines, true);
+        let output = self.compute_child_layout(node_id, inputs);
+        self.measure_baselines = previous;
+        output
+    }
+
     fn should_hide(&self, node_id: NodeId, inputs: LayoutInput) -> bool {
         inputs.run_mode == RunMode::PerformHiddenLayout
             || self.boxes[LayoutBoxId::from_taffy(node_id).index()]
@@ -1922,6 +1980,29 @@ where
 
         if inline_formatting_context {
             return self.compute_inline_formatting_context(id, inputs, block_context);
+        }
+
+        if self.measure_baselines
+            && inputs.run_mode == RunMode::ComputeSize
+            && !matches!(
+                kind,
+                LayoutBoxKind::TableWrapper
+                    | LayoutBoxKind::InlineTableWrapper
+                    | LayoutBoxKind::AnonymousTableWrapper
+            )
+        {
+            let mut tree = FullMeasurementTree(self);
+            let full_inputs = LayoutInput {
+                run_mode: RunMode::PerformLayout,
+                ..inputs
+            };
+            return if display.is_flex_container() {
+                compute_flexbox_layout(&mut tree, node_id, full_inputs)
+            } else if display.is_grid_container() {
+                compute_grid_layout(&mut tree, node_id, full_inputs)
+            } else {
+                compute_block_layout(&mut tree, node_id, full_inputs, block_context)
+            };
         }
 
         // Pseudo origins retain a pseudo-specific box kind, so their computed
@@ -2075,6 +2156,17 @@ where
         } else {
             inputs
         };
+        // The leaf adapter's size-only shortcut drops the line baselines.
+        // Only the adapter needs full measurement: the original inputs still
+        // keep Parley on its measurement path without final paint fragments.
+        let leaf_inputs = if self.measure_baselines && inputs.run_mode == RunMode::ComputeSize {
+            LayoutInput {
+                run_mode: RunMode::PerformLayout,
+                ..leaf_inputs
+            }
+        } else {
+            leaf_inputs
+        };
         let alignment = self.boxes[id.index()].style.text_align();
         let mut inline_context = self.boxes[id.index()]
             .inline_layout
@@ -2154,6 +2246,13 @@ where
                 content_box_height - measurement.alignment_block_size,
             );
             measurement.translate_block_axis(block_offset);
+            output.block_content_end = Some(
+                measurement.alignment_block_size
+                    + padding.top
+                    + border.top
+                    + scrollbar_insets.top
+                    + block_offset,
+            );
             output.content_size.height = output.content_size.height.max(
                 measurement.alignment_block_size
                     + padding.top
@@ -2234,7 +2333,7 @@ where
         reset_inline_layout_for_probe(layout);
 
         let parent_writing_mode = self.boxes[owner.index()].style.writing_mode();
-        let child_inputs = LayoutInput {
+        let mut child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
             sizing_purpose: inputs.sizing_purpose,
@@ -2247,6 +2346,9 @@ where
             block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
+        if self.table_cell_percentage_height == Some((owner, false)) {
+            child_inputs.parent_size.height = None;
+        }
         // A float's max-content contribution is measured independently from
         // the finite line slot it will eventually occupy. Final fit-content
         // layout still uses the IFC owner's content width; it must not use
@@ -2479,6 +2581,7 @@ where
             .any(|object| object.role == InlineObjectRole::Float);
         let mut float_height = None;
         let mut alignment_float_height = 0.0;
+        let mut float_line_clearances = Vec::new();
         if has_inline_float
             || block_context
                 .as_ref()
@@ -2501,7 +2604,7 @@ where
                     padding_border.top,
                     [padding_border.left, padding_border.right],
                 );
-                self.break_inline_lines_with_floats(
+                float_line_clearances = self.break_inline_lines_with_floats(
                     context,
                     layout,
                     width,
@@ -2525,7 +2628,7 @@ where
                     padding_border.top,
                     [padding_border.left, padding_border.right],
                 );
-                self.break_inline_lines_with_floats(
+                float_line_clearances = self.break_inline_lines_with_floats(
                     context,
                     layout,
                     width,
@@ -2556,6 +2659,7 @@ where
                 layout,
                 &atomic_baseline_ascents,
                 &structural_edge_contributions,
+                &float_line_clearances,
             );
             (metrics, Some(placements))
         } else {
@@ -2565,6 +2669,7 @@ where
                     layout,
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
+                    &float_line_clearances,
                 ),
                 None,
             )
@@ -2623,32 +2728,67 @@ where
         block_context: &mut BlockContext<'_>,
         content_offset: Point<f32>,
         floats: &mut Vec<InlineFloatPlacement>,
-    ) {
+    ) -> Vec<f32> {
+        let wraps = self.boxes[context.root_style.index()]
+            .style
+            .computed
+            .as_ref()
+            .is_none_or(|computed| {
+                computed.get_inherited_text().text_wrap_mode
+                    == style::computed_values::text_wrap_mode::T::Wrap
+            });
         let mut breaker = layout.break_lines();
-        let initial_slot = block_context.find_content_slot(0.0, Clear::None, None);
-        let mut has_active_floats = initial_slot.segment_id.is_some();
+        let mut slot = inline_float_slot(block_context, 0.0, None, 0.0);
+        let mut clearance = slot.y.max(0.0);
+        let mut line_clearances = Vec::new();
         {
             let state = breaker.state_mut();
             state.set_layout_max_advance(width);
-            state.set_line_max_advance(initial_slot.width.max(0.0));
-            state.set_line_x(initial_slot.x);
-            state.set_line_y(f64::from(initial_slot.y));
+            state.set_line_max_advance(slot.width.max(0.0));
+            state.set_line_x(slot.x);
+            state.set_line_y(f64::from(slot.y));
         }
 
         while let Some(yield_data) = breaker.break_next() {
             match yield_data {
-                YieldData::LineBreak(_) => {
-                    let state = breaker.state_mut();
-                    if has_active_floats {
-                        let next_slot = block_context.find_content_slot(
-                            state.line_y() as f32,
-                            Clear::None,
-                            None,
+                YieldData::LineBreak(data) => {
+                    // An unbreakable item may overflow a rectangular paragraph,
+                    // but a float-reduced slot can have more room below it.
+                    // Regular breaks can hang trailing whitespace beyond the
+                    // slot; that whitespace alone must not move a fitting line.
+                    // Preformatted/nowrap lines deliberately overflow their
+                    // available width instead of moving below adjacent floats.
+                    let tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
+                    if wraps
+                        && slot.segment_id.is_some()
+                        && (data.reason != parley::BreakReason::Regular || slot.width <= 0.0)
+                        && data.advance > slot.width.max(0.0) + tolerance
+                        && breaker.revert()
+                    {
+                        slot = inline_float_slot(
+                            block_context,
+                            data.line_y_start as f32,
+                            slot.segment_id,
+                            data.advance,
                         );
-                        has_active_floats = next_slot.segment_id.is_some();
-                        state.set_line_max_advance(next_slot.width.max(0.0));
-                        state.set_line_x(next_slot.x);
-                        state.set_line_y(f64::from(next_slot.y));
+                        clearance = clearance.max(slot.y);
+                        let state = breaker.state_mut();
+                        state.set_line_max_advance(slot.width.max(0.0));
+                        state.set_line_x(slot.x);
+                        state.set_line_y(f64::from(slot.y));
+                        continue;
+                    }
+                    line_clearances.push(clearance);
+                    let state = breaker.state_mut();
+                    if slot.segment_id.is_some() {
+                        let line_y = state.line_y() as f32;
+                        slot = inline_float_slot(block_context, line_y, None, 0.0);
+                        if slot.y > line_y {
+                            clearance = clearance.max(slot.y);
+                        }
+                        state.set_line_max_advance(slot.width.max(0.0));
+                        state.set_line_x(slot.x);
+                        state.set_line_y(f64::from(slot.y));
                     } else {
                         state.set_line_x(0.0);
                         state.set_line_max_advance(width);
@@ -2706,17 +2846,24 @@ where
                         order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
                         parent_width: child_inputs.parent_size.width,
                     });
-                    let next_slot =
-                        block_context.find_content_slot(state.line_y() as f32, Clear::None, None);
-                    has_active_floats = next_slot.segment_id.is_some();
-                    state.set_line_max_advance(next_slot.width.max(0.0));
-                    state.set_line_x(next_slot.x);
-                    state.set_line_y(f64::from(next_slot.y));
+                    let line_y = state.line_y() as f32;
+                    // Keep the immediate edge slot, even when it has no room
+                    // for text. An empty inline boundary remains beside an
+                    // oversized float; the next nonempty line break searches
+                    // for a fitting slot below it.
+                    slot = block_context.find_content_slot(line_y, Clear::None, None);
+                    if slot.y > line_y {
+                        clearance = clearance.max(slot.y);
+                    }
+                    state.set_line_max_advance(slot.width.max(0.0));
+                    state.set_line_x(slot.x);
+                    state.set_line_y(f64::from(slot.y));
                     state.append_inline_box_to_line(data.advance, 0.0);
                 }
             }
         }
         breaker.finish();
+        line_clearances
     }
 
     fn position_inline_objects(
@@ -2832,6 +2979,21 @@ where
             padding,
             margin,
         };
+    }
+}
+
+fn inline_float_slot(
+    context: &BlockContext<'_>,
+    min_y: f32,
+    mut after: Option<usize>,
+    minimum_width: f32,
+) -> taffy::ContentSlot {
+    loop {
+        let slot = context.find_content_slot(min_y, Clear::None, after);
+        if slot.segment_id.is_none() || slot.width >= minimum_width {
+            return slot;
+        }
+        after = slot.segment_id;
     }
 }
 
@@ -3095,7 +3257,10 @@ impl InlineMeasurement {
 /// this adapter boundary instead. This is the leaf equivalent of Chromium's
 /// `AlignBlockContent` plus `BoxFragmentBuilder::MoveChildrenInDirection`, not
 /// a post-layout paint translation.
-fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_space: f32) -> f32 {
+pub(crate) fn single_subject_block_alignment_offset(
+    alignment: Option<AlignContent>,
+    free_space: f32,
+) -> f32 {
     let Some(alignment) = alignment else {
         return 0.0;
     };

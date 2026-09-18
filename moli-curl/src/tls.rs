@@ -102,6 +102,33 @@ impl CurlTlsConfig {
         }
         Ok(())
     }
+
+    /// Install certificate-chain and hostname verification for an HTTPS proxy.
+    ///
+    /// libcurl keeps proxy TLS settings separate from origin TLS settings. The
+    /// configured CA is shared, but client identities remain origin-only unless
+    /// a dedicated proxy identity is added in the future.
+    pub fn configure_https_proxy<H: Handler>(&self, easy: &mut Easy2<H>) -> Result<()> {
+        easy.proxy_ssl_verify_peer(self.verify)
+            .context("failed to configure curl HTTPS proxy peer verification")?;
+        easy.proxy_ssl_verify_host(self.verify)
+            .context("failed to configure curl HTTPS proxy host verification")?;
+        if let Some(ca_cert) = &self.ca_cert {
+            let ca_cert_text = ca_cert.to_str().with_context(|| {
+                format!(
+                    "curl HTTPS proxy CA certificate path is not valid UTF-8: `{}`",
+                    ca_cert.display()
+                )
+            })?;
+            easy.proxy_cainfo(ca_cert_text).with_context(|| {
+                format!(
+                    "failed to configure curl HTTPS proxy CA certificate `{}`",
+                    ca_cert.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

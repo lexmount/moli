@@ -548,6 +548,29 @@ fn finish_worker_module_bootstrap(
     let root_module_global = runtime.graph.borrow().module(root_entry).clone();
     let root_module = v8::Local::new(scope, &root_module_global);
 
+    // Include dependencies of synthetic Wasm modules, which V8's IsGraphAsync
+    // cannot see, while excluding dependencies reached only by import source.
+    // Reject before instantiation or evaluation can execute any module code.
+    if super::global_scope::get_worker_state(scope).is_some_and(|state| {
+        matches!(
+            state.borrow().global_kind,
+            super::thread::WorkerGlobalKind::Service { .. }
+        )
+    }) && runtime
+        .graph
+        .borrow()
+        .has_top_level_await(scope, root_entry)
+    {
+        let message = v8str(scope, "Top-level await is not allowed in service workers.");
+        let exception = v8::Exception::type_error(scope, message);
+        return Err(Box::new(worker_bootstrap_value_error(
+            scope,
+            script_url,
+            exception,
+            WorkerParentErrorEventKind::Event,
+        )));
+    }
+
     match root_module.instantiate_module2(
         scope,
         worker_resolve_static_module_callback,
@@ -1899,6 +1922,32 @@ impl WorkerModuleGraph {
 
     fn module(&self, entry: usize) -> &v8::Global<v8::Module> {
         &self.records[entry].module
+    }
+
+    fn has_top_level_await(&self, scope: &mut v8::PinScope<'_, '_>, root_entry: usize) -> bool {
+        let mut pending = vec![root_entry];
+        let mut seen = HashSet::new();
+        while let Some(entry) = pending.pop() {
+            if !seen.insert(entry) {
+                continue;
+            }
+            let module = v8::Local::new(scope, self.module(entry));
+            if module.has_top_level_await() {
+                return true;
+            }
+            for request in &self.records[entry].requests {
+                if request.phase == ModuleImportPhase::Evaluation
+                    && let Some(dependency) = self.resolve_static_dependency_entry(
+                        module,
+                        &request.specifier,
+                        &request.attributes,
+                    )
+                {
+                    pending.push(dependency);
+                }
+            }
+        }
+        false
     }
 
     fn requests(&self, entry: usize) -> Vec<WorkerModuleRequest> {
