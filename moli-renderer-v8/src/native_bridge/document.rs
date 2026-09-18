@@ -263,6 +263,9 @@ pub(super) use detached_surface::{
     detached_character_data_value, detached_text_split_text_callback,
     detached_text_whole_text_value, set_detached_character_data_value,
 };
+pub(in crate::native_bridge::document) use detached_surface::{
+    detached_document_content_type_value, set_detached_document_content_type,
+};
 pub(in crate::native_bridge) use detached_surface::{
     detached_element_local_name, detached_element_namespace_uri, detached_element_prefix,
 };
