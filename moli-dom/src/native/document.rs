@@ -49,6 +49,7 @@ impl std::fmt::Display for DocumentReadyState {
 pub struct Document {
     url: Url,
     content_type: Box<str>,
+    character_set: Box<str>,
     ready_state: DocumentReadyState,
     // Retained with the Document when its Window is replaced during navigation.
     visibility_hidden: bool,
@@ -79,6 +80,7 @@ impl Document {
             base_url_state: DocumentBaseUrlState::new(&url),
             url,
             content_type: "text/html".into(),
+            character_set: "UTF-8".into(),
             ready_state: DocumentReadyState::Complete,
             visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
@@ -96,6 +98,7 @@ impl Document {
             base_url_state: DocumentBaseUrlState::new(&url),
             url,
             content_type: "application/xml".into(),
+            character_set: "UTF-8".into(),
             ready_state: DocumentReadyState::Complete,
             visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
@@ -114,6 +117,14 @@ impl Document {
 
     pub fn content_type(&self) -> &str {
         &self.content_type
+    }
+
+    pub fn character_set(&self) -> &str {
+        &self.character_set
+    }
+
+    pub fn set_character_set(&mut self, character_set: impl Into<String>) {
+        self.character_set = character_set.into().into_boxed_str();
     }
 
     pub fn css_target(&self) -> Option<NativeNodeId> {

@@ -276,6 +276,15 @@ impl DocumentRuntime {
         &self.document_character_set
     }
 
+    pub(crate) fn document_character_set_for_handle(&self, handle: DomHandle) -> Option<&str> {
+        let document = self.dom_host().node(handle)?.as_document()?;
+        Some(if handle == self.dom_host().document_handle() {
+            self.document_character_set()
+        } else {
+            document.character_set()
+        })
+    }
+
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
         self.script_execution_control.set_disabled(disabled);
     }
@@ -311,6 +320,9 @@ impl DocumentRuntime {
 
     pub(crate) fn set_document_character_set(&mut self, character_set: impl Into<String>) {
         self.document_character_set = character_set.into();
+        let document_handle = self.dom_host.document_handle();
+        self.dom_host
+            .set_document_character_set_for_handle(document_handle, &self.document_character_set);
     }
 
     pub(crate) fn set_document_default_language(&mut self, language: Option<String>) {
