@@ -13,6 +13,7 @@ mod observer;
 mod promise;
 mod state;
 mod transform;
+mod until;
 
 pub(crate) use event_target::event_target_when;
 
@@ -37,6 +38,8 @@ struct ObservablePrototype {
     take: (),
     #[webapi(method, length = 1, callback = transform::drop)]
     drop: (),
+    #[webapi(method = "takeUntil", length = 1, callback = until::take_until)]
+    take_until: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
     #[webapi(method, length = 0, returns_promise, callback = collect::last)]
@@ -291,6 +294,7 @@ fn subscribe_internal<'s>(
             }
         } else if !from::subscribe(scope, observable, subscriber)
             && !transform::subscribe(scope, observable, subscriber)
+            && !until::subscribe(scope, observable, subscriber)
         {
             event_target::subscribe(scope, observable, subscriber);
         }
