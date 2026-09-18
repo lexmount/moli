@@ -15,6 +15,7 @@ mod inspect;
 mod observer;
 mod promise;
 mod state;
+mod switch_map;
 mod transform;
 mod until;
 
@@ -37,6 +38,8 @@ struct ObservablePrototype {
     map: (),
     #[webapi(method = "flatMap", length = 1, callback = flat_map::flat_map)]
     flat_map: (),
+    #[webapi(method = "switchMap", length = 1, callback = switch_map::switch_map)]
+    switch_map: (),
     #[webapi(method, length = 1, callback = transform::filter)]
     filter: (),
     #[webapi(method, length = 1, callback = transform::take)]
@@ -322,6 +325,7 @@ fn subscribe_internal<'s>(
             && !inspect::subscribe(scope, observable, subscriber)
             && !finally::subscribe(scope, observable, subscriber)
             && !flat_map::subscribe(scope, observable, subscriber)
+            && !switch_map::subscribe(scope, observable, subscriber)
         {
             event_target::subscribe(scope, observable, subscriber);
         }
