@@ -63,6 +63,22 @@ fn extracts_request_header_content_type_essence_for_fetch_rules() {
         request_header_content_type_essence("text/plain, text/plain"),
         None
     );
+    for input in [
+        "application/json, text/plain",
+        "text/plain, application/json",
+    ] {
+        assert_eq!(request_header_content_type_essence(input), None, "{input}");
+    }
+    for input in [
+        "text/plain;charset=utf8, extra",
+        "text/plain;charset=utf8, application/json",
+    ] {
+        assert_eq!(
+            request_header_content_type_essence(input).as_deref(),
+            Some("text/plain"),
+            "{input}"
+        );
+    }
     assert_eq!(request_header_content_type_essence("text"), None);
     assert_eq!(request_header_content_type_essence("text/"), None);
     assert_eq!(request_header_content_type_essence("te xt/plain"), None);
