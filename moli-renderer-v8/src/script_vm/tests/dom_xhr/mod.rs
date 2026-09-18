@@ -2,6 +2,7 @@ use super::*;
 
 mod blob_mime;
 mod computed_style;
+mod cors_response;
 mod cssom;
 mod dom;
 mod file_input;
