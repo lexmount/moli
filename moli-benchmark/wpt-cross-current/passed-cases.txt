@@ -4289,6 +4289,8 @@ dom/nodes/remove-next-sibling-during-replace-with.html
 dom/nodes/remove-unscopable.html
 dom/nodes/rootNode.html
 dom/nodes/svg-template-querySelector.html
+dom/observable/tentative/crashtests/observable-gc.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/crashtests/observable-gc.any.js?moli-wpt-any=window
 dom/observable/tentative/idlharness.html
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=window
@@ -4296,6 +4298,10 @@ dom/observable/tentative/observable-constructor.window.js?moli-wpt-script=window
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-event-target.window.js?moli-wpt-script=window
+dom/observable/tentative/observable-every.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-every.any.js?moli-wpt-any=window
+dom/observable/tentative/observable-find.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-find.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-first.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-first.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-forEach.any.js?moli-wpt-any=dedicatedworker
@@ -4305,6 +4311,8 @@ dom/observable/tentative/observable-last.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-last.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-reduce.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-reduce.any.js?moli-wpt-any=window
+dom/observable/tentative/observable-some.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-some.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=window
 dom/ranges/Range-adopt-test.html

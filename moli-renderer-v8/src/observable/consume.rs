@@ -1,5 +1,5 @@
 //! Callback-driven Promise consumers use traced Web IDL callbacks and cancel
-//! only their own observer when a visitor or reducer throws.
+//! only their own observer when a callback throws or a predicate decides.
 
 use super::{
     callbacks,
@@ -40,6 +40,60 @@ struct ReduceArgs<'scope> {
     initial: Option<v8::Local<'scope, v8::Value>>,
     #[webidl(with = signal_arg)]
     signal: Option<ResolvedAbortSignal<'scope>>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Observable")]
+struct PredicateArgs<'scope> {
+    #[webidl(required, converter = "callback_function")]
+    predicate: webidl::WebIdlCallbackFunction,
+    #[webidl(with = signal_arg)]
+    signal: Option<ResolvedAbortSignal<'scope>>,
+}
+
+pub(super) fn some<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    predicate(scope, args, rv, observer::SOME);
+}
+
+pub(super) fn every<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    predicate(scope, args, rv, observer::EVERY);
+}
+
+pub(super) fn find<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    predicate(scope, args, rv, observer::FIND);
+}
+
+fn predicate<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    kind: i32,
+) {
+    let Some(parsed) = webidl::parse_args::<PredicateArgs<'s>>(scope, &args) else {
+        return;
+    };
+    if let Some(promise) = consume(
+        scope,
+        args.this(),
+        parsed.predicate,
+        None,
+        parsed.signal,
+        kind,
+    ) {
+        rv.set(promise.into());
+    }
 }
 
 pub(super) fn for_each<'s>(
@@ -178,10 +232,26 @@ pub(super) fn notify<'s>(
             // The draft increments after invocation; a reentrant next() sees
             // the current index. Read it again to preserve nested increments.
             increment_index(scope, observer);
-            if kind == observer::REDUCE
-                && let Ok(value) = result
-            {
-                set_accumulator(scope, observer, value);
+            match (kind, result) {
+                (observer::REDUCE, Ok(value)) => set_accumulator(scope, observer, value),
+                // Predicate's boolean return conversion does not invoke
+                // author code or assimilate returned thenables.
+                (observer::SOME | observer::EVERY | observer::FIND, Ok(passed))
+                    if passed.boolean_value(scope) != (kind == observer::EVERY) =>
+                {
+                    let result = if kind == observer::FIND {
+                        value
+                    } else {
+                        v8::Boolean::new(scope, kind == observer::SOME).into()
+                    };
+                    if let Some(resolver) = promise::start_settlement(scope, observer) {
+                        resolver.resolve(scope, result);
+                    }
+                    // Also run after a nested next()/then getter settles
+                    // first, to unsubscribe this observer from the source.
+                    promise::abort_controller(scope, observer, v8::undefined(scope).into());
+                }
+                _ => {}
             }
         }
         Notification::Error(error) => {
@@ -193,6 +263,8 @@ pub(super) fn notify<'s>(
             let value = if kind == observer::REDUCE {
                 get_private_value(scope, observer, ACCUMULATOR)
                     .unwrap_or_else(|| v8::undefined(scope).into())
+            } else if matches!(kind, observer::SOME | observer::EVERY) {
+                v8::Boolean::new(scope, kind == observer::EVERY).into()
             } else {
                 v8::undefined(scope).into()
             };
