@@ -1,6 +1,142 @@
 use super::*;
 
 #[test]
+fn observable_first_promises_cancellation_reentrancy_and_native_observers() {
+    let mut vm = new_storage_test_vm("https://observable-first.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.firstResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-first.js")
+    ))
+    .expect("Observable.first fixture should evaluate");
+    let result = vm
+        .eval("firstResult")
+        .expect("Observable.first fixture should settle");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 72, "{result}");
+}
+
+#[test]
+fn observable_first_pending_promises_trace_observers_without_rooting_abandoned_cycles() {
+    let mut vm = new_storage_test_vm("https://observable-first-gc.test/");
+    vm.eval(
+        r#"
+(() => {
+  const captured = {};
+  const source = new Observable(s => {
+    globalThis.weakFirstSubscriber = new WeakRef(s);
+    s.addTeardown(() => captured);
+  });
+  globalThis.weakFirstCapture = new WeakRef(captured);
+  globalThis.weakFirstSource = new WeakRef(source);
+  globalThis.weakFirstPromise = new WeakRef(source.first());
+})();
+(() => {
+  const iterator = {next: () => new Promise(() => {})};
+  globalThis.weakFirstIterator = new WeakRef(iterator);
+  Observable.from({[Symbol.asyncIterator]: () => iterator}).first();
+})();
+(() => {
+  const source = new Observable(s => {
+    globalThis.weakKeptSubscriber = new WeakRef(s);
+    globalThis.deliverFirst = s.next.bind(s);
+  });
+  globalThis.weakKeptSource = new WeakRef(source);
+  globalThis.keptFirstPromise = source.first();
+})();
+(() => {
+  const ac = new AbortController();
+  globalThis.cancelFirst = ac.abort.bind(ac);
+  new Observable(s => { globalThis.weakAbortFirstSubscriber = new WeakRef(s); })
+    .first({signal: ac.signal}).catch(reason => { globalThis.firstAbortReason = reason; });
+})();
+"#,
+    )
+    .unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+weakFirstSubscriber.deref() === undefined, weakFirstCapture.deref() === undefined,
+weakFirstSource.deref() === undefined, weakFirstPromise.deref() === undefined,
+weakFirstIterator.deref() === undefined, weakKeptSource.deref() === undefined,
+weakKeptSubscriber.deref() !== undefined, weakAbortFirstSubscriber.deref() !== undefined
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true,true,true,true,true]"
+    );
+    vm.eval("delete globalThis.deliverFirst;").unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("weakKeptSubscriber.deref() !== undefined").unwrap(),
+        "true"
+    );
+    vm.eval(
+        r#"
+keptFirstPromise.then(value => { globalThis.firstDelivered = value; });
+weakKeptSubscriber.deref().next(31);
+cancelFirst('cancelled');
+delete globalThis.keptFirstPromise;
+delete globalThis.cancelFirst;
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([firstDelivered, firstAbortReason])")
+            .unwrap(),
+        "[31,\"cancelled\"]"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("JSON.stringify([weakKeptSubscriber.deref() === undefined, weakAbortFirstSubscriber.deref() === undefined])").unwrap(), "[true,true]");
+}
+
+#[test]
+fn observable_first_uses_callee_promise_and_error_realms_with_foreign_sources() {
+    let mut vm = new_storage_test_vm("https://observable-first-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.first realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const first = child.Observable.prototype.first;
+  const source = new Observable(s => s.next(5));
+  const promise = first.call(source);
+  checks.push(promise instanceof child.Promise, !(promise instanceof Promise), await promise === 5);
+  let conversions = 0;
+  const invalid = first.call({}, {get signal() { conversions++; }});
+  checks.push(invalid instanceof child.Promise);
+  await invalid.catch(e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError)));
+  checks.push(conversions === 0);
+  await first.call(new Observable(s => s.complete())).catch(e => checks.push(e instanceof child.RangeError, !(e instanceof RangeError)));
+  const foreign = new child.Observable(s => s.next(6));
+  const local = Observable.prototype.first.call(foreign);
+  checks.push(local instanceof Promise, !(local instanceof child.Promise), await local === 6);
+  const marker = {}, ac = new AbortController();
+  const pending = first.call(new Observable(() => {}), {signal: ac.signal});
+  ac.abort(marker);
+  await pending.catch(e => checks.push(e === marker));
+  globalThis.firstRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    assert_eq!(
+        vm.eval("firstRealms").unwrap(),
+        "[true,true,true,true,true,true,true,true,true,true,true,true,true]"
+    );
+}
+
+#[test]
 fn observable_from_iterables_promises_cancellation_and_exception_timing() {
     let mut vm = new_storage_test_vm("https://observable-from.test/");
     vm.eval(&format!(

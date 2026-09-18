@@ -20,6 +20,7 @@ pub(crate) use signal::{
 };
 pub(crate) use statics::{
     abort_signal_any_callback, abort_signal_static_abort_callback, abort_signal_timeout_callback,
+    new_dependent_abort_signal,
 };
 
 const ABORT_SIGNAL_ID_SLOT: &str = "__lmAbortSignalId";
