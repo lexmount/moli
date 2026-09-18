@@ -143,7 +143,7 @@ impl JsContextHost {
                 stale.runtime_observable_context_token,
                 config.resource_owner_id,
             );
-            stale_context.detach_global();
+            self.detach_child_window_proxy_for_reuse(scope, handle, stale_context);
         }
 
         let caller_global = scope.get_current_context().global(scope);

@@ -1026,6 +1026,30 @@ impl JsContextHost {
             .promote_shell_to_live(scope, handle, shell);
     }
 
+    pub(crate) fn detach_child_window_proxy_for_reuse<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        handle: DomHandle,
+        context: v8::Local<'s, v8::Context>,
+    ) -> bool {
+        // Navigation reuses the browsing context's WindowProxy with a new
+        // inner global. Destruction has no successor: retained references must
+        // keep the last inner global even after its execution owner retires.
+        if !self.child_browsing_context_is_live(handle) {
+            return false;
+        }
+        let Some(window_proxy) = self.child_window_proxy_records.shell(scope, handle) else {
+            return false;
+        };
+        // Removal and reinsertion can create another browsing context for the
+        // same DOM handle before the old realm is pruned. It has its own proxy.
+        if !context.global(scope).strict_equals(window_proxy.into()) {
+            return false;
+        }
+        context.detach_global();
+        true
+    }
+
     pub(crate) fn preserve_child_window_proxy_between_realms<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_, ()>,
