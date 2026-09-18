@@ -3046,7 +3046,7 @@ pub(super) fn install_worker_global_scope<'s>(
         secure_context,
         &identity,
     )?;
-    crate::context_bootstrap::install_worker_indexed_db_runtime_state(scope, global)?;
+    crate::context_bootstrap::install_worker_indexed_db_runtime_state(scope)?;
     crate::context_bootstrap::install_worker_base64_runtime_state(scope, global)?;
     install_simple_event_target_methods(scope, global, WORKER_GLOBAL_LISTENERS_SLOT, false);
     install_simple_event_target_ordered_handlers(scope, global);
