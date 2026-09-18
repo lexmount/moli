@@ -48,6 +48,33 @@ class XhrHeaderFixtureTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_fixed_response_preserves_empty_duplicate_cookie_and_non_ascii_headers(self) -> None:
+        server = self.server()
+        for method in ("GET", "HEAD"):
+            with self.subTest(method=method):
+                connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                try:
+                    connection.request(method, "/xhr/resources/headers.py")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    headers = response.getheaders()
+                    self.assertIn(("Content-Type", "text/plain"), headers)
+                    self.assertIn(("X-Custom-Header", "test"), headers)
+                    self.assertIn(("Set-Cookie", "test"), headers)
+                    self.assertIn(("Set-Cookie2", "test"), headers)
+                    self.assertIn(("X-Custom-Header-Empty", ""), headers)
+                    self.assertEqual(
+                        [value for name, value in headers if name == "X-Custom-Header-Comma"],
+                        ["1", "2"],
+                    )
+                    self.assertEqual(
+                        response.getheader("X-Custom-Header-Bytes").encode("latin-1"),
+                        b"\xe2\x80\xa6",
+                    )
+                    self.assertEqual(response.read(), b"TEST" if method == "GET" else b"")
+                finally:
+                    connection.close()
+
     def test_name_filter_preserves_case_duplicates_whitespace_and_bytes(self) -> None:
         server = self.server()
         status, headers, body = self.request(server.port, "filter_name=X-CaSe", [
@@ -212,12 +239,14 @@ class XhrHeaderFixtureTests(unittest.TestCase):
             "xhr/wrong-root.window.js": "fetch('inspect-headers.py');",
             "xhr/nested/wrong-relative.window.js": "fetch('resources/inspect-headers.py');",
         }
-        sources.update({
-            path.replace(".window.js", "-echo.window.js"): source.replace(
-                "inspect-headers.py", "echo-headers.py"
-            )
-            for path, source in list(sources.items())
-        })
+        base_sources = sources.copy()
+        for suffix, resource in (("fixed", "headers.py"), ("echo", "echo-headers.py")):
+            sources.update({
+                path.replace(".window.js", f"-{suffix}.window.js"): source.replace(
+                    "inspect-headers.py", resource
+                )
+                for path, source in base_sources.items()
+            })
         for path, source in sources.items():
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -225,9 +254,12 @@ class XhrHeaderFixtureTests(unittest.TestCase):
         selected = enumerate_cases(self.root, dir_prefixes=("xhr",))
         self.assertEqual([case.case_path for case in selected], [
             "xhr/absolute-echo.window.js?moli-wpt-script=window",
+            "xhr/absolute-fixed.window.js?moli-wpt-script=window",
             "xhr/absolute.window.js?moli-wpt-script=window",
             "xhr/nested/parent-echo.window.js?moli-wpt-script=window",
+            "xhr/nested/parent-fixed.window.js?moli-wpt-script=window",
             "xhr/nested/parent.window.js?moli-wpt-script=window",
             "xhr/relative-echo.window.js?moli-wpt-script=window",
+            "xhr/relative-fixed.window.js?moli-wpt-script=window",
             "xhr/relative.window.js?moli-wpt-script=window",
         ])
