@@ -1593,3 +1593,5 @@ mod performance_user_timing;
 mod abort_controller_receivers;
 
 mod synthetic_exceptions;
+
+mod wasm_csp;
