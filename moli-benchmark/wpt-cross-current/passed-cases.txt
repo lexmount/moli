@@ -4294,6 +4294,8 @@ dom/observable/tentative/crashtests/observable-gc.any.js?moli-wpt-any=window
 dom/observable/tentative/crashtests/observable-takeUntil-toArray.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/crashtests/observable-takeUntil-toArray.any.js?moli-wpt-any=window
 dom/observable/tentative/idlharness.html
+dom/observable/tentative/observable-catch.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-catch.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-constructor.window.js?moli-wpt-script=window
