@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_observable_callback_consumers_conversion_reentrancy_cancellation_and_exception_identity()
+ {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(value => {{ postMessage(value); close(); }});",
+            include_str!("../../../../tests/fixtures/observable-callback-consumers.js")
+        ),
+        "https://observable-consumers.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 132, "{result}");
+}
+
+#[tokio::test]
 async fn worker_observable_collect_values_abort_order_and_native_promise_observers() {
     ensure_v8();
     let mut handle = spawn_worker(
