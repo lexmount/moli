@@ -299,11 +299,13 @@ impl JsContextHost {
                     }
                 }
             } else {
+                let entry_document = host.document_open_entry_document(scope);
                 let Some(context) = host.begin_child_document_stream_replacement(
                     scope,
                     host_ptr,
                     child_handle,
                     document_handle,
+                    entry_document,
                 ) else {
                     return;
                 };
@@ -422,6 +424,7 @@ impl JsContextHost {
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
+        entry_document: Option<DomHandle>,
     ) -> Option<v8::Local<'s, v8::Context>> {
         debug_assert!(std::ptr::eq(host_ptr, self));
         if self.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
@@ -483,8 +486,24 @@ impl JsContextHost {
         {
             return None;
         }
-        let document_url = self.document_url_for_handle(document_handle);
-        let document_base_url = self.document_base_url_for_handle(document_handle);
+        let previous_url = self.document_url_for_handle(document_handle);
+        let replacement_url = entry_document
+            .filter(|_| self.child_browsing_context_is_live(child_handle))
+            .map(|entry| self.document_open_replacement_url(document_handle, entry));
+        let document_url = replacement_url.as_ref().unwrap_or(&previous_url).clone();
+        let document_base_url = if replacement_url.is_some() {
+            if document_url == previous_url {
+                self.dom_host()
+                    .node(document_handle)?
+                    .as_document()?
+                    .fallback_base_url()
+                    .clone()
+            } else {
+                document_url.clone()
+            }
+        } else {
+            self.document_base_url_for_handle(document_handle)
+        };
         let replacement_plan = self
             .frame_owner_store
             .plan_child_document_open_replacement(
@@ -532,6 +551,9 @@ impl JsContextHost {
                 let _ =
                     remove_child_to_current_reaction_queue(scope, host_ptr, document_handle, child);
             }
+            if replacement_url.is_some() {
+                host.set_dom_document_url_for_handle(document_handle, document_url.clone());
+            }
 
             host.cancel_child_meta_refresh_navigation(child_handle);
             host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
@@ -559,7 +581,7 @@ impl JsContextHost {
                 child_handle,
                 current_owner.document_owner(),
                 document_handle,
-                document_url,
+                document_url.clone(),
             );
             host.note_child_frame_load_started_for_parent(child_handle);
             host.queue_child_frame_document_opened_event(child_handle);
@@ -572,6 +594,14 @@ impl JsContextHost {
                 "opened child document stream through same-LocalWindow owner transaction"
             );
         });
+        if replacement_url.is_some() {
+            let window = script_context.global(scope);
+            crate::context_bootstrap::update_history_for_document_open(
+                scope,
+                window,
+                &document_url,
+            );
+        }
         Some(script_context)
     }
 
@@ -593,6 +623,7 @@ impl JsContextHost {
             host_ptr,
             child_handle,
             document_handle,
+            None,
         ) else {
             return false;
         };

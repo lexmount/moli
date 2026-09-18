@@ -34,6 +34,9 @@ mod module_document_write;
 #[path = "scripts/document_close.rs"]
 mod document_close;
 
+#[path = "scripts/document_open_url.rs"]
+mod document_open_url;
+
 #[path = "scripts/document_write_insertion.rs"]
 mod document_write_insertion;
 
