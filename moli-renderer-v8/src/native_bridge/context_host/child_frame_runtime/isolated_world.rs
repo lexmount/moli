@@ -137,11 +137,15 @@ impl JsContextHost {
         if let Some(stale) = stale {
             self.pending_history_traversal_admissions
                 .retire_owner(WindowExecutionContextOwner::Frame(stale.local_window_id));
+            let stale_context = v8::Local::new(scope, &stale.context);
+            {
+                let stale_scope = &mut v8::ContextScope::new(scope, stale_context);
+                crate::native_bridge::clear_context_wrapper_cache_for_teardown(stale_scope, false);
+            }
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
                 config.resource_owner_id,
             );
-            let stale_context = v8::Local::new(scope, &stale.context);
             stale_context.detach_global();
         }
 
