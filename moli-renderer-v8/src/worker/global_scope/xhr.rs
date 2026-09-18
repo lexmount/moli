@@ -245,15 +245,22 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     };
 
     let xhr = args.this();
+    let body = match convert_xhr_send_body_from_args(scope, args) {
+        Ok(body) => body,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return true;
+        }
+    };
+
     if !xhr_ensure_send_allowed(scope, xhr) {
         return true;
     }
 
     let async_request = xhr_state_bool_property(scope, xhr, XHR_ASYNC_SLOT).unwrap_or(true);
-
     let method =
         xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_else(|| "GET".to_owned());
-    let prepared_body = match prepare_xhr_send_body_from_args(scope, args, &method) {
+    let prepared_body = match body.prepare(scope, &method) {
         Ok(body) => body,
         Err(error) => {
             webidl::throw_error(scope, &error);
