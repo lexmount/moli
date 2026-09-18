@@ -9,7 +9,7 @@ fn detached_document_shallow_clones_are_empty_and_accept_a_new_root() {
         .expect("Document shallow clone probe should evaluate");
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["checks"], 245);
+    assert_eq!(result["checks"], 273);
 }
 
 #[test]
