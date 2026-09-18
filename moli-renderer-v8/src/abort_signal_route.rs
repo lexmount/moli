@@ -46,7 +46,7 @@ impl AbortAlgorithm {
 /// Most internal abort algorithms cannot throw. Observable iterator closing
 /// is an exception: its synchronous return() failure escapes AbortController.abort.
 /// Keep this policy on the native callback, in the existing signal-owned list.
-pub(crate) fn invoke_abort_algorithm<'s>(
+fn invoke_abort_algorithm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     label: &str,
     algorithm: v8::Local<'s, v8::Function>,
@@ -65,6 +65,46 @@ pub(crate) fn invoke_abort_algorithm<'s>(
             signal.into(),
             &[reason],
         );
+        true
+    }
+}
+
+/// A multi-source Observable shares a signal between its producers. A failing
+/// IteratorClose must not leave later producers active. Finish the cancellation
+/// snapshot before propagating its first exception to the abort caller.
+pub(crate) fn invoke_abort_algorithms<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    label: &str,
+    signal: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+    algorithms: Vec<AbortAlgorithm>,
+) -> bool {
+    let mut first_error = None;
+    for algorithm in algorithms {
+        let Some(algorithm) = algorithm.prepare(scope) else {
+            continue;
+        };
+        let exception = {
+            v8::tc_scope!(let scope, scope);
+            if invoke_abort_algorithm(scope, label, algorithm, signal, reason) {
+                None
+            } else {
+                let Some(error) = scope.exception() else {
+                    // Do not resume script execution after V8 termination.
+                    return false;
+                };
+                scope.reset();
+                Some(error)
+            }
+        };
+        if first_error.is_none() {
+            first_error = exception;
+        }
+    }
+    if let Some(error) = first_error {
+        scope.throw_exception(error);
+        false
+    } else {
         true
     }
 }
