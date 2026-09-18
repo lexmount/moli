@@ -115,13 +115,9 @@ impl JsContextHost {
         else {
             return Ok(());
         };
-        job.script_nonce = self
-            .dom_host()
-            .node(script_handle)
-            .and_then(crate::dom::native::Node::as_element)
-            .and_then(|element| element.cryptographic_nonce())
-            .map(str::to_owned)
-            .or_else(|| self.dom_host().get_attribute(script_handle, "nonce"));
+        job.script_nonce =
+            crate::host::script_element_nonce_for_csp(self.dom_host(), script_handle)
+                .map(str::to_owned);
         job.script_integrity = self.dom_host().get_attribute(script_handle, "integrity");
         // Commit before entering V8: the script can remove and reinsert itself,
         // mutate another pending script, or replace its preparation Document.

@@ -74,10 +74,6 @@ html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigati
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
-html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location-assign.html
-html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location-href.html
-html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location.html
-html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-window-open.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/unknown-protocol-reload-crash.html
