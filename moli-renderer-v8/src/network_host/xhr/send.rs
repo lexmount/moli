@@ -231,11 +231,6 @@ pub(super) fn xhr_send_callback<'s>(
         set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, internal_id as f64);
         schedule_xhr_timeout(scope, host, xhr, internal_id);
     } else {
-        if !host.allow_synchronous_xhr_request(&prepared.resolved_url) {
-            set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
-            throw_type_error(scope, "Synchronous XMLHttpRequest request limit exceeded");
-            return;
-        }
         send_synchronous_network_xhr(scope, host, xhr, prepared, loader);
     }
 }

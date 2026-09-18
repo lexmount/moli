@@ -3570,80 +3570,169 @@ async fn synchronous_xhr_cancel_is_replayed_for_abort_handler_xhr() {
     .await;
 }
 
-#[tokio::test]
-async fn synchronous_xhr_repeated_url_limit_breaks_request_floods() {
-    run_page_vm_async_test(async move {
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("bind sync XHR flood test server");
-        let addr = listener.local_addr().expect("sync XHR flood server addr");
-        let base_url = format!("http://{addr}");
-        let server = std::thread::Builder::new()
-            .name("sync-xhr-flood-test-server".to_owned())
-            .spawn(move || {
-                use std::io::{Read, Write};
+fn spawn_repeated_synchronous_xhr_server(
+    status: u16,
+) -> (
+    String,
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<usize>,
+) {
+    use std::io::Write;
+    use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 
-                for _ in 0..32 {
-                    let (mut stream, _) = listener.accept().expect("accept sync XHR flood request");
-                    let mut request = Vec::new();
-                    let mut byte = [0_u8; 1];
-                    loop {
-                        stream
-                            .read_exact(&mut byte)
-                            .expect("read sync XHR flood request");
-                        request.push(byte[0]);
-                        if request.ends_with(b"\r\n\r\n") {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("bind repeated synchronous XHR server");
+    let addr = listener.local_addr().expect("synchronous XHR server addr");
+    listener
+        .set_nonblocking(true)
+        .expect("allow synchronous XHR server shutdown");
+    let (shutdown, stop) = std::sync::mpsc::channel();
+    let server = std::thread::Builder::new()
+        .name("sync-xhr-repetition-server".to_owned())
+        .spawn(move || {
+            let mut received = 0;
+            while matches!(stop.try_recv(), Err(TryRecvError::Empty)) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if !matches!(
+                            stop.recv_timeout(Duration::from_millis(1)),
+                            Err(RecvTimeoutError::Timeout)
+                        ) {
                             break;
                         }
+                        continue;
                     }
-                    let body = "retry";
-                    let response = format!(
-                        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    stream
-                        .write_all(response.as_bytes())
-                        .expect("write sync XHR flood response");
-                }
-            })
-            .expect("spawn sync XHR flood test server");
+                    Err(error) => panic!("accept repeated synchronous XHR: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound synchronous XHR request read");
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound synchronous XHR response write");
+                let request = read_blocking_http_request_head(&mut stream);
+                assert!(request.starts_with("GET /repeated HTTP/1.1\r\n"));
+                let reason = if status == 200 { "OK" } else { "Bad Request" };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: 5\r\nConnection: close\r\n\r\nreply"
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write repeated synchronous XHR response");
+                received += 1;
+            }
+            received
+        })
+        .expect("spawn repeated synchronous XHR server");
+    (format!("http://{addr}"), shutdown, server)
+}
+
+#[tokio::test]
+async fn synchronous_xhr_repeated_url_succeeds_across_objects_and_script_turns() {
+    run_page_vm_async_test(async move {
+        for status in [200, 400] {
+            let (base_url, shutdown, server) = spawn_repeated_synchronous_xhr_server(status);
+            let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
+            let mut page_vm = test_page_vm_with_document_url(document_url);
+            let local_executor = page_vm.local_executor.clone();
+            let xhr_url = serde_json::to_string(&format!("{base_url}/repeated"))
+                .expect("serialize repeated XHR URL");
+
+            local_executor
+                .run(async move {
+                    for reuse in [false, true] {
+                        for count in [64, 16] {
+                            let observed = page_vm
+                                .vm_mut()
+                                .eval(&format!(
+                                    r#"
+                                    (() => {{
+                                        globalThis.repeatedXhr ??= new XMLHttpRequest();
+                                        const results = [];
+                                        for (let i = 0; i < {count}; i++) {{
+                                            const xhr = {reuse} ? repeatedXhr : new XMLHttpRequest();
+                                            xhr.open("GET", {xhr_url}, false);
+                                            xhr.send();
+                                            results.push([xhr.status, xhr.responseText, xhr.readyState]);
+                                        }}
+                                        return JSON.stringify(results);
+                                    }})()
+                                    "#
+                                ))
+                                .expect("finite repeated synchronous XHR should complete");
+                            let observed: Vec<(u16, String, u8)> =
+                                serde_json::from_str(&observed).expect("parse repeated XHR results");
+                            assert_eq!(observed, vec![(status, "reply".to_owned(), 4); count]);
+                        }
+                    }
+                })
+                .await;
+
+            drop(shutdown);
+            assert_eq!(server.join().expect("join repeated XHR server"), 160);
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn synchronous_xhr_runaway_loop_is_terminated_by_watchdog_and_recovers() {
+    run_page_vm_async_test(async move {
+        let (base_url, shutdown, server) = spawn_repeated_synchronous_xhr_server(200);
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
-        let xhr_url = format!("{base_url}/sync-xhr-flood");
-        let xhr_url_literal = serde_json::to_string(&xhr_url).expect("serialize xhr url");
+        let xhr_url = serde_json::to_string(&format!("{base_url}/repeated"))
+            .expect("serialize repeated XHR URL");
 
-        let observed = local_executor
+        local_executor
             .run(async move {
-                page_vm.vm_mut().eval(&format!(
-                    r#"
-                    (() => {{
-                        let completed = 0;
-                        let thrown = "";
-                        for (let i = 0; i < 33; i++) {{
-                            const xhr = new XMLHttpRequest();
-                            xhr.open("GET", {xhr_url_literal}, false);
-                            try {{
+                let _watchdog_timeout =
+                    crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+                        crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+                        Duration::from_millis(500),
+                    );
+                let started = Instant::now();
+                let error = page_vm
+                    .vm_mut()
+                    .exec(
+                        &format!(
+                            r#"
+                            for (;;) {{
+                                const xhr = new XMLHttpRequest();
+                                xhr.open("GET", {xhr_url}, false);
                                 xhr.send();
-                                completed++;
-                            }} catch (error) {{
-                                thrown = `${{error && error.name}}:${{error && error.message}}`;
-                                break;
                             }}
-                        }}
-                        return JSON.stringify({{ completed, thrown }});
-                    }})()
-                    "#
-                ))
+                            "#
+                        ),
+                        None,
+                    )
+                    .expect_err("watchdog should terminate a runaway synchronous XHR loop");
+                assert!(started.elapsed() < Duration::from_secs(4));
+                assert!(
+                    error.to_string().contains("script execution exceeded"),
+                    "unexpected watchdog error: {error}"
+                );
+                let recovered = page_vm
+                    .vm_mut()
+                    .eval(&format!(
+                        r#"
+                        (() => {{
+                            const xhr = new XMLHttpRequest();
+                            xhr.open("GET", {xhr_url}, false);
+                            xhr.send();
+                            return `${{xhr.status}}:${{xhr.responseText}}`;
+                        }})()
+                        "#
+                    ))
+                    .expect("synchronous XHR should work after watchdog termination");
+                assert_eq!(recovered, "200:reply");
             })
-            .await
-            .expect("sync XHR flood test should run on owner lane");
+            .await;
 
-        server.join().expect("sync XHR flood server should finish");
-        assert_eq!(
-            observed,
-            r#"{"completed":32,"thrown":"TypeError:Synchronous XMLHttpRequest request limit exceeded"}"#
-        );
+        drop(shutdown);
+        assert!(server.join().expect("join repeated XHR server") > 1);
     })
     .await;
 }
