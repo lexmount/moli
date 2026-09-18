@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_observable_take_until_preserves_conversion_notifier_order_sharing_and_cancellation()
+{
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(value => {{ postMessage(value); close(); }});",
+            include_str!("../../../../tests/fixtures/observable-take-until.js")
+        ),
+        "https://observable-take-until.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 154, "{result}");
+}
+
+#[tokio::test]
 async fn worker_observable_count_operators_preserve_conversion_sharing_reentrancy_and_cancellation()
 {
     ensure_v8();
