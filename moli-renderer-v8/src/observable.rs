@@ -9,6 +9,7 @@ mod consume;
 mod event_target;
 mod finally;
 mod first;
+mod flat_map;
 mod from;
 mod inspect;
 mod observer;
@@ -34,6 +35,8 @@ struct ObservablePrototype {
     subscribe: (),
     #[webapi(method, length = 1, callback = transform::map)]
     map: (),
+    #[webapi(method = "flatMap", length = 1, callback = flat_map::flat_map)]
+    flat_map: (),
     #[webapi(method, length = 1, callback = transform::filter)]
     filter: (),
     #[webapi(method, length = 1, callback = transform::take)]
@@ -318,6 +321,7 @@ fn subscribe_internal<'s>(
             && !until::subscribe(scope, observable, subscriber)
             && !inspect::subscribe(scope, observable, subscriber)
             && !finally::subscribe(scope, observable, subscriber)
+            && !flat_map::subscribe(scope, observable, subscriber)
         {
             event_target::subscribe(scope, observable, subscriber);
         }
