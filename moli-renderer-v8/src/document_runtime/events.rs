@@ -32,9 +32,19 @@ impl DocumentRuntime {
             EventTargetHandle::Window => clear_window,
             EventTargetHandle::ChildWindow(_) => clear_window,
             EventTargetHandle::Node(handle) => {
-                handle == document_handle
-                    || (dom_host.owner_document_handle(handle) == Some(document_handle)
-                        && dom_host.is_connected(handle))
+                // Retiring a browsing context can disconnect the native tree
+                // without removing its Document/child relationships.
+                let mut current = Some(handle);
+                while let Some(node) = current {
+                    if node == document_handle {
+                        return true;
+                    }
+                    current = dom_host
+                        .dom()
+                        .parent_node(node)
+                        .or_else(|| dom_host.shadow_root_host(node));
+                }
+                false
             }
         })
     }
