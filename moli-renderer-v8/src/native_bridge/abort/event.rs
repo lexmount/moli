@@ -1,4 +1,4 @@
-use crate::abort_signal_route::{AbortAlgorithm, invoke_abort_algorithm};
+use crate::abort_signal_route::AbortAlgorithm;
 
 pub(super) fn invoke_abort_algorithms<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -7,21 +7,13 @@ pub(super) fn invoke_abort_algorithms<'s>(
     abort_algorithms: Vec<AbortAlgorithm>,
 ) -> bool {
     let signal = local_object_in_scope(scope, signal);
-    for algorithm in abort_algorithms {
-        let Some(algorithm) = algorithm.prepare(scope) else {
-            continue;
-        };
-        if !invoke_abort_algorithm(
-            scope,
-            "AbortSignal abort algorithm",
-            algorithm,
-            signal,
-            reason,
-        ) {
-            return false;
-        }
-    }
-    true
+    crate::abort_signal_route::invoke_abort_algorithms(
+        scope,
+        "AbortSignal abort algorithm",
+        signal,
+        reason,
+        abort_algorithms,
+    )
 }
 
 pub(super) fn local_object_in_scope<'s>(
