@@ -2392,7 +2392,6 @@ mod window_getter_consolidation;
 mod window_receiver_access;
 mod worklet_interfaces;
 
-mod string_timers;
 
 mod history_replace_forward;
 
