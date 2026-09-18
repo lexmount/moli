@@ -291,6 +291,10 @@ impl ParserConnectedScriptBridge {
         self.parser_control.enter_parser_script_nesting()
     }
 
+    pub(crate) fn parser_script_nesting_level(&self) -> usize {
+        self.parser_control.parser_script_nesting_level()
+    }
+
     pub(crate) fn run_state(&self) -> DocumentParserRunState {
         self.parser_control.run_state()
     }

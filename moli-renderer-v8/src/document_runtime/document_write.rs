@@ -2268,9 +2268,16 @@ impl DocumentRuntime {
                 blocking_signatures_before,
                 script,
             } => {
-                if self.has_pending_parser_script_blocking_stylesheet_signatures(
-                    blocking_signatures_before.iter(),
-                ) {
+                // Preparing an inline script while another parser script runs raises
+                // HTML's script nesting level above one, so it executes immediately.
+                let nested_inline =
+                    matches!(script.source, crate::planning::ScriptSource::Inline(_))
+                        && parser_bridge.parser_script_nesting_level() > 0;
+                if !nested_inline
+                    && self.has_pending_parser_script_blocking_stylesheet_signatures(
+                        blocking_signatures_before.iter(),
+                    )
+                {
                     if matches!(script.source, crate::planning::ScriptSource::External) {
                         self.start_document_write_stylesheet_blocked_external_script(
                             scope,
