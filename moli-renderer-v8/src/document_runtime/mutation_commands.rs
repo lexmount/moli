@@ -2273,11 +2273,7 @@ pub(super) fn prepare_runtime_mutation_effects(
     let meta_refresh_candidates = if document_followups_deferred_to_parser_owner {
         Vec::new()
     } else {
-        super::meta_refresh::meta_refresh_navigations_from_mutation(
-            dom_host,
-            effects,
-            document_url,
-        )
+        super::meta_refresh::meta_refresh_navigations_from_mutation(dom_host, effects, document_url)
     };
     let inline_style_attribute_csp_mutations = if options.check_inline_style_csp {
         effects
@@ -2319,14 +2315,14 @@ pub(super) fn prepare_runtime_mutation_effects(
     let mut font_face_use_roots = Vec::new();
     if !document_followups_deferred_to_parser_owner {
         font_face_use_roots = effects.tree().connected_roots().to_vec();
-    for mutation in effects.style().attribute_mutations() {
-        if mutation.namespace().is_none()
-            && mutation.local_name().eq_ignore_ascii_case("style")
-            && !font_face_use_roots.contains(&mutation.target())
-        {
-            font_face_use_roots.push(mutation.target());
+        for mutation in effects.style().attribute_mutations() {
+            if mutation.namespace().is_none()
+                && mutation.local_name().eq_ignore_ascii_case("style")
+                && !font_face_use_roots.contains(&mutation.target())
+            {
+                font_face_use_roots.push(mutation.target());
+            }
         }
-    }
     }
     RuntimeMutationApplyResult {
         changed: effects.did_change(),

@@ -398,10 +398,11 @@ impl JsContextHost {
         if self.force_fresh_layout_reads_for_test {
             return None;
         }
-        if !self.layout_snapshot_inputs_are_current(document) || !self
-            .document_layout_state
-            .borrow()
-            .latest_layout_matches_environment(self.layout_environment())
+        if !self.layout_snapshot_inputs_are_current(document)
+            || !self
+                .document_layout_state
+                .borrow()
+                .latest_layout_matches_environment(self.layout_environment())
         {
             return None;
         }

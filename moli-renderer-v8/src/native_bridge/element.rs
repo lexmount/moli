@@ -6448,8 +6448,9 @@ struct ShadowRootPrototypeReflectionDeclaration {
     #[webapi(
         accessor_property = "onslotchange",
         enumerable,
-        getter = event_handlers::node_event_handler_getter_function,
-        setter = event_handlers::node_event_handler_setter_function,
+        receiver = web_api_interfaces::ShadowRoot::is_instance,
+        getter = event_handlers::shadow_root_event_handler_getter_function,
+        setter = event_handlers::shadow_root_event_handler_setter_function,
         data = v8str(scope, "onslotchange")
     )]
     on_slot_change: (),
