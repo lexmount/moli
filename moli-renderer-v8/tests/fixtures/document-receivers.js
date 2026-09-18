@@ -15,7 +15,7 @@ async function documentReceiverProbe() {
       'URL', 'documentURI', 'readyState', 'contentType', 'characterSet', 'charset',
       'inputEncoding', 'compatMode', 'lastModified', 'referrer', 'defaultView',
       'activeElement', 'implementation', 'fonts', 'currentScript', 'hidden',
-      'visibilityState', 'prerendering', 'domain', 'scrollingElement'
+      'visibilityState', 'prerendering', 'wasDiscarded', 'domain', 'scrollingElement'
     ];
     let traps = 0;
     const revoked = Proxy.revocable(document, {});
@@ -71,11 +71,14 @@ async function documentReceiverProbe() {
         check(`${realmName}/domain/genuine-conversion-${index}`, caught === sentinel, true);
       }
       check(`${realmName}/domain/conversion-count`, conversions, genuine.length);
+      const ready = Object.getOwnPropertyDescriptor(realm.Document.prototype, 'onreadystatechange');
       for (const [name, descriptor] of [
+        ['onreadystatechange', ready],
         ['onmouseenter', Object.getOwnPropertyDescriptor(realm.HTMLElement.prototype, 'onmouseenter')],
         ['onmouseleave', Object.getOwnPropertyDescriptor(realm.HTMLElement.prototype, 'onmouseleave')]
       ]) {
-        const incompatible = invalid.filter(receiver => receiver !== element);
+        const incompatible = name === 'onreadystatechange'
+          ? invalid : invalid.filter(receiver => receiver !== element);
         check(`${realmName}/${name}/lenient`, incompatible.map(receiver => {
           try {
             return descriptor.get.call(receiver) === undefined &&
