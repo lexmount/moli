@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn detached_document_shallow_clones_are_empty_and_accept_a_new_root() {
+    let mut vm = new_storage_test_vm("https://document-shallow-clone.test/");
+    let fixture = include_str!("../../../../tests/fixtures/document-shallow-clone.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({fixture})"))
+        .expect("Document shallow clone probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 273);
+}
+
+#[test]
 fn detached_document_content_type_controls_element_creation_after_root_mutations_and_cloning() {
     let mut vm = new_storage_test_vm("https://document-create-element-content-type.test/");
     let fixture =
