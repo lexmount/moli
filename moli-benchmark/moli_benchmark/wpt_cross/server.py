@@ -79,6 +79,7 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
     "/fetch/api/resources/stash-take.py",
@@ -1656,6 +1657,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1683,6 +1686,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1731,6 +1736,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1753,6 +1760,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
             if unquote(urlparse(self.path).path) in {
                 "/xhr/resources/inspect-headers.py", "/xhr/resources/echo-headers.py",
             }:
@@ -1884,6 +1893,8 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_empty_location_resource(emit_body=emit_body):
+                return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
             parsed = urlparse(self.path)
@@ -2422,6 +2433,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
+                return self._serve_empty_location_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             raise AttributeError(name)
@@ -2486,6 +2499,19 @@ def _make_handler(
                 return
             self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
                              status_code=status, status_text=reason)
+
+        def _serve_empty_location_resource(self, *, emit_body: bool = True) -> bool:
+            if unquote(urlparse(self.path).path) != FETCH_EMPTY_LOCATION_PATH:
+                return False
+            # The upstream handler ignores request data and responds immediately.
+            # Close the connection so an unfinished upload is never another request.
+            self.close_connection = True
+            self._send_bytes(
+                None, b"", emit_body=emit_body, status_code=302,
+                extra_headers=[("Connection", "close"), ("Location", "")],
+                cache_control=None,
+            )
+            return True
 
         def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
             parsed = urlparse(self.path)
