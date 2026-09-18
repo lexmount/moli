@@ -42,17 +42,33 @@ pub(super) fn invoke<'s>(
     carrier: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Local<'s, v8::Value>> {
+    invoke_value(scope, carrier, arguments).err()
+}
+
+/// The same typed boundary, retaining the raw result for any-returning
+/// callbacks such as reducers. This does not assimilate returned thenables.
+pub(super) fn invoke_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    carrier: v8::Local<'s, v8::Object>,
+    arguments: &[v8::Local<'s, v8::Value>],
+) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
     let callback = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
     let context = callback.relevant_context(scope);
     if !context_is_current(scope, context) {
-        return None;
+        return Ok(v8::undefined(scope).into());
     }
     v8::tc_scope!(let scope, scope);
     let receiver = v8::undefined(scope).into();
-    invoke_synchronous_webidl_callback_function(scope, &callback, receiver, arguments);
+    let result = invoke_synchronous_webidl_callback_function(scope, &callback, receiver, arguments);
     let exception = scope.exception();
     scope.reset();
-    exception
+    if let Some(exception) = exception {
+        Err(exception)
+    } else {
+        Ok(result
+            .map(|value| v8::Local::new(scope, value))
+            .unwrap_or_else(|| v8::undefined(scope).into()))
+    }
 }
 
 pub(super) fn report_callback_exception<'s>(
