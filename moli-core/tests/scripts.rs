@@ -40,6 +40,9 @@ mod document_write_insertion;
 #[path = "scripts/document_write_errors.rs"]
 mod document_write_errors;
 
+#[path = "scripts/document_write_stylesheets.rs"]
+mod document_write_stylesheets;
+
 #[path = "scripts/parser_cleanup.rs"]
 mod parser_cleanup;
 
