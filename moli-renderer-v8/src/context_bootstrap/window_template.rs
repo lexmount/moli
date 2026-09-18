@@ -17,40 +17,16 @@ use crate::{
     network_host,
     queue_microtask::window_queue_microtask_callback,
     util::{
-        call_script_visible_function, get_private_value, global_constructor_prototype,
-        set_private_value, v8str,
+        call_script_visible_function, get_private_value, global_constructor_object,
+        global_constructor_prototype, set_private_value, v8str,
     },
     window_host,
 };
 use anyhow::{Result, anyhow};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
+const WINDOW_NAMED_PROPERTIES_READY_SLOT: &str = "__moliWindowNamedPropertiesReady";
 const WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT: &str = "__moliWindowNamedPropertiesReflectSet";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WindowNamedPropertiesProxyHandlerDeclaration {
-    #[webapi(method, length = 4, callback = window_named_properties_proxy_set_callback)]
-    set: (),
-    #[webapi(
-        method,
-        length = 2,
-        callback = window_named_properties_proxy_set_prototype_of_callback
-    )]
-    set_prototype_of: (),
-    #[webapi(
-        method,
-        length = 3,
-        callback = window_named_properties_proxy_reject_callback
-    )]
-    define_property: (),
-    #[webapi(
-        method,
-        length = 2,
-        callback = window_named_properties_proxy_reject_callback
-    )]
-    delete_property: (),
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable)]
@@ -401,53 +377,161 @@ pub(crate) fn install_window_own_template_bindings<'s>(
     WindowMediaTemplateMethodsDeclaration::initialize_prototype_template(scope, window_template);
 }
 
-fn window_named_properties_proxy_set_callback<'s>(
+fn reject_window_named_properties_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
-    let receiver = args.get(3);
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    // V8 installs a constructor property while instantiating the intermediate
+    // FunctionTemplate. Bootstrap removes it before exposing this exotic object.
+    if !get_private_value(scope, args.holder(), WINDOW_NAMED_PROPERTIES_READY_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
+fn set_window_named_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: v8::Local<'s, v8::Name>,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    let holder = args.holder();
     let Some(reflect_set) =
-        get_private_value(scope, args.this(), WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT)
+        get_private_value(scope, holder, WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT)
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
+        return v8::Intercepted::kNo;
     };
+    if key.strict_equals(v8::Symbol::get_to_string_tag(scope).into()) {
+        rv.set_bool(false);
+        return v8::Intercepted::kYes;
+    }
+    // V8 calls this setter only when the interceptor holder is the receiver.
+    // Its ordinary Set fast paths can add properties without calling a definer,
+    // so only forward writes which reach an inherited accessor. Both prototypes
+    // above WindowProperties are ordinary objects with immutable prototypes.
+    let parent = holder
+        .get_prototype(scope)
+        .expect("WindowProperties has a parent");
+    let mut prototype = Some(parent);
+    let mut inherited_accessor = false;
+    while let Some(object) =
+        prototype.and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        let Some(descriptor) = object.get_own_property_descriptor(scope, key) else {
+            return v8::Intercepted::kYes;
+        };
+        if let Ok(descriptor) = v8::Local::<v8::Object>::try_from(descriptor) {
+            inherited_accessor = descriptor
+                .has_own_property(scope, v8str(scope, "set").into())
+                .unwrap_or(false);
+            break;
+        }
+        prototype = object.get_prototype(scope);
+    }
+    if !inherited_accessor {
+        rv.set_bool(false);
+        return v8::Intercepted::kYes;
+    }
     let undefined = v8::undefined(scope).into();
-    if let Some(set) = call_script_visible_function(
+    if let Some(result) = call_script_visible_function(
         scope,
         reflect_set,
         undefined,
-        &[target.into(), args.get(1), args.get(2), receiver],
+        &[parent, key.into(), value, holder.into()],
         "WindowProperties [[Set]]",
     ) {
-        rv.set(set);
+        rv.set_bool(result.boolean_value(scope));
     }
+    v8::Intercepted::kYes
 }
 
-fn window_named_properties_proxy_set_prototype_of_callback<'s>(
+fn window_named_properties_indexed_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let unchanged = v8::Local::<v8::Object>::try_from(args.get(0))
-        .ok()
-        .and_then(|target| target.get_prototype(scope))
-        .is_some_and(|prototype| prototype.strict_equals(args.get(1)));
-    rv.set(v8::Boolean::new(scope, unchanged).into());
+    index: u32,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    let key = v8::String::new(scope, &index.to_string()).expect("indexed property name");
+    set_window_named_property(scope, key.into(), value, args, rv)
 }
 
-fn window_named_properties_proxy_reject_callback<'s>(
+fn window_named_properties_definer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Boolean::new(scope, false).into());
+    _key: v8::Local<'_, v8::Name>,
+    _descriptor: &v8::PropertyDescriptor,
+    args: v8::PropertyCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    reject_window_named_properties_mutation(scope, args, rv)
+}
+
+fn window_named_properties_indexed_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _index: u32,
+    _descriptor: &v8::PropertyDescriptor,
+    args: v8::PropertyCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    reject_window_named_properties_mutation(scope, args, rv)
+}
+
+fn window_named_properties_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _key: v8::Local<'_, v8::Name>,
+    args: v8::PropertyCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    reject_window_named_properties_mutation(scope, args, rv)
+}
+
+fn window_named_properties_indexed_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    reject_window_named_properties_mutation(scope, args, rv)
+}
+
+pub(in crate::context_bootstrap) fn window_named_properties_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    event_target: v8::Local<'s, v8::FunctionTemplate>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template = v8::FunctionTemplate::new(scope, window_noop_callback);
+    template.inherit(event_target);
+    let prototype = template.prototype_template(scope);
+    prototype.set_immutable_proto();
+    prototype.set_with_attr(
+        v8::Symbol::get_to_string_tag(scope).into(),
+        v8str(scope, "WindowProperties").into(),
+        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
+    );
+    // The getters implement named-property visibility themselves. The mutation
+    // hooks must also see real own properties and symbols, so are not NON_MASKING.
+    prototype.set_named_property_handler(
+        v8::NamedPropertyHandlerConfiguration::new()
+            .getter(window_named_property_getter)
+            .setter(set_window_named_property)
+            .query(window_named_property_query)
+            .definer(window_named_properties_definer)
+            .deleter(window_named_properties_deleter),
+    );
+    prototype.set_indexed_property_handler(
+        v8::IndexedPropertyHandlerConfiguration::new()
+            .getter(window_named_properties_indexed_property_getter)
+            .setter(window_named_properties_indexed_setter)
+            .query(window_named_properties_indexed_property_query)
+            .definer(window_named_properties_indexed_definer)
+            .deleter(window_named_properties_indexed_deleter),
+    );
+    template
 }
 
 pub(super) fn install_window_named_properties_object(
@@ -457,91 +541,57 @@ pub(super) fn install_window_named_properties_object(
         .ok_or_else(|| anyhow!("missing Window.prototype for named properties object"))?;
     let event_target_prototype = global_constructor_prototype(scope, "EventTarget")
         .ok_or_else(|| anyhow!("missing EventTarget.prototype for named properties object"))?;
+    let window_constructor = global_constructor_object(scope, "Window")
+        .ok_or_else(|| anyhow!("missing Window constructor"))?;
+    let event_target_constructor = global_constructor_object(scope, "EventTarget")
+        .ok_or_else(|| anyhow!("missing EventTarget constructor"))?;
+    if !window_constructor
+        .set_prototype(scope, event_target_constructor.into())
+        .unwrap_or(false)
+    {
+        return Err(anyhow!("failed to link Window constructor to EventTarget"));
+    }
 
-    // Blink installs Window's named getter on an otherwise anonymous
-    // WindowProperties object between Window.prototype and
-    // EventTarget.prototype. Keeping the interceptor off the global instance
-    // means ordinary Window properties (especially the hot `document` getter)
-    // resolve before named DOM access is considered.
-    let named_properties_template = v8::ObjectTemplate::new(scope);
-    named_properties_template.set_with_attr(
-        v8::Symbol::get_to_string_tag(scope).into(),
-        v8str(scope, "WindowProperties").into(),
-        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
-    );
-    named_properties_template.set_named_property_handler(
-        v8::NamedPropertyHandlerConfiguration::new()
-            .getter(window_named_property_getter)
-            .query(window_named_property_query)
-            .flags(
-                // Window named properties must not mask real own/prototype
-                // properties. Let V8 skip the interceptor for non-string keys and
-                // perform the ordinary lookup before calling us for id/name misses.
-                v8::PropertyHandlerFlags::NON_MASKING
-                    | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
-            ),
-    );
-    // Indexed callbacks share the named-property visibility check, including
-    // real numeric properties inherited from EventTarget/Object prototypes.
-    named_properties_template.set_indexed_property_handler(
-        v8::IndexedPropertyHandlerConfiguration::new()
-            .getter(window_named_properties_indexed_property_getter)
-            .query(window_named_properties_indexed_property_query),
-    );
-    let named_properties_target = named_properties_template
-        .new_instance(scope)
-        .ok_or_else(|| anyhow!("failed to create Window named properties object"))?;
-    if !named_properties_target
-        .set_prototype(scope, event_target_prototype.into())
+    let named_properties = window_prototype
+        .get_prototype(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing Window named properties object"))?;
+    if !named_properties
+        .get_prototype(scope)
+        .is_some_and(|value| value.strict_equals(event_target_prototype.into()))
+    {
+        return Err(anyhow!("invalid Window named properties prototype chain"));
+    }
+    if !named_properties
+        .delete(scope, v8str(scope, "constructor").into())
         .unwrap_or(false)
     {
         return Err(anyhow!(
-            "failed to link Window named properties object to EventTarget.prototype"
-        ));
-    }
-    let handler = WindowNamedPropertiesProxyHandlerDeclaration {
-        set: (),
-        set_prototype_of: (),
-        define_property: (),
-        delete_property: (),
-    }
-    .bind(scope)
-    .map_err(|error| anyhow!("failed to create Window named properties proxy handler: {error}"))?;
-    // Proxy trap lookup traverses the handler's prototype chain. Inherited page
-    // properties must never become internal WindowProperties traps.
-    let null_prototype = v8::null(scope).into();
-    if !handler
-        .set_prototype(scope, null_prototype)
-        .unwrap_or(false)
-    {
-        return Err(anyhow!(
-            "failed to clear Window named properties proxy handler prototype"
+            "failed to remove Window named properties constructor"
         ));
     }
     let global = scope.get_current_context().global(scope);
     let reflect = global
         .get(scope, v8str(scope, "Reflect").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .ok_or_else(|| anyhow!("missing Reflect for Window named properties proxy"))?;
+        .ok_or_else(|| anyhow!("missing Reflect for Window named properties object"))?;
     let reflect_set = reflect
         .get(scope, v8str(scope, "set").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .ok_or_else(|| anyhow!("missing Reflect.set for Window named properties proxy"))?;
+        .ok_or_else(|| anyhow!("missing Reflect.set for Window named properties object"))?;
     set_private_value(
         scope,
-        handler,
+        named_properties,
         WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT,
         reflect_set.into(),
     );
-    let named_properties = v8::Proxy::new(scope, named_properties_target, handler)
-        .ok_or_else(|| anyhow!("failed to create Window named properties proxy"))?;
-    if !window_prototype
-        .set_prototype(scope, named_properties.into())
-        .unwrap_or(false)
-    {
-        return Err(anyhow!(
-            "failed to link Window.prototype to named properties object"
-        ));
-    }
+    let ready = v8::Boolean::new(scope, true);
+    set_private_value(
+        scope,
+        named_properties,
+        WINDOW_NAMED_PROPERTIES_READY_SLOT,
+        ready.into(),
+    );
+
     Ok(())
 }
