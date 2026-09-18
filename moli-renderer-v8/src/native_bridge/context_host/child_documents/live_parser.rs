@@ -1355,6 +1355,19 @@ impl PageScriptHost {
             .is_some_and(|owner| self.child_document_parsers.contains(owner))
     }
 
+    pub(crate) fn enter_child_parser_script_input_context(
+        &self,
+        child_handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<moli_parser::ParserInputContext> {
+        if self.current_child_document_task_owner(child_handle) != Some(owner) {
+            return None;
+        }
+        self.child_document_parsers
+            .insertion_handle(owner.document_owner())
+            .map(|insertion| insertion.enter_script_input_context())
+    }
+
     pub(in crate::native_bridge::context_host) fn pump_child_document_write_parser(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -1408,7 +1421,7 @@ impl PageScriptHost {
             } else if ready || parser_insertion_only && !executing_parser_script {
                 insertion.enqueue_script_input_html(chunk);
             } else if executing_parser_script {
-                if !insertion.append_to_current_inserted_input(&chunk) {
+                if !insertion.append_to_current_script_input(&chunk) {
                     insertion.enqueue_script_input_html(chunk);
                 }
             } else {
@@ -1801,6 +1814,9 @@ impl PageScriptHost {
             .and_then(|owner| self.child_document_parsers.insertion_handle(owner))
             .map(|insertion| insertion.control_handle().enter_parser_script_nesting());
         let result = {
+            let _input_context = parser_script_owner.and_then(|owner| {
+                self.enter_child_parser_script_input_context(child_handle, owner)
+            });
             let script_scope = &mut v8::ContextScope::new(scope, script_context);
             crate::script_vm::execute_source_text_on_current_stack(
                 script_scope,
