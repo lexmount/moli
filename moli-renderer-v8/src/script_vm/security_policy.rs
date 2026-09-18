@@ -129,13 +129,13 @@ impl ScriptVm {
     }
 }
 
-pub(super) unsafe extern "C" fn wasm_code_generation_check_callback(
+pub(crate) unsafe extern "C" fn wasm_code_generation_check_callback(
     context: v8::Local<'_, v8::Context>,
     _source: v8::Local<'_, v8::String>,
 ) -> bool {
     v8::callback_scope!(unsafe scope, context);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return true;
+        return crate::worker::worker_allows_wasm_code_generation_by_csp(scope).unwrap_or(true);
     };
     let host = unsafe { &mut *host_ptr };
     host.allows_wasm_code_generation_by_csp(scope)
