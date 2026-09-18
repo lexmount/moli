@@ -1,6 +1,131 @@
 use super::*;
 
 #[test]
+fn observable_catch_preserves_recovery_order_conversion_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-catch.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.catchResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-catch.js")
+    ))
+    .expect("Observable.catch fixture should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&vm.eval("catchResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 130, "{result}");
+}
+
+#[test]
+fn observable_catch_preserves_result_conversion_callback_and_cancellation_realms() {
+    let mut vm = new_storage_test_vm("https://observable-catch-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.catch realm");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.catchRealms = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-catch-realms.js")
+    ))
+    .expect("Observable.catch realms fixture should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&vm.eval("catchRealms").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 35, "{result}");
+}
+
+#[test]
+fn observable_catch_releases_exhausted_sources_and_callbacks_while_tracing_recovery() {
+    let mut vm = new_storage_test_vm("https://observable-catch-gc.test/");
+    vm.eval(r#"
+function makeCatchSource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+function makeCatchInner(entry) {
+  return new Observable(s => { entry.inner = new WeakRef(s); });
+}
+function makeCatcher(value) {
+  const token = {value};
+  return {token, callback: () => token.value};
+}
+globalThis.catchChains = [];
+for (const mode of ['abandoned', 'complete', 'source-abort', 'recover-complete', 'recover-error', 'recover-abort']) (() => {
+  const outer = makeCatchSource(), entry = {mode}, inner = makeCatchInner(entry), catcher = makeCatcher(inner);
+  const result = outer.source.catch(catcher.callback), controller = new AbortController();
+  const promise = result.toArray(mode.endsWith('abort') ? {signal: controller.signal} : undefined);
+  promise.catch(() => {}); outer.subscriber.next(1);
+  Object.assign(entry, {templates: [outer.source, result].map(v => new WeakRef(v)),
+    source: new WeakRef(outer.subscriber), innerTemplate: new WeakRef(inner),
+    callbacks: [catcher.callback, catcher.token].map(v => new WeakRef(v))});
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode.endsWith('abort')) entry.controller = controller;
+  catchChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+catchChains.every(c => c.templates.every(r => r.deref() === undefined)),
+catchChains.every(c => [c.source, c.innerTemplate, ...c.callbacks].every(r => (r.deref() !== undefined) === (c.mode !== 'abandoned')))
+])"#).unwrap(), "[true,true]");
+    vm.eval(
+        r#"
+for (const c of catchChains.filter(c => c.promise)) {
+  c.promise.then(v => { c.outcome = v; }, e => { c.outcome = e; });
+  const source = c.source.deref();
+  if (c.mode === 'complete') source.complete();
+  else if (c.mode === 'source-abort') c.controller.abort(c.mode);
+  else { source.error('original'); c.inner.deref().next(2); }
+}
+"#,
+    )
+    .unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+catchChains.every(c => c.source.deref() === undefined),
+catchChains.every(c => [c.innerTemplate, ...c.callbacks].every(r => r.deref() === undefined)),
+catchChains.filter(c => c.mode.startsWith('recover')).every(c => c.inner.deref() !== undefined),
+catchChains.find(c => c.mode === 'complete').outcome.join(',') === '1',
+catchChains.find(c => c.mode === 'source-abort').outcome === 'source-abort'
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true,true]"
+    );
+    vm.eval(
+        r#"
+for (const c of catchChains.filter(c => c.mode.startsWith('recover'))) {
+  const inner = c.inner.deref();
+  if (c.mode === 'recover-complete') inner.complete();
+  else if (c.mode === 'recover-error') inner.error(c.mode);
+  else c.controller.abort(c.mode);
+}
+"#,
+    )
+    .unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+catchChains.filter(c => c.inner).every(c => c.inner.deref() === undefined),
+catchChains.find(c => c.mode === 'recover-complete').outcome.join(',') === '1,2',
+catchChains.find(c => c.mode === 'recover-error').outcome === 'recover-error',
+catchChains.find(c => c.mode === 'recover-abort').outcome === 'recover-abort'
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true]"
+    );
+}
+
+#[test]
 fn observable_switch_map_preserves_switch_order_conversion_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-switch-map.test/");
     vm.eval(&format!(
