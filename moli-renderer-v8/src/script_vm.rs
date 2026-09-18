@@ -810,7 +810,9 @@ pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 #[cfg(test)]
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
 mod security_policy;
-pub(crate) use security_policy::string_code_generation_check_callback;
+pub(crate) use security_policy::{
+    string_code_generation_check_callback, wasm_code_generation_check_callback,
+};
 mod service_worker_client_message_body;
 #[cfg(test)]
 mod service_worker_client_message_test_support;

@@ -45,6 +45,9 @@ impl WorkerIsolateState {
         isolate.set_modify_code_generation_from_strings_callback(
             crate::script_vm::string_code_generation_check_callback,
         );
+        isolate.set_allow_wasm_code_generation_callback(
+            crate::script_vm::wasm_code_generation_check_callback,
+        );
         let runtime_inspector = WorkerRuntimeInspector::new(
             &mut isolate,
             inspector_task_runner.clone(),

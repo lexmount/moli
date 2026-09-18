@@ -6628,35 +6628,60 @@ pub(crate) fn worker_allows_eval_code_generation_by_csp(
     allow_trusted_types_eval: bool,
     source: Option<&str>,
 ) -> Option<bool> {
+    use crate::content_security_policy::ContentSecurityPolicyNonUrlKind;
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    worker_allows_compilation_by_csp(scope, kind, source)
+}
+
+pub(crate) fn worker_allows_wasm_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    worker_allows_compilation_by_csp(
+        scope,
+        crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval,
+        None,
+    )
+}
+
+fn worker_allows_compilation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    kind: crate::content_security_policy::ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
+) -> Option<bool> {
     let state = get_worker_state(scope)?;
-    let (wake_tx, mut report_only_violation, mut enforce_violation) = {
+    let (wake_tx, mut report_only_violations, mut enforce_violations) = {
         let state = state.borrow();
         let Some(protected_url) = state.current_script_url.as_ref() else {
             return Some(true);
         };
         (
             state.worker_wake_tx.clone(),
-            worker_eval_content_security_policy_violation(
+            worker_compilation_content_security_policy_violations(
                 &state,
                 protected_url,
-                allow_trusted_types_eval,
+                kind,
                 source,
                 crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
             ),
-            worker_eval_content_security_policy_violation(
+            worker_compilation_content_security_policy_violations(
                 &state,
                 protected_url,
-                allow_trusted_types_eval,
+                kind,
                 source,
                 crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
             ),
         )
     };
-    if (report_only_violation.is_some() || enforce_violation.is_some())
+    if kind != crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval
+        && (!report_only_violations.is_empty() || !enforce_violations.is_empty())
         && let Some((source_file, line_number, column_number)) =
             crate::content_security_policy::current_script_violation_location(scope)
     {
-        for violation in [&mut report_only_violation, &mut enforce_violation]
+        for violation in [&mut report_only_violations, &mut enforce_violations]
             .into_iter()
             .flatten()
         {
@@ -6665,13 +6690,8 @@ pub(crate) fn worker_allows_eval_code_generation_by_csp(
             violation.column_number = column_number;
         }
     }
-    if let Some(violation) = report_only_violation {
-        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
-            Box::new(violation),
-        ));
-    }
-    let allowed = enforce_violation.is_none();
-    if let Some(violation) = enforce_violation {
+    let allowed = enforce_violations.is_empty();
+    for violation in report_only_violations.into_iter().chain(enforce_violations) {
         let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
             Box::new(violation),
         ));
