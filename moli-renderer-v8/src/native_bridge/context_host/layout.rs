@@ -6,6 +6,7 @@ use moli_layout::{
 };
 
 use super::JsContextHost;
+use super::layout_snapshot::LayoutEnvironment;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
@@ -221,6 +222,7 @@ impl JsContextHost {
             return Ok(None);
         };
         let pass_viewport = request.viewport;
+        let environment = self.layout_environment();
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
         let mut pass = {
             let mut state = self.document_layout_state.borrow_mut();
@@ -307,7 +309,7 @@ impl JsContextHost {
         let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            state.publish_latest_layout(document, tree);
+            state.publish_latest_layout(document, tree, environment);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
@@ -336,14 +338,39 @@ impl JsContextHost {
         reason: LayoutFlushReason,
         viewport: LayoutViewport,
     ) -> bool {
+        self.with_reusable_layout_tree_for_document(document, reason, viewport, |_| ())
+            .is_some()
+    }
+
+    fn layout_environment(&self) -> LayoutEnvironment {
+        LayoutEnvironment {
+            viewport: self.style_viewport(),
+            media: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
+        }
+    }
+
+    fn with_reusable_layout_tree_for_document<T>(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        viewport: LayoutViewport,
+        inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>) -> T,
+    ) -> Option<T> {
         #[cfg(test)]
         if self.force_fresh_layout_reads_for_test {
-            return false;
+            return None;
+        }
+        if !self
+            .document_layout_state
+            .borrow()
+            .latest_layout_matches_environment(self.layout_environment())
+        {
+            return None;
         }
         self.with_latest_layout_tree_for_document(document, |tree| {
-            layout_tree_satisfies_request(tree, reason, viewport)
+            layout_tree_satisfies_request(tree, reason, viewport).then(|| inspect(tree))
         })
-        .unwrap_or(false)
+        .flatten()
     }
 
     /// Inspects the member tree for one exact Document in the single latest
@@ -401,23 +428,13 @@ impl JsContextHost {
         viewport: LayoutViewport,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        #[cfg(test)]
-        let reuse_latest = !self.force_fresh_layout_reads_for_test;
-        #[cfg(not(test))]
-        let reuse_latest = true;
-        let cached = if reuse_latest {
-            self.with_latest_layout_tree_for_document(document, |tree| {
-                if !layout_tree_satisfies_request(tree, reason, viewport) {
-                    return None;
-                }
+        let cached = self
+            .with_reusable_layout_tree_for_document(document, reason, viewport, |tree| {
                 self.last_layout_pass_metrics
                     .get()
                     .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
             })
-            .flatten()
-        } else {
-            None
-        };
+            .flatten();
         if let Some(answers) = cached {
             self.layout_snapshot_cache_hits
                 .set(self.layout_snapshot_cache_hits.get().saturating_add(1));

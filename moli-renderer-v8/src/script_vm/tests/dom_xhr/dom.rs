@@ -2606,6 +2606,131 @@ fn document_point_queries_refresh_responsive_geometry_after_viewport_resize() {
 }
 
 #[test]
+fn geometry_queries_refresh_after_screen_only_environment_changes() {
+    // Exercise each entry point without first warming the other layout mode.
+    for hit_test in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://geometry-screen-environment.test/",
+            r#"<html><head><style>
+                body { margin: 0 }
+                #target { width: 100px; height: 100px }
+                @media (device-width: 1280px), (device-height: 720px) {
+                    #target { width: 200px }
+                }
+            </style></head><body><div id=target></div></body></html>"#,
+        );
+        let mut surface = crate::protocol_types::ViewportSurface {
+            inner_width: 800,
+            inner_height: 600,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        };
+        let before = vm.layout_pass_observability_for_test().1;
+        for (screen_width, screen_height, expected_width, expected_passes) in [
+            (1920, 1080, 100, 1),
+            (1280, 1080, 200, 2),
+            (1280, 1080, 200, 2),
+            (1920, 1080, 100, 3),
+            (1920, 720, 200, 4),
+            (1920, 720, 200, 4),
+            (1920, 1080, 100, 5),
+        ] {
+            surface.screen_width = screen_width;
+            surface.screen_height = screen_height;
+            // Moving the window changes the surface but not the style environment.
+            surface.window_x += 1;
+            let passes = vm.layout_pass_observability_for_test().1;
+            let cache = vm.layout_snapshot_cache_observability_for_test();
+            vm.set_viewport_surface(Some(surface))
+                .expect("screen environment should update");
+            assert_eq!(vm.layout_snapshot_cache_observability_for_test(), cache);
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                passes,
+                "an environment update alone must not trigger layout"
+            );
+            let result = vm
+                .eval(if hit_test {
+                    r#"JSON.stringify([
+                        document.elementFromPoint(150, 20)?.id === 'target',
+                        document.elementsFromPoint(150, 20).some(element => element.id === 'target'),
+                        document.getElementById('target').getBoundingClientRect().width
+                    ])"#
+                } else {
+                    "String(document.getElementById('target').getBoundingClientRect().width)"
+                })
+                .expect("geometry query after screen environment update");
+            let hit = expected_width == 200;
+            let expected = if hit_test {
+                format!("[{hit},{hit},{expected_width}]")
+            } else {
+                expected_width.to_string()
+            };
+            assert_eq!(result, expected, "screen {screen_width}x{screen_height}");
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + expected_passes,
+                "screen media changes refresh once; unchanged style inputs reuse the tree"
+            );
+        }
+    }
+}
+
+#[test]
+fn geometry_queries_refresh_after_media_environment_changes() {
+    use crate::protocol_types::EmulatedMediaOverrides;
+
+    for overrides in [
+        EmulatedMediaOverrides {
+            media: Some("print".to_owned()),
+            ..Default::default()
+        },
+        EmulatedMediaOverrides {
+            color_scheme: Some("dark".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://geometry-media-environment.test/",
+            r#"<html><head><style>
+                body { margin: 0 }
+                #target { width: 100px; height: 100px }
+                @media print, (prefers-color-scheme: dark) { #target { width: 200px } }
+            </style></head><body><div id=target></div></body></html>"#,
+        );
+        let defaults = EmulatedMediaOverrides::default();
+        let before = vm.layout_pass_observability_for_test().1;
+        for (environment, expected_width, expected_passes) in [
+            (&defaults, 100, 1),
+            (&overrides, 200, 2),
+            (&overrides, 200, 2),
+            (&defaults, 100, 3),
+        ] {
+            let passes = vm.layout_pass_observability_for_test().1;
+            vm.set_emulated_media(environment);
+            assert_eq!(vm.layout_pass_observability_for_test().1, passes);
+            let result = vm
+                .eval(
+                    r#"JSON.stringify([
+                        document.elementFromPoint(150, 20)?.id === 'target',
+                        document.getElementById('target').getBoundingClientRect().width
+                    ])"#,
+                )
+                .expect("geometry query after media environment update");
+            assert_eq!(
+                result,
+                format!("[{},{}]", expected_width == 200, expected_width)
+            );
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                before + expected_passes,
+                "media changes refresh once; repeated queries reuse the new environment"
+            );
+        }
+    }
+}
+
+#[test]
 fn document_point_queries_parse_webidl_coordinates() {
     let mut vm = new_parsed_test_vm(
         "https://document-point-query-webidl.test/path/index.html",
