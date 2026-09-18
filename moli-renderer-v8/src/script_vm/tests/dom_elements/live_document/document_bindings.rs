@@ -222,7 +222,7 @@ root.appendChild(frame);
         .filter(|check| check["pass"] != true)
         .collect();
     assert_eq!(result["state"], "pass", "{failures:?}");
-    assert_eq!(checks.len(), 111);
+    assert_eq!(checks.len(), 117);
 }
 
 #[test]
