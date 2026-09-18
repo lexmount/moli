@@ -2931,7 +2931,7 @@ fn detached_first_exposure_retires_prebootstrapped_child_realm() {
         vm.prebootstrapped_child_default_contexts
             .borrow()
             .is_empty(),
-        "the owner source must detach and release an unclaimed realm for a removed LocalWindow"
+        "the owner source must release its unclaimed realm record for a removed LocalWindow"
     );
     assert_eq!(
         vm._context_host

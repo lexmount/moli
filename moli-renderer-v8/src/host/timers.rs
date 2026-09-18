@@ -11,9 +11,9 @@ use crate::{
     native_bridge::{
         CALLBACK_ERROR_WINDOW_HANDLE_SLOT, OwnerDispatchScope, ResourceTimingBufferId,
         RuntimeObservableContextToken, WindowExecutionContextBinding,
-        WindowExecutionContextIdentity, WindowExecutionContextOwner, active_child_window_handle,
-        active_lightweight_popup_id, current_runtime_observable_context_token,
-        lightweight_popup_id_from_window,
+        WindowExecutionContextIdentity, WindowExecutionContextOwner, WindowOperationReceiver,
+        active_child_window_handle, active_lightweight_popup_id,
+        current_runtime_observable_context_token, lightweight_popup_id_from_window,
     },
     page_task_queue::RendererPageTimerSelection,
     script_provenance::CompiledStringProvenance,
@@ -973,8 +973,25 @@ fn scheduled_timer_owner_for_target<'s>(
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
     let execution_context_owner = host.current_window_execution_context_owner(dispatch_scope)?;
-    let binding =
-        host.clone_window_execution_context_binding(scope, execution_context_owner, dispatch_scope);
+    let binding = match (owner, dispatch_scope, receiver) {
+        (HostTimerOwner::Window, OwnerDispatchScope::Child(_), Some(receiver))
+            if crate::web_api_interfaces::Window::is_instance(scope, receiver) =>
+        {
+            // A retained Window can share an iframe handle with a new browsing
+            // context after removal/reinsertion. Scheduling and cancellation
+            // must use that receiver's exact realm, never the replacement.
+            Some(
+                WindowOperationReceiver::capture_and_authorize(scope, receiver, host)
+                    .ok()?
+                    .resolve_live_binding(host)?,
+            )
+        }
+        _ => host.clone_window_execution_context_binding(
+            scope,
+            execution_context_owner,
+            dispatch_scope,
+        ),
+    };
 
     // Lightweight popups share the renderer isolate and install their context
     // lazily. Capture the popup object's exact creation context before queueing.
