@@ -3711,7 +3711,9 @@ impl ScriptVm {
                         let scope = pin!(v8::HandleScope::new(isolate));
                         let scope = &mut scope.init();
                         let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                        context.detach_global();
+                        self._context_host
+                            .borrow()
+                            .detach_child_window_proxy_for_reuse(scope, child_handle, context);
                         Ok(())
                     })?;
                 // Cancellation can synchronously install a successor realm or
@@ -3833,11 +3835,11 @@ impl ScriptVm {
             let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
             stale_prebootstrapped_handles
                 .into_iter()
-                .filter_map(|handle| contexts.remove(&handle))
+                .filter_map(|handle| contexts.remove(&handle).map(|context| (handle, context)))
                 .collect::<Vec<_>>()
         };
         if !stale_prebootstrapped_contexts.is_empty() {
-            for context in &stale_prebootstrapped_contexts {
+            for (_, context) in &stale_prebootstrapped_contexts {
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
@@ -3847,7 +3849,7 @@ impl ScriptVm {
             }
             {
                 let mut host = self._context_host.borrow_mut();
-                for context in &stale_prebootstrapped_contexts {
+                for (_, context) in &stale_prebootstrapped_contexts {
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
                         self.resource_owner_id,
@@ -3859,8 +3861,10 @@ impl ScriptVm {
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    for context in &stale_prebootstrapped_contexts {
-                        v8::Local::new(scope, &context.context).detach_global();
+                    let host = self._context_host.borrow();
+                    for (handle, context) in &stale_prebootstrapped_contexts {
+                        let context = v8::Local::new(scope, &context.context);
+                        host.detach_child_window_proxy_for_reuse(scope, *handle, context);
                     }
                     Ok(())
                 });
@@ -3994,10 +3998,14 @@ impl ScriptVm {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                local_context.detach_global();
                 let host_ptr = (*context_host).as_ptr();
                 let host = unsafe { &mut *host_ptr };
-                if host.child_browsing_context_is_live(context.child_handle)
+                let detached = host.detach_child_window_proxy_for_reuse(
+                    scope,
+                    context.child_handle,
+                    local_context,
+                );
+                if detached
                     && !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
                 {
                     anyhow::bail!("failed to park the live child WindowProxy between realms");
@@ -4017,7 +4025,7 @@ impl ScriptVm {
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "detached retired child WindowProxy global for identity reuse"
+                "retired child Window realm while preserving its WindowProxy identity"
             );
         }
     }
