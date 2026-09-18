@@ -33,6 +33,10 @@ struct ObservablePrototype {
     map: (),
     #[webapi(method, length = 1, callback = transform::filter)]
     filter: (),
+    #[webapi(method, length = 1, callback = transform::take)]
+    take: (),
+    #[webapi(method, length = 1, callback = transform::drop)]
+    drop: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
     #[webapi(method, length = 0, returns_promise, callback = collect::last)]
