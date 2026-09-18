@@ -1,5 +1,8 @@
 mod cache;
 mod collectors;
+mod request_headers;
+
+pub(crate) use request_headers::RequestHeaderList;
 
 use std::{
     ffi::{c_char, c_long},
@@ -513,8 +516,8 @@ pub(crate) fn store_response_cookies(
     ))
 }
 
-pub(crate) fn configure_easy<H: Handler>(
-    easy: &mut Easy2<H>,
+pub(crate) fn configure_easy(
+    easy: &mut Easy2<crate::runtime::FetchTransferHandler>,
     config: &FetchConfig,
     proxy_route: &HttpProxyRoute,
     request: &Request,
@@ -648,7 +651,7 @@ pub(crate) fn configure_easy<H: Handler>(
             .context("failed to configure curl host resolve overrides")?;
     }
 
-    let mut headers = List::new();
+    let mut headers = RequestHeaderList::default();
     let mut outgoing_headers =
         outgoing_request_headers_for_url(config, request, request_url, cookie_header);
     // A 407 can come from a transparent proxy even when no explicit proxy
@@ -666,7 +669,6 @@ pub(crate) fn configure_easy<H: Handler>(
             .append_request_headers(&mut outgoing_headers, &request.method, request_url)
             .with_context(|| anyhow!("failed to sign web bot auth request for {request_url}"))?;
     }
-    let mut has_headers = false;
 
     let mut has_content_type_header = false;
     for (name, value) in &outgoing_headers {
@@ -679,7 +681,6 @@ pub(crate) fn configure_easy<H: Handler>(
         headers
             .append(&header_line)
             .context("failed to build request header")?;
-        has_headers = true;
     }
     if let Some(validation_headers) = validation_headers {
         for (name, value) in validation_headers {
@@ -687,7 +688,6 @@ pub(crate) fn configure_easy<H: Handler>(
             headers
                 .append(&format!("{name}: {value}"))
                 .context("failed to build cache validation request header")?;
-            has_headers = true;
         }
     }
     if (request.method.eq_ignore_ascii_case("POST")
@@ -700,12 +700,6 @@ pub(crate) fn configure_easy<H: Handler>(
         headers
             .append("Content-Type:")
             .context("failed to suppress curl default content-type")?;
-        has_headers = true;
-    }
-
-    if has_headers {
-        easy.http_headers(headers)
-            .context("failed to attach curl request headers")?;
     }
 
     if let Some(auth) = request.auth()
@@ -747,6 +741,7 @@ pub(crate) fn configure_easy<H: Handler>(
         }
     }
 
+    crate::runtime::FetchTransferHandler::set_request_headers(easy, headers)?;
     Ok(outgoing_headers)
 }
 

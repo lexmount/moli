@@ -2658,7 +2658,8 @@ struct ActiveRawStreamingTransferContext {
     effective_request: Request,
 }
 
-struct FetchTransferHandler {
+pub(crate) struct FetchTransferHandler {
+    request_headers: crate::blocking::RequestHeaderList,
     response: FetchResponseCollector,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
@@ -2671,6 +2672,23 @@ enum FetchResponseCollector {
 }
 
 impl FetchTransferHandler {
+    pub(crate) fn set_request_headers(
+        easy: &mut Easy2<Self>,
+        headers: crate::blocking::RequestHeaderList,
+    ) -> Result<()> {
+        // SAFETY: libcurl borrows this list. On success, retain it in the
+        // handler until replacement or Easy2 cleanup (which precedes handler
+        // destruction). Keep the previous list alive if setopt fails.
+        let result = unsafe {
+            curl_sys::curl_easy_setopt(easy.raw(), curl_sys::CURLOPT_HTTPHEADER, headers.as_ptr())
+        };
+        if result != curl_sys::CURLE_OK {
+            return Err(curl::Error::new(result)).context("failed to attach curl request headers");
+        }
+        easy.get_mut().request_headers = headers;
+        Ok(())
+    }
+
     fn new_buffered(collector: ResponseCollector) -> Self {
         Self::new(FetchResponseCollector::Buffered(collector))
     }
@@ -2685,6 +2703,7 @@ impl FetchTransferHandler {
 
     fn new(response: FetchResponseCollector) -> Self {
         Self {
+            request_headers: crate::blocking::RequestHeaderList::default(),
             response,
             network_observation_recorder: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),

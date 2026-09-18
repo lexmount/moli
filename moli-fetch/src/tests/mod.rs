@@ -1,5 +1,6 @@
 mod cookie_context;
 mod cookie_store;
+mod header_bytes;
 mod mixed_transport;
 mod request_security;
 mod support;

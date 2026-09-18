@@ -14,6 +14,7 @@ use url::Url;
 use crate::{
     FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
+    headers::{decode_http_header_bytes, parse_http_header_line},
 };
 
 use crate::RedirectInfo;
@@ -945,7 +946,7 @@ impl Handler for ResponseCollector {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
-        let line = String::from_utf8_lossy(data);
+        let line = decode_http_header_bytes(data);
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
@@ -958,12 +959,10 @@ impl Handler for ResponseCollector {
             return true;
         }
 
-        let Some((name, value)) = line.split_once(':') else {
+        let Some((mut name, value)) = parse_http_header_line(line) else {
             return true;
         };
-
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim().to_owned();
+        name.make_ascii_lowercase();
 
         if name == "content-length"
             && self
@@ -1003,7 +1002,7 @@ impl Handler for StreamingResponseCollector {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
-        let line = String::from_utf8_lossy(data);
+        let line = decode_http_header_bytes(data);
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
@@ -1024,12 +1023,10 @@ impl Handler for StreamingResponseCollector {
             return true;
         }
 
-        let Some((name, value)) = line.split_once(':') else {
+        let Some((mut name, value)) = parse_http_header_line(line) else {
             return true;
         };
-
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim().to_owned();
+        name.make_ascii_lowercase();
 
         if name == "content-length"
             && self
@@ -1076,7 +1073,7 @@ impl Handler for RawStreamingResponseCollector {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
-        let line = String::from_utf8_lossy(data);
+        let line = decode_http_header_bytes(data);
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
@@ -1097,12 +1094,10 @@ impl Handler for RawStreamingResponseCollector {
             return true;
         }
 
-        let Some((name, value)) = line.split_once(':') else {
+        let Some((mut name, value)) = parse_http_header_line(line) else {
             return true;
         };
-
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim().to_owned();
+        name.make_ascii_lowercase();
 
         if name == "content-length"
             && self
