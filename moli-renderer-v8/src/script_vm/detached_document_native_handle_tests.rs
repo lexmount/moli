@@ -2813,6 +2813,37 @@ fn detached_html_document_clone_uses_native_root_metadata_after_property_tamper(
 }
 
 #[test]
+fn detached_document_clones_preserve_the_full_native_quirks_mode() {
+    let (status, vm) = eval_with_vm(
+        r#"(() => {
+            const source = new DOMParser().parseFromString(
+                '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><p>text</p>',
+                'text/html'
+            );
+            for (const deep of [false, true]) {
+                const clone = source.cloneNode(deep);
+                const marker = clone.createElement('section');
+                marker.id = 'limited-quirks-clone-' + deep;
+                if (deep) clone.body.append(marker);
+                else clone.append(marker);
+            }
+            return source.compatMode;
+        })()"#,
+    );
+    assert_eq!(status, "CSS1Compat");
+    for deep in [false, true] {
+        let marker = element_handle_by_id(&vm, &format!("limited-quirks-clone-{deep}"));
+        let host = vm.document_runtime.dom_host();
+        let owner = host.node(marker).unwrap().owner_document().unwrap();
+        assert_eq!(
+            host.document_quirks_mode_for_handle(owner),
+            Some(selectors::matching::QuirksMode::LimitedQuirks),
+            "cloning must not collapse LimitedQuirks into NoQuirks"
+        );
+    }
+}
+
+#[test]
 fn detached_adopt_node_uses_native_detach_after_method_tamper() {
     let status = eval(
         r#"
